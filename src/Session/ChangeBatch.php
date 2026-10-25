@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Session;
 
+use Closure;
 use JsonException;
 
 /**
@@ -69,6 +70,42 @@ final class ChangeBatch
      */
     public static function apply(string $projectRoot, array $changes, bool $relocateSaves = false, bool $checkOnly = false): array
     {
+        return self::run($projectRoot, $changes,
+            static fn(self $batch): array => $batch->request('changes.commit', ['relocateSaves' => $relocateSaves, 'check' => $checkOnly]));
+    }
+
+    /**
+     * Applies changes to a project as {@see apply()} does, shows the session
+     * they leave, unsaved, to `$inspect`, and then undoes them: nothing is
+     * written. A script sees what a batch would make before it applies it.
+     *
+     * @param list<mixed> $changes The session requests, in order.
+     * @param Closure(EditorSession): mixed $inspect
+     * @return array<string, mixed> `{status: 'previewed', result}` with what `$inspect` answered, or
+     *     `{status: 'failed', step, method, message}` when a change was refused.
+     */
+    public static function preview(string $projectRoot, array $changes, Closure $inspect): array
+    {
+        return self::run($projectRoot, $changes, static function (self $batch) use ($inspect): array {
+            try {
+                return ['status' => 'previewed', 'result' => $inspect($batch->host->session
+                    ?? throw new SessionRefusal('The batch has no session open.'))];
+            } finally {
+                $batch->request('changes.cancel');
+            }
+        });
+    }
+
+    /**
+     * Opens the project, applies the changes in a change set, and finishes it
+     * with `$finish`, or cancels it at the first refused change.
+     *
+     * @param list<mixed> $changes
+     * @param Closure(self): array<string, mixed> $finish
+     * @return array<string, mixed>
+     */
+    private static function run(string $projectRoot, array $changes, Closure $finish): array
+    {
         $memory = fopen('php://memory', 'r+');
         $batch = new self(new SessionHost($memory, $memory, STDERR));
 
@@ -84,7 +121,7 @@ final class ChangeBatch
                 }
             }
 
-            return $batch->request('changes.commit', ['relocateSaves' => $relocateSaves, 'check' => $checkOnly]);
+            return $finish($batch);
         } catch (SessionRefusal $refusal) {
             return ['status' => 'failed', 'step' => null, 'method' => null, 'message' => $refusal->getMessage()];
         } finally {

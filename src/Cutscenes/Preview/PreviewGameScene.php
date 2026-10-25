@@ -82,6 +82,10 @@ final class PreviewGameScene extends GameScene
     {
         $this->fieldEffects?->clear();
         $this->fieldEffects = new FieldEffectManager(getcwd() . '/assets', $presentation);
+        // A new manager learns what the attached renderer draws, as the scene's own did; without it, it draws nothing.
+        if ($this->getPresentationContext() !== null) {
+            $this->synchronizeFieldViewport();
+        }
         $this->previewMap->installFieldEffects();
         if ($this->shownEffect !== null) {
             $this->showFieldEffect(...$this->shownEffect);
