@@ -43,6 +43,7 @@ use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
+use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Field\MapRoleCatalog;
 use Ichiloto\Engine\Field\PlayerSpriteSet;
 use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
@@ -370,6 +371,8 @@ final readonly class MapInspector
             MapTerrainFields::TARGET => $this->applyTerrainValue($map, $field, $value),
             MapStationField::TARGET => $this->applyStationValue($map, (string) $value),
             self::ROLE_TARGET => $this->applyMapRole($map, trim((string) $value)),
+            self::DASHING_TARGET => $this->writeMapData($map, [DashSettings::MAP_DISABLE_DASHING], $value === true ? true : null,
+                'Disable Dashing'),
             default => null,
         };
     }
@@ -967,6 +970,8 @@ final readonly class MapInspector
      */
     /** The Role row's target: a map's role in the project's Map Roles, chosen, never typed. */
     public const string ROLE_TARGET = 'map-role';
+    /** The map's Disable Dashing row: true writes the Engine's `disableDashing`, false removes it. */
+    public const string DASHING_TARGET = 'map-dashing';
 
     /**
      * The map's Role row: what it is to the world (an overworld, an outside place, an interior), one of the
@@ -1565,6 +1570,31 @@ final readonly class MapInspector
      *
      * @return array<int, array<string, mixed>>
      */
+    /**
+     * The map's movement rows: whether it turns the project's dash off, as RPG Maker's Disable Dashing. The Engine
+     * reads the same key ({@see DashSettings::readMapDisablesDashing()}); a value it would refuse stays visible.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function mapMovementFields(ProjectMap $map): array
+    {
+        $path = [DashSettings::MAP_DISABLE_DASHING];
+        $value = $map->getMapDataField($path);
+        $disabled = $value === true;
+
+        return [
+            ['label' => 'Movement', 'value' => '', 'editable' => false],
+            [
+                'label' => '  Disable Dashing',
+                'value' => $value === null || is_bool($value) ? ($disabled ? 'true' : 'false')
+                    : sprintf('%s · must be true or false', var_export($value, true)),
+                'control' => new InputControl(InputControlType::BOOLEAN, $disabled ? 'true' : 'false'),
+                'target' => self::DASHING_TARGET,
+                'field' => DashSettings::MAP_DISABLE_DASHING,
+            ],
+        ];
+    }
+
     private function mapRuntimeFields(ProjectMap $map): array
     {
         $bgm = $map->getMapDataField(['bgm']);
@@ -1594,7 +1624,7 @@ final readonly class MapInspector
             ],
         ];
 
-        $fields = [...$fields, ...$this->mapBgmVariantFields($map, $known)];
+        $fields = [...$fields, ...$this->mapBgmVariantFields($map, $known), ...$this->mapMovementFields($map)];
 
         $encounters = MapEncounters::fromMap($map);
         $fields[] = [

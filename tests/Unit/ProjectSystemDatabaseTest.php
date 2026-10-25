@@ -266,3 +266,83 @@ it('reports progression rules the Engine would not read as an error', function (
     expect($issues)->toHaveCount(1)
         ->and($issues[0]->message)->toContain("replaced by levelUpRecovery: write 'full' for true or 'none' for false");
 });
+
+it('authors the dash in System as the Engine reads it, an absent dash reading as none, and keeps the rest', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn " . var_export(productionSystem(), true) . ";\n");
+    $read = static fn(array $system): Ichiloto\Engine\Field\DashSettings => Ichiloto\Engine\Field\DashSettings::fromSystemData($system);
+
+    expect(systemSettingsValue($root, 'dash.enabled'))->toBe('false')
+        ->and(systemSettingsValue($root, 'dash.speedMultiplier'))->toBe('2')
+        ->and($read(productionSystem())->enabled)->toBeFalse();
+
+    $database = systemRecords($root);
+    $database->setField(0, 'dash.enabled', 'true');
+    $database->setField(0, 'dash.speedMultiplier', '1.5');
+    $database->save();
+    $saved = require $path;
+    expect($saved)->toBe([...productionSystem(), 'dash' => ['enabled' => true, 'speedMultiplier' => 1.5]])
+        ->and($read($saved))->toEqual(new Ichiloto\Engine\Field\DashSettings(true, 1.5))
+        ->and(systemSettingsValue($root, 'dash.enabled'))->toBe('true');
+
+    // Turning the dash off leaves no enabled key to read: an absent dash is none.
+    $database = systemRecords($root);
+    $database->setField(0, 'dash.enabled', 'false');
+    $database->save();
+    expect($read(require $path)->enabled)->toBeFalse();
+});
+
+it('serves the dash to the GUI session as a switch and a number that keep the file\'s own writing', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/system.php';
+    $source = "<?php\n\nuse Ichiloto\\Engine\\Core\\Enumerations\\MovementHeading;\n\nreturn [\n  'title' => 'Fixture',\n"
+        . "  // Where the story starts.\n  'startingPositions' => ['player' => ['spawnSprite' => [MovementHeading::SOUTH->value]]],\n];\n";
+    file_put_contents($path, $source);
+    $session = EditorSession::open($root);
+    $row = static fn(string $field): array => array_find($session->readDatabaseRecord('system', 0)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === $field)
+        ?? throw new RuntimeException("Missing $field row");
+
+    expect($row('dash.enabled'))->toMatchArray(['label' => 'Dash', 'value' => 'false'])
+        ->and($row('dash.speedMultiplier'))->toMatchArray(['label' => 'Dash Speed Multiplier']);
+
+    $session->applyDatabaseRecord('system', 0, $row('dash.enabled')['key'], 'true');
+    $session->applyDatabaseRecord('system', 0, $row('dash.speedMultiplier')['key'], '2');
+    $session->saveDatabase('system');
+    $written = (string) file_get_contents($path);
+
+    expect($written)->toContain('// Where the story starts.', '[MovementHeading::SOUTH->value]')
+        ->and(Ichiloto\Engine\Field\DashSettings::fromSystemData(require $path))->toEqual(new Ichiloto\Engine\Field\DashSettings(true, 2.0));
+
+    $session->undo();
+    $session->undo();
+    $session->saveDatabase('system');
+    expect((string) file_get_contents($path))->toBe($source);
+});
+
+it('reports a dash or a map Disable Dashing the Engine would not read as an error', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/system.php';
+    $system = is_file($path) ? require $path : [];
+    $validate = static fn(): array => new Ichiloto\Editor\Validation\DashValidator()->validate(Ichiloto\Editor\ProjectWorkspace::fromProject($root));
+
+    expect($validate())->toBe([]);
+
+    foreach ([[['enabled' => true, 'speedMultiplier' => 1], 'greater than 1'], [['enabled' => 'yes'], 'true or false'],
+        [['run' => true], 'Unknown system.dash field']] as [$dash, $message]) {
+        file_put_contents($path, "<?php\n\nreturn " . var_export([...$system, 'dash' => $dash], true) . ";\n");
+        $issues = $validate();
+        expect($issues)->toHaveCount(1)
+            ->and($issues[0]->severity)->toBe(Ichiloto\Editor\Validation\Severity::ERROR)
+            ->and($issues[0]->message)->toContain($message);
+    }
+
+    file_put_contents($path, "<?php\n\nreturn " . var_export([...$system, 'dash' => ['enabled' => true]], true) . ";\n");
+    expect($validate())->toBe([]);
+    $map = Ichiloto\Editor\ProjectWorkspace::fromProject($root)->maps[0];
+    file_put_contents($map->dataPath, "<?php\n\nreturn " . var_export([...(require $map->dataPath), 'disableDashing' => 'yes'], true) . ";\n");
+    $issues = $validate();
+    expect($issues)->toHaveCount(1)->and($issues[0]->map)->toBe($map->mapId)
+        ->and($issues[0]->message)->toContain('disableDashing must be true or false');
+});

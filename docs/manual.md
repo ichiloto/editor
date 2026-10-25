@@ -690,8 +690,11 @@ overrides) has been removed along with the Engine's support for it; tilesets
 replace it.
 
 **Measuring walks** is a GUI editor tool: its Measure tool shows the
-shortest walk between cells with its steps, walking seconds, screens crossed
-and expected encounters, read from the session's `map.measure` (see Measuring
+shortest walk between cells with its steps, walking and dashing seconds,
+screens crossed and expected encounters, read from the session's `map.measure`.
+Dashing seconds use the game's Dash Speed Multiplier from Database > System,
+unsaved edits included; a game without a dash, a map with Disable Dashing on,
+or a dash the game could not read shows walking time only and says why (see Measuring
 A Walk in [Change Maps From A Script](guides/change-maps-from-a-script.md)).
 The terminal editor keeps its workflow and has no measuring mode.
 
@@ -1141,6 +1144,13 @@ skip: a missing, empty, or unknown track, malformed conditions, and the
 unreachable-variant warning above. The editor authors and validates the
 structure; the engine alone evaluates conditions and plays anything.
 
+**Movement.** `Disable Dashing` is a switch, RPG Maker's map setting of the
+same name: on, the player walks on this map even when the game's Dash is on in
+Database > System and Dash is held. Switching it on writes the map's
+`disableDashing`; switching it off removes the key, so the map follows the
+game's dash. A value the Engine would not read stays visible with what it
+must be, and validation names it.
+
 **Encounters.** The `Encounters` heading summarises the map's random
 encounters (`off`, or `2 troops, every ~22 steps, danger tiles`), and the
 rows beneath it edit the engine's own `encounters` block:
@@ -1436,8 +1446,8 @@ skill's effects, a quest's rewards) listed under them.
 | Optimize Weights | `assets/Data/equipment-optimization.php` | Editable | Same |
 | Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable | Same |
 | Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable | Same |
-| System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, battle engine, openings and time gauge settings, and whether a level up restores HP and MP (on unless turned off) | Same |
-| Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
+| System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, battle engine, openings and time gauge settings, whether a level up restores HP and MP (on unless turned off), and the dash (Dash, Dash Speed Multiplier) | Same |
+| Configuration | `config.php` (`save`, `accessibility`, `ui`, `field`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
 | Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
 | Dialogue Portraits | `assets/Data/Presentation/dialogue.php` (`actors`, `resources`) | Editable - one record per speaker identity: what it speaks as (an actor, chosen, or a non-actor character with a stable id), its dialogue portrait and skit bust, and its emotions, each a name with its own portrait and bust, chosen as project images | Same, with each image shown beside its path |
@@ -2027,7 +2037,7 @@ must be reloaded before saving, so newer external edits are not overwritten.
 ### Configuration
 
 The rest of the project's `config.php`: the `save`, `accessibility`, `ui`,
-`graphics`, `audio` and `inn` settings, one row per setting with its dotted
+`field`, `graphics`, `audio` and `inn` settings, one row per setting with its dotted
 path. A switch is a switch, a number a number, and a setting authored as an
 enum case (a selection colour, a window position) is a choice of that enum,
 written back as the case. A setting the engine reads with a default is listed
@@ -2040,6 +2050,13 @@ writes nothing.
 save point, picked from the project's event scripts (None keeps the Engine's
 save point notice, worded in Terms as `messages.save.point_prompt` and
 `messages.save.point_title`). Validation names a script that does not exist.
+
+#### Always Dash
+
+`field.always_dash` is the first value of the player's Always Dash option, a
+switch (off by default, as in RPG Maker). Players change it in the game's
+Options and Config; with it on they dash without holding Dash. It applies
+only to a game whose Dash is on in Database > System.
 
 #### Field Zoom
 

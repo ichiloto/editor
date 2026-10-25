@@ -28,6 +28,7 @@ use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
+use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Rendering\Tilesets\TerrainKind;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
@@ -1040,14 +1041,40 @@ final class EditorSession
             && $zoom >= FieldViewport::MIN_ZOOM && $zoom <= FieldViewport::MAX_ZOOM ? (float) $zoom : FieldViewport::DEFAULT_ZOOM;
         $view = new FieldViewport(new RendererGridConfig(BattleScreen::WIDTH, BattleScreen::HEIGHT,
             RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT), $zoom);
+        [$dashSpeed, $dashUnavailable] = $this->readDashSpeed($map);
         try {
-            // No game data authors a dash speed yet, so the measurement says it shows walking only.
-            $measurement = new MapWalkMeasurement($map, $view)->measure($points);
+            $measurement = new MapWalkMeasurement($map, $view, dashSpeedMultiplier: $dashSpeed, dashUnavailable: $dashUnavailable)
+                ->measure($points);
         } catch (InvalidArgumentException|MapSourceRefusal $refusal) {
             throw new SessionRefusal(sprintf('%s cannot be measured: %s', $mapId, $refusal->getMessage()), previous: $refusal);
         }
 
         return ['map' => $map->mapId, 'revision' => $this->getMapRevision($map), ...$measurement];
+    }
+
+    /**
+     * How many times faster than walking the player dashes on a map, by the Engine's own reading of the game's
+     * System dash and the map's Disable Dashing, unsaved edits included; or null and why the player cannot dash there.
+     *
+     * @return array{0: ?float, 1: ?string}
+     */
+    private function readDashSpeed(ProjectMap $map): array
+    {
+        $system = $this->workspace->getRecordDatabase('system')?->getRecordByIndex(0)?->toArray() ?? [];
+        try {
+            $dash = DashSettings::fromSystemData($system);
+            if (! $dash->enabled) {
+                // The measurement's own wording for a game without a dash.
+                return [null, null];
+            }
+            if (DashSettings::readMapDisablesDashing($map->getEditableData())) {
+                return [null, 'This map turns dashing off, so only walking time is shown.'];
+            }
+        } catch (InvalidArgumentException $invalid) {
+            return [null, sprintf('The game cannot read its dash (%s), so only walking time is shown.', $invalid->getMessage())];
+        }
+
+        return [$dash->speedMultiplier, null];
     }
 
     /**
