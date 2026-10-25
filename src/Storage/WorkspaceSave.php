@@ -42,11 +42,13 @@ final class WorkspaceSave
      *
      * @param (Closure(Command): void)|null $recordRelocation Records the undo step of a map's save relocations once
      *     they are installed; null refuses a map whose save would move existing saves.
+     * @param list<string> $madeMaps Maps made since the last save, such as in an open change set: no save stands on
+     *     them, whatever their blank files on disk hold.
      * @return list<PreparedSave>
      * @throws RuntimeException When a document cannot take its edits, a map would move its folder, or a map needs
      *     save relocations that were not allowed. Nothing is written.
      */
-    public static function prepareAll(ProjectWorkspace $workspace, ?Closure $recordRelocation = null): array
+    public static function prepareAll(ProjectWorkspace $workspace, ?Closure $recordRelocation = null, array $madeMaps = []): array
     {
         $saves = [];
         // Categories editing through one settings file (Terms and Configuration write `config.php`
@@ -91,8 +93,10 @@ final class WorkspaceSave
             }
         }
 
-        // One manifest step holds every map's relocations: the manifest is written once.
-        $relocation = SaveRelocationPlanner::planAll($dirtyMaps, $workspace->projectRoot);
+        // One manifest step holds every map's relocations: the manifest is written once. A map made since the last
+        // save holds no save, whatever stands on its blank files.
+        $relocation = SaveRelocationPlanner::planAll(array_values(array_filter($dirtyMaps,
+            static fn(ProjectMap $map): bool => ! in_array($map->mapId, $madeMaps, true))), $workspace->projectRoot);
 
         if ($relocation !== null) {
             if ($recordRelocation === null) {

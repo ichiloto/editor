@@ -252,3 +252,23 @@ it('moves no save off a map the player reaches nowhere, such as one just made an
         ->and($saved)->toHaveKey('saved')
         ->and((string) file_get_contents($root . '/assets/Data/save-compatibility.php'))->toBe($manifest);
 });
+
+it('moves no save off a map a change set made, though something already led to it and its blank files are on disk', function () {
+    $root = mapLineRemovalProject();
+    // The start already leads to the map the change set will make.
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => "
+        . "['destinationMap' => 'cellar', 'spawnPoint' => ['x' => 1, 'y' => 1], 'spawnSprite' => ['South']]]];\n");
+    $manifest = (string) file_get_contents($root . '/assets/Data/save-compatibility.php');
+    $session = EditorSession::open($root);
+    $session->beginChanges();
+    $session->createMap('Cellar', null, 6, 4, 'cellar');
+    $map = $session->readMap('cellar');
+    $session->paint('cellar', $map['revision'], $map['baseLayer'], [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [0, 1], [5, 1], [0, 2], [5, 2],
+        [0, 3], [1, 3], [2, 3], [3, 3], [4, 3], [5, 3]], '#');
+
+    // Whatever else the check finds of the unfinished map, it plans no save onto or off it.
+    $outcome = $session->commitChanges(checkOnly: true);
+    expect($outcome['relocated'])->toBe([])
+        ->and((string) ($outcome['reason'] ?? ''))->not->toContain('Saves')
+        ->and((string) file_get_contents($root . '/assets/Data/save-compatibility.php'))->toBe($manifest);
+});
