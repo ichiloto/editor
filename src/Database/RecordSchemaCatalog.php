@@ -235,6 +235,9 @@ final class RecordSchemaCatalog
                 new RecordField('damageTakenRate', 'Damage Taken Rate', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
                 // Cover: the bearer takes the single-target hits meant for its weakest ally.
                 RecordField::boolean('coversAllies', 'Covers Allies'),
+                // Confusion: the chance each turn that the bearer attacks a random battler of either side instead.
+                new RecordField('confusionChancePercent', 'Confusion Chance %', InputControlType::INTEGER, removeWhenEmpty: true,
+                    displayDefault: '0 (never)'),
             ],
             labelKey: 'name',
             identityKey: 'id',
@@ -1593,6 +1596,11 @@ final class RecordSchemaCatalog
             // Rolled for each listed state the target has (a 75% treatment cures three times in four).
             new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
         ];
+        // What a reveal uncovers about each target for the rest of the battle, and the chance it succeeds.
+        $variants['reveal'] = [
+            new RecordField('facts', 'Reveals', reference: 'reveal_facts', codec: RecordFieldCodec::CSV_LIST),
+            new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
+        ];
         $variants['modify_stat_stage'] = [
             new RecordField('stat', 'Stat', options: Character::buffableStats()),
             new RecordField('delta', 'Stages', InputControlType::INTEGER),
@@ -1624,7 +1632,7 @@ final class RecordSchemaCatalog
                 prefix: 'effect',
                 singular: 'effect',
                 fields: [
-                    new RecordField('type', 'Type', options: [...array_keys(SkillRecord::FORMULA_EFFECTS), ...array_keys(SkillRecord::STATE_EFFECTS)]),
+                    new RecordField('type', 'Type', options: SkillRecord::getEffectTypes()),
                 ],
                 blank: ['type' => 'hp_damage', 'formula' => '$user->stats->attack * 2', 'variance' => 0.2],
                 variants: $variants,

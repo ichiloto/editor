@@ -4,6 +4,12 @@
 
 ### Added
 
+- Skills author the Engine's `reveal` effect: its facts (`Reveals`, picked from the Engine's
+  `reveal_facts`: `hp`, `mp`, `stats`, `affinities`) and its `Chance %`, shown in the Effects pane as
+  `Reveal: hp, stats, 75%`. The effect Type list is the Engine's own (`SkillRecord::getEffectTypes()`).
+- States author `Confusion Chance %` (`confusionChancePercent`): the chance each turn that the bearer
+  attacks a random battler of either side instead of acting as it chose. Cleared, it leaves the file.
+
 - Map review renders: `EditorSession::renderMapReview()` draws a map, or a
   rectangle of it, both ways as the game draws it, unsaved edits included,
   through the game's own field: the Terminal picture the field's camera draws

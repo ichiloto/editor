@@ -263,6 +263,8 @@ final class RecordPanes
             isset($effect['formula']) => [strval($effect['formula'])],
             isset($effect['stateId']) => [sprintf('%s, %d%%', strval($effect['stateId']), intval($effect['chancePercent'] ?? 100))],
             isset($effect['stateIds']) && is_array($effect['stateIds']) => [implode(', ', array_map('strval', $effect['stateIds']))],
+            isset($effect['facts']) && is_array($effect['facts']) => [sprintf('%s, %d%%',
+                implode(', ', array_map('strval', $effect['facts'])), intval($effect['chancePercent'] ?? 100))],
             isset($effect['stat']) => [sprintf('%s %+d%s', strval($effect['stat']), intval($effect['delta'] ?? 0), ($effect['affectsUser'] ?? false) === true ? ' on the user' : '')],
             default => [],
         };

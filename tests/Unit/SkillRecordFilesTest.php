@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordAuthoring;
+use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Battle\Insight\RevealFact;
+use Ichiloto\Engine\Entities\Effects\SkillEffects\RevealSkillEffect;
 use Ichiloto\Engine\Entities\Effects\SkillEffects\HPDamageSkillEffect;
 use Ichiloto\Engine\Entities\Skills\BasicSkill;
 use Ichiloto\Engine\Entities\Skills\MagicSkill;
@@ -67,6 +71,34 @@ it('authors effects by type, keeping only what each type reads', function () {
     expect($skills->getRecordByIndex(1)?->get('effects'))->toBe([['type' => 'add_state', 'stateId' => 'poison']])
         ->and($lunge?->effects[0]?->stateId)->toBe('poison')
         ->and(SkillCatalog::load($root . '/assets')->getProblems())->toBe([]);
+});
+
+it('authors a reveal effect the Engine reads back, with its facts chosen from the Engine\'s own', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $field = static fn(string $name): string => ProjectRecordDatabase::subFieldId('effect', 0, $name);
+
+    $skills->setField(1, $field('type'), 'reveal');
+    $skills->setField(1, $field('facts'), 'hp, stats');
+    $skills->setField(1, $field('chancePercent'), '75');
+    $skills->save();
+
+    $effect = SkillCatalog::load($root . '/assets')->findSkill('Lunge')?->effects[0];
+
+    expect($skills->getRecordByIndex(1)?->get('effects'))->toBe([['type' => 'reveal', 'facts' => ['hp', 'stats'], 'chancePercent' => 75]])
+        ->and($effect)->toBeInstanceOf(RevealSkillEffect::class)
+        ->and($effect?->facts)->toBe([RevealFact::HP, RevealFact::STATS])
+        ->and((new ReferenceCatalog(ProjectWorkspace::fromProject($root)))->valuesFor('reveal_facts'))
+        ->toBe(['hp', 'mp', 'stats', 'affinities']);
+});
+
+it('authors a state\'s confusion chance and leaves it out when cleared', function () {
+    $states = loadRecordDatabase(makeTemporaryProject(), 'states');
+
+    $states->setField(0, 'confusionChancePercent', '100');
+    expect($states->getRecordByIndex(0)?->get('confusionChancePercent'))->toBe(100);
+    $states->setField(0, 'confusionChancePercent', '');
+    expect(array_key_exists('confusionChancePercent', $states->getRecordByIndex(0)?->toArray() ?? []))->toBeFalse();
 });
 
 it('seeds a new skill with the action-name battle message and previews what each message shows, as a battle formats it', function () {
