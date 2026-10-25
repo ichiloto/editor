@@ -3784,6 +3784,11 @@ final class ProjectRecordDatabase
             return trim($rawValue) === '' && $field->removeWhenEmpty ? null
                 : \Ichiloto\Editor\Maps\PhysicalFootprintCodec::decode($rawValue);
         }
+        if ($field->codec === RecordFieldCodec::PIECE_DOORWAY) {
+            $cells = \Ichiloto\Editor\Maps\PieceDoorwayCodec::decode($rawValue);
+
+            return $cells === [] && $field->removeWhenEmpty ? null : $cells;
+        }
         if ($field->codec === RecordFieldCodec::SOURCE_RECT) {
             if (trim($rawValue) === '' && $field->removeWhenEmpty) {
                 return null;
@@ -4059,6 +4064,7 @@ final class ProjectRecordDatabase
 
         return match ($field->codec) {
             RecordFieldCodec::PHYSICAL_FOOTPRINT => \Ichiloto\Editor\Maps\PhysicalFootprintCodec::encode($value),
+            RecordFieldCodec::PIECE_DOORWAY => \Ichiloto\Editor\Maps\PieceDoorwayCodec::encode($value),
             RecordFieldCodec::CONDITIONS => ConditionCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::AFFINITIES => ElementAffinityCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::encodeAll(is_array($value) ? $value : []),

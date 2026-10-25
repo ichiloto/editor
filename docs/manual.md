@@ -250,6 +250,14 @@ does not erase collision already stamped into a map. The TUI preserves recipes
 through existing record edits without adding graphical authoring controls.
 Native acceptance of the physical brushes and footprint controls remains open.
 
+A stamped piece whose art paints doors, such as a building, names them in its
+**Painted Doors** record row: each door's cell from the piece's top-left cell,
+with `front` for a door entered from the cell before it, separated by
+semicolons (`2,4; 4,4 front`). Validation then requires every copy of the piece
+standing whole on a map to meet an entrance at each door, and leaves those cells
+to the doorway rule rather than judging their look against passage. The pieces
+list reports each piece's doors. The TUI preserves them through record edits.
+
 The GUI tileset view's **Appearance** mode sets what tiles show at ground
 level, for validation alone: choose Ground, Water, Barrier or Overhead (art
 over the player, or a light decoration that says nothing about the ground),

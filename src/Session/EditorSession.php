@@ -896,8 +896,8 @@ final class EditorSession
         }
         try {
             $declaration = $value === null ? null : \Ichiloto\Editor\Maps\PhysicalFootprintCodec::decodeRows($value);
-            // Graphical rows and effect admission do not own logical footprint geometry.
-            unset($piece['tiles'], $piece['effect'], $piece['occupancy']);
+            // Graphical rows, and the effect and doors found by them, do not own logical footprint geometry.
+            unset($piece['tiles'], $piece['effect'], $piece['occupancy'], $piece['doorway']);
             if ($declaration !== null) { $piece['occupancy'] = $declaration; }
             TilesetPiece::fromArray($pieceId, $piece, 'Tileset occupancy authoring');
         } catch (InvalidArgumentException $error) {
@@ -1248,7 +1248,8 @@ final class EditorSession
      * The pieces of the map's tileset an author places ({@see PiecePlacer}),
      * in authored order: each with the gameplay layer its glyphs go on and
      * whether the map has it, whether it is drawn as connected cells rather
-     * than stamped whole, its size, and a picture of what it draws. A map
+     * than stamped whole, its size, a picture of what it draws, its physical
+     * recipe and the doors its art paints. A map
      * whose tileset offers none says why in `issue`.
      *
      * @return array{map: string, pieces: list<array<string, mixed>>, issue: ?string}
@@ -1284,6 +1285,8 @@ final class EditorSession
                 'tileLayers' => $tileset?->getPieceTileLayers($piece) ?? [],
                 'picture' => PiecePlacer::buildPicture($piece),
                 'occupancy' => PhysicalOccupancyEditor::exportRecipe($piece),
+                // Where its art paints doors, from its top-left cell; each map's entrances must meet them.
+                'doorway' => \Ichiloto\Engine\Field\Doorway::exportCells($piece->doorway),
             ];
         }
 

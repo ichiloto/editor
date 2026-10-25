@@ -18,6 +18,9 @@
   not read. The GUI session's walk measurement shows dashing seconds at the
   authored speed, unsaved edits included, and says why when the player cannot
   dash on the map.
+- A tileset piece's **Painted Doors** record row (GUI Database), typed as
+  `2,4; 4,4 front`, and each piece's doors in the pieces list. Glyph-footprint
+  and physical-recipe authoring keep a piece's doors.
 - Database > Tilesets, Terrain Kinds: `Joins` names a corner-edged kind's join
   group. Kinds on one tile layer naming the same group share one edge, so a
   river runs into a lake or the sea with no bank between them; validation's
