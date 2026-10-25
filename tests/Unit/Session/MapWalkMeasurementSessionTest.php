@@ -66,6 +66,36 @@ it('says plainly that only walking time is shown while the game authors no dash 
         ->and($walk['dashUnavailable'])->toBe('This game authors no dash speed, so only walking time is shown.');
 });
 
+it('shows dashing seconds at the game\'s authored dash speed, unsaved edits included, except where the map turns dashing off', function () {
+    $root = createMeasuredProject();
+    $system = $root . '/assets/Data/system.php';
+    file_put_contents($system, "<?php\n\nreturn " . var_export([...(is_file($system) ? require $system : []),
+        'dash' => ['enabled' => true, 'speedMultiplier' => 2.0]], true) . ";\n");
+    $session = EditorSession::open($root);
+    $walk = $session->measureWalk('test-map', [[1, 1], [1, 2], [6, 1]]);
+
+    expect($walk)->toMatchArray(['dashSpeed' => 2.0, 'dashUnavailable' => null, 'walkSeconds' => 1.87, 'dashSeconds' => 0.93])
+        ->and(array_column($walk['legs'], 'dashSeconds'))->toBe([0.13, 0.8]);
+
+    // An unsaved System edit is what the tool reads.
+    $row = static fn(): array => array_find($session->readDatabaseRecord('system', 0)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'dash.speedMultiplier');
+    $session->applyDatabaseRecord('system', 0, $row()['key'], '1.5');
+    expect($session->measureWalk('test-map', [[1, 1], [6, 1]])['dashSeconds'])->toBe(0.89);
+
+    // A map that turns dashing off measures walking only, and says why.
+    $read = $session->readInspector('test-map');
+    $disable = array_find($read['rows'], static fn(array $row): bool => $row['label'] === 'Disable Dashing');
+    $session->applyInspector('test-map', $read['revision'], $disable['key'], 'true');
+    expect($session->measureWalk('test-map', [[1, 1], [6, 1]]))
+        ->toMatchArray(['dashSpeed' => null, 'dashSeconds' => null, 'dashUnavailable' => 'This map turns dashing off, so only walking time is shown.']);
+
+    // A dash the Engine could not read says so instead of guessing.
+    $session->applyInspector('test-map', $session->readInspector('test-map')['revision'], $disable['key'], 'false');
+    $session->applyDatabaseRecord('system', 0, $row()['key'], '9');
+    expect($session->measureWalk('test-map', [[1, 1], [6, 1]])['dashUnavailable'])->toContain('cannot read its dash', 'at most 4');
+});
+
 it('walks through waypoints in order, leg by leg', function () {
     $walk = EditorSession::open(createMeasuredProject())->measureWalk('test-map', [[1, 1], [1, 2], [6, 1]]);
 

@@ -46,13 +46,15 @@ final readonly class MapWalkMeasurement
 
     /**
      * @param FieldViewport $view The field view screens are counted in.
-     * @param float|null $dashSpeedMultiplier How many times faster dashing is than walking, as the game authors it; null when it authors none.
+     * @param float|null $dashSpeedMultiplier How many times faster dashing is than walking, as the game authors it; null when the player cannot dash here.
+     * @param string|null $dashUnavailable Why the player cannot dash here, when the multiplier is null; the game authoring no dash otherwise.
      */
     public function __construct(
         private ProjectMap $map,
         private FieldViewport $view,
         private FieldMetric $metric = new FieldMetric(),
         private ?float $dashSpeedMultiplier = null,
+        private ?string $dashUnavailable = null,
     ) {
         if ($dashSpeedMultiplier !== null && (! is_finite($dashSpeedMultiplier) || $dashSpeedMultiplier <= 0.0)) {
             throw new InvalidArgumentException('A dash speed must be a positive, finite multiple of walking speed.');
@@ -131,7 +133,8 @@ final readonly class MapWalkMeasurement
             'walkSeconds' => $this->roundSeconds($steps * $stepSeconds),
             'dashSeconds' => $this->measureDashSeconds($steps * $stepSeconds),
             'dashSpeed' => $this->dashSpeedMultiplier,
-            'dashUnavailable' => $this->dashSpeedMultiplier === null ? 'This game authors no dash speed, so only walking time is shown.' : null,
+            'dashUnavailable' => $this->dashSpeedMultiplier === null
+                ? $this->dashUnavailable ?? 'This game authors no dash speed, so only walking time is shown.' : null,
             'stepSeconds' => round($stepSeconds, 4),
             'view' => ['columns' => $this->view->columns, 'rows' => $this->view->rows, 'zoom' => $this->view->zoom],
             'screens' => round($across / $this->view->columns + $down / $this->view->rows, 2),
