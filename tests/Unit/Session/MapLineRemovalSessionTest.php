@@ -54,3 +54,20 @@ it('routes map.removeLines through the host with an optional landing', function 
     expect($request('map.removeLines', ['map' => 'home', 'revision' => $revision, 'axis' => 'y', 'at' => 2, 'count' => 1, 'landing' => [3, 2]])['result'])
         ->toMatchArray(['status' => 'question', 'landing' => [3, 2]]);
 });
+
+it('moves no save when the player reaches the map nowhere, such as one not yet joined to the world', function () {
+    $root = mapLineRemovalProject();
+    $session = EditorSession::open($root);
+    $session->createMap('Far field', null, 6, 5, 'far-field');
+    $manifest = (string) file_get_contents($root . '/assets/Data/save-compatibility.php');
+    $revision = $session->readMap('far-field')['revision'];
+
+    $question = $session->removeMapLines('far-field', $revision, 'x', 0, 2);
+    expect($question)->toMatchArray(['status' => 'question', 'landing' => null])
+        ->and($question['notes'])->toContain('No save moves: the player reaches this map nowhere today.')
+        ->and($question['paths'])->not->toContain('assets/Data/save-compatibility.php');
+
+    $session->removeMapLines('far-field', $revision, 'x', 0, 2, null, 'write', $question['confirm']);
+    expect($session->readMap('far-field')['width'])->toBe(4)
+        ->and((string) file_get_contents($root . '/assets/Data/save-compatibility.php'))->toBe($manifest);
+});

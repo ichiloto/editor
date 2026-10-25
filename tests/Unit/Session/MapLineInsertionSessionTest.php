@@ -17,7 +17,7 @@ function mapInsertionSessionProject(): string
     'tileLayers' => ['floor' => ['offset' => [0, 1]]],
     'npcs' => [['id' => 'visitor', 'name' => 'Visitor', 'sprite' => 'v', 'x' => 2, 'y' => 1,
         'movement' => 'wander', 'wanderArea' => ['x' => 1, 'y' => 0, 'width' => 2, 'height' => 2]]],
-    'events' => ['D' => ['class' => 'Ichiloto\Engine\Events\Triggers\SleepEventTrigger', 'data' => ['spawnPoint' => ['x' => 2, 'y' => 1]]]],
+    'events' => ['D' => ['class' => 'Ichiloto\Engine\Events\Triggers\SleepEventTrigger', 'data' => ['spawnPoint' => ['x' => 2, 'y' => 1], 'spawnSprite' => ['South'], 'cost' => 0, 'confirmDialogue' => ['text' => 'Rest?']]]],
 PHP, (string) file_get_contents($path)));
     file_put_contents($directory . '/test-map.event.php', MapGridSource::buildSource("    \n D  ", 'EVENTS', "// Authored event notes.\n"));
     $other = $root . '/assets/Maps/approach';
@@ -29,7 +29,7 @@ PHP, (string) file_get_contents($path)));
 // Keep this author's comment.
 return ['name' => 'Approach', 'region' => '', 'events' => ['D' => [
     'class' => 'Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger',
-    'data' => ['destinationMap' => 'test-map', 'spawnPoint' => ['x' => 2, 'y' => 1]],
+    'data' => ['destinationMap' => 'test-map', 'spawnPoint' => ['x' => 2, 'y' => 1], 'spawnSprite' => ['South']],
 ]]];
 PHP);
     file_put_contents($root . '/assets/Events/arrival.php', <<<'PHP'
@@ -51,9 +51,11 @@ PHP);
 return [['type' => 'move_player', 'x' => 3, 'y' => 1]];
 PHP);
     $system = $root . '/assets/Data/system.php';
-    $data = ['startingPositions' => ['player' => ['destinationMap' => 'test-map', 'spawnPoint' => ['x' => 2, 'y' => 1]]]];
+    $data = ['startingPositions' => ['player' => ['destinationMap' => 'test-map', 'spawnPoint' => ['x' => 2, 'y' => 1], 'spawnSprite' => ['South']]]];
     file_put_contents($system, "<?php\n\nreturn " . var_export($data, true) . ";\n");
     file_put_contents($root . '/assets/Data/save-compatibility.php', "<?php\nreturn ['contentVersion' => 0, 'migrations' => [], 'aliases' => [], 'tombstones' => []];\n");
+    // Known collision, so the player reaches test-map from the start and saves can stand there to move.
+    file_put_contents($root . '/assets/Maps/collisions.php', "<?php\nuse Ichiloto\\Engine\\Events\\Enumerations\\CollisionType;\nreturn ['.' => CollisionType::NONE, ' ' => CollisionType::NONE, '/' => CollisionType::NONE, 'x' => CollisionType::NONE];\n");
 
     return $root;
 }

@@ -133,7 +133,8 @@ it('reports what it cannot rewrite instead of guessing or flattening it', functi
 });
 
 it('raises the save content version with a declarative map shift step', function () {
-    $root = mapLineProject();
+    // Saves can stand on home only where the player reaches it, so the collision is known.
+    $root = mapLineRemovalProject();
     $plan = planLineInsertion($root, 'y', 2, 2);
     expect($plan->notes)->toBe(['Saves move with the map: save content version 1 adds this map shift.']);
     $plan->apply();
@@ -182,7 +183,8 @@ it('moves a cutscene cast and script that start on the map, and a finalizer tran
 });
 
 it('inserts through the palette after a count and a confirmation, and one undo restores every file', function () {
-    $root = mapLineProject();
+    // Saves can stand on home only where the player reaches it, so the collision is known.
+    $root = mapLineRemovalProject();
     $before = sourceHashTree($root . '/assets');
     $editor = mapLineEditor($root);
     $workspace = getEditorProperty($editor, 'workspace');

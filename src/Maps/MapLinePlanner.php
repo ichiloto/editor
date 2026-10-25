@@ -17,6 +17,8 @@ use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Field\Reachability\ProjectReachability;
+use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
+use Ichiloto\Engine\Core\Rect;
 use RuntimeException;
 use Throwable;
 
@@ -172,11 +174,16 @@ final class MapLinePlanner
 
         $notes = [];
         $manifestPath = $root . '/' . self::MANIFEST;
+        $report = array_key_exists($manifestPath, $payloads) ? ProjectReachability::analyze($root . '/assets')->reports[$edit->mapId] ?? null : null;
         if (! array_key_exists($manifestPath, $payloads)) {
             $notes[] = sprintf('Existing saves are not migrated: the project has no %s.', self::MANIFEST);
+        } elseif (! ($report?->isAnyReachable(new Rect(0, 0, max(1, $width), max(1, $height))) ?? false)) {
+            // As for save relocations: a map the player reaches nowhere today, such as one not yet joined to the
+            // world, holds no save to move.
+            $notes[] = 'No save moves: the player reaches this map nowhere today.';
         } else {
             if ($edit instanceof LineRemoval) {
-                $edit = $edit->withLanding(self::findLanding($root, $edit, $width, $height));
+                $edit = $edit->withLanding(self::findLanding($report, $edit, $width, $height));
                 $notes[] = sprintf('Saves standing on the removed lines land at x %d, y %d.', ...$edit->landing);
             }
             $next = self::planSaveMigration($watched[$manifestPath], $payloads[$manifestPath], $edit, $handEdits);
@@ -211,9 +218,8 @@ final class MapLinePlanner
      * @return array{int, int}
      * @throws RuntimeException When no reachable cell is left, or the given landing is not one.
      */
-    private static function findLanding(string $root, LineRemoval $removal, int $width, int $height): array
+    private static function findLanding(?MapReachabilityReport $report, LineRemoval $removal, int $width, int $height): array
     {
-        $report = ProjectReachability::analyze($root . '/assets')->reports[$removal->mapId] ?? null;
         $vertical = $removal->axis === 'y';
         // Today's cell for a cell after the removal: lines from the removed ones on sit further along by the count.
         $toToday = static fn(int $x, int $y): array => $vertical
