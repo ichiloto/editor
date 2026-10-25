@@ -25,9 +25,13 @@ use Throwable;
  * cell the player could stand on in the saved map, reachable today or not, a
  * save standing there would load inside it. A cell is taken when its new type blocks movement (new
  * furniture, a wall, painted collision; walkable grass, exits and save points
- * do not) or when an authored NPC now stands on it, added or moved. The plan
+ * do not), when an authored NPC now stands on it, added or moved, or when an
+ * event now covers it that covered nothing there before, such as a moved door. Floor
+ * the player reaches today that the change walls off, such as the inside of
+ * a building moved onto open ground, moves its saves too. The plan
  * moves saves on each such cell to the nearest plain floor the player can
- * reach today, as one declared `relocations` step in the project's save
+ * reach once the change is saved, never a pocket the change itself walls
+ * off, as one declared `relocations` step in the project's save
  * compatibility manifest, for the author to review before the save writes
  * both. A project without a manifest, or a map not yet on disk, needs none.
  *
@@ -71,11 +75,17 @@ final class SaveRelocationPlanner
             return null;
         }
         $reachability = ProjectReachability::analyze($root . '/assets');
+        // Where saves land is judged on the maps as the change leaves them: a pocket it walls off is reachable today.
+        $unsaved = [];
+        foreach ($maps as $map) {
+            $unsaved[$map->mapId] = ['data' => $map->getEditableData(), 'layers' => $map->getLayerSet(), 'eventLayer' => $map->getEventLayerCells()];
+        }
+        $changed = ProjectReachability::analyze($root . '/assets', $unsaved);
         $relocations = [];
         $moving = [];
         foreach ($maps as $map) {
             $report = $reachability->reports[$map->mapId] ?? null;
-            $found = $report === null ? [] : self::planMap($map, $root, $report);
+            $found = $report === null ? [] : self::planMap($map, $root, $report, $changed->reports[$map->mapId] ?? null);
             if ($found !== []) {
                 $relocations = [...$relocations, ...$found];
                 $moving[] = $map->mapId;
@@ -109,11 +119,12 @@ final class SaveRelocationPlanner
     }
 
     /**
-     * One map's relocations, against today's reachability.
+     * One map's relocations: saves may stand where the player reaches today,
+     * and land where the player reaches once the map is saved.
      *
      * @return list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>
      */
-    private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report): array
+    private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report, ?MapReachabilityReport $changed): array
     {
         $grid = $map->getResolvedCollisionMap();
         $npcs = self::readNpcCells((array) ($map->getEditableData()['npcs'] ?? []));
@@ -124,11 +135,23 @@ final class SaveRelocationPlanner
         // Any cell walkable on disk may hold a save, even one no route reaches today: an older layout may have
         // reached it, and a save made there must never load inside what now takes it.
         $walkable = self::readSavedWalkableCells($root, $map->mapId);
+        // An event now covering a cell no event covered on disk, such as a door moved there, would start under a save.
+        $saved = self::readSavedEventCells($root, $map->mapId);
+        $covered = [];
+        foreach (self::readEventAreas($map) as $area) {
+            foreach ($area->cells as [$x, $y]) {
+                if (! isset($saved["{$x},{$y}"])) {
+                    $covered["{$x},{$y}"] = true;
+                }
+            }
+        }
         $blocked = [];
         foreach ($grid as $y => $row) {
             foreach (array_keys($row) as $x) {
-                if (($report->isReachable($x, $y) || isset($walkable["{$x},{$y}"]))
-                    && (CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]))) {
+                $taken = CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]) || isset($covered["{$x},{$y}"]);
+                // Floor the player reaches today and the change walls off: a save there would load with no way out.
+                $cutOff = $changed !== null && $report->isReachable($x, $y) && ! $changed->isReachable($x, $y);
+                if (($report->isReachable($x, $y) || isset($walkable["{$x},{$y}"])) && ($taken || $cutOff)) {
                     $blocked["{$x},{$y}"] = [$x, $y];
                 }
             }
@@ -143,7 +166,7 @@ final class SaveRelocationPlanner
         $areas = self::readEventAreas($map);
         $canLandFrom = static fn(int $fromX, int $fromY): \Closure => static fn(int $x, int $y): bool
             => ($grid[$y][$x] ?? null) === CollisionType::NONE->value
-            && $passable($x, $y) && $report->isReachable($x, $y) && ! isset($events["{$x},{$y}"])
+            && $passable($x, $y) && ($changed?->isReachable($x, $y) ?? false) && ! isset($events["{$x},{$y}"])
             && ! array_any($areas, static fn(CellArea $area): bool => $area->containsCell($x, $y) && ! $area->containsCell($fromX, $fromY));
         $groups = [];
         foreach ($blocked as [$x, $y]) {
@@ -272,6 +295,22 @@ final class SaveRelocationPlanner
         }
 
         return $walkable;
+    }
+
+    /** @return array<string, true> The cells the map's events cover on disk, bound events included. */
+    private static function readSavedEventCells(string $root, string $mapId): array
+    {
+        $source = MapSourceReader::readFiles(MapSourceReader::resolvePaths($root . '/assets/Maps', $mapId));
+        $cells = [];
+        foreach ((array) ($source['data']['events'] ?? []) as $event) {
+            if (is_array($event) && is_array($event['area'] ?? null)) {
+                foreach (CellArea::fromArray($event['area'], 'Event area')->cells as [$x, $y]) {
+                    $cells["{$x},{$y}"] = true;
+                }
+            }
+        }
+
+        return $cells;
     }
 
     private static function readSavedNpcs(string $root, string $mapId): array

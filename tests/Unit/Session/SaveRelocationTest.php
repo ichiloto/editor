@@ -15,13 +15,13 @@ use Ichiloto\Editor\Storage\WorkspaceSave;
  * reachable, and the project has a save manifest.
  */
 
-/** @return array{string, EditorSession} The project and a session with a wall painted on home's floor at (2, 3). */
+/** @return array{string, EditorSession} The project and a session with a wall painted on home's floor at (1, 2), a dead end beside the bed. */
 function openWalledHomeSession(): array
 {
     $root = mapLineRemovalProject();
     $session = EditorSession::open($root);
     $map = $session->readMap('home');
-    $session->paint('home', $map['revision'], $map['baseLayer'], [[2, 3]], '#');
+    $session->paint('home', $map['revision'], $map['baseLayer'], [[1, 2]], '#');
 
     return [$root, $session];
 }
@@ -38,8 +38,8 @@ it('asks before saving a map that makes reachable floor solid, naming where thos
     $question = $session->saveMap('home');
 
     expect($question)->toMatchArray(['status' => 'question', 'map' => 'home', 'contentVersion' => 1])
-        ->and($question['relocations'])->toBe([['map' => 'home', 'cells' => [[2, 3]], 'to' => [2, 4]]])
-        ->and($question['moves'])->toBe(['x 2, y 3 to x 2, y 4'])
+        ->and($question['relocations'])->toBe([['map' => 'home', 'cells' => [[1, 2]], 'to' => [1, 1]]])
+        ->and($question['moves'])->toBe(['x 1, y 2 to x 1, y 1'])
         ->and(array_column($question['answers'], 'key'))->toBe(['cancel', 'write'])
         ->and(sourceHashTree($root))->toBe($before)
         ->and($session->saveMap('home', 'cancel'))->toMatchArray(['status' => 'cancelled'])
@@ -53,10 +53,10 @@ it('saves the map and the relocation step together once confirmed, and undo remo
 
     $saved = $session->saveMap('home', 'write', $question['confirm']);
 
-    expect($saved['relocated'])->toBe(['x 2, y 3 to x 2, y 4'])
+    expect($saved['relocated'])->toBe(['x 1, y 2 to x 1, y 1'])
         ->and(readSaveManifest($root)['contentVersion'])->toBe(1)
         ->and(readSaveManifest($root)['migrations'])->toBe([['from' => 0, 'to' => 1,
-            'relocations' => [['map' => 'home', 'cells' => [[2, 3]], 'to' => [2, 4]]]]])
+            'relocations' => [['map' => 'home', 'cells' => [[1, 2]], 'to' => [1, 1]]]]])
         ->and(Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest::fromProjectRoot($root)->createMigrationFrom(0))
         ->toBeInstanceOf(Ichiloto\Engine\IO\SaveCompatibility\DeclaredPositionContentMigration::class)
         ->and(describeSaveCompatibilityIssues($root))->toBe([])
@@ -97,7 +97,7 @@ it('moves no save off walkable grass or a save point, and moves saves off grass 
     };
 
     // New grass and a new save point are walkable: nothing to move.
-    $paint([[3, 1]], 'g');
+    $paint([[1, 2]], 'g');
     $paint([[1, 1]], 'P');
     expect($session->saveMap('home'))->toHaveKey('saved');
 
@@ -105,9 +105,9 @@ it('moves no save off walkable grass or a save point, and moves saves off grass 
     $paint([[2, 1]], ' ');
     expect($session->saveMap('home'))->toHaveKey('saved');
 
-    // Grass that becomes solid does move the saves on it.
-    $paint([[3, 1]], '#');
-    expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[3, 1]], 'to' => [2, 1]]]);
+    // Grass that becomes solid does move the saves on it, past the save point to plain floor.
+    $paint([[1, 2]], '#');
+    expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[1, 2]], 'to' => [2, 1]]]);
 });
 
 it('moves saves off walkable floor no route reaches today, since an older layout may have reached it', function () {
@@ -151,12 +151,12 @@ it('leaves a map that would move saves out of Save All, for its own reviewed sav
 it('reviews the relocation in the terminal editor before Ctrl+S writes both', function () {
     $root = mapLineRemovalProject();
     $editor = mapLineEditor($root);
-    getEditorProperty($editor, 'workspace')->getMapByIndex(0)->setTileSymbol(2, 3, '#');
+    getEditorProperty($editor, 'workspace')->getMapByIndex(0)->setTileSymbol(1, 2, '#');
 
     pressKeys($editor, "\x13");
     $labels = array_column(getEditorProperty($editor, 'eventOptionDialogEntries'), 'label');
     expect(getEditorProperty($editor, 'isEventOptionDialogOpen'))->toBeTrue()
-        ->and($labels)->toContain('Save and move saves', 'Move saves on x 2, y 3 to x 2, y 4')
+        ->and($labels)->toContain('Save and move saves', 'Move saves on x 1, y 2 to x 1, y 1')
         ->and(readSaveManifest($root)['contentVersion'])->toBe(0);
 
     pressKeys($editor, "\033[B", "\r");
@@ -174,7 +174,8 @@ it('writes the relocations of every map saved together as one manifest step', fu
     $workspace = Ichiloto\Editor\ProjectWorkspace::fromProject($root);
     foreach ($workspace->maps as $map) {
         if (in_array($map->mapId, ['home', 'town'], true)) {
-            [$x, $y] = $map->mapId === 'home' ? [2, 3] : [3, 1];
+            // Home's wall leaves its door to town reachable, so both maps have floor to land saves on.
+            [$x, $y] = $map->mapId === 'home' ? [1, 2] : [3, 1];
             $map->setLayerCell($map->getLayers()[0]['id'], $x, $y, '#');
         }
     }
@@ -204,4 +205,27 @@ it('lands no save inside a bound event its own cell was not already in', functio
 
     expect($question['relocations'])->toHaveCount(1)
         ->and($question['relocations'][0]['to'])->not->toBe([2, 4]);
+});
+
+it('moves saves off floor the change walls off, and lands none in that pocket', function () {
+    $root = mapLineRemovalProject();
+    $session = EditorSession::open($root);
+    $map = $session->readMap('home');
+    // A wall at (3, 1) closes the north-west corner off behind the water and the bed: floor the player reaches
+    // today and no route reaches once saved, so its saves move too, and the wall's own saves land outside it.
+    $session->paint('home', $map['revision'], $map['baseLayer'], [[3, 1]], '#');
+
+    expect($session->saveMap('home')['relocations'])->toBe([
+        ['map' => 'home', 'cells' => [[1, 1], [1, 2]], 'to' => [1, 4]],
+        ['map' => 'home', 'cells' => [[2, 1], [3, 1]], 'to' => [4, 2]],
+    ]);
+});
+
+it('moves saves off floor an event moved onto, where loading would start it', function () {
+    $root = mapLineRemovalProject();
+    $session = EditorSession::open($root);
+    // The event at (4, 1) moves one cell west onto open floor; the floor it leaves takes the saves.
+    $session->moveEvent('home', $session->readMap('home')['revision'], 'W', -1, 0);
+
+    expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[3, 1]], 'to' => [4, 1]]]);
 });

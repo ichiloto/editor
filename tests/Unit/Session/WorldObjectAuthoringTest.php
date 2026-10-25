@@ -508,3 +508,20 @@ it('refuses a placement condition the Engine cannot evaluate before changing the
     expect($session->readMap('test-map')['worldObjects'])->toBe($before)
         ->and(file_get_contents($file))->toBe($source);
 });
+
+it('judges a world object where a line removal moves it, so one beyond the map\'s new width moves back with its line', function () {
+    [$root, $file, $session] = createWorldObjectProject();
+    file_put_contents($file, str_replace("'anchor' => ['x' => 1, 'y' => 1]", "'anchor' => ['x' => 3, 'y' => 1]", (string) file_get_contents($file)));
+    // No saves to land: the removal needs no reachable landing.
+    @unlink($root . '/assets/Data/save-compatibility.php');
+    $session = EditorSession::open($root);
+    $revision = $session->readMap('test-map')['revision'];
+
+    $question = $session->removeMapLines('test-map', $revision, 'x', 0, 1);
+    $removed = $session->removeMapLines('test-map', $revision, 'x', 0, 1, null, 'write', $question['confirm']);
+
+    expect($removed['status'])->toBe('removed')
+        ->and($session->readMap('test-map')['width'])->toBe(3)
+        ->and($session->readMap('test-map')['worldObjects'][0]['anchor'])->toBe(['x' => 2, 'y' => 1])
+        ->and((require $file)['worldObjects'][0]['anchor'])->toBe(['x' => 2, 'y' => 1]);
+});

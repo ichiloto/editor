@@ -20,6 +20,8 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
+use Ichiloto\Engine\Events\Enumerations\CollisionType;
+use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Field\WorldObjectDefinition;
 use Ichiloto\Engine\Rendering\Sprites\FieldSpriteRole;
 use Throwable;
@@ -548,17 +550,124 @@ final readonly class WorldObjectAuthoring
         return $this->writeEntries($entries, $label);
     }
 
+    /**
+     * Writes the map's world objects, and on a map that declares its own
+     * collision, the footprints their resources stamp ({@see planFootprints()}),
+     * as one undo step.
+     */
     private function writeEntries(array $entries, string $label): ?Command
     {
         $before = $this->map->getMapDataField([WorldObjectDefinition::DATA_KEY]);
         if ($before === $entries) { return null; }
         self::validateEntries($this->map, $entries, false);
         if (($issue = $this->getSourceIssue()) !== null) { throw new MapSourceRefusal($issue); }
-        $this->map->setMapDataField([WorldObjectDefinition::DATA_KEY], $entries);
+        $footprints = $this->planFootprints(is_array($before) ? $before : [], $entries);
         $map = $this->map;
+        $occupancyBefore = $footprints === [] ? null : $map->getMapDataField([MapPhysicalOccupancy::DATA_KEY]);
+        $map->setMapDataField([WorldObjectDefinition::DATA_KEY], $entries);
+        if ($occupancyBefore === null) {
+            return new GenericCommand($label,
+                static fn() => $map->setMapDataField([WorldObjectDefinition::DATA_KEY], $entries),
+                static fn() => $map->setMapDataField([WorldObjectDefinition::DATA_KEY], $before));
+        }
+        try {
+            $map->writePhysicalOccupancy($footprints);
+        } catch (MapSourceRefusal $refusal) {
+            $map->setMapDataField([WorldObjectDefinition::DATA_KEY], $before);
+            throw $refusal;
+        }
+        $occupancyAfter = $map->getMapDataField([MapPhysicalOccupancy::DATA_KEY]);
         return new GenericCommand($label,
-            static fn() => $map->setMapDataField([WorldObjectDefinition::DATA_KEY], $entries),
-            static fn() => $map->setMapDataField([WorldObjectDefinition::DATA_KEY], $before));
+            static function () use ($map, $entries, $occupancyAfter): void {
+                $map->setMapDataField([WorldObjectDefinition::DATA_KEY], $entries);
+                $map->setMapDataField([MapPhysicalOccupancy::DATA_KEY], $occupancyAfter);
+            },
+            static function () use ($map, $before, $occupancyBefore): void {
+                $map->setMapDataField([WorldObjectDefinition::DATA_KEY], $before);
+                $map->setMapDataField([MapPhysicalOccupancy::DATA_KEY], $occupancyBefore);
+            });
+    }
+
+    /**
+     * The collision writes that keep each world object's resource footprint
+     * (its occupancy stamp, an authoring recipe the Engine never reads at run
+     * time) in the map's own declared collision as objects are made, moved,
+     * changed or deleted. A cell a footprint leaves goes back to plain floor
+     * when it still holds what the footprint stamped and no other object
+     * stamps it; a cell a footprint takes must be plain floor, as a tree the
+     * tree brush plants must, so leaving it later gives back exactly that
+     * floor. Maps that resolve collision from their glyphs keep none.
+     *
+     * @param list<array<string, mixed>> $before
+     * @param list<array<string, mixed>> $after
+     * @return list<array{0: int, 1: int, 2: CollisionType}>
+     * @throws MapSourceRefusal When a footprint would take a cell that is not plain floor; nothing is changed.
+     */
+    private function planFootprints(array $before, array $after): array
+    {
+        if (! $this->map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY])) {
+            return [];
+        }
+        $left = $this->readFootprints($before);
+        $taken = $this->readFootprints($after);
+        if ($left === $taken) {
+            return [];
+        }
+        // The declared cells as authored, which footprints write; never what glyphs or terrain kinds resolve to.
+        $collision = array_map(static fn(mixed $row): array => array_map(
+            static fn(mixed $cell): ?int => $cell instanceof CollisionType ? $cell->value : null, (array) $row),
+            (array) $this->map->getMapDataField([MapPhysicalOccupancy::DATA_KEY]));
+        $writes = [];
+        foreach ($left as $key => [$x, $y, $type]) {
+            if (! isset($taken[$key]) && ($collision[$y][$x] ?? null) === $type->value) {
+                $writes[] = [$x, $y, CollisionType::NONE];
+            }
+        }
+        foreach ($taken as $key => [$x, $y, $type, $id]) {
+            if (($left[$key][2] ?? null) === $type) {
+                continue;
+            }
+            $current = $collision[$y][$x] ?? null;
+            if ($current !== CollisionType::NONE->value && ! isset($left[$key])) {
+                throw new MapSourceRefusal(sprintf('World object %s stamps %s on %d, %d, which is %s, not plain floor. '
+                    . 'An object\'s footprint stands on plain floor, so moving or removing it gives that floor back; '
+                    . 'choose another place or paint the cell\'s collision first. Nothing was changed.',
+                    $id, $type->name, $x, $y, CollisionType::tryFrom((int) $current)?->name ?? 'outside the map'));
+            }
+            $writes[] = [$x, $y, $type];
+        }
+
+        return $writes;
+    }
+
+    /**
+     * Each cell the objects' resources stamp, with its collision and the
+     * object stamping it first. Objects without a known resource stamp none.
+     *
+     * @param list<array<string, mixed>> $entries
+     * @return array<string, array{0: int, 1: int, 2: CollisionType, 3: string}>
+     */
+    private function readFootprints(array $entries): array
+    {
+        $catalog = $this->map->getFieldCatalog();
+        $cells = [];
+        foreach ($entries as $entry) {
+            $anchor = $entry['anchor'] ?? null;
+            if (! is_string($entry['resource'] ?? null) || ! is_int($anchor['x'] ?? null) || ! is_int($anchor['y'] ?? null)) {
+                continue;
+            }
+            try {
+                $stamp = $catalog->getResource($entry['resource'])->occupancyStamp;
+            } catch (InvalidArgumentException) {
+                continue;
+            }
+            foreach ($stamp as $cell) {
+                [$x, $y] = [$anchor['x'] + $cell['x'], $anchor['y'] + $cell['y']];
+                $cells["{$x},{$y}"] ??= [$x, $y, $cell['type'], (string) ($entry['id'] ?? $entry['resource'])];
+            }
+        }
+
+        return $cells;
     }
 
     private function getUnusedId(array $entries, string $stem): string
