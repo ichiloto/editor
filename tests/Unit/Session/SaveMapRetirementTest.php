@@ -34,12 +34,36 @@ function retirementProject(): string
         'old-road' => [["######", "#....#", "######"], ["      ", "      ", "      "], "'events' => [],\n"],
     ];
     foreach ($maps as $mapId => [$tiles, $events, $content]) {
-        $folder = $root . '/assets/Maps/' . $mapId;
-        mkdir($folder, 0o777, true);
-        file_put_contents("{$folder}/{$mapId}.map.php", "<?php\n\nreturn <<<'ICHILOTO_MAP'\n" . implode("\n", $tiles) . "\nICHILOTO_MAP;\n");
-        file_put_contents("{$folder}/{$mapId}.event.php", "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n" . implode("\n", $events) . "\nICHILOTO_EVENT_MAP;\n");
-        file_put_contents("{$folder}/{$mapId}.data.php", "<?php\n\nreturn [\n  'name' => '{$mapId}',\n  'region' => '',\n  'triggers' => [],\n  {$content}];\n");
+        writeRetirementMap($root, $mapId, $tiles, $events, $content);
     }
+
+    return $root;
+}
+
+/** Writes one map of the synthetic project from its glyph rows, event rows and data entries. */
+function writeRetirementMap(string $root, string $mapId, array $tiles, array $events, string $content): void
+{
+    $folder = $root . '/assets/Maps/' . $mapId;
+    is_dir($folder) || mkdir($folder, 0o777, true);
+    file_put_contents("{$folder}/{$mapId}.map.php", "<?php\n\nreturn <<<'ICHILOTO_MAP'\n" . implode("\n", $tiles) . "\nICHILOTO_MAP;\n");
+    file_put_contents("{$folder}/{$mapId}.event.php", "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n" . implode("\n", $events) . "\nICHILOTO_EVENT_MAP;\n");
+    file_put_contents("{$folder}/{$mapId}.data.php", "<?php\n\nreturn [\n  'name' => '{$mapId}',\n  'region' => '',\n  'triggers' => [],\n  {$content}];\n");
+}
+
+/**
+ * The synthetic project with a second successor: `reach`, a small field the player reaches from `field` through a
+ * door, holding the part of `old-road` split off from `field`.
+ */
+function splitRetirementProject(): string
+{
+    $root = retirementProject();
+    writeRetirementMap($root, 'field', ["########", "#......#", "#.~~.;.#", "#......#", "#......#", "########"],
+        ["        ", "      E ", "        ", "        ", "      D ", "        "],
+        "'events' => ['E' => ['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\ChestEventTrigger', 'data' => ['lootType' => 'item', 'loot' => 'S-Potion']],\n"
+        . "    'D' => ['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\TransferPlayerTrigger', 'data' => ['destinationMap' => 'reach', 'spawnPoint' => ['x' => 2, 'y' => 1], 'spawnSprite' => ['South']]]],\n"
+        . "  'npcs' => [['id' => 'guard', 'name' => 'Guard', 'sprite' => 'g', 'x' => 4, 'y' => 3, 'dialogue' => [['text' => 'Halt.']]]],\n");
+    writeRetirementMap($root, 'reach', ["#####", "#...#", "#.~.#", "#####"], ["     ", " A   ", "     ", "     "],
+        "'events' => ['A' => ['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\TransferPlayerTrigger', 'data' => ['destinationMap' => 'field', 'spawnPoint' => ['x' => 5, 'y' => 4], 'spawnSprite' => ['West']]]],\n");
 
     return $root;
 }
@@ -88,20 +112,76 @@ it('refuses a retirement whose landings cannot be stood on, writing nothing', fu
         ->and(sourceHashTree($root . '/assets'))->toBe($before)
         ->and($session->undo()['label'])->toBeNull();
 })->with([
-    'solid' => ['field', [2, 2], null, 'x 2, y 2 (it is solid)'],
-    'an event' => ['field', [1, 4], [['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1, 'to' => [6, 1]]], 'x 6, y 1 (an event is there)'],
-    'an NPC' => ['field', [4, 3], null, 'x 4, y 3 (an NPC stands there)'],
-    'grass' => ['field', [5, 2], null, 'x 5, y 2 (it is not plain floor (encounter))'],
-    'off the map' => ['field', [9, 9], null, 'x 9, y 9 (it is off the map)'],
+    'solid' => ['field', [2, 2], null, 'field x 2, y 2 (it is solid)'],
+    'an event' => ['field', [1, 4], [['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1, 'to' => [6, 1]]], 'field x 6, y 1 (an event is there)'],
+    'an NPC' => ['field', [4, 3], null, 'field x 4, y 3 (an NPC stands there)'],
+    'grass' => ['field', [5, 2], null, 'field x 5, y 2 (it is not plain floor (encounter))'],
+    'off the map' => ['field', [9, 9], null, 'field x 9, y 9 (it is off the map)'],
     'an unknown destination' => ['nowhere', [1, 1], null, 'There is no map nowhere for the saves on old-road to move into.'],
     'a malformed landing' => ['field', [1, 4], [['x' => 0, 'y' => 0, 'width' => 0, 'height' => 1, 'to' => [5, 4]]], 'landings[0] width must be a positive integer'],
 ]);
+
+it('lands part of a split retired map on the successor its landing names', function () {
+    $root = splitRetirementProject();
+    $session = EditorSession::open($root);
+
+    expect($session->retireMap('old-road', 'field', [1, 4], [['x' => 3, 'y' => 0, 'width' => 3, 'height' => 3, 'map' => 'reach', 'to' => [3, 1]]]))
+        ->toBe(['from' => 0, 'to' => 1, 'contentVersion' => 1, 'map' => 'old-road', 'into' => 'field'])
+        ->and(readRetirementManifest($root)['migrations'][0]['mapRetirements'][0]['landings'])
+        ->toBe([['x' => 3, 'y' => 0, 'width' => 3, 'height' => 3, 'map' => 'reach', 'to' => [3, 1]]])
+        ->and(describeSaveCompatibilityIssues($root))->toBe([]);
+
+    $migration = SaveCompatibilityManifest::fromProjectRoot($root)->createMigrationFrom(0);
+    expect($migration->movePlace('old-road', new Vector2(4, 1)))->toEqual(['mapId' => 'reach', 'position' => new Vector2(3, 1)])
+        ->and($migration->movePlace('old-road', new Vector2(1, 1)))->toEqual(['mapId' => 'field', 'position' => new Vector2(1, 4)]);
+});
+
+it('refuses a split landing on a missing map, on the retired map or where a save cannot stand on its own map', function (array $landing, string $reason) {
+    $root = splitRetirementProject();
+    $before = sourceHashTree($root . '/assets');
+    $session = EditorSession::open($root);
+
+    expect(fn() => $session->retireMap('old-road', 'field', [1, 4], [['x' => 3, 'y' => 0, 'width' => 3, 'height' => 3, ...$landing]]))
+        ->toThrow(SessionRefusal::class, $reason)
+        ->and(sourceHashTree($root . '/assets'))->toBe($before);
+})->with([
+    'a missing map' => [['map' => 'nowhere', 'to' => [1, 1]], 'nowhere x 1, y 1 (there is no such map)'],
+    'the retired map' => [['map' => 'old-road', 'to' => [1, 1]], 'map old-road is the retired map'],
+    'water on the other successor' => [['map' => 'reach', 'to' => [2, 2]], 'reach x 2, y 2 (it is solid)'],
+    'an event on the other successor' => [['map' => 'reach', 'to' => [1, 1]], 'reach x 1, y 1 (an event is there)'],
+]);
+
+it('re-checks a split landing on its own map when a change set commits', function () {
+    $root = splitRetirementProject();
+    $before = sourceHashTree($root . '/assets');
+    $session = EditorSession::open($root);
+
+    $session->beginChanges();
+    $session->retireMap('old-road', 'field', [1, 4], [['x' => 3, 'y' => 0, 'width' => 3, 'height' => 3, 'map' => 'reach', 'to' => [3, 1]]]);
+    $map = $session->readMap('reach');
+    $session->paint('reach', $map['revision'], $map['baseLayer'], [[3, 1]], '~');
+    $refused = $session->commitChanges(relocateSaves: true);
+
+    expect($refused['status'])->toBe('refused')
+        ->and($refused['reason'])->toContain('saves on old-road at reach x 3, y 1 (it is solid)')
+        ->and(sourceHashTree($root . '/assets'))->toBe($before);
+});
+
+it('reports a split landing on a map the project no longer has', function () {
+    $root = splitRetirementProject();
+    $session = EditorSession::open($root);
+    $session->retireMap('old-road', 'field', [1, 4], [['x' => 3, 'y' => 0, 'width' => 3, 'height' => 3, 'map' => 'reach', 'to' => [3, 1]]]);
+    $path = $root . '/assets/Data/save-compatibility.php';
+    file_put_contents($path, str_replace("'map' => 'reach'", "'map' => 'gone'", (string) file_get_contents($path)));
+
+    expect(describeSaveCompatibilityIssues($root))->toBe(['Saves on old-road move into gone, which is not a map in the project.']);
+});
 
 it('retires a redrawn map into itself, its landings judged on the layout the session holds', function () {
     $root = retirementProject();
     $session = EditorSession::open($root);
 
-    expect(fn() => $session->retireMap('field', 'field', [2, 2]))->toThrow(SessionRefusal::class, 'x 2, y 2 (it is solid)');
+    expect(fn() => $session->retireMap('field', 'field', [2, 2]))->toThrow(SessionRefusal::class, 'field x 2, y 2 (it is solid)');
 
     $retired = $session->retireMap('field', 'field', [1, 4], [['x' => 0, 'y' => 0, 'width' => 4, 'height' => 2, 'to' => [5, 4]]]);
 
@@ -115,7 +195,7 @@ it('judges landings on the destination as the session holds it, unsaved edits in
     $map = $session->readMap('field');
     $session->paint('field', $map['revision'], $map['baseLayer'], [[1, 4]], '~');
 
-    expect(fn() => $session->retireMap('old-road', 'field', [1, 4]))->toThrow(SessionRefusal::class, 'x 1, y 4 (it is solid)');
+    expect(fn() => $session->retireMap('old-road', 'field', [1, 4]))->toThrow(SessionRefusal::class, 'field x 1, y 4 (it is solid)');
 });
 
 it('writes a retirement inside a change set, and refuses one whose later edits take a landing, leaving nothing', function () {
@@ -130,7 +210,7 @@ it('writes a retirement inside a change set, and refuses one whose later edits t
     $refused = $session->commitChanges(relocateSaves: true);
 
     expect($refused['status'])->toBe('refused')
-        ->and($refused['reason'])->toContain('map retirement landings where saves cannot stand: saves on old-road at x 5, y 4 (it is solid)')
+        ->and($refused['reason'])->toContain('map retirement landings where saves cannot stand: saves on old-road at field x 5, y 4 (it is solid)')
         ->and(sourceHashTree($root . '/assets'))->toBe($before)
         ->and($session->listUnsavedChanges())->toBe([]);
 

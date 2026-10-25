@@ -18,7 +18,8 @@ use Throwable;
  * Plans retiring a map in the project's save compatibility manifest: one new
  * step holding one `mapRetirements` entry, so saves standing on the retired
  * map load onto the map its places moved to, at the landings the author
- * chose. The content version rises by one. The manifest is rewritten through
+ * chose; a landing may name another successor when the places were split
+ * across maps. The content version rises by one. The manifest is rewritten through
  * the source-preserving writer and the staged manifest is read back as the
  * game reads it, so an entry the game would refuse is never written.
  *
@@ -82,13 +83,14 @@ final class SaveMapRetirement
     /**
      * Where each landing of the retirement in step `$from` stands once every
      * later declared step has run, as a save landing there moves: a later
-     * shift, removal or relocation on the destination, or a later retirement
-     * of it. A step that names a project class is passed over, as the Editor
+     * shift, removal or relocation on the map it lands on (`into`, or the
+     * successor the landing names), or a later retirement of that map. A step that names a project class is passed over, as the Editor
      * cannot run project code.
      *
      * @param array<array-key, mixed> $manifest The manifest as evaluated.
      * @param int $from The retirement step's `from` version.
-     * @return list<array{map: string, cell: array{int, int}, landing: array{int, int}}> Each landing as written, and
+     * @return list<array{map: string, cell: array{int, int}, landing: array{int, int}}> Each landing cell as written on
+     *     its own map, and
      *     where it stands now: the map by its current id, through declared map aliases. None when the step does not
      *     retire `$map`, as after an undo.
      * @throws RuntimeException When a step is malformed.
@@ -119,8 +121,8 @@ final class SaveMapRetirement
         unset($steps[$from]);
 
         $landings = [];
-        foreach ($retirement->getLandingCells() as $landing) {
-            $place = ['mapId' => $retirement->into, 'position' => new Vector2(...$landing)];
+        foreach ($retirement->getLandingPlaces() as ['map' => $landingMap, 'cell' => $landing]) {
+            $place = ['mapId' => $landingMap, 'position' => new Vector2(...$landing)];
             foreach ($steps as $edits) {
                 $place = $edits === null ? $place : new DeclaredPositionContentMigration($edits, $aliases)->movePlace($place['mapId'], $place['position']);
             }

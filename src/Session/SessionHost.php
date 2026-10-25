@@ -926,7 +926,7 @@ final class SessionHost
 
         return is_array($landings) && array_is_list($landings) && array_all($landings, static fn(mixed $landing): bool => is_array($landing))
             ? $landings
-            : throw new InvalidRequest('"landings" must be a list of {x, y, width, height, to} rectangles when given.');
+            : throw new InvalidRequest('"landings" must be a list of {x, y, width, height, to, map?} rectangles when given.');
     }
 
     /**

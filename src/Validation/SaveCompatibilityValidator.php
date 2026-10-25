@@ -330,9 +330,10 @@ final class SaveCompatibilityValidator
     }
 
     /**
-     * Reports a retirement whose saves end on no map of the project: its
-     * destination, followed through later retirements and map aliases as a
-     * save landing there moves, is not a current map.
+     * Reports a retirement whose saves end on no map of the project: a map it
+     * lands saves on (`into`, or a successor a landing names), followed
+     * through later retirements and map aliases as a save landing there
+     * moves, is not a current map.
      *
      * @param list<array{where: string, retirement: MapRetirement}> $retirements In manifest order.
      * @param array<mixed> $mapAliases
@@ -355,15 +356,20 @@ final class SaveCompatibilityValidator
         };
         $issues = [];
         foreach ($retirements as $index => ['where' => $where, 'retirement' => $retirement]) {
-            $current = $resolve($retirement->into);
+            // Every map a save may end on: each map the retirement lands on, and, where a later retirement moves
+            // saves off one, every map that one lands on in turn.
+            $ends = array_fill_keys(array_map($resolve, array_column($retirement->getLandingPlaces(), 'map')), true);
             foreach (array_slice($retirements, $index + 1) as ['retirement' => $later]) {
-                if ($resolve($later->map) === $current) {
-                    $current = $resolve($later->into);
+                if (isset($ends[$resolve($later->map)])) {
+                    unset($ends[$resolve($later->map)]);
+                    $ends += array_fill_keys(array_map($resolve, array_column($later->getLandingPlaces(), 'map')), true);
                 }
             }
-            if (! in_array($current, $workspace->mapIds, true)) {
-                $issues[] = Issue::error($where, sprintf('Saves on %s move into %s, which is not a map in the project.', $retirement->map, $current),
-                    'Retire the map into one that exists, or alias the destination to the map that took its place.');
+            foreach (array_keys($ends) as $current) {
+                if (! in_array($current, $workspace->mapIds, true)) {
+                    $issues[] = Issue::error($where, sprintf('Saves on %s move into %s, which is not a map in the project.', $retirement->map, $current),
+                        'Retire the map into one that exists, or alias the destination to the map that took its place.');
+                }
             }
         }
 

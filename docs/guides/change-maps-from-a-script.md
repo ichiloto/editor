@@ -293,27 +293,39 @@ places now stand on another map. It appends one step to
 `assets/Data/save-compatibility.php` with one `mapRetirements` entry and
 raises `contentVersion` by one. A save standing on `map` then loads onto
 `into`: at the `to` of the first landing rectangle that holds its cell, or at
-the entry's own `to`. Each landing is `{x, y, width, height, to}`: a
-rectangle in `map`'s coordinates and the cell on `into` its saves land on.
-For example:
+the entry's own `to`. Each landing is `{x, y, width, height, to, map?}`: a
+rectangle in `map`'s coordinates and the cell its saves land on, on `into`
+or, when that part of `map`'s places was split off onto another map, on the
+successor its `map` names. For example:
 
 ```json
 {"method": "saveCompatibility.retireMap", "params": {"map": "overworld", "into": "continent",
   "landings": [{"x": 0, "y": 0, "width": 60, "height": 61, "to": [12, 40]}], "to": [30, 30]}}
 ```
 
-Every landing must be a cell a save can stand on in `into` as the session
-holds it, unsaved edits included: plain floor the player can reach, not
-grass, an exit or a save point, with no event or NPC on it. The request is
-refused with nothing written when a landing is not, naming each cell and why,
-and when `into` is not a map or the entry is malformed.
+A region split across maps lands each part on its own successor:
+
+```json
+{"method": "saveCompatibility.retireMap", "params": {"map": "garden", "into": "continent",
+  "landings": [{"x": 140, "y": 0, "width": 81, "height": 41, "map": "high-reach", "to": [2, 22]}], "to": [142, 128]}}
+```
+
+Every landing must be a cell a save can stand on in the map it lands on as
+the session holds it, unsaved edits included: plain floor the player can
+reach, not grass, an exit or a save point, with no event or NPC on it. The
+request is refused with nothing written when a landing is not, naming each
+map, cell and why, when `into` or a landing's `map` is not a map, when a
+landing's `map` is the retired map (unless it retires into itself), or when
+the entry is malformed. Committing a change set judges the landings again on
+each map as the change set leaves it.
 
 A map redrawn under its own ID retires into itself: `map` and `into` are the
 same, the rectangles are in its old layout's coordinates and the landings are
 judged on the new layout the session holds. Every save made on the old layout
 moves.
 `map` may still exist: retire it first, then delete it with `map.delete`
-outside the batch. A save that visited `map` has visited `into` too. The
+outside the batch. A save that visited `map` has visited `into` too; only
+`into`, which takes over the retired identity, inherits the visit. The
 retirement adds no map alias, since an alias would make the two maps one and
 read every completed one-shot event `map:marker` as `into`'s own marker.
 

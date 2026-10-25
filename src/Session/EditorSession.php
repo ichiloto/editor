@@ -6546,7 +6546,8 @@ final class EditorSession
      * change set leaves them, followed through the steps written after it.
      *
      * @param array{int, int} $to Where saves no landing holds land on `$into`.
-     * @param list<array<string, mixed>>|null $landings Rectangles of `$map` (`x`, `y`, `width`, `height`) and each one's `to`.
+     * @param list<array<string, mixed>>|null $landings Rectangles of `$map` (`x`, `y`, `width`, `height`), each one's `to`
+     *     and optional `map`: the successor holding that part of the places, `$into` when left out.
      * @return array{from: int, to: int, contentVersion: int, map: string, into: string}
      * @throws SessionRefusal When the entry is malformed, `$into` is not a map, a landing cannot be
      *     stood on, or the manifest cannot be read or take the step; nothing is written.
@@ -6562,11 +6563,11 @@ final class EditorSession
         if (! isset($this->getMapsById()[$retirement->into])) {
             throw new SessionRefusal(sprintf('There is no map %s for the saves on %s to move into.', $retirement->into, $retirement->map));
         }
-        $refusals = $this->describeLandingRefusals($this->workspace->analyzeReachability(),
-            array_map(static fn(array $cell): array => ['map' => $retirement->into, 'cell' => $cell], $retirement->getLandingCells()));
+        // Each landing is judged on the map it lands on: `into`, or the successor a landing names.
+        $refusals = $this->describeLandingRefusals($this->workspace->analyzeReachability(), $retirement->getLandingPlaces());
         if ($refusals !== []) {
-            throw new SessionRefusal(sprintf('Saves on %s cannot land on %s at %s. Choose plain floor the player can reach, with no event or NPC on it.',
-                $retirement->map, $retirement->into, implode('; ', $refusals)));
+            throw new SessionRefusal(sprintf('Saves on %s cannot land at %s. Choose plain floor the player can reach, with no event or NPC on it.',
+                $retirement->map, implode('; ', $refusals)));
         }
         try {
             $planned = SaveMapRetirement::plan($this->workspace->projectRoot, $this->workspace->projectId, $entry);
@@ -6650,7 +6651,7 @@ final class EditorSession
      * Why each save landing cannot be stood on, as the session holds its map.
      *
      * @param list<array{map: string, cell: array{int, int}}> $landings
-     * @return list<string> One `x 3, y 4 (it is solid)` per refused landing; empty when all may be stood on.
+     * @return list<string> One `field x 3, y 4 (it is solid)` per refused landing; empty when all may be stood on.
      */
     private function describeLandingRefusals(ProjectReachability $reachability, array $landings): array
     {
@@ -6660,12 +6661,12 @@ final class EditorSession
             $map = $this->getMapsById()[$mapId] ?? null;
             $report = $reachability->reports[$mapId] ?? null;
             $reason = match (true) {
-                $map === null => sprintf('%s is no map', $mapId),
+                $map === null => 'there is no such map',
                 $report === null => sprintf('%s cannot be read as the game reads it', $mapId),
                 default => ($cells[$mapId] ??= SaveLandingCells::readMap($map, $report))->findLandingRefusal($x, $y),
             };
             if ($reason !== null) {
-                $refusals[] = sprintf('x %d, y %d (%s)', $x, $y, $reason);
+                $refusals[] = sprintf('%s x %d, y %d (%s)', $mapId, $x, $y, $reason);
             }
         }
 
