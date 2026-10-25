@@ -240,23 +240,65 @@ pending region answers. Conversion remains explicit on legacy maps.
 In the GUI tileset inspector, **Physical footprint** is an optional reusable
 recipe, not an automatic consequence of placing a picture. Its cells use final
 collision types or **Leave unchanged**; adding a recipe initially leaves all
-cells unchanged. Edit it through the constrained grid or Physical Footprint
-record row, then save the tileset. The Collision tool's **Object footprint** mode
-selects a saved recipe and stamps it with one click as one undo step. Only map
-occupancy changes, never glyphs or tiles. Every non-null cell must fit the actual
-map, including ragged rows, or the entire stamp refuses. Stale map/recipe values
-and unsupported source expressions refuse before mutation. Removing a recipe
-does not erase collision already stamped into a map. The TUI preserves recipes
-through existing record edits without adding graphical authoring controls.
-Native acceptance of the physical brushes and footprint controls remains open.
+cells unchanged. Edit it by clicking the piece's cells over its art in the
+tileset view's Collision mode, or through the Physical Footprint record row,
+then save the tileset. Placing the piece in the GUI's Tiles tool sets its
+footprint in the same undo step while **With its collision** is checked, on a
+map with its own collision; unchecked, placing leaves collision as it is. The
+Collision tool's **Object footprint** mode selects a saved recipe and stamps it
+alone with one click as one undo step: only map occupancy changes, never glyphs
+or tiles. Every non-null cell must fit the actual map, including ragged rows,
+or the entire stamp refuses. Stale map/recipe values and unsupported source
+expressions refuse before mutation. Removing a recipe does not erase collision
+already stamped into a map. The TUI preserves recipes through existing record
+edits without adding graphical authoring controls, and its piece stamps leave
+collision as it is. Native acceptance of the physical brushes and footprint
+controls remains open.
 
 A stamped piece whose art paints doors, such as a building, names them in its
 **Painted Doors** record row: each door's cell from the piece's top-left cell,
 with `front` for a door entered from the cell before it, separated by
-semicolons (`2,4; 4,4 front`). Validation then requires every copy of the piece
+semicolons (`2,4; 4,4 front`), or clicks them on the piece's art in the GUI
+tileset view's Doors mode. Validation then requires every copy of the piece
 standing whole on a map to meet an entrance at each door, and leaves those cells
 to the doorway rule rather than judging their look against passage. The pieces
 list reports each piece's doors. The TUI preserves them through record edits.
+
+The GUI tileset view lays each upper sheet (B to E) out as its image is,
+sixteen cells across, so a piece as wide as the sheet is one selection; the A
+tab keeps RPG Maker's palette layout. Its **Add art** mode copies another
+image's cells, such as a building delivered on a sheet of its own, into free
+cells of a sheet, pixel for pixel: choose the image (the image picker's
+**Import image** brings one in from the computer), drag across its cells, and
+click the sheet cell where their top-left goes. Cells that already hold art
+are shaded and never drawn over, B's first cell is the empty tile, and every
+other pixel of the sheet stays as it was. The sheet is written at once, not on
+Save; Undo puts back its exact bytes, and refuses when the file was changed
+outside the Editor since. The copied cells come back selected. **Define piece**
+then makes a new piece from the selected cells (its name, the gameplay layer
+its glyphs go on and the tile layer its tiles go on), with a blank glyph in
+every cell, and shows a stamped piece's cells over its art: Glyphs (click a
+cell, type its character, Enter; its colour is the brush's), Collision and
+Doors. Each edit is one undo step through the tileset record's own rows.
+**Above characters** marks a dragged rectangle, such as a roof, in one step.
+None of this is offered by the TUI, which edits the same rows as text.
+
+A building or other stamped piece on a map is found by its tiles, as the
+doorway rule finds it. Clicking one of its cells in the GUI shows it in the
+inspector's **Placed piece** section: where it stands, each door its art paints
+with the cell it is entered from and the entrance there, and **Add entrance**,
+**Move** and **Remove**. The canvas outlines it, fills its doors and marks each
+entrance cell, filled when an entrance stands on it. Add entrance places a
+transfer on the cell in front of a `front` door (on the door itself for one
+walked onto) and shows it, so its Destination Map, Spawn Point and Spawn
+Facing rows choose where it leads, the arrival cell and the facing there. Move carries the piece until a click puts
+its top-left down; its glyphs, its tiles, with **With its collision** its
+footprint, and the entrances meeting its doors go with it, as one undo step.
+Remove takes away its glyphs where they are still its own, with the tiles they
+carry, its other tiles, and with its collision the footprint's cells, which
+take the collision the glyphs left on them give, as Separate collision would
+have read them. Cells a piece covered keep whatever lies beneath on other
+layers.
 
 The GUI tileset view's **Appearance** mode sets what tiles show at ground
 level, for validation alone: choose Ground, Water, Barrier or Overhead (art
@@ -714,7 +756,9 @@ two side by side for every view. `--player X,Y[,HEADING]` stands the player
 on a cell for door checks, `--actor ID` shows an actor there, `--scale 0.5`
 adds an overview, and `--changes BATCH` renders a batch before it is applied,
 writing nothing. The session serves the same render to an editor as
-`EditorSession::renderMapReview()`, unsaved edits included. See Rendering
+`EditorSession::renderMapReview()`, unsaved edits included, and writes it as
+`map.review`: the GUI toolbar's review button asks for a folder, writes the
+review of the open map there and opens its page. See Rendering
 Maps For Review in [Change Maps From A Script](guides/change-maps-from-a-script.md).
 
 **Pending, not implemented:** richer renderers will use a separate,
@@ -3208,7 +3252,10 @@ Before a map save the editor runs a validation pass and warns - never blocks -
 on dangling destination references, event markers without definitions, and
 spawn points outside the map. The warnings appear in the status footer;
 `Ctrl+E` shows the full text. The project-wide pass (`ichiloto validate`) also
-covers every NPC field, as described under [NPC Mode](#npc-mode).
+covers every NPC field, as described under [NPC Mode](#npc-mode). The GUI's
+map inspector checks the open map the same way on request (**Check this map**,
+`map.validate`), unsaved edits included, and lists every problem with what to
+do about it, errors first; **Show** moves to the first cell a problem names.
 
 Skills are read as one catalogue from their record files, as the game reads
 them: a skill name defined twice, or a record the game cannot read, is an

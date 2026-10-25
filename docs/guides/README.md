@@ -19,6 +19,9 @@ Read these in order the first time:
    through the engine from the editor.
 7. [Author a Summon Cutscene](author-a-summon-cutscene.md) — a frame-driven
    battle presentation: tracks, keyframes, cues, and the actor assignment.
+8. [Make a Building](make-a-building.md): bring a building's art into a
+   tileset, define its piece, place it with its collision and give its door an
+   entrance, in the GUI editor.
 
 ## For Agents And Scripts
 
