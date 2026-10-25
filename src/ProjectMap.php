@@ -2333,7 +2333,7 @@ final class ProjectMap
                 unset($row);
             }
         }
-        $this->applyGridState($layers, $occupancy);
+        $this->applyGridState($layers, $occupancy, static fn(int $line): ?int => $line >= $at ? $line + $count : $line, $axis);
     }
 
     /**
@@ -2391,7 +2391,8 @@ final class ProjectMap
                 unset($row);
             }
         }
-        $this->applyGridState($layers, $occupancy);
+        $this->applyGridState($layers, $occupancy,
+            static fn(int $line): ?int => $line < $at ? $line : ($line < $at + $count ? null : $line - $count), $axis);
     }
 
     /** @return list<list<CollisionType>>|null Null means undeclared, never invalid. */
@@ -2417,7 +2418,12 @@ final class ProjectMap
     }
 
     /** Installs geometry and its declaration only after validation and source preflight. */
-    private function applyGridState(MapLayers $layers, mixed $occupancy): void
+    /**
+     * @param (Closure(int): ?int)|null $moveLine Where a line edit moves each line on `$axis`, null for a removed
+     *     one. The project-wide line plan ({@see MapLinePlanner}) moves the map's world objects with their lines,
+     *     so they are judged where the plan leaves them.
+     */
+    private function applyGridState(MapLayers $layers, mixed $occupancy, ?Closure $moveLine = null, string $axis = 'x'): void
     {
         $next = $this->editableData;
         if ($occupancy === null) {
@@ -2430,7 +2436,7 @@ final class ProjectMap
                 throw new MapSourceRefusal($error->getMessage() . ' Nothing was changed.', previous: $error);
             }
         }
-        $this->assertWorldObjectState($layers, $next);
+        $this->assertWorldObjectState($layers, $moveLine === null ? $next : self::moveWorldObjects($next, $moveLine, $axis));
         if ($next !== $this->editableData) {
             $document = $this->assertDataPreservable($next);
             $next = $document->alignValue($next);
@@ -2439,6 +2445,56 @@ final class ProjectMap
         $this->editableData = $next;
         $this->cachedWidth = null;
         $this->touchState();
+    }
+
+    /**
+     * The map data with its world objects' anchors and covered cells moved
+     * as a line edit moves their lines. An object on a removed line is left
+     * out: the line plan refuses the removal, naming it.
+     *
+     * @param Closure(int): ?int $moveLine
+     * @return array<array-key, mixed>
+     */
+    private static function moveWorldObjects(array $data, Closure $moveLine, string $axis): array
+    {
+        if (! is_array($data['worldObjects'] ?? null)) {
+            return $data;
+        }
+        $move = static function (mixed $point) use ($moveLine, $axis): mixed {
+            $key = $axis === 'y' ? 1 : 0;
+            $named = is_array($point) && array_key_exists($axis, $point);
+            $line = $named ? $point[$axis] : (is_array($point) ? ($point[$key] ?? null) : null);
+            if (! is_int($line)) {
+                return $point;
+            }
+            $moved = $moveLine($line);
+            if ($moved === null) {
+                return null;
+            }
+            $point[$named ? $axis : $key] = $moved;
+
+            return $point;
+        };
+        $objects = [];
+        foreach ($data['worldObjects'] as $index => $object) {
+            if (! is_array($object)) {
+                $objects[$index] = $object;
+                continue;
+            }
+            if (array_key_exists('anchor', $object)) {
+                $object['anchor'] = $move($object['anchor']);
+            }
+            if (is_array($object['covers']['cells'] ?? null)) {
+                $object['covers']['cells'] = array_map($move, $object['covers']['cells']);
+            }
+            if (($object['anchor'] ?? false) === null || in_array(null, $object['covers']['cells'] ?? [], true)) {
+                continue;
+            }
+            $objects[$index] = $object;
+        }
+        $data['worldObjects'] = array_is_list($data['worldObjects']) ? array_values($objects) : $objects;
+
+        return $data;
     }
 
     /** Layer/geometry edits cannot leave map-owned anchors or coverage dangling. */
