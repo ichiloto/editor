@@ -1943,6 +1943,9 @@ final class RecordSchemaCatalog
                     '' => [
                         new RecordField('glyphs', 'Glyph Rows', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES),
                         new RecordField('effect', 'Effect', reference: 'effects', removeWhenEmpty: true, allowsNone: true, displayDefault: '(none)'),
+                        // Where its art paints doors, which each map's entrances must meet: graphical authoring, so the GUI editor's.
+                        ...($graphical ? [new RecordField('doorway', 'Painted Doors', codec: RecordFieldCodec::PIECE_DOORWAY,
+                            removeWhenEmpty: true, displayDefault: '(none)')] : []),
                     ],
                     TilesetPiece::LINES => [
                         new RecordField('glyphs.horizontal', 'Across Glyph'),

@@ -49,7 +49,7 @@ final class TilesetAuthoring
             try {
                 // The glyph footprint remains author-owned even while tile rows are being repaired.
                 $glyphData = $dataPiece;
-                unset($glyphData['tiles'], $glyphData['effect'], $glyphData['occupancy']);
+                unset($glyphData['tiles'], $glyphData['effect'], $glyphData['occupancy'], $glyphData['doorway']);
                 $blueprint = TilesetPiece::fromArray((string) $id, $glyphData, 'Tileset authoring');
             } catch (InvalidArgumentException $error) {
                 $issue = $error->getMessage();
