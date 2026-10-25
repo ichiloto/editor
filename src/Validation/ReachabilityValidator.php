@@ -65,13 +65,14 @@ final class ReachabilityValidator
             return null;
         }
         $cells = [];
-        foreach ($layers->layers[0]->glyphs ?? [] as $y => $row) {
-            foreach ($row as $x => $_) {
+        $base = $layers->layers[0];
+        for ($y = 0; $y < $base->height; $y++) {
+            for ($x = 0, $width = $base->getRowLength($y); $x < $width; $x++) {
                 if (! $report->isReachable($x, $y)) {
                     continue;
                 }
                 foreach ($graphics->layers as $layer) {
-                    $tile = (int) ($layer->tiles[$y][$x] ?? TileId::EMPTY);
+                    $tile = $layer->getTileAt($x, $y) ?? TileId::EMPTY;
                     if ($tile !== TileId::EMPTY && isset($usable[TileId::getSheet($tile)?->value ?? ''])) {
                         continue 2;
                     }

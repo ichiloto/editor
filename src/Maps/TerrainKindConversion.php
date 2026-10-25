@@ -277,9 +277,9 @@ final class TerrainKindConversion
         } else {
             $layers = array_map(static function (MapLayer $layer) use ($painted): MapLayer {
                 $rows = [];
-                foreach ($layer->grid as $y => $row) {
+                for ($y = 0; $y < $layer->height; $y++) {
                     $cells = [];
-                    foreach ($row as $x => $cell) {
+                    foreach ($layer->getRowCells($y) as $x => $cell) {
                         $kind = $painted[$y][$x] ?? null;
                         $cells[] = $kind !== null && $kind->layer === $layer->name ? $kind->piece->grid[0][0] : $cell;
                     }

@@ -56,7 +56,7 @@ it('resizes every tile layer with the map, cropping and padding with empty tiles
 
     expect(readTileRows($floor))->toBe([[2816, 2816, 2816]])
         ->and(readTileRows($decor))->toBe([[0, 5, 0]])
-        ->and(array_map(static fn($layer): array => $layer->tiles, $graphics?->layers ?? []))->toBe([[[2816, 2816, 2816]], [[0, 5, 0]]]);
+        ->and(array_map(static fn($layer): array => $layer->readTiles(), $graphics?->layers ?? []))->toBe([[[2816, 2816, 2816]], [[0, 5, 0]]]);
 });
 
 it('validates tile layer offsets in the map data as the Engine reads them', function () {

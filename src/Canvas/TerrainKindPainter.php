@@ -278,7 +278,7 @@ final class TerrainKindPainter
         foreach ($set->layers as $layer) {
             if ($layer->name === $layerName) {
                 $above = true;
-            } elseif ($above && ! $layer->decoration && ($layer->glyphs[$y][$x] ?? ' ') !== ' ') {
+            } elseif ($above && ! $layer->decoration && ($layer->getGlyphAt($x, $y) ?? ' ') !== ' ') {
                 return false;
             }
         }

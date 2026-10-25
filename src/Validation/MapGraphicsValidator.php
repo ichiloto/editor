@@ -248,8 +248,8 @@ final class MapGraphicsValidator
         $issues = [];
         foreach ($layers as $layer) {
             $stale = [];
-            foreach ($layer->tiles as $y => $row) {
-                foreach ($row as $x => $id) {
+            for ($y = 0; $y < $layer->height; $y++) {
+                foreach ($layer->getRowTiles($y) as $x => $id) {
                     if (isset($drawn[$layer->name][$id]) && ! isset($explained[$layer->name][$y][$x][$id])
                         && ! isset($kept[$layer->name][$y][$x])) {
                         $stale[] = "({$x}, {$y})";
@@ -285,8 +285,8 @@ final class MapGraphicsValidator
         $issues = [];
         foreach ($layers as $layer) {
             $cells = [];
-            foreach ($layer->tiles as $y => $row) {
-                foreach ($row as $x => $id) {
+            for ($y = 0; $y < $layer->height; $y++) {
+                foreach ($layer->getRowTiles($y) as $x => $id) {
                     if ($id === $tileset->missingArt) {
                         $cells[] = "({$x}, {$y})";
                     }
@@ -324,12 +324,12 @@ final class MapGraphicsValidator
             return [];
         }
         usort($layers, static fn(MapTileLayer $a, MapTileLayer $b): int => $a->order <=> $b->order);
-        $grids = array_map(static fn(MapTileLayer $layer): array => AutotileShape::resolveLayer($layer->tiles), $layers);
+        $grids = array_map(static fn(MapTileLayer $layer): array => AutotileShape::resolveLayer($layer->readTiles()), $layers);
         // A corner-edged kind's own tile draws nothing by itself; the corner tiles its sheet draws stand for it, or,
         // when that sheet is unusable, its glyph shows and checkCornerSheets() says why.
         $cornerTiles = $tileset->getCornerTiles();
         $cornerSheets = self::readCornerSheets($map, $tileset, $layers)['usable'];
-        $corners = array_map(static fn(MapTileLayer $layer): array => CornerShape::resolveLayer($layer->tiles, array_keys($cornerSheets),
+        $corners = array_map(static fn(MapTileLayer $layer): array => CornerShape::resolveLayer($layer->readTiles(), array_keys($cornerSheets),
             $tileset->getCornerJoins()), $layers);
         // One reader per pass, so replaced artwork is read as it is now.
         $coverage = new TileCoverage($tileset, $map->getAssetRoot());
