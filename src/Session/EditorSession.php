@@ -19,6 +19,7 @@ use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Database\EnemySprites;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Canvas\PiecePlacer;
+use Ichiloto\Editor\Canvas\PlacedPieces;
 use Ichiloto\Editor\Canvas\TerrainKindPainter;
 use Ichiloto\Editor\Audio\AudioAudition;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewGame;
@@ -112,6 +113,9 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Review\MapRenderer;
 use Ichiloto\Editor\Review\MapRendering;
 use Ichiloto\Editor\Review\MapRenderView;
+use Ichiloto\Editor\Review\MapRenderSubject;
+use Ichiloto\Editor\Review\MapReviewWriter;
+use Ichiloto\Editor\Review\FieldStillRaster;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\SaveSet;
@@ -195,6 +199,8 @@ use WeakReference;
 final class EditorSession
 {
     use MapPlacementSession;
+    use TilesetArtSession;
+    use PlacedPieceSession;
 
     /** The renderer a playtest started from a graphical editor uses: it owns no terminal to hand over. */
     public const string PLAYTEST_RENDERER = 'gpui';
@@ -823,7 +829,11 @@ final class EditorSession
         $tabs = [];
         $sheetIssues = \Ichiloto\Editor\Maps\TilesetAuthoring::getSheetIssues($tileset, $assetRoot);
         $unreadable = array_values($sheetIssues);
-        foreach (TilePalette::getTabs($tileset) as $tab) {
+        // An upper sheet is shown as its image lays it out, sixteen cells across, so a piece as wide as the sheet can
+        // be selected in one rectangle and copied cells land where the image has them.
+        $images = array_column(\Ichiloto\Editor\Assets\TilesetSheetCells::describeSheets($tileset), 'ids', 'sheet');
+        foreach (array_map(static fn(array $tab): array => in_array($tab['name'], ['B', 'C', 'D', 'E'], true)
+            ? [...$tab, 'ids' => $images[$tab['name']]] : $tab, TilePalette::getTabs($tileset)) as $tab) {
             try {
                 $world = TilePalette::buildWorld($tileset, $tab['ids'], $assetRoot, 'tileset-preview:' . $tab['name']);
                 $tabs[] = [...$tab, 'operations' => $world->operations];
@@ -867,11 +877,30 @@ final class EditorSession
                 static fn(int $tile): bool => TileId::getSheet($tile) === TilesetSheet::A2)),
             'pieces' => $pieces,
             'authoring' => \Ichiloto\Editor\Maps\TilesetAuthoring::describePieces($data, $this->readDatabaseRecord('tilesets', $index)['rows']),
+            // The names a new piece's glyph and tile layers take: those the tileset's pieces and the maps drawn with it use.
+            'layerNames' => \Ichiloto\Editor\Maps\TilesetAuthoring::listLayerNames($tileset, $this->listMapsOfTileset($tileset->id)),
             'connectionShapes' => TilesetPiece::LINE_SHAPES,
             'collisionTypes' => PhysicalOccupancyEditor::getCollisionChoices(),
             'issue' => $issue,
             'unreadable' => $unreadable,
         ];
+    }
+
+    /**
+     * The maps whose data names a tileset, unsaved edits included.
+     *
+     * @return list<ProjectMap>
+     */
+    private function listMapsOfTileset(string $tilesetId): array
+    {
+        $maps = [];
+        for ($index = 0; ($map = $this->workspace->getMapByIndex($index)) !== null; $index++) {
+            if ($map->getMapDataField(['tileset']) === $tilesetId) {
+                $maps[] = $map;
+            }
+        }
+
+        return $maps;
     }
 
     /**
@@ -944,6 +973,53 @@ final class EditorSession
      */
     public function toggleTilesetMark(int $index, string $mark, int $tile): array
     {
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        $this->assertTileMarkable($mark, $tile);
+        $flag = TileId::getFlagId($tile);
+        $listed = array_values(array_filter(is_array($record->get($mark)) ? $record->get($mark) : [], is_int(...)));
+        $marked = ! array_any($listed, static fn(int $listedTile): bool => TileId::getFlagId($listedTile) === $flag);
+
+        return [...$this->setTilesetMarks($index, $mark, [$tile], $marked), 'marked' => $marked];
+    }
+
+    /**
+     * Gives several tiles of a tileset record a mark, or takes it from them,
+     * as one undo step through the record's Above Characters or Tables
+     * field: what a drag across a building's roof does. Tiles already as
+     * asked stay as they are.
+     *
+     * @param 'above'|'tables' $mark
+     * @param list<int> $tiles
+     * @return array{changed: bool, records: list<string>, tiles: int}
+     * @throws SessionRefusal When the record or mark is unknown, or a tile cannot take the mark.
+     */
+    public function setTilesetMarks(int $index, string $mark, array $tiles, bool $marked): array
+    {
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        if ($tiles === []) {
+            throw new SessionRefusal('Choose tiles to mark first.');
+        }
+        $flags = [];
+        foreach ($tiles as $tile) {
+            $this->assertTileMarkable($mark, $tile);
+            $flags[TileId::getFlagId($tile)] = true;
+        }
+        $listed = array_values(array_filter(is_array($record->get($mark)) ? $record->get($mark) : [], is_int(...)));
+        $present = array_map(TileId::getFlagId(...), $listed);
+        // Tiles marked already keep their place in the list, and new ones follow.
+        $next = $marked
+            ? [...$listed, ...array_values(array_diff(array_keys($flags), $present))]
+            : array_values(array_filter($listed, static fn(int $listedTile): bool => ! isset($flags[TileId::getFlagId($listedTile)])));
+        $result = $this->applyDatabaseRecord('tilesets', $index, ['field' => $mark, 'frame' => []], implode(', ', $next));
+
+        return [...$result, 'tiles' => count($flags)];
+    }
+
+    /** @throws SessionRefusal When the mark is not one, or the tile cannot take it. */
+    private function assertTileMarkable(string $mark, int $tile): void
+    {
         if (! in_array($mark, ['above', 'tables'], true)) {
             throw new SessionRefusal(sprintf('%s is not a tile mark; a tile is marked above characters or as a table.', $mark));
         }
@@ -953,16 +1029,6 @@ final class EditorSession
         if ($mark === 'tables' && TileId::getSheet($tile) !== TilesetSheet::A2) {
             throw new SessionRefusal(sprintf('Only A2 autotiles can be tables; tile %d is on sheet %s.', $tile, TileId::getSheet($tile)?->value ?? '?'));
         }
-        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
-            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
-        $flag = TileId::getFlagId($tile);
-        $listed = array_values(array_filter(is_array($record->get($mark)) ? $record->get($mark) : [], is_int(...)));
-        $kept = array_values(array_filter($listed, static fn(int $listedTile): bool => TileId::getFlagId($listedTile) !== $flag));
-        $marked = count($kept) === count($listed);
-        $result = $this->applyDatabaseRecord('tilesets', $index, ['field' => $mark, 'frame' => []],
-            implode(', ', $marked ? [...$kept, $flag] : $kept));
-
-        return [...$result, 'marked' => $marked];
     }
 
     /**
@@ -1335,15 +1401,19 @@ final class EditorSession
      * Places a piece between two corners as one undo step: an item piece
      * stamped as whole copies across the area, a connected piece drawn along
      * its outline ({@see PiecePlacer}). An area that cannot be placed whole
-     * changes nothing.
+     * changes nothing. With `$footprint`, each stamped copy also sets the
+     * collision its physical footprint gives, in the same step, on a map with
+     * its own collision ({@see PlacedPieces::addFootprint()}); without it, or
+     * for a piece with no footprint, collision is left as it is.
      *
      * @param array{0: int, 1: int} $from
      * @param array{0: int, 1: int} $to
      * @param string|null $color The colour of cells the piece leaves unstyled; null keeps each cell's own.
-     * @return array{status: 'applied', changed: bool, copies: int, cells: int, revision: int}
+     * @return array{status: 'applied', changed: bool, copies: int, cells: int, footprint: int, revision: int}
      * @throws SessionRefusal When the map is unknown, stale or read-only, the piece is unknown, or the placement is refused.
      */
-    public function placePiece(string $mapId, int $revision, string $pieceId, array $from, array $to, ?string $color = null): array
+    public function placePiece(string $mapId, int $revision, string $pieceId, array $from, array $to, ?string $color = null,
+        bool $footprint = false): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
@@ -1352,9 +1422,14 @@ final class EditorSession
         $piece = $this->requirePiece($map, $pieceId);
         [$from, $to] = [['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]]];
         try {
+            $stamped = 0;
             if ($piece->connects === null) {
                 ['command' => $command, 'origins' => $origins] = PiecePlacer::stampArea($map, $piece, $from, $to, $color);
                 [$copies, $cells] = [count($origins), 0];
+                if ($footprint) {
+                    ['command' => $command, 'cells' => $stamped] = PlacedPieces::addFootprint($map, $piece, $command, $origins,
+                        sprintf('Place %s', $piece->name));
+                }
             } else {
                 $drawn = PiecePlacer::getConnectedDrawCells($from, $to);
                 $command = PiecePlacer::drawConnected($map, $piece, $drawn, [], $color);
@@ -1367,7 +1442,8 @@ final class EditorSession
             $this->history->record($command);
         }
 
-        return ['status' => 'applied', 'changed' => $command !== null, 'copies' => $copies, 'cells' => $cells, 'revision' => $this->getMapRevision($map)];
+        return ['status' => 'applied', 'changed' => $command !== null, 'copies' => $copies, 'cells' => $cells, 'footprint' => $stamped,
+            'revision' => $this->getMapRevision($map)];
     }
 
     /**
@@ -5480,6 +5556,36 @@ final class EditorSession
     }
 
     /**
+     * Renders a map, or a rectangle of it, for review as the game draws it,
+     * unsaved edits included, and writes the review into a folder
+     * ({@see MapReviewWriter}): the Terminal picture beside the graphical
+     * still, on one page that carries its stills. With a cell, the player
+     * stands there facing the heading given, for door checks. The project's
+     * files never change.
+     *
+     * @param array{0: int, 1: int, 2: int, 3: int}|null $region x, y, width and height in map cells; null is the whole map.
+     * @param array{0: int, 1: int}|null $player The cell the player stands on, or null for nobody.
+     * @return array{page: string, files: array<string, string>, diagnostics: list<string>}
+     * @throws SessionRefusal When the view cannot be rendered or the folder cannot be written.
+     */
+    public function writeMapReview(string $mapId, string $directory, ?array $region = null, ?array $player = null, ?string $heading = null): array
+    {
+        try {
+            $subject = $player === null ? null : new MapRenderSubject($player[0], $player[1],
+                $heading === null ? \Ichiloto\Engine\Core\Enumerations\MovementHeading::SOUTH : MapRenderSubject::readHeading($heading));
+            $view = new MapRenderView($mapId, $region === null ? null : ['x' => $region[0], 'y' => $region[1], 'width' => $region[2], 'height' => $region[3]],
+                $subject);
+            $rendering = $this->renderMapReview($view);
+            $writer = new MapReviewWriter($directory, new FieldStillRaster(rtrim($this->workspace->projectRoot, '/') . '/assets'));
+            $written = $writer->writeRendering($rendering);
+
+            return ['page' => $writer->writeReviewPage($view->label), 'files' => $written['files'], 'diagnostics' => $written['diagnostics']];
+        } catch (InvalidArgumentException|RuntimeException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+    }
+
+    /**
      * Closes a map's editing canvas, releasing its signs' prepared labels and its renderer client.
      *
      * @return array{closed: bool}
@@ -5921,7 +6027,7 @@ final class EditorSession
      * call asks, and `write` with the question's `confirm` saves the map and
      * the relocation step together.
      *
-     * @return array{saved: string, warnings: list<string>, errors: list<array<string, ?string>>, backupFailures: list<string>, relocated: list<string>}
+     * @return array{saved: string, warnings: list<string>, errors: list<array<string, mixed>>, backupFailures: list<string>, relocated: list<string>}
      *     |array{status: 'question', map: string, question: string, answers: list<array{key: string, label: string, description: string}>,
      *         relocations: list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>, moves: list<string>,
      *         contentVersion: int, confirm: string}
@@ -6479,8 +6585,30 @@ final class EditorSession
      * included, by the same checks as `ichiloto validate`.
      *
      * @param list<string>|null $mapIds Only the issues about these maps; null for every issue.
-     * @return array{issues: list<array<string, ?string>>, errors: int, warnings: int}
+     * @return array{issues: list<array<string, mixed>>, errors: int, warnings: int}
      */
+    /**
+     * Checks one map as saving it does ({@see MapValidator}), unsaved edits
+     * included, without the rest of the project: what an editor shows beside
+     * the map. Each issue names the cells it is about, when it names any.
+     *
+     * @return array{map: string, revision: int, issues: list<array<string, mixed>>, errors: int, warnings: int}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function validateMap(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        $issues = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
+
+        return [
+            'map' => $map->mapId,
+            'revision' => $this->getMapRevision($map),
+            'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $issues),
+            'errors' => count(MapValidator::selectSeverity($issues, Severity::ERROR)),
+            'warnings' => count(MapValidator::selectSeverity($issues, Severity::WARNING)),
+        ];
+    }
+
     public function validateProject(?array $mapIds = null): array
     {
         $issues = new ProjectValidator()->validate($this->workspace);
@@ -6769,7 +6897,7 @@ final class EditorSession
      *     without it such a change set is refused, naming where they would move.
      * @param bool $checkOnly Whether to only report what committing would find, then undo the change set.
      * @return array{status: 'saved'|'refused'|'checked', maps: list<string>, saved: list<string>, written: array<string, list<string>>,
-     *     issues: list<array<string, ?string>>, blocking: int, relocated: list<string>, backupFailures: list<string>,
+     *     issues: list<array<string, mixed>>, blocking: int, relocated: list<string>, backupFailures: list<string>,
      *     reason?: ?string, unrestored?: int, unrestoredFiles?: list<string>}
      *     `written` names each document written and the files it wrote or removed, relative to the project root.
      * @throws SessionRefusal When no change set is open.

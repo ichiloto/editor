@@ -57,9 +57,10 @@ final class TilePalette
      */
     public static function buildWorld(Tileset $tileset, array $ids, string $assetRoot, string $id): PresentationWorld
     {
-        $rows = array_map(static fn(array $row): array => array_pad($row, self::COLUMNS, TileId::EMPTY), $ids);
+        $columns = max([self::COLUMNS, ...array_map(count(...), $ids)]);
+        $rows = array_map(static fn(array $row): array => array_pad($row, $columns, TileId::EMPTY), $ids);
         $layers = new MapLayerSet([new MapLayer(self::LAYER, 1, false, self::LAYER,
-            implode("\n", array_fill(0, count($rows), str_repeat(' ', self::COLUMNS))))]);
+            implode("\n", array_fill(0, count($rows), str_repeat(' ', $columns))))]);
         $tiles = new MapTileLayer(self::LAYER, 1, self::LAYER,
             implode("\n", array_map(static fn(array $row): string => implode(' ', $row), $rows)));
 

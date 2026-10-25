@@ -210,17 +210,37 @@ final class SessionHost
                 self::requireInt($params, 'index'), self::requireFootprintId($params, 'tileset'), self::requireFootprintId($params, 'piece'),
                 self::requireFootprint($params, 'expected'), self::requireFootprint($params, 'value'),
             ),
-            'tilesets.mark' => $session->toggleTilesetMark(
-                self::requireInt($params, 'index'),
-                self::requireString($params, 'mark'),
-                self::requireInt($params, 'tile'),
-            ),
+            'tilesets.mark' => array_key_exists('tiles', $params)
+                ? $session->setTilesetMarks(self::requireInt($params, 'index'), self::requireString($params, 'mark'), self::requireTileList($params),
+                    self::readOptionalBool($params, 'marked', true))
+                : $session->toggleTilesetMark(
+                    self::requireInt($params, 'index'),
+                    self::requireString($params, 'mark'),
+                    self::requireInt($params, 'tile'),
+                ),
             'tilesets.appearance' => $session->setTileAppearance(
                 self::requireInt($params, 'index'),
                 self::requireString($params, 'tileset'),
                 self::requireSelectors($params),
                 self::readOptionalString($params, 'appearance'),
             ),
+            'assets.import' => $session->importAsset(self::requireString($params, 'source'), self::requireString($params, 'destination'),
+                self::readOptionalBool($params, 'replace')),
+            'tilesets.freeCells' => $session->readTilesetFreeCells(self::requireInt($params, 'index'), self::requireString($params, 'tileset')),
+            'tilesets.imageCells' => $session->readImageCells(self::requireInt($params, 'index'), self::requireString($params, 'tileset'),
+                self::requireString($params, 'source')),
+            'tilesets.copyCells' => $session->copyTilesetCells(self::requireInt($params, 'index'), self::requireString($params, 'tileset'),
+                self::requireString($params, 'source'), self::requireCell($params, 'from'), self::requireCell($params, 'size'),
+                self::requireInt($params, 'tile')),
+            'tilesets.createPiece' => $session->createTilesetPiece(self::requireInt($params, 'index'), self::requireString($params, 'tileset'),
+                self::requireString($params, 'name'), self::requireString($params, 'layer'), self::requireString($params, 'tileLayer'),
+                self::requireTileRows($params)),
+            'tilesets.setPieceGlyph' => $session->setTilesetPieceGlyph(self::requireInt($params, 'index'), self::requireString($params, 'tileset'),
+                self::requireString($params, 'piece'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+                self::requireString($params, 'glyph'), self::readOptionalString($params, 'color')),
+            'tilesets.setPieceDoor' => $session->setTilesetPieceDoor(self::requireInt($params, 'index'), self::requireString($params, 'tileset'),
+                self::requireString($params, 'piece'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+                self::readOptionalString($params, 'entrance')),
             'audio.play' => $session->playAudio(self::requireString($params, 'kind'), self::requireString($params, 'name')),
             'audio.stop' => $session->stopAudio(),
             'audio.status' => $session->describeAudio(),
@@ -281,7 +301,22 @@ final class SessionHost
                     self::requireCell($params, 'from'),
                     self::requireCell($params, 'to'),
                     self::readOptionalString($params, 'color'),
+                    self::readOptionalBool($params, 'footprint'),
                 ),
+            'map.review' => $session->writeMapReview(self::requireString($params, 'map'), self::requireString($params, 'directory'),
+                self::readOptionalRegion($params), array_key_exists('player', $params) && $params['player'] !== null ? self::requireCell($params, 'player') : null,
+                self::readOptionalString($params, 'heading')),
+            'pieces.findPlaced' => $session->findPlacedPieces(self::requireString($params, 'map'), self::requireInt($params, 'x'),
+                self::requireInt($params, 'y')),
+            'pieces.remove' => $session->removePlacedPiece(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'piece'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+                self::readOptionalBool($params, 'footprint')),
+            'pieces.move' => $session->movePlacedPiece(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'piece'), self::requireCell($params, 'from'), self::requireCell($params, 'to'),
+                self::readOptionalBool($params, 'footprint'), self::readOptionalString($params, 'color')),
+            'pieces.addEntrance' => $session->addPlacedPieceEntrance(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'piece'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+                self::requireInt($params, 'door')),
             'kinds.list' => $session->listKinds(self::requireString($params, 'map')),
             'kinds.preview' => $session->previewKind(
                 self::requireString($params, 'map'),
@@ -707,6 +742,7 @@ final class SessionHost
             'history.redo' => $session->redo(),
             'project.dirty' => ['dirty' => $session->hasUnsavedChanges(), 'unsaved' => $session->listUnsavedChanges()],
             'project.saveAll' => $session->saveAll(),
+            'map.validate' => $session->validateMap(self::requireString($params, 'map')),
             'project.validate' => $session->validateProject(array_key_exists('maps', $params) ? self::requireLines($params, 'maps') : null),
             'changes.begin' => $session->beginChanges(),
             'changes.commit' => $session->commitChanges(
@@ -849,6 +885,62 @@ final class SessionHost
         }
 
         return array_combine(array_map(strval(...), array_keys($mapping)), array_values($mapping));
+    }
+
+    /**
+     * A rectangle of map cells as [x, y, width, height], when given.
+     *
+     * @param array<string, mixed> $params
+     * @return array{0: int, 1: int, 2: int, 3: int}|null
+     */
+    private static function readOptionalRegion(array $params): ?array
+    {
+        $region = $params['region'] ?? null;
+        if ($region === null) {
+            return null;
+        }
+
+        return is_array($region) && array_is_list($region) && count($region) === 4 && array_all($region, static fn(mixed $value): bool => is_int($value))
+            ? $region : throw new InvalidRequest('"region" must be [x, y, width, height] in whole cells.');
+    }
+
+    /** @param array<string, mixed> $params */
+    private static function readOptionalBool(array $params, string $key, bool $default = false): bool
+    {
+        $value = $params[$key] ?? $default;
+
+        return is_bool($value) ? $value : throw new InvalidRequest(sprintf('"%s" must be a boolean when given.', $key));
+    }
+
+    /**
+     * A list of tile identities.
+     *
+     * @param array<string, mixed> $params
+     * @return list<int>
+     */
+    private static function requireTileList(array $params): array
+    {
+        $tiles = $params['tiles'] ?? null;
+
+        return is_array($tiles) && array_is_list($tiles) && array_all($tiles, static fn(mixed $tile): bool => is_int($tile))
+            ? $tiles : throw new InvalidRequest('"tiles" must be a list of tile identities.');
+    }
+
+    /**
+     * A rectangle of tile identities, row by row.
+     *
+     * @param array<string, mixed> $params
+     * @return list<list<int>>
+     */
+    private static function requireTileRows(array $params): array
+    {
+        $rows = $params['rows'] ?? null;
+        if (! is_array($rows) || ! array_is_list($rows) || $rows === [] || ! array_all($rows, static fn(mixed $row): bool => is_array($row)
+            && array_is_list($row) && $row !== [] && array_all($row, static fn(mixed $tile): bool => is_int($tile)))) {
+            throw new InvalidRequest('"rows" must be rows of tile identities.');
+        }
+
+        return $rows;
     }
 
     private static function readOptionalString(array $params, string $key): ?string
