@@ -77,7 +77,19 @@ final class TilesetAuthoring
                 $layers[] = ['name' => (string) $name, 'key' => $keys[$field] ?? null,
                     'shapes' => (object) (is_array($shapes) ? $shapes : [])];
             }
+            $doorway = null;
+            $doorwayIssue = null;
+            if (! $connected && array_key_exists('doorway', $dataPiece) && $dataPiece['doorway'] !== []) {
+                try {
+                    $doorway = \Ichiloto\Engine\Field\Doorway::exportCells(\Ichiloto\Engine\Field\Doorway::readCells($dataPiece['doorway'], 'Painted doors'));
+                } catch (InvalidArgumentException $error) {
+                    $doorwayIssue = $error->getMessage();
+                }
+            }
             $pieces[] = ['id' => (string) $id, 'name' => (string) ($dataPiece['name'] ?? $id),
+                // Each glyph cell as the terminal shows it, for authoring a stamped piece cell by cell over its art.
+                'cells' => $blueprint === null || $connected ? null : \Ichiloto\Editor\Canvas\PiecePlacer::buildPicture($blueprint),
+                'doorway' => $doorway ?? [], 'doorwayIssue' => $doorwayIssue,
                 'layer' => (string) ($dataPiece['layer'] ?? ''), 'connected' => $connected,
                 'width' => $blueprint?->width, 'height' => $blueprint?->height,
                 'key' => $keys[$prefix . 'Name'] ?? null, 'layers' => $layers, 'issue' => $issue,
@@ -86,6 +98,43 @@ final class TilesetAuthoring
         }
 
         return $pieces;
+    }
+
+    /**
+     * The gameplay and tile layer names a tileset's pieces and the maps drawn
+     * with it use, each list sorted, for naming a new piece's layers.
+     *
+     * @param list<\Ichiloto\Editor\ProjectMap> $maps
+     * @return array{glyph: list<string>, tiles: list<string>}
+     */
+    public static function listLayerNames(Tileset $tileset, array $maps): array
+    {
+        $glyph = $tiles = [];
+        foreach ($tileset->pieces as $piece) {
+            $glyph[$piece->layer] = true;
+            foreach ($tileset->getPieceTileLayers($piece) as $name) {
+                $tiles[$name] = true;
+            }
+        }
+        foreach ($maps as $map) {
+            foreach ($map->getLayers() as $layer) {
+                if ($layer['id'] !== MapLayers::EVENT && ! $layer['decoration']) {
+                    $glyph[$layer['name']] = true;
+                }
+            }
+            try {
+                foreach ($map->getTileLayerNames() as $name) {
+                    $tiles[$name] = true;
+                }
+            } catch (\Throwable) {
+                // A map whose tile layers cannot be read names none; validation reports it.
+            }
+        }
+        [$glyph, $tiles] = [array_map(strval(...), array_keys($glyph)), array_map(strval(...), array_keys($tiles))];
+        sort($glyph, SORT_STRING);
+        sort($tiles, SORT_STRING);
+
+        return ['glyph' => $glyph, 'tiles' => $tiles];
     }
 
     /**

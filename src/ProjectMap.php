@@ -1214,6 +1214,30 @@ final class ProjectMap
     }
 
     /**
+     * The collision the terminal layers give cells as they stand, read as an
+     * undeclared map's are, through the collision dictionary and terrain
+     * kinds: what a cell is once a piece that set its own collision there is
+     * taken away, as separating collision would have captured it.
+     *
+     * @param list<array{0: int, 1: int}> $cells
+     * @return list<array{0: int, 1: int, 2: CollisionType}> Physical writes for the cells on the map.
+     * @throws InvalidArgumentException When the layers' collision cannot be resolved.
+     */
+    public function resolveGlyphCollision(array $cells): array
+    {
+        $rows = MapCollisionResolver::resolveLegacyOccupancy($this->layers->getLayerSet(), $this->loadCollisionDictionary(),
+            $this->loadTerrainKinds())->collisionGrid;
+        $writes = [];
+        foreach ($cells as [$x, $y]) {
+            if (isset($rows[$y][$x])) {
+                $writes[] = [$x, $y, CollisionType::from($rows[$y][$x])];
+            }
+        }
+
+        return $writes;
+    }
+
+    /**
      * How many cells would resolve to another collision if the layer were
      * renamed: collision lookup uses the layer name ({@see MapCollisionResolver}).
      *
