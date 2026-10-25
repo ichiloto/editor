@@ -38,6 +38,21 @@
 
 ### Fixed
 
+- Save relocations land saves only on floor the player reaches once the change
+  is saved, and also move saves off floor the change walls off. A wall that
+  closed off a pocket of floor reachable before the change could send saves into
+  that pocket, or leave saves standing in it, where they loaded with no way out;
+  moving a building onto open ground did both with its enclosed interior.
+  Saves on floor an event now covers that no event covered before, such as a
+  door moved there, move too, so loading one starts nothing new.
+
+- World objects keep the footprint their resource stamps (a tree's trunk) in a
+  map's own declared collision: making, moving, changing or deleting an object
+  moves its solid cells with it, and a cell it leaves goes back to plain floor
+  unless another object still stamps it. A footprint may only take plain floor,
+  as the tree brush's trunks do, so moving a tree no longer leaves an invisible
+  wall behind or arrives without one.
+
 - Database > Weapons, Armors: clearing a parameter change (Attack, Defence,
   Speed and the rest) removes it from the record instead of writing a zero, so
   an accessory made from the armor blank can drop the Defence it started with.

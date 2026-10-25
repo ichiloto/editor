@@ -345,6 +345,11 @@ In the terminal editor, Enter on that tile steps through its phases.
 `worldObjects.move` moves an object with what shows it in the terminal: its
 anchor, the cells it covers and their glyphs, with the tiles those glyphs
 draw. Moving only the anchor (`worldObjects.place`) leaves its glyphs behind.
+On a map that declares its own collision, the footprint the object's resource
+stamps (a tree's trunk) follows the object whenever it is made, moved, placed
+or deleted: the cells it leaves go back to plain floor unless another object
+still stamps them, and the cells it takes must be plain floor, or the change
+is refused.
 
 ## Worked Example: Bind An Event To Its Object, Then Move Them
 

@@ -8,12 +8,14 @@ use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Storage\SourceSetPlan;
+use Ichiloto\Engine\Core\CellArea;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\Field\MapTerrainKinds;
 use Ichiloto\Engine\Field\MapSourceReader;
 use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
 use Ichiloto\Engine\Field\Reachability\ProjectReachability;
+use Ichiloto\Engine\Field\Validation\MapEventResolver;
 use RuntimeException;
 use Throwable;
 
@@ -22,9 +24,13 @@ use Throwable;
  * cell the player could stand on in the saved map, reachable today or not, a
  * save standing there would load inside it. A cell is taken when its new type blocks movement (new
  * furniture, a wall, painted collision; walkable grass, exits and save points
- * do not) or when an authored NPC now stands on it, added or moved. The plan
+ * do not), when an authored NPC now stands on it, added or moved, or when an
+ * event now covers it that covered nothing there before, such as a moved door. Floor
+ * the player reaches today that the change walls off, such as the inside of
+ * a building moved onto open ground, moves its saves too. The plan
  * moves saves on each such cell to the nearest plain floor the player can
- * reach today, as one declared `relocations` step in the project's save
+ * reach once the change is saved, never a pocket the change itself walls
+ * off, as one declared `relocations` step in the project's save
  * compatibility manifest, for the author to review before the save writes
  * both. A project without a manifest, or a map not yet on disk, needs none.
  *
@@ -68,11 +74,17 @@ final class SaveRelocationPlanner
             return null;
         }
         $reachability = ProjectReachability::analyze($root . '/assets');
+        // Where saves land is judged on the maps as the change leaves them: a pocket it walls off is reachable today.
+        $unsaved = [];
+        foreach ($maps as $map) {
+            $unsaved[$map->mapId] = ['data' => $map->getEditableData(), 'layers' => $map->getLayerSet(), 'eventLayer' => $map->getEventLayerCells()];
+        }
+        $changed = ProjectReachability::analyze($root . '/assets', $unsaved);
         $relocations = [];
         $moving = [];
         foreach ($maps as $map) {
             $report = $reachability->reports[$map->mapId] ?? null;
-            $found = $report === null ? [] : self::planMap($map, $root, $report);
+            $found = $report === null ? [] : self::planMap($map, $root, $report, $changed->reports[$map->mapId] ?? null);
             if ($found !== []) {
                 $relocations = [...$relocations, ...$found];
                 $moving[] = $map->mapId;
@@ -106,26 +118,41 @@ final class SaveRelocationPlanner
     }
 
     /**
-     * One map's relocations, against today's reachability.
+     * One map's relocations: saves may stand where the player reaches today,
+     * and land where the player reaches once the map is saved.
      *
      * @return list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>
      */
-    private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report): array
+    private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report, ?MapReachabilityReport $changed): array
     {
         $grid = $map->getResolvedCollisionMap();
-        $cells = SaveLandingCells::readMap($map, $report);
-        $passable = $cells->isPassable(...);
+        // Landings are judged on the map as the change leaves them: a pocket it walls off is no landing.
+        $cells = $changed === null ? null : SaveLandingCells::readMap($map, $changed);
+        $npcs = SaveLandingCells::readNpcCells((array) ($map->getEditableData()['npcs'] ?? []));
+        $passable = static fn(int $x, int $y): bool => isset($grid[$y][$x]) && ! isset($npcs["{$x},{$y}"])
+            && ! CollisionType::from($grid[$y][$x])->blocksMovement();
         // An NPC already standing there on disk is no change: reachability lets saves stand where a wanderer starts.
-        $arrived = array_diff_key(SaveLandingCells::readNpcCells((array) ($map->getEditableData()['npcs'] ?? [])),
-            SaveLandingCells::readNpcCells(self::readSavedNpcs($root, $map->mapId)));
+        $arrived = array_diff_key($npcs, SaveLandingCells::readNpcCells(self::readSavedNpcs($root, $map->mapId)));
         // Any cell walkable on disk may hold a save, even one no route reaches today: an older layout may have
         // reached it, and a save made there must never load inside what now takes it.
         $walkable = self::readSavedWalkableCells($root, $map->mapId);
+        // An event now covering a cell no event covered on disk, such as a door moved there, would start under a save.
+        $saved = self::readSavedEventCells($root, $map->mapId);
+        $covered = [];
+        foreach (self::readEventAreas($map) as $area) {
+            foreach ($area->cells as [$x, $y]) {
+                if (! isset($saved["{$x},{$y}"])) {
+                    $covered["{$x},{$y}"] = true;
+                }
+            }
+        }
         $blocked = [];
         foreach ($grid as $y => $row) {
             foreach (array_keys($row) as $x) {
-                if (($report->isReachable($x, $y) || isset($walkable["{$x},{$y}"]))
-                    && (CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]))) {
+                $taken = CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]) || isset($covered["{$x},{$y}"]);
+                // Floor the player reaches today and the change walls off: a save there would load with no way out.
+                $cutOff = $changed !== null && $report->isReachable($x, $y) && ! $changed->isReachable($x, $y);
+                if (($report->isReachable($x, $y) || isset($walkable["{$x},{$y}"])) && ($taken || $cutOff)) {
                     $blocked["{$x},{$y}"] = [$x, $y];
                 }
             }
@@ -135,7 +162,8 @@ final class SaveRelocationPlanner
         }
 
         // A save lands where SaveLandingCells allows, inside only the events its own cell was already in.
-        $canLandFrom = static fn(int $fromX, int $fromY): \Closure => static fn(int $x, int $y): bool => $cells->canLand($x, $y, [$fromX, $fromY]);
+        $canLandFrom = static fn(int $fromX, int $fromY): \Closure => static fn(int $x, int $y): bool
+            => $cells?->canLand($x, $y, [$fromX, $fromY]) ?? false;
         $groups = [];
         foreach ($blocked as [$x, $y]) {
             $landing = self::findLanding($x, $y, $passable, $canLandFrom($x, $y), $grid);
@@ -191,6 +219,15 @@ final class SaveRelocationPlanner
         return $best === null ? null : [$best[0], $best[1]];
     }
 
+    /** @return list<CellArea> Every event's cells as the Engine resolves them, bound events included. */
+    private static function readEventAreas(ProjectMap $map): array
+    {
+        $events = MapEventResolver::inspect($map->getEditableData(), $map->getEventLayerCells(), $map->mapId)->events;
+
+        return array_values(array_map(static fn(array $event): CellArea => CellArea::fromArray($event['area'], 'Event area'),
+            array_filter($events, static fn(array $event): bool => is_array($event['area'] ?? null))));
+    }
+
     /**
      * The cells of the map on disk that a player could stand on, by `x,y`:
      * walkable by its saved collision, reachable or not. None when the
@@ -217,6 +254,22 @@ final class SaveRelocationPlanner
         }
 
         return $walkable;
+    }
+
+    /** @return array<string, true> The cells the map's events cover on disk, bound events included. */
+    private static function readSavedEventCells(string $root, string $mapId): array
+    {
+        $source = MapSourceReader::readFiles(MapSourceReader::resolvePaths($root . '/assets/Maps', $mapId));
+        $cells = [];
+        foreach ((array) ($source['data']['events'] ?? []) as $event) {
+            if (is_array($event) && is_array($event['area'] ?? null)) {
+                foreach (CellArea::fromArray($event['area'], 'Event area')->cells as [$x, $y]) {
+                    $cells["{$x},{$y}"] = true;
+                }
+            }
+        }
+
+        return $cells;
     }
 
     /** @return array<mixed> The map's `npcs` entries as saved on disk. */
