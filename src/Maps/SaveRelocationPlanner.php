@@ -25,7 +25,8 @@ use Throwable;
  * cell the player could stand on in the saved map, reachable today or not, a
  * save standing there would load inside it. A cell is taken when its new type blocks movement (new
  * furniture, a wall, painted collision; walkable grass, exits and save points
- * do not) or when an authored NPC now stands on it, added or moved. Floor
+ * do not), when an authored NPC now stands on it, added or moved, or when an
+ * event now covers it that covered nothing there before, such as a moved door. Floor
  * the player reaches today that the change walls off, such as the inside of
  * a building moved onto open ground, moves its saves too. The plan
  * moves saves on each such cell to the nearest plain floor the player can
@@ -134,10 +135,20 @@ final class SaveRelocationPlanner
         // Any cell walkable on disk may hold a save, even one no route reaches today: an older layout may have
         // reached it, and a save made there must never load inside what now takes it.
         $walkable = self::readSavedWalkableCells($root, $map->mapId);
+        // An event now covering a cell no event covered on disk, such as a door moved there, would start under a save.
+        $saved = self::readSavedEventCells($root, $map->mapId);
+        $covered = [];
+        foreach (self::readEventAreas($map) as $area) {
+            foreach ($area->cells as [$x, $y]) {
+                if (! isset($saved["{$x},{$y}"])) {
+                    $covered["{$x},{$y}"] = true;
+                }
+            }
+        }
         $blocked = [];
         foreach ($grid as $y => $row) {
             foreach (array_keys($row) as $x) {
-                $taken = CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]);
+                $taken = CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]) || isset($covered["{$x},{$y}"]);
                 // Floor the player reaches today and the change walls off: a save there would load with no way out.
                 $cutOff = $changed !== null && $report->isReachable($x, $y) && ! $changed->isReachable($x, $y);
                 if (($report->isReachable($x, $y) || isset($walkable["{$x},{$y}"])) && ($taken || $cutOff)) {
@@ -284,6 +295,22 @@ final class SaveRelocationPlanner
         }
 
         return $walkable;
+    }
+
+    /** @return array<string, true> The cells the map's events cover on disk, bound events included. */
+    private static function readSavedEventCells(string $root, string $mapId): array
+    {
+        $source = MapSourceReader::readFiles(MapSourceReader::resolvePaths($root . '/assets/Maps', $mapId));
+        $cells = [];
+        foreach ((array) ($source['data']['events'] ?? []) as $event) {
+            if (is_array($event) && is_array($event['area'] ?? null)) {
+                foreach (CellArea::fromArray($event['area'], 'Event area')->cells as [$x, $y]) {
+                    $cells["{$x},{$y}"] = true;
+                }
+            }
+        }
+
+        return $cells;
     }
 
     private static function readSavedNpcs(string $root, string $mapId): array

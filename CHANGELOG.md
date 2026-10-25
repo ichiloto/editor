@@ -26,6 +26,8 @@
   closed off a pocket of floor reachable before the change could send saves into
   that pocket, or leave saves standing in it, where they loaded with no way out;
   moving a building onto open ground did both with its enclosed interior.
+  Saves on floor an event now covers that no event covered before, such as a
+  door moved there, move too, so loading one starts nothing new.
 
 - World objects keep the footprint their resource stamps (a tree's trunk) in a
   map's own declared collision: making, moving, changing or deleting an object

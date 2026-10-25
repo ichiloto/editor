@@ -220,3 +220,12 @@ it('moves saves off floor the change walls off, and lands none in that pocket', 
         ['map' => 'home', 'cells' => [[2, 1], [3, 1]], 'to' => [4, 2]],
     ]);
 });
+
+it('moves saves off floor an event moved onto, where loading would start it', function () {
+    $root = mapLineRemovalProject();
+    $session = EditorSession::open($root);
+    // The event at (4, 1) moves one cell west onto open floor; the floor it leaves takes the saves.
+    $session->moveEvent('home', $session->readMap('home')['revision'], 'W', -1, 0);
+
+    expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[3, 1]], 'to' => [4, 1]]]);
+});

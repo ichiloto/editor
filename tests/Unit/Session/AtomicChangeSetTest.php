@@ -189,10 +189,11 @@ it('writes a change set\'s documents and the save relocations its map needs toge
 
     $outcome = $session->commitChanges(relocateSaves: true);
 
-    expect($outcome)->toMatchArray(['status' => 'saved', 'saved' => ['harbour'], 'relocated' => ['x 6, y 4 to x 6, y 5']])
+    // The lamp's cell (10, 3) is new to event B, now bound to it, so its saves move off it as the new wall's do.
+    expect($outcome)->toMatchArray(['status' => 'saved', 'saved' => ['harbour'], 'relocated' => ['x 10, y 3 to x 10, y 4', 'x 6, y 4 to x 6, y 5']])
         ->and(array_keys($outcome['written']))->toBe(['common_events', 'field_resources', 'cinematic harbour-lanterns', 'save relocations for harbour', 'map harbour'])
         ->and((require $manifestPath)['migrations'])->toBe([['from' => 0, 'to' => 1,
-            'relocations' => [['map' => 'harbour', 'cells' => [[6, 4]], 'to' => [6, 5]]]]])
+            'relocations' => [['map' => 'harbour', 'cells' => [[10, 3]], 'to' => [10, 4]], ['map' => 'harbour', 'cells' => [[6, 4]], 'to' => [6, 5]]]]])
         ->and($session->listUnsavedChanges())->toBe([]);
 
     $session->undo();
