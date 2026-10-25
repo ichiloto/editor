@@ -22,8 +22,10 @@
 ### Fixed
 
 - Save relocations land saves only on floor the player reaches once the change
-  is saved. A wall that closed off a pocket of floor reachable before the change
-  could send saves into that pocket, where they loaded with no way out.
+  is saved, and also move saves off floor the change walls off. A wall that
+  closed off a pocket of floor reachable before the change could send saves into
+  that pocket, or leave saves standing in it, where they loaded with no way out;
+  moving a building onto open ground did both with its enclosed interior.
 
 - World objects keep the footprint their resource stamps (a tree's trunk) in a
   map's own declared collision: making, moving, changing or deleting an object

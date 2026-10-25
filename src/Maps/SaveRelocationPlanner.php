@@ -25,7 +25,9 @@ use Throwable;
  * cell the player could stand on in the saved map, reachable today or not, a
  * save standing there would load inside it. A cell is taken when its new type blocks movement (new
  * furniture, a wall, painted collision; walkable grass, exits and save points
- * do not) or when an authored NPC now stands on it, added or moved. The plan
+ * do not) or when an authored NPC now stands on it, added or moved. Floor
+ * the player reaches today that the change walls off, such as the inside of
+ * a building moved onto open ground, moves its saves too. The plan
  * moves saves on each such cell to the nearest plain floor the player can
  * reach once the change is saved, never a pocket the change itself walls
  * off, as one declared `relocations` step in the project's save
@@ -135,8 +137,10 @@ final class SaveRelocationPlanner
         $blocked = [];
         foreach ($grid as $y => $row) {
             foreach (array_keys($row) as $x) {
-                if (($report->isReachable($x, $y) || isset($walkable["{$x},{$y}"]))
-                    && (CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]))) {
+                $taken = CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]);
+                // Floor the player reaches today and the change walls off: a save there would load with no way out.
+                $cutOff = $changed !== null && $report->isReachable($x, $y) && ! $changed->isReachable($x, $y);
+                if (($report->isReachable($x, $y) || isset($walkable["{$x},{$y}"])) && ($taken || $cutOff)) {
                     $blocked["{$x},{$y}"] = [$x, $y];
                 }
             }
