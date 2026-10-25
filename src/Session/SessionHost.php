@@ -305,6 +305,7 @@ final class SessionHost
             'selection.clipboard' => $session->describeClipboard(),
             'map.coverage' => $session->readCoverage(self::requireString($params, 'map')),
             'map.passageAgreement' => $session->readPassageAgreement(self::requireString($params, 'map')),
+            'map.measure' => $session->measureWalk(self::requireString($params, 'map'), self::requireCells(['cells' => $params['points'] ?? null])),
             'layer.drawTiles' => $session->drawLayerTiles(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
