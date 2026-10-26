@@ -156,6 +156,25 @@ it('moves area cells with inserted lines, and stops a removal through an area\'s
         ->toThrow(SessionRefusal::class, 'areas.1.area.cells.1.0 (area porch has a cell on a removed line)');
 });
 
+it('asks the author to reshape exact cells that inserted lines leave a gap in, never filling it by guess', function () {
+    [$root, $file, $session] = createLandmarkProject();
+    $revision = static fn(): int => $session->readMap('test-map')['revision'];
+    // span covers row 1 on both sides of column 1; porch meets column 1 only on another row.
+    $session->createArea('test-map', $revision(), 'span', ['cells' => [[0, 1], [1, 1]]]);
+    $session->createArea('test-map', $revision(), 'porch', ['cells' => [[0, 0], [2, 1]]]);
+    $session->saveMap('test-map');
+
+    $question = $session->insertMapLines('test-map', $revision(), 'x', 1, 2);
+    $reasons = array_column($question['handEdits'], 'reason', 'where');
+    expect($reasons)->toBe(['areas.0.area.cells' => 'area span has cells on both sides of the inserted lines, which leave a gap in it; reshape it over them']);
+
+    $session->insertMapLines('test-map', $question['revision'], 'x', 1, 2, 'write', $question['confirm']);
+    expect(readSavedAreas($file))->toBe([
+        ['id' => 'span', 'area' => ['cells' => [[0, 1], [3, 1]]]],
+        ['id' => 'porch', 'area' => ['cells' => [[0, 0], [4, 1]]]],
+    ]);
+});
+
 it('renames and deletes areas, and binds an event to one, through the rows both editors share', function () {
     [, , $session] = createLandmarkProject();
     $revision = static fn(): int => $session->readMap('test-map')['revision'];

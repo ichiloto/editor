@@ -563,6 +563,9 @@ final class MapLineInventory
      * moves, shrinking with removed lines; exact cells each move with their
      * line. A cell on a removed line stops the removal, since dropping it
      * would change the territory the area names; reshape the area first.
+     * Exact cells on both sides of inserted lines leave the new cells between
+     * them outside the area, which a rectangle would take in, so that is
+     * reported for the author to reshape, never guessed.
      *
      * @param list<int|string> $path
      * @param array<string, mixed> $area
@@ -574,6 +577,9 @@ final class MapLineInventory
             return;
         }
         $axis = $this->edit->axis === 'x' ? 0 : 1;
+        if ($this->edit instanceof LineInsertion && self::spansLine((array) $area['cells'], $axis, $this->edit->at)) {
+            $this->reportHandEdit($file, [...$path, 'cells'], sprintf('area %s has cells on both sides of the inserted lines, which leave a gap in it; reshape it over them', $id));
+        }
         foreach ((array) $area['cells'] as $cellIndex => $cell) {
             $coordinate = is_array($cell) ? ($cell[$axis] ?? null) : null;
             if (! is_int($coordinate)) {
@@ -591,6 +597,31 @@ final class MapLineInventory
                 $this->shifts[$file][self::formatKey($cellPath)] = ['path' => $cellPath, 'value' => $shifted];
             }
         }
+    }
+
+    /**
+     * Whether exact cells stand on both sides of a line at the same place across it: on the line before it and on
+     * the line itself.
+     *
+     * @param array<mixed> $cells
+     */
+    private static function spansLine(array $cells, int $axis, int $at): bool
+    {
+        $before = [];
+        $on = [];
+        foreach ($cells as $cell) {
+            if (! is_array($cell) || ! is_int($cell[0] ?? null) || ! is_int($cell[1] ?? null)) {
+                continue;
+            }
+            $across = $cell[1 - $axis];
+            if ($cell[$axis] === $at - 1) {
+                $before[$across] = true;
+            } elseif ($cell[$axis] === $at) {
+                $on[$across] = true;
+            }
+        }
+
+        return array_intersect_key($before, $on) !== [];
     }
 
     /** @param list<int|string> $path */
