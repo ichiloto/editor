@@ -740,7 +740,7 @@ final class ProjectRecordDatabase
                 'dataPath' => [...($basePath === [] ? explode('.', $subList->key) : $basePath), $entryIndex, ...explode('.', $field->key)]], $entry, $owner, $references)];
         }
 
-        $variant = $subList->variantKey !== null ? strval($entry[$subList->variantKey] ?? '') : '';
+        $variant = $subList->getVariant($entry);
 
         if ($this->graphical) {
             $fields = StagedActorFields::describeFields($entry, $fields, $this->authoringReferences?->getAssetRoot());
@@ -3461,7 +3461,7 @@ final class ProjectRecordDatabase
         }
 
         $nestedList = $list->nestedListFor($entry);
-        $isChoice = $list->variantKey !== null && strval($entry[$list->variantKey] ?? '') === 'choice';
+        $isChoice = $list->getVariant($entry) === 'choice';
 
         return new RecordItem(
             RecordItem::ENTRY,
@@ -4955,7 +4955,7 @@ final class ProjectRecordDatabase
      */
     private static function withoutStaleVariantFields(RecordSubList $subList, array $before, array $after): array
     {
-        if (strval($before[$subList->variantKey] ?? '') === strval($after[$subList->variantKey] ?? '')) {
+        if ($subList->getVariant($before) === $subList->getVariant($after)) {
             // The same variant picked again changes nothing.
             return $after;
         }

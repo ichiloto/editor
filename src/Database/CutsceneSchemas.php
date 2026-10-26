@@ -325,7 +325,8 @@ final class CutsceneSchemas
             prefix: 'cast',
             singular: 'cast member',
             fields: [
-                new RecordField('kind', 'Kind', options: ['player', 'party_actor', 'npc', 'staged_actor', ...($graphical ? ['world_object'] : [])]),
+                new RecordField('kind', 'Kind', options: ['player', 'party_actor', 'npc', 'staged_actor', ...($graphical ? ['world_object'] : [])],
+                    displayDefault: 'staged_actor'),
             ],
             blank: ['kind' => 'staged_actor', 'id' => 'actor', 'sprite' => ['@'], 'x' => 0, 'y' => 0],
             variants: [
@@ -337,8 +338,10 @@ final class CutsceneSchemas
             ],
             variantKey: 'kind',
             nestedLists: $graphical ? ['staged_actor' => StagedActorFields::getSuppressionList(...)] : [],
+            // The Engine stages a cast member that names no kind.
+            variantDefault: 'staged_actor',
             prepareEdit: static fn(array $entry, string $field): array => StagedActorFields::preparePositionEdit(
-                $graphical ? StagedActorFields::prepareEdit($entry, $field) : $entry, $field),
+                StagedActorFields::prepareAppearanceEdit($graphical ? StagedActorFields::prepareEdit($entry, $field) : $entry, $field), $field),
         );
     }
 
@@ -373,6 +376,20 @@ final class CutsceneSchemas
             new RecordField('sprites.east', 'Sprite East', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             new RecordField('sprites.west', 'Sprite West', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
         ];
+
+        // A map NPC's look replaces the actor's own glyphs and sheet; a bound visual already wears its subject's.
+        if (! isset($entry['subject'])) {
+            $look = [new RecordField('appearance.kind', 'Look Of', options: ['', ...CinematicCommandSchema::STAGED_ACTOR_APPEARANCE_KINDS],
+                removeWhenEmpty: true, displayDefault: '(its own look)')];
+            if (($entry['appearance']['kind'] ?? null) === 'npc') {
+                $look[] = RecordField::reference('appearance.id', 'Look Of NPC', 'map_npcs');
+            }
+            array_splice($fields, 1, 0, $look);
+        }
+        if (isset($entry['appearance'])) {
+            $fields = array_values(array_filter($fields, static fn(RecordField $field): bool
+                => $field->key !== 'sprite' && $field->key !== 'asset' && ! str_starts_with($field->key, 'sprites.')));
+        }
 
         if (! $graphical) {
             return $fields;
@@ -419,6 +436,7 @@ final class CutsceneSchemas
             prepareEdit: static function (array $entry, string $field) use ($graphical): array {
                 $entry = InnPresentationFields::prepareEdit($entry, $field);
                 $entry = $graphical ? StagedActorFields::prepareEdit($entry, $field) : $entry;
+                $entry = StagedActorFields::prepareAppearanceEdit($entry, $field);
                 $entry = StagedActorFields::preparePositionEdit($entry, $field);
                 return MovementRouteFields::prepareEdit($entry, $field);
             },
