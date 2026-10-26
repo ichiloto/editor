@@ -174,6 +174,22 @@ final readonly class ProjectCatalogs
     }
 
     /**
+     * The regions as the Regions page holds them.
+     *
+     * @throws InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function loadRegions(): \Ichiloto\Engine\Field\RegionCatalog
+    {
+        $current = $this->readCurrent(\Ichiloto\Engine\Field\RegionCatalog::FILE);
+
+        return match (true) {
+            $current === null => \Ichiloto\Engine\Field\RegionCatalog::load($this->getAssetRoot()),
+            ! $current['exists'] => new \Ichiloto\Engine\Field\RegionCatalog(),
+            default => \Ichiloto\Engine\Field\RegionCatalog::fromArray($current['payload']),
+        };
+    }
+
+    /**
      * The text roles (`Data/Presentation/text.php`) as the Text Roles page
      * holds them; null when the project declares none.
      *
@@ -192,7 +208,7 @@ final readonly class ProjectCatalogs
     /**
      * The dialogue catalogue (`Data/Presentation/dialogue.php`) as the
      * Dialogue Portraits and Speaker Names pages hold it, with the keys
-     * neither page owns (theme, skits, skit stage) as the file has them.
+     * neither page owns (theme, skit stage) as the file has them.
      *
      * @throws InvalidArgumentException|\RuntimeException When the Engine would refuse the catalogue.
      */

@@ -106,6 +106,9 @@ final class RecordSchemaCatalog
     /** A skill's battle message where none is authored: the Engine shows the action's name. */
     public const string SKILL_MESSAGE_DEFAULT = '%2';
 
+    /** How a skit without a backdrop of its own reads: it shows the backdrop of the place it plays in. */
+    public const string SKIT_BACKDROP_NONE = 'None: the place\'s backdrop';
+
     /**
      * The event-script command types built into the engine's interpreter.
      *
@@ -163,6 +166,7 @@ final class RecordSchemaCatalog
             \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
             \Ichiloto\Editor\Field\MapRoleFields::getSchema(),
             \Ichiloto\Editor\Field\PlaceTypeFields::getSchema(),
+            \Ichiloto\Editor\Field\RegionFields::getSchema(),
             DialoguePortraitFields::getSchema(),
             DialogueSpeakerFields::getSchema(),
             FieldCueFields::getSchema(),
@@ -1666,6 +1670,9 @@ final class RecordSchemaCatalog
                 new RecordField('id', 'Id'),
                 new RecordField('title', 'Title'),
                 RecordField::reference('where', 'Where', 'maps'),
+                // Only for a skit whose content needs one setting wherever it plays; otherwise the place's shows.
+                new RecordField(\Ichiloto\Engine\Field\SkitBackdrop::SKIT_KEY, 'Backdrop', reference: 'png_assets', removeWhenEmpty: true,
+                    allowsNone: true, displayDefault: self::SKIT_BACKDROP_NONE),
                 new RecordField('conditions', 'Conditions', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
                 new RecordField('speed', 'Speed (chars/sec)', InputControlType::INTEGER, removeWhenEmpty: true),
             ],

@@ -20,19 +20,16 @@ final class DialogueCatalogFile
     /** Where the catalogue lives in a project: under its assets, where the Engine reads it. */
     public const string RELATIVE_PATH = 'assets/' . DialoguePresentationCatalog::FILE;
 
-    /**
-     * The schema id DialoguePresentationCatalog::load() requires, written into a catalogue the Editor creates.
-     * The Engine states it only inside load(); this is the one place the Editor names it.
-     */
-    public const string SCHEMA = 'ichiloto.dialogue/1';
+    /** The schema id DialoguePresentationCatalog::load() requires, written into a catalogue the Editor creates. */
+    public const string SCHEMA = DialoguePresentationCatalog::SCHEMA;
 
-    /** The keys load() accepts, beside the schema. */
-    private const array KEYS = ['schema', 'theme', 'actors', 'resources', 'speakers', 'skits', 'skitStage'];
+    /** The keys load() accepts. A skit's backdrop is the place's, never this file's ({@see \Ichiloto\Engine\Field\SkitBackdrop}). */
+    private const array KEYS = DialoguePresentationCatalog::KEYS;
 
     private function __construct() {}
 
     /**
-     * The catalogue the Engine makes of a payload: its identities, speaker names, skits and skit stage, admitted
+     * The catalogue the Engine makes of a payload: its identities, speaker names and skit stage, admitted
      * by the Engine's own constructor. The theme is admitted too when an asset root is given; without one it is
      * left out, since naming emotions needs no artwork.
      *
@@ -40,17 +37,20 @@ final class DialogueCatalogFile
      */
     public static function createCatalog(array $whole, ?string $assetRoot = null): DialoguePresentationCatalog
     {
+        if (array_key_exists(DialoguePresentationCatalog::RETIRED_SKITS_KEY, $whole)) {
+            throw new \InvalidArgumentException('Dialogue catalogue "skits" is retired: a skit\'s backdrop follows the map, its region or the skit. Run `ichiloto upgrade`.');
+        }
         if (($whole['schema'] ?? null) !== self::SCHEMA || array_diff(array_keys($whole), self::KEYS) !== []) {
             throw new \InvalidArgumentException(sprintf('Dialogue catalogue requires schema %s and only the keys %s.', self::SCHEMA, implode(', ', self::KEYS)));
         }
-        foreach (['actors', 'resources', 'speakers', 'skits', 'skitStage'] as $key) {
+        foreach (['actors', 'resources', 'speakers', 'skitStage'] as $key) {
             if (array_key_exists($key, $whole) && ! is_array($whole[$key])) {
                 throw new \InvalidArgumentException(sprintf('Dialogue catalogue "%s" must be an array.', $key));
             }
         }
         $theme = $assetRoot !== null && is_array($whole['theme'] ?? null) ? new MenuPresentationCatalog($assetRoot, $whole['theme']) : null;
 
-        return new DialoguePresentationCatalog($whole['actors'] ?? [], $theme, $whole['speakers'] ?? [], $whole['skits'] ?? [],
+        return new DialoguePresentationCatalog($whole['actors'] ?? [], $theme, $whole['speakers'] ?? [],
             SkitStageStyle::getFromArray($whole['skitStage'] ?? []), $whole['resources'] ?? []);
     }
 

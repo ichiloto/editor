@@ -4,6 +4,12 @@
 
 ### Added
 
+- Skit backdrops that follow the place, through the Engine's `SkitBackdrop`: a map's `Skit Backdrop` Inspector
+  row (`skitBackdrop`), a Regions Database page over the Engine's `RegionCatalog` (`assets/Data/regions.php`, one
+  record per region name with its skit backdrop) and a skit's optional `Backdrop` (`backdrop`), each chosen with
+  the shared image picker in the Terminal and GUI editors and stored as an asset-root-relative path. The map row
+  says what its skits show when it names none (its region's backdrop, or none). Validation warns where a skit
+  would show no backdrop, about a backdrop the game cannot draw and about a region record no map is in.
 - Configuration offers how long each battle action category's announcement is read at each animation pace
   (`ui.battle.announcement_seconds.<category>.<pace>`, the Engine's `BattleActionCategory::getAnnouncementConfigPath()`),
   with the Engine's time as its default, and refuses a time outside 0.1 s to 10 s. Choosing the default writes
@@ -65,6 +71,11 @@
   tile into the cell's stack in depth order (further south, then further east,
   in front), refusing a cell that would overfill the stack. Database >
   Tilesets authors Stacks.
+
+### Removed
+
+- The dialogue catalogue's `skits` key: Dialogue Portraits and Speaker Names refuse a catalogue that still has it
+  and name `ichiloto upgrade` (format 4), which moves each skit background to its skit's `Backdrop`.
 
 ### Fixed
 - `map:render` review pages carry their graphical stills inside the page, so they show when the page is opened or sent on its own; they used to reference the PNG files beside them and showed no pictures elsewhere.

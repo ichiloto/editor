@@ -183,6 +183,7 @@ class ProjectValidator
       ...$this->checkActorDefinitions($workspace),
       ...new ActorReferenceValidator()->validate($workspace),
       ...new DialoguePresentationValidator()->validate($workspace),
+      ...new SkitBackdropValidator()->validate($workspace),
       ...new RecordReferenceValidator()->validate($workspace),
       ...$this->checkKnowledgeCatalog($workspace),
       ...$this->checkSpecialProperties($workspace),

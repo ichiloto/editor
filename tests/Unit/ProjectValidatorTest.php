@@ -48,7 +48,8 @@ function writeConsistentQuests(string $root): void
  * Rewrites the temporary project's skit so it only names things it has.
  *
  * Same story as the quests: the fixture's skit plays on a map from a bigger
- * project and waits on one of its quests.
+ * project and waits on one of its quests. The map it plays on gets a
+ * backdrop, so the skit has a scene to show.
  *
  * @param string $root The project root.
  * @return void
@@ -67,6 +68,9 @@ function writeConsistentSkits(string $root): void
       ],
     ];
     PHP);
+    writeTilesetTestPng($root . '/assets/Graphics/Skits/Test.png', 32, 18);
+    editTestMapData($root, static fn(string $source): string => str_replace("'region' => '',",
+        "'region' => '',\n  'skitBackdrop' => 'Graphics/Skits/Test.png',", $source));
 }
 
 /**
