@@ -614,7 +614,8 @@ final class ReferenceCatalog
      * object a subject reference (`at`) names, on the subject map; none until it names an object that has some.
      * `terrain_grounds`: the ground kinds of the tileset a terrain kind belongs to, those that stand on nothing,
      * other than the kind itself. `tileset_whole_pieces`: the pieces of the tileset a place icon belongs to that are
-     * stamped whole, any of which can show a place type.
+     * stamped whole, any of which can show a place type. `tileset_thickets`: the thickets of the tileset a terrain
+     * kind belongs to.
      *
      * @param array<string, mixed> $holder What the field lives in.
      * @param array<string, mixed> $owner The record holding the entry.
@@ -635,6 +636,10 @@ final class ReferenceCatalog
             $pieces = is_array($owner['pieces'] ?? null) ? $owner['pieces'] : [];
             return array_values(array_map(strval(...), array_keys(array_filter($pieces, static fn(mixed $piece): bool
                 => is_array($piece) && ($piece['connects'] ?? null) === null))));
+        }
+        if ($source === 'tileset_thickets') {
+            $thickets = is_array($owner['thickets'] ?? null) ? $owner['thickets'] : [];
+            return array_values(array_map(strval(...), array_keys($thickets)));
         }
         if ($source !== 'world_object_attachments') {
             throw new InvalidArgumentException(sprintf('There is no entry choice source %s.', $source));

@@ -561,6 +561,21 @@ art. A troop of the map's encounters can be limited to terrains (the
 inspector's `Terrains` row, offered on maps painted in kinds), typed as the
 encounter terrains the map's kinds meet.
 
+### Thickets
+
+Woodland, marsh reeds and tall grass hide a character walking through them
+in the graphical field, as classic JRPGs do. The GUI editor's Database >
+Tilesets declares a tileset's **Thickets**, one per foliage type: its id and
+name, its **Depth** (field pixels of a character hidden, up from its feet, 1
+to 48), its **Hidden Part Opacity** (0 masks the hidden part behind the
+foliage; up to just below 1 shows it through, as RPG Maker draws a bush),
+whether it **Rustles** around a character walking through it, and the
+**Tiles**, other than terrain kinds' own autotiles, that are it. A terrain
+kind's **Thicket** row chooses among the tileset's thickets the one its own
+autotile is. The game hides a character in the deepest thicket among the
+tiles its cell shows. The terminal, collision, movement and encounters are
+unchanged, and the terminal Database neither shows nor drops thickets.
+
 ### Stacked Pieces
 
 Some decorations overlap their neighbours, such as the peaks over a world

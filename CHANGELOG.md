@@ -21,6 +21,9 @@
   terminal glyphs, is not its destination's type's (`place.icon`) or a place icon over a way into a map with no
   type (`place.untyped`), and names a map whose type the project does not have (`map.place-type`). A type stays
   while a map is of it or a tileset gives it an icon.
+- Database > Tilesets authors the Engine's thickets in the GUI editor: a **Thickets** list (id, name, depth up
+  from the feet, hidden part opacity, rustles, tiles) and a terrain kind's **Thicket**, chosen among the
+  tileset's thickets (`tileset_thickets`). The terminal Database neither shows nor drops them.
 - Skills author the Engine's `reveal` effect: its facts (`Reveals`, picked from the Engine's
   `reveal_facts`: `hp`, `mp`, `stats`, `affinities`) and its `Chance %`, shown in the Effects pane as
   `Reveal: hp, stats, 75%`. The effect Type list is the Engine's own (`SkillRecord::getEffectTypes()`).
