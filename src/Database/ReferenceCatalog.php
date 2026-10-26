@@ -1380,6 +1380,21 @@ final class ReferenceCatalog
         return $this->workspace->catalogs->loadPlaceTypes();
     }
 
+    /**
+     * The project's regions as the Regions page holds them, unsaved edits included.
+     *
+     * @throws \InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function getRegionCatalog(): \Ichiloto\Engine\Field\RegionCatalog
+    {
+        $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\RegionFields::CATEGORY);
+        if (($reason = $database?->getReadOnlyReason()) !== null) {
+            throw new \InvalidArgumentException($reason);
+        }
+
+        return $this->workspace->catalogs->loadRegions();
+    }
+
     public function getMapCategoryCatalog(): \Ichiloto\Engine\Field\MapCategoryCatalog
     {
         // The project's own categories as the Place Categories page holds them, unsaved edits included.

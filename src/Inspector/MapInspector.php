@@ -46,6 +46,10 @@ use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
 use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Field\MapRoleCatalog;
 use Ichiloto\Engine\Field\PlaceTypeCatalog;
+use Ichiloto\Engine\Field\RegionCatalog;
+use Ichiloto\Engine\Field\SkitBackdrop;
+use Ichiloto\Engine\Field\Enumerations\SkitBackdropSource;
+use Ichiloto\Engine\Rendering\Sprites\PngAssetPreflight;
 use Ichiloto\Engine\Field\PlayerSpriteSet;
 use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
@@ -175,6 +179,7 @@ final readonly class MapInspector
             ],
             $this->buildMapRoleField($map),
             $this->buildPlaceTypeField($map),
+            $this->buildSkitBackdropField($map),
             $this->buildMapKindField($map),
             [
                 'label' => 'Description',
@@ -376,6 +381,7 @@ final readonly class MapInspector
             MapStationField::TARGET => $this->applyStationValue($map, (string) $value),
             self::ROLE_TARGET => $this->applyMapRole($map, trim((string) $value)),
             self::PLACE_TYPE_TARGET => $this->applyPlaceType($map, trim((string) $value)),
+            self::SKIT_BACKDROP_TARGET => $this->applySkitBackdrop($map, trim((string) $value)),
             self::DASHING_TARGET => $this->writeMapData($map, [DashSettings::MAP_DISABLE_DASHING], $value === true ? true : null,
                 'Disable Dashing'),
             default => null,
@@ -1084,6 +1090,75 @@ final readonly class MapInspector
         }
 
         return $this->writeMapData($map, [PlaceTypeCatalog::MAP_KEY], $type === '' ? null : $type, 'Place Type');
+    }
+
+    /** The Skit Backdrop row's target: the scene skits show on this map, a project PNG chosen, never typed. */
+    public const string SKIT_BACKDROP_TARGET = 'map-skit-backdrop';
+    /** How the Skit Backdrop row's choice of none reads. */
+    public const string SKIT_BACKDROP_NONE = 'None: the region\'s backdrop, or none';
+
+    /**
+     * The map's Skit Backdrop row: the scene a skit's stage shows while it plays on this map, unless the skit's
+     * content names its own. Chosen with the project's image picker and stored as an asset-root-relative path in the
+     * map's `skitBackdrop`. With none, the row says what skits here show instead: the region's backdrop, or none,
+     * which the game reports. A path the project no longer has stays visible and says so.
+     *
+     * @return array<string, mixed>
+     */
+    public function buildSkitBackdropField(ProjectMap $map): array
+    {
+        $backdrop = $map->getMapDataField([SkitBackdrop::MAP_KEY]);
+        try {
+            $regions = $this->references->getRegionCatalog();
+        } catch (InvalidArgumentException) {
+            // Unreadable regions name no backdrop here; validation says why.
+            $regions = new RegionCatalog();
+        }
+        // What a skit that names none shows here, by the Engine's own choice.
+        $shown = SkitBackdrop::resolve([], SkitBackdrop::readMapBinding($map->getEditableData()), $regions);
+
+        return [
+            'label' => 'Skit Backdrop',
+            'value' => match (true) {
+                $shown->source === SkitBackdropSource::REGION => sprintf('None: region %s\'s, %s', $map->getMapDataField(['region']), $shown->asset),
+                $shown->source === SkitBackdropSource::NONE => 'None: skits here show no backdrop',
+                $shown->asset === null => sprintf('%s · %s', is_scalar($backdrop) ? (string) $backdrop : get_debug_type($backdrop), $shown->issue),
+                ! $this->isProjectPng($shown->asset) => $shown->asset . ' · not a PNG in assets',
+                default => $shown->asset,
+            },
+            'selectedValue' => is_string($backdrop) ? $backdrop : '',
+            'reference' => 'png_assets',
+            'noneLabel' => self::SKIT_BACKDROP_NONE,
+            'optional' => true,
+            'target' => self::SKIT_BACKDROP_TARGET,
+            'field' => SkitBackdrop::MAP_KEY,
+        ];
+    }
+
+    /**
+     * Makes a project PNG the scene skits show on the map, or none for an empty value, as one undo step.
+     *
+     * @throws InspectorRefusal When the value is not one of the project's PNGs.
+     */
+    private function applySkitBackdrop(ProjectMap $map, string $asset): ?Command
+    {
+        if ($asset !== '' && ! $this->isProjectPng($asset)) {
+            throw new InspectorRefusal(sprintf('%s is not a PNG in the project\'s assets. Choose one with the image picker.', $asset));
+        }
+
+        return $this->writeMapData($map, [SkitBackdrop::MAP_KEY], $asset === '' ? null : $asset, 'Skit Backdrop');
+    }
+
+    /** Whether an asset-root-relative path is a PNG inside the project's assets, read from the file, never listed. */
+    private function isProjectPng(string $asset): bool
+    {
+        try {
+            PngAssetPreflight::inspect($this->references->getAssetRoot(), $asset);
+        } catch (Throwable) {
+            return false;
+        }
+
+        return true;
     }
 
     public function buildMapKindField(ProjectMap $map): array

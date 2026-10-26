@@ -1148,6 +1148,18 @@ type. Restamp the icon over the entrance with the piece it names, keeping the
 entrance cell. A type the project no longer has stays visible as
 `id · not in Place Types`, and validation names it.
 
+### Skit backdrop
+
+`Skit Backdrop`, under `Place Type`, is the scene a skit's stage shows while
+the skit plays on this map, unless the skit's own `Backdrop` names one (see
+[Skits](#skits)). Enter opens the project's image picker (the GUI editor
+shows each image); `None` removes it. It is stored as the map data's
+`skitBackdrop`, a path under `assets`, so replacing the file keeps the
+binding. With none, the row says what skits here show instead: its region's
+backdrop from the [Regions](#database-screen) page, or no backdrop, which the
+game reports with the skit and the map. A path the project no longer has
+stays visible as `path · not a PNG in assets`, and validation names it.
+
 ### Map kind
 
 `Kind`, under `Region`, is the setting the map draws: one of the project's
@@ -1534,6 +1546,7 @@ skill's effects, a quest's rewards) listed under them.
 | Place Categories | `assets/Data/map-categories.php` (`categories`) | Editable - one record per category: stable id, name and translation key, and the generic category it specializes | Same |
 | Map Roles | `assets/Data/map-roles.php` (`roles`) | Editable - one record per role: stable id, name and translation key, and the roles its maps may lead to | Same |
 | Place Types | `assets/Data/place-types.php` (`types`) | Editable - one record per type: stable id, name and translation key | Same |
+| Regions | `assets/Data/regions.php` (`regions`) | Editable - one record per region, keyed by its name: its skit backdrop, chosen as a project image | Same, with the image shown beside its path |
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
 | Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, an image or a sign board, and an optional occupancy stamp |
 | Battle Arenas | `assets/Data/Presentation/arenas.php` (`arenas`) | Not shown: graphical battle presentation | One record per arena, keyed by its stable id (set when it is created): name, background image and optional crop, and the ground its picture shows: far edge (`Ground Far Edge`, just below the horizon or walkable edge), near edge and far-edge scale, each defaulting to the battle theme's. Every troop's formation stands on the chosen arena's ground |
@@ -1604,6 +1617,12 @@ stamped whole. Validation then holds every entrance on a map drawn with that
 tileset to its destination's type. Its id may change until a map is of it or a
 tileset gives it an icon; while one does, the id stays and the type cannot be
 deleted.
+
+Regions hold what a whole region shows, one record per region, chosen among
+the region names the project's maps use. A region's **Skit Backdrop** is the
+scene skits show on any of its maps whose own Skit Backdrop is none, interiors
+included, so give a region one only where it suits every such map. A region
+needs no record to be a region; validation warns about a record no map is in.
 
 Field Resources are reusable whole images, such as a tree, that a map places by
 reference. A resource owns its art and its ground contact (the pivot, such as a
@@ -2323,13 +2342,17 @@ Optional party banter, one file per skit under `assets/Data/Skits`. The engine
 scans the directory and keys skits by their `id` field, not by filename, so
 renaming an `Id` in the editor does not require renaming the file.
 
-Fields: `Id`, `Title`, `Where (map id)`, `Conditions`, `Speed (chars/sec)`,
-then each beat's `Actor` or `Non-actor Speaker`, its `Emotion` and its `Text`.
+Fields: `Id`, `Title`, `Where (map id)`, `Backdrop`, `Conditions`,
+`Speed (chars/sec)`, then each beat's `Actor` or `Non-actor Speaker`, its `Emotion` and its `Text`.
 The emotion is chosen among the speaker's emotions (see
 [Dialogue Portraits and Emotions](#dialogue-portraits-and-emotions)).
 
 - `Where` gates the skit to one map id, matched case-insensitively. Leave it
   empty to make the skit available anywhere.
+- `Backdrop` is for a skit whose content needs one particular setting
+  wherever it plays. Leave it `None` and the skit shows the backdrop of the
+  place it plays in: the map's [Skit Backdrop](#skit-backdrop), else its
+  region's. Validation warns where a skit would show none.
 - `Conditions` is the shared world-condition line described under
   [Condition Lines](#condition-lines).
 - `Shift+O` and `Shift+X` add and remove beats.
