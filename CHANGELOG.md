@@ -8,6 +8,13 @@
   (`ui.battle.announcement_seconds.<category>.<pace>`, the Engine's `BattleActionCategory::getAnnouncementConfigPath()`),
   with the Engine's time as its default, and refuses a time outside 0.1 s to 10 s. Choosing the default writes
   nothing. The summon and effect battle previews read the authored time, as the battle does.
+- Place Types, a Database page over the Engine's `PlaceTypeCatalog` (`assets/Data/place-types.php`): the kinds
+  of place maps lead into, such as town, outpost or shrine. A map chooses its place's type on a `Place Type` row
+  (`placeType`); a tileset gives each type the piece shown for it under `Place Icons` on its Database > Tilesets
+  record, chosen among its pieces stamped whole. Validation warns at every entrance whose icon, in its tiles or
+  terminal glyphs, is not its destination's type's (`place.icon`) or a place icon over a way into a map with no
+  type (`place.untyped`), and names a map whose type the project does not have (`map.place-type`). A type stays
+  while a map is of it or a tileset gives it an icon.
 - Skills author the Engine's `reveal` effect: its facts (`Reveals`, picked from the Engine's
   `reveal_facts`: `hp`, `mp`, `stats`, `affinities`) and its `Chance %`, shown in the Effects pane as
   `Reveal: hp, stats, 75%`. The effect Type list is the Engine's own (`SkillRecord::getEffectTypes()`).

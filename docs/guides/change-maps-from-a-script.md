@@ -123,7 +123,10 @@ see Map Roles in the manual), or a map naming a role the project does not have
 (`map.role`).
 
 Warnings never refuse a change: tiles a piece draws whose glyph is gone, the
-missing-art placeholder, see-through ground, a map nothing reaches yet.
+missing-art placeholder, see-through ground, a map nothing reaches yet, an
+entrance whose icon is not its destination's place type's (`place.icon`) or a
+place icon over a way into a map naming no place type (`place.untyped`). A map
+naming a place type the project does not have is an error (`map.place-type`).
 
 A change to a map that already has an error is refused until that error is
 fixed too. Put the fix in the same batch.
@@ -395,6 +398,7 @@ batches.
 | Move a story event onto the NPC who delivers it | `npc.adoptEvent {map, marker, npc?}`: the event becomes the NPC's first page (its conditions, writes, cue, action and run-once), its cells are cleared, a run-once event's saved completion is aliased to the page, and the result lists what was dropped and the quest waymarks to repoint at the NPC (`database.apply` on the waymark's NPC row) |
 | Map fields (name, kind, music, encounters, atlas, landmarks) | `inspector.apply` with the map row's key |
 | A map's role | `inspector.apply` with `{target: map-role, field: role}`, value a role id from the Map Roles page (`database.create {category: map_roles}`), empty removes it |
+| A map's place type | `inspector.apply` with `{target: map-place-type, field: placeType}`, value a type id from the Place Types page (`database.create {category: place_types}`), empty removes it |
 | New map | `map.create {name, kind, width, height, id?}`; `id` is its folder, such as `town/inn/cellar` |
 | Copy or move a map | `map.duplicate {map, to?}`; `map.move {map, to}` asks first, then `{map, to, destination, confirm: true}` |
 | Landmark id | `inspector.apply` with `{target: map-landmarks, index, field: id}`; other maps' atlas parents follow the rename |

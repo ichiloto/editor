@@ -87,6 +87,12 @@ final readonly class ProjectWorkspace
         $this->getRecordDatabase(\Ichiloto\Editor\Field\MapRoleFields::CATEGORY)?->useDeletionReferences(
             fn(string $role): array => \Ichiloto\Editor\Field\MapRoleFields::describeRoleReferences($this->maps, $role),
         );
+        // A place type stays while a map is of it or a tileset gives it an icon.
+        $this->getRecordDatabase(\Ichiloto\Editor\Field\PlaceTypeFields::CATEGORY)?->useDeletionReferences(
+            fn(string $type): array => \Ichiloto\Editor\Field\PlaceTypeFields::describeTypeReferences($this->maps, array_column(array_map(
+                static fn(\Ichiloto\Editor\Database\ProjectRecord $record): array => ['id' => $record->recordId, 'data' => (array) $record->toArray()],
+                $this->getRecordDatabase('tilesets')?->getRecords() ?? []), 'data', 'id'), $type),
+        );
         // A skill stays while a class, actor, enemy, skill or state names it; skills.retire moves or removes those first.
         $this->getRecordDatabase('skills')?->useDeletionReferences(fn(string $skill): array => $this->describeSkillUses($skill));
         $references = new ReferenceCatalog($this);

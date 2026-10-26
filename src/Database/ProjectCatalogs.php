@@ -161,6 +161,19 @@ final readonly class ProjectCatalogs
     }
 
     /**
+     * The place types as the Place Types page holds them.
+     *
+     * @throws InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function loadPlaceTypes(): \Ichiloto\Engine\Field\PlaceTypeCatalog
+    {
+        $current = $this->readCurrent(\Ichiloto\Engine\Field\PlaceTypeCatalog::FILE);
+
+        return $current === null ? \Ichiloto\Engine\Field\PlaceTypeCatalog::load($this->getAssetRoot())
+            : \Ichiloto\Engine\Field\PlaceTypeCatalog::fromArray($current['payload']);
+    }
+
+    /**
      * The text roles (`Data/Presentation/text.php`) as the Text Roles page
      * holds them; null when the project declares none.
      *

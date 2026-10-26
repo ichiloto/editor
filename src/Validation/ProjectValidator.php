@@ -1733,6 +1733,7 @@ class ProjectValidator
           ...MapCompletenessCheck::validate($map, $this->inventoryCatalog),
           ...$this->checkDoors($map, $workspace->mapIds),
           ...MapRoleCheck::validate($map, $mapsById),
+          ...PlaceIconCheck::validate($map, $mapsById),
           ...$this->checkEncounters($map, $troops),
           ...$this->checkNpcs($map, $workspace),
           ...$this->checkDuplicateKeys($map),
