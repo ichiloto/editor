@@ -2,10 +2,12 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
-use Ichiloto\Engine\Battle\BattleTurnTimings;
+use Ichiloto\Engine\Battle\Actions\AttackAction;
+use Ichiloto\Engine\Battle\BattlePacing;
 use Ichiloto\Engine\Battle\Enumerations\BattleActionCategory;
 use Ichiloto\Engine\Battle\Enumerations\BattlePace;
 
@@ -36,14 +38,31 @@ it('previews a summon cast by the battle test party at its troop, for both rende
         ->and($session->listUnsavedChanges())->toBe([]);
 });
 
-it('paces the previewed summon as the battle paces it, by its action type', function () {
-    $phases = EditorSession::open(summonBattlePreviewProject())->readSummonBattlePreview(0, 0)['phases'];
-    // Even the fastest summon pacing steps forward longer than the slowest ordinary attack.
-    $summon = BattleTurnTimings::fromTotalDuration(BattleActionCategory::SUMMON->totalDurationSeconds(BattlePace::FAST));
-    $attack = BattleTurnTimings::fromTotalDuration(BattleActionCategory::PHYSICAL_ATTACK->totalDurationSeconds(BattlePace::SLOW));
+it('paces the previewed summon as the battle paces it: its move read for the summon announcement time, the rest as an attack', function () {
+    $root = summonBattlePreviewProject();
+    $phases = EditorSession::open($root)->readSummonBattlePreview(0, 0)['phases'];
+    $engine = new BattlePacing(BattlePace::SLOW, BattlePace::SLOW);
+    $frames = static fn(float $seconds): int => max(1, (int) ceil($seconds * 120));
+    $attack = $engine->getTurnTimings(new AttackAction('Attack'));
 
-    expect($phases['advance']['length'])->toBeGreaterThanOrEqual((int) floor($summon->stepForward * 120))
-        ->and($phases['advance']['length'])->toBeGreaterThan((int) ceil($attack->stepForward * 120));
+    expect($phases['announce']['length'])->toBe($frames($engine->getAnnouncementSeconds(BattleActionCategory::SUMMON)))
+        ->and($phases['advance']['length'])->toBe($frames($attack->stepForward))
+        ->and($phases['source']['length'])->toBe($frames($attack->actionAnimation))
+        ->and($phases['reaction']['length'])->toBe($frames($attack->statChanges))
+        ->and($phases['return']['length'])->toBe($frames($attack->stepBack))
+        ->and($phases['finish']['length'])->toBe($frames($attack->turnOver));
+
+    // The reading time the project authors in Configuration is the one the preview reads.
+    $workspace = ProjectWorkspace::fromProject($root);
+    $settings = $workspace->getRecordDatabase('configuration');
+    $settings->setField(array_search(BattleActionCategory::SUMMON->getAnnouncementConfigPath(BattlePace::SLOW),
+        $settings->getEntryLabels(), true), 'value', '2.5');
+    $workspace->config->save();
+    $authored = EditorSession::open($root)->readSummonBattlePreview(0, 0)['phases'];
+
+    expect($authored['announce']['length'])->toBe(300)
+        ->and($authored['advance'])->toBe($phases['advance'])
+        ->and($authored['reaction']['length'])->toBe($phases['reaction']['length']);
 });
 
 it('previews the summon as it stands, unsaved edits included', function () {

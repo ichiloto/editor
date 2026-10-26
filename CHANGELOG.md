@@ -4,6 +4,10 @@
 
 ### Added
 
+- Configuration offers how long each battle action category's announcement is read at each animation pace
+  (`ui.battle.announcement_seconds.<category>.<pace>`, the Engine's `BattleActionCategory::getAnnouncementConfigPath()`),
+  with the Engine's time as its default, and refuses a time outside 0.1 s to 10 s. Choosing the default writes
+  nothing. The summon and effect battle previews read the authored time, as the battle does.
 - Skills author the Engine's `reveal` effect: its facts (`Reveals`, picked from the Engine's
   `reveal_facts`: `hp`, `mp`, `stats`, `affinities`) and its `Chance %`, shown in the Effects pane as
   `Reveal: hp, stats, 75%`. The effect Type list is the Engine's own (`SkillRecord::getEffectTypes()`).
