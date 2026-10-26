@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Field;
 
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Engine\Field\EncounterArenaRule;
 use Ichiloto\Engine\Field\EncounterEntry;
 use InvalidArgumentException;
 
@@ -23,6 +24,10 @@ use InvalidArgumentException;
  *     'rate' => 22,
  *     'tiles' => 'encounter',
  *     'battleArena' => 'arena.cryptic-ruins',
+ *     'battleArenas' => [
+ *         ['area' => 'east-roost', 'battleArena' => 'arena.roost'],
+ *         ['terrain' => 'woodland', 'battleArena' => 'arena.deep-woods'],
+ *     ],
  * ],
  * ```
  *
@@ -34,6 +39,10 @@ use InvalidArgumentException;
  * map's named areas the troop is met in; without them it is met anywhere the
  * map counts steps. Its `terrains` names encounter terrains of the map's
  * terrain kinds, such as `woodland`; without them it is met on any.
+ * `battleArenas` are the map's arena rules, the Engine's own
+ * ({@see EncounterArenaRule}): the arena for a named area, an encounter
+ * terrain, or a terrain within an area, edited as ordered rows. The arena a
+ * battle is drawn on is then refined by its terrain variants.
  *
  * The engine reads it loosely -- a missing `rate` means fifteen steps, a
  * missing `tiles` means danger tiles only, a troop with a non-positive or
@@ -78,8 +87,11 @@ final class MapEncounters
     /** The entry key naming the encounter terrains a troop is met on, the Engine's own. */
     public const string TERRAINS_KEY = EncounterEntry::TERRAINS_KEY;
 
+    /** The key holding the map's arena rules, the Engine's own. */
+    public const string ARENA_RULES_KEY = EncounterArenaRule::KEY;
+
     /** The keys this model owns; everything else in the block is the author's. */
-    private const array OWNED_KEYS = ['troops', 'rate', 'tiles', self::ARENA_KEY];
+    private const array OWNED_KEYS = ['troops', 'rate', 'tiles', self::ARENA_KEY, self::ARENA_RULES_KEY];
 
     /**
      * @param array<string, mixed>|null $block The authored block, or null when the map declares none.
@@ -87,11 +99,14 @@ final class MapEncounters
      *   The troop rows, in authored order: each one's weight and arena, and
      *   the entry as authored when it was written as a map.
      * @param string|null $unsupported Why this block cannot be edited, or null.
+     * @param list<array{area: ?string, terrain: ?string, arena: ?string, entry: array<string, mixed>}> $rules
+     *   The arena rules, in authored order, each with its entry as authored.
      */
     private function __construct(
         private readonly ?array $block,
         private readonly array $rows,
         private readonly ?string $unsupported,
+        private readonly array $rules = [],
     ) {
     }
 
@@ -167,7 +182,45 @@ final class MapEncounters
                 'entry' => $structured ? $entry : null];
         }
 
-        return new self($block, $rows, null);
+        $rules = self::readArenaRules($block[self::ARENA_RULES_KEY] ?? null);
+
+        return is_string($rules) ? new self($block, [], $rules) : new self($block, $rows, null, $rules);
+    }
+
+    /**
+     * Reads the arena rules as rows, or says why they cannot be held: the
+     * Engine judges what a rule means; this keeps exactly what was written.
+     *
+     * @return list<array{area: ?string, terrain: ?string, arena: ?string, entry: array<string, mixed>}>|string
+     */
+    private static function readArenaRules(mixed $rules): array|string
+    {
+        if ($rules === null) {
+            return [];
+        }
+
+        if (! is_array($rules) || ! array_is_list($rules)) {
+            return 'the battleArenas are not a list of arena rules';
+        }
+
+        $read = [];
+
+        foreach ($rules as $index => $rule) {
+            if (! is_array($rule) || ($rule !== [] && array_is_list($rule))) {
+                return sprintf('battle arena rule %d is %s, not a rule', $index + 1, get_debug_type($rule));
+            }
+
+            foreach (['area', 'terrain', self::ARENA_KEY] as $key) {
+                if (array_key_exists($key, $rule) && ! is_string($rule[$key])) {
+                    return sprintf('battle arena rule %d has a %s that is %s', $index + 1, $key, get_debug_type($rule[$key]));
+                }
+            }
+
+            $read[] = ['area' => $rule['area'] ?? null, 'terrain' => $rule['terrain'] ?? null, 'arena' => $rule[self::ARENA_KEY] ?? null,
+                'entry' => $rule];
+        }
+
+        return $read;
     }
 
     /**
@@ -202,6 +255,105 @@ final class MapEncounters
     public function rows(): array
     {
         return $this->rows;
+    }
+
+    /**
+     * The arena rules, in authored order.
+     *
+     * @return list<array{area: ?string, terrain: ?string, arena: ?string, entry: array<string, mixed>}>
+     */
+    public function arenaRules(): array
+    {
+        return $this->rules;
+    }
+
+    /**
+     * The arena rules naming an area, by position.
+     *
+     * @return list<int>
+     */
+    public function arenaRulesInArea(string $areaId): array
+    {
+        return array_keys(array_filter($this->rules, static fn(array $rule): bool => $rule['area'] === $areaId));
+    }
+
+    /**
+     * The block with one more arena rule, after the given position.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function withArenaRuleAdded(?string $area, ?string $terrain, string $arena, ?int $after = null): ?array
+    {
+        $rules = $this->rules;
+        $position = $after === null ? count($rules) : min(count($rules), max(0, $after + 1));
+        array_splice($rules, $position, 0, [['area' => $area, 'terrain' => $terrain, 'arena' => $arena, 'entry' => []]]);
+
+        return $this->rebuilt($this->rows, [self::ARENA_RULES_KEY => self::writeArenaRules($rules)]);
+    }
+
+    /**
+     * The block with one arena rule's area, terrain or arena changed; null
+     * clears an area (the whole map) or a terrain (any terrain).
+     *
+     * @param string $field `area`, `terrain` or `arena`.
+     * @return array<string, mixed>|null
+     */
+    public function withArenaRuleAt(int $index, string $field, ?string $value): ?array
+    {
+        $rules = $this->rules;
+
+        if (! array_key_exists($index, $rules) || ! in_array($field, ['area', 'terrain', 'arena'], true)) {
+            return $this->block;
+        }
+
+        $rules[$index][$field] = $value;
+
+        return $this->rebuilt($this->rows, [self::ARENA_RULES_KEY => self::writeArenaRules($rules)]);
+    }
+
+    /**
+     * The block without one arena rule; the last takes the key with it.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function withArenaRuleRemovedAt(int $index): ?array
+    {
+        $rules = $this->rules;
+
+        if (! array_key_exists($index, $rules)) {
+            return $this->block;
+        }
+
+        array_splice($rules, $index, 1);
+
+        return $this->rebuilt($this->rows, [self::ARENA_RULES_KEY => self::writeArenaRules($rules)]);
+    }
+
+    /**
+     * The rules as the block stores them, each entry keeping what it carried, or null for none.
+     *
+     * @param list<array{area: ?string, terrain: ?string, arena: ?string, entry: array<string, mixed>}> $rules
+     * @return list<array<string, mixed>>|null
+     */
+    private static function writeArenaRules(array $rules): ?array
+    {
+        if ($rules === []) {
+            return null;
+        }
+
+        return array_map(static function (array $rule): array {
+            $entry = $rule['entry'];
+
+            foreach (['area' => $rule['area'], 'terrain' => $rule['terrain'], self::ARENA_KEY => $rule['arena']] as $key => $value) {
+                if ($value === null) {
+                    unset($entry[$key]);
+                } else {
+                    $entry[$key] = $value;
+                }
+            }
+
+            return $entry;
+        }, $rules);
     }
 
     /**
@@ -420,7 +572,7 @@ final class MapEncounters
     }
 
     /**
-     * The block with an area renamed in every row that names it.
+     * The block with an area renamed in every row and arena rule that names it.
      *
      * @return array<string, mixed>|null
      */
@@ -431,8 +583,9 @@ final class MapEncounters
 
             return $row;
         }, $this->rows);
+        $rules = array_map(static fn(array $rule): array => $rule['area'] === $from ? ['area' => $to] + $rule : $rule, $this->rules);
 
-        return $this->rebuilt($rows);
+        return $this->rebuilt($rows, $rules === $this->rules ? [] : [self::ARENA_RULES_KEY => self::writeArenaRules($rules)]);
     }
 
     /**

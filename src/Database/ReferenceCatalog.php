@@ -52,6 +52,9 @@ final class ReferenceCatalog
     /**
      * The kinds of reference a field may declare.
      */
+    /** The encounter terrains the project's terrain kinds meet ({@see \Ichiloto\Engine\Rendering\Tilesets\TerrainKind::$encounters}). */
+    public const string ENCOUNTER_TERRAINS = 'encounter_terrains';
+
     public const array CATEGORIES = [
         'actors',
         'actor_ids',
@@ -133,6 +136,7 @@ final class ReferenceCatalog
         'place_types',
         'animation_roles',
         'battle_arenas',
+        self::ENCOUNTER_TERRAINS,
         // The dialogue catalogue's identities, actor and non-actor, whose artwork lines show.
         'dialogue_identities',
     ];
@@ -325,6 +329,8 @@ final class ReferenceCatalog
             // The scenes a graphical battle can take place in, by the key a
             // map's encounters or a start_battle command name one with.
             'battle_arenas' => array_map(strval(...), array_keys($this->loadArenaNames())),
+            // The encounter terrains the project's tilesets' kinds meet, each an arena may draw a variant for.
+            self::ENCOUNTER_TERRAINS => $this->loadEncounterTerrains(),
             // A region is the display name the game shows for where the party
             // is; choosing from the names the maps already use keeps one
             // region spelled one way.
@@ -1249,6 +1255,32 @@ final class ReferenceCatalog
      *
      * @return array<string, string>
      */
+    /**
+     * The encounter terrains every terrain kind of the project's tilesets
+     * meets, each once, in tileset then kind order. A tileset that cannot be
+     * read offers none; project validation reports why.
+     *
+     * @return list<string>
+     */
+    private function loadEncounterTerrains(): array
+    {
+        $catalogs = $this->workspace->catalogs;
+        $terrains = [];
+        foreach ($catalogs->listTilesetIds() as $id) {
+            try {
+                foreach ($catalogs->loadTileset($id)->kinds as $kind) {
+                    if ($kind->encounters !== null) {
+                        $terrains[$kind->encounters] = $kind->encounters;
+                    }
+                }
+            } catch (\Throwable) {
+                continue;
+            }
+        }
+
+        return array_values($terrains);
+    }
+
     private function loadTilesetNames(): array
     {
         $catalogs = $this->workspace->catalogs;
