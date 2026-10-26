@@ -11,8 +11,8 @@ use Ichiloto\Engine\Animations\Field\FieldWaymarkStyle;
 
 /**
  * Field Cues: how the game draws cue marks and objective waymarks, one row
- * per setting. The cue style keeps marks readable on any ground (a gentle bob, the edge pointer's spacing, and the Terminal cell's
- * background and bold); each cue colour names its upright mark effect, the
+ * per setting. The cue style keeps marks readable on any ground (a gentle bob, the edge pointer's spacing, how see-through a
+ * mark turns while the player's sprite overlaps it, and the Terminal cell's background and bold); each cue colour names its upright mark effect, the
  * plate behind it and the eight pointer images an edge marker turns; the waymark style picks the
  * colour, symbol and edge inset. Both editors offer it, since the Terminal
  * draws cues too. FieldPresentationSettings owns the file.
@@ -70,6 +70,11 @@ final class FieldCueFields
                 $path === "{$style}.pointerSpacing.x", $path === "{$style}.pointerSpacing.y" => new RecordField('value',
                     sprintf('Pointer spacing %s (0..%d px)', str_ends_with($path, '.x') ? 'across' : 'up or down',
                         FieldCueStyle::MAX_POINTER_SPACING), InputControlType::INTEGER, displayDefault: $default),
+                $path === "{$style}.overlap.opacity" => new RecordField('value', 'Opacity under the player (0..1)',
+                    InputControlType::FLOAT, displayDefault: $default),
+                $path === "{$style}.overlap.seconds" => new RecordField('value',
+                    sprintf('Fade seconds under the player (0..%s)', FieldCueStyle::MAX_OVERLAP_SECONDS), InputControlType::FLOAT,
+                    displayDefault: $default),
                 $path === "{$style}.terminal.bold" => RecordField::boolean('value', 'Bold'),
                 str_ends_with($path, '.effect') => RecordField::reference('value', 'Mark effect', 'effects'),
                 str_contains($path, '.pointer.') && str_ends_with($path, '.asset')
