@@ -5,6 +5,9 @@ declare(strict_types=1);
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Battle\BattlePacing;
+use Ichiloto\Engine\Battle\Enumerations\BattleActionCategory;
+use Ichiloto\Engine\Battle\Enumerations\BattlePace;
 
 function createZoomProject(string $graphics = ''): string
 {
@@ -276,6 +279,34 @@ it('offers each engine sound\'s own volume beside its track and refuses one outs
     $workspace->config->save();
 
     expect((require $root . '/config.php')['audio'])->toBe(['sounds' => ['counter' => 'tick-loop'], 'sound_volumes' => ['counter' => 35]]);
+});
+
+it('offers each action category\'s announcement reading time at each pace, writing nothing until one changes', function () {
+    $root = createZoomProject();
+    $original = file_get_contents($root . '/config.php');
+    $workspace = ProjectWorkspace::fromProject($root);
+    $path = BattleActionCategory::SUMMON->getAnnouncementConfigPath(BattlePace::SLOW);
+
+    foreach (BattleActionCategory::cases() as $category) {
+        foreach (BattlePace::cases() as $pace) {
+            expect($workspace->config->getRecord($category->getAnnouncementConfigPath($pace))->toArray()['default'])
+                ->toBe(round($category->getAnnouncementSeconds($pace), 3));
+        }
+    }
+    setConfiguration($workspace, $path, '4.2');
+    expect($workspace->hasUnsavedChanges())->toBeFalse();
+    foreach (['0.05', '10.5', 'long'] as $outside) {
+        expect(fn() => setConfiguration($workspace, $path, $outside))->toThrow(InvalidArgumentException::class);
+    }
+    expect($workspace->config->isDirty())->toBeFalse()
+        ->and(file_get_contents($root . '/config.php'))->toBe($original);
+
+    setConfiguration($workspace, $path, '3.5');
+    $workspace->config->save();
+    $battleUi = (require $root . '/config.php')['ui']['battle'];
+
+    expect($battleUi)->toBe(['announcement_seconds' => ['summon' => ['slow' => 3.5]]])
+        ->and(BattlePacing::fromBattleUiConfig($battleUi)->getAnnouncementSeconds(BattleActionCategory::SUMMON))->toBe(3.5);
 });
 
 it('offers Always Dash\'s first value as a switch the Engine reads, writing nothing until it changes', function () {

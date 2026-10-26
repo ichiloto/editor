@@ -10,6 +10,9 @@ use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Engine\Audio\AudioManager;
 use Ichiloto\Engine\Audio\Enumerations\AudioBus;
 use Ichiloto\Engine\Audio\Enumerations\SystemSound;
+use Ichiloto\Engine\Battle\BattlePacing;
+use Ichiloto\Engine\Battle\Enumerations\BattleActionCategory;
+use Ichiloto\Engine\Battle\Enumerations\BattlePace;
 use Ichiloto\Engine\Localization\EngineMessageTerms;
 use Ichiloto\Engine\Field\PlayerDash;
 use Ichiloto\Engine\Rendering\FieldViewport;
@@ -94,6 +97,18 @@ final class ProjectConfig extends ProjectSettingsFile
             $settings[$sound->getConfigPath()] = ['default' => null];
             $settings[$sound->getVolumeConfigPath()] = ['default' => SystemSound::DEFAULT_VOLUME];
         }
+        // How long each action category's announcement is read at each battle animation pace, apart from the rest of
+        // its turn. The Engine's time is shown to the millisecond; choosing it writes nothing, so the Engine keeps it.
+        foreach (BattleActionCategory::cases() as $category) {
+            foreach (BattlePace::cases() as $pace) {
+                $settings[$category->getAnnouncementConfigPath($pace)] = [
+                    'default' => round($category->getAnnouncementSeconds($pace), 3),
+                    'description' => sprintf('Seconds a %s announcement is read at %s battle animation pace, from %g to %g.',
+                        str_replace('_', ' ', $category->value), $pace->value,
+                        BattlePacing::MIN_ANNOUNCEMENT_SECONDS, BattlePacing::MAX_ANNOUNCEMENT_SECONDS),
+                ];
+            }
+        }
         // The Engine's own wording for terms many screens share, such as the level in rows ("Lv"), is offered
         // even where the project leaves it out, so a game rewords it once.
         foreach (Vocabulary::DEFAULTS as $path => $default) {
@@ -117,7 +132,8 @@ final class ProjectConfig extends ProjectSettingsFile
      * Refuses a value the engine would not accept at a path, before anything
      * changes: a field zoom outside its range, a master, bus or system sound
      * volume outside its range, an inn presentation that is not a timeline
-     * identity, or an Always Dash that is not true or false.
+     * identity, an Always Dash that is not true or false, or a battle
+     * announcement reading time outside its range.
      *
      * @throws \InvalidArgumentException
      */
@@ -137,6 +153,18 @@ final class ProjectConfig extends ProjectSettingsFile
         if ($path === self::ALWAYS_DASH && ! is_bool($value)) {
             throw new \InvalidArgumentException('Always Dash must be true or false.');
         }
+        if (self::isAnnouncementSeconds($path) && (! is_int($value) && ! is_float($value) || ! is_finite((float) $value)
+            || $value < BattlePacing::MIN_ANNOUNCEMENT_SECONDS || $value > BattlePacing::MAX_ANNOUNCEMENT_SECONDS)) {
+            throw new \InvalidArgumentException(sprintf('An announcement is read for a finite number of seconds from %g to %g.',
+                BattlePacing::MIN_ANNOUNCEMENT_SECONDS, BattlePacing::MAX_ANNOUNCEMENT_SECONDS));
+        }
+    }
+
+    /** Whether a path holds the seconds an action category's battle announcement is read at one pace. */
+    private static function isAnnouncementSeconds(string $path): bool
+    {
+        return array_any(BattleActionCategory::cases(), static fn(BattleActionCategory $category): bool =>
+            array_any(BattlePace::cases(), static fn(BattlePace $pace): bool => $path === $category->getAnnouncementConfigPath($pace)));
     }
 
     /** Whether a path holds a volume the Engine reads: the master volume, a bus's or a system sound's own. */
