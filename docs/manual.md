@@ -582,9 +582,14 @@ Some decorations overlap their neighbours, such as the peaks over a world
 map's mountains and the crests over its hills. A tileset declares the tile
 layers they stack on (Database > Tilesets, Stacks: an id and its tile layers,
 bottom to top, such as `relief-1, relief-2, relief-3, relief-4`), and a piece
-stacks by putting its tiles on the stack's first layer. Such a piece is
-decoration alone: its glyphs are spaces, and it has no physical footprint,
-effect or kept layers, so it never changes passage, encounters or the atlas.
+stacks by putting its tiles on the stack's first layer. It has no effect,
+kept layers or doorway. A decoration such as a peak has spaces for glyphs and
+no physical footprint, so it never changes passage, encounters or the atlas:
+the mountain kind beneath it is solid already. An obstacle standing on
+walkable ground, such as a hill crest's mound, declares its ground footprint
+like any object: glyphs on the cells it blocks, on a gameplay layer above the
+terrain kinds (never the kinds' own layer), and the occupancy those cells
+take on a map with declared occupancy. Stamping it writes those glyphs.
 
 Stamping a stacked piece lays each of its tiles into the cell's stack in
 depth order, whichever was placed first: an object whose bottom row is
@@ -598,7 +603,16 @@ Removing one object from a stack is a remaining GUI capability. Repainting
 terrain kinds clears a stack by whole object: an object goes when the paint
 covers every cell it shows on, and stays whole when it also shows on a cell
 the paint leaves, so painting the road beside a range never crops the peak
-that overhangs it. To remove an object, paint over all of its cells at once.
+that overhangs it. An object that goes takes its footprint glyphs with it
+where they are still its own. To remove an object, paint over all of its
+cells at once.
+
+Each stacked object belongs to its piece's gameplay layer, so a stack whose
+objects belong to several layers moves with none of them as whole tile
+layers. Copying, cutting and pasting a selection carries the selected
+layer's own objects, cell by cell, and lays them into the stacks where they
+land in depth order: copying the terrain takes the peaks and leaves the hill
+crests, which travel with the layer their footprint glyphs are on.
 
 ### Map Graphics
 

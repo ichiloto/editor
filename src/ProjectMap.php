@@ -35,6 +35,7 @@ use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\IO\Console\SgrStyleState;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Editor\Maps\EditableGrid;
 use Ichiloto\Editor\Maps\MapFolder;
 use Ichiloto\Editor\Maps\MapLayers;
@@ -760,7 +761,9 @@ final class ProjectMap
      * Where a new tile layer goes among the map's tile layers: before the
      * first that belongs to a gameplay layer drawn above the new layer's
      * own, so terrain tiles draw under building tiles and those under
-     * fixtures. A layer whose owner is unknown goes last.
+     * fixtures. A stack's layer, whose objects may belong to several
+     * gameplay layers, draws with the lowest of them, as peaks and hill
+     * crests stand over the terrain. A layer whose owner is unknown goes last.
      *
      * @param list<string> $names The map's tile layer names, in order.
      * @return string|null The tile layer to place it before, or null for last.
@@ -771,15 +774,19 @@ final class ProjectMap
             $layer['id'] !== MapLayers::EVENT && ! $layer['decoration']));
         $rank = array_flip(array_column($gameplay, 'name'));
         try {
+            $tileset = $this->loadTileset();
             $owners = MapGraphics::resolveLayerOwners($this->getMapDataField([MapGraphics::SETTINGS_KEY]), [...$names, $name],
-                array_keys($rank), $this->loadTileset(), $this->mapId, $this->isPaintedInKinds());
+                array_keys($rank), $tileset, $this->mapId, $this->isPaintedInKinds());
         } catch (InvalidArgumentException | RuntimeException) {
             return null;
         }
-        if (($owners[$name] ?? null) === null) {
+        $stack = $tileset?->findStackHolding($name);
+        $stackRanks = $stack === null ? [] : array_values(array_filter(array_map(static fn(TilesetPiece $piece): ?int
+            => $tileset->getStackOf($piece) === $stack ? ($rank[$piece->layer] ?? null) : null, $tileset->pieces), is_int(...)));
+        if (($owners[$name] ?? null) === null && $stackRanks === []) {
             return null;
         }
-        $own = $rank[$owners[$name]];
+        $own = ($owners[$name] ?? null) !== null ? $rank[$owners[$name]] : min($stackRanks);
         foreach ($names as $existing) {
             $owner = $owners[$existing] ?? null;
             if ($owner !== null && $rank[$owner] > $own) {
@@ -796,7 +803,9 @@ final class ProjectMap
      * the map data (`'tileLayers' => ['floor' => ['movesWith' =>
      * 'buildings']]`) or otherwise written only by this layer's tileset
      * pieces. The event layer moves no tiles, and neither does any layer
-     * while the settings are invalid, which validation reports.
+     * while the settings are invalid, which validation reports. A tileset
+     * stack's layers are never among them: their objects move with the layer
+     * each belongs to, one by one ({@see \Ichiloto\Editor\Canvas\StackedObjects}).
      *
      * @return list<string> Tile layer names.
      */
@@ -822,7 +831,10 @@ final class ProjectMap
             return [];
         }
 
-        return array_keys(array_filter($owners, static fn(?string $owner): bool => $owner === $layer['name']));
+        $stacked = $tileset?->getStackLayers() ?? [];
+
+        return array_values(array_filter(array_keys(array_filter($owners, static fn(?string $owner): bool => $owner === $layer['name'])),
+            static fn(string $name): bool => ! in_array($name, $stacked, true)));
     }
 
     /**

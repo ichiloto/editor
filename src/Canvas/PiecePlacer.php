@@ -35,7 +35,9 @@ use InvalidArgumentException;
  * A piece on one of its tileset's stacks ({@see TilesetStack}), such as a
  * mountain peak, is laid over what the stack's layers already hold: each of
  * its cells joins the cell's tiles in depth order, so overlapping objects
- * draw as the field orders them. It writes no glyph.
+ * draw as the field orders them. Its glyphs, when it has any, are the ground
+ * footprint of an obstacle such as a hill crest's mound, written on its
+ * gameplay layer; a decoration such as a peak writes none.
  */
 final class PiecePlacer
 {

@@ -37,16 +37,18 @@ final readonly class TileGlyphBinding
     {
         try {
             $pieces = $map->loadPlacements();
+            // A stack lays its pieces' tiles itself, so no glyph carries them ({@see TilesetStack}).
+            $stackLayers = $map->loadTileset()?->getStackLayers() ?? [];
         } catch (InvalidArgumentException | RuntimeException) {
-            $pieces = [];
+            [$pieces, $stackLayers] = [[], []];
         }
         $bindings = $planners = [];
-        $free = self::findFreeEntries($pieces);
+        $free = self::findFreeEntries($pieces, $stackLayers);
         foreach ($map->getLayers() as $layer) {
             if ($pieces === [] || $layer['id'] === MapLayers::EVENT || $layer['decoration']) {
                 continue;
             }
-            $planner = GlyphTilePlanner::fromPieces($pieces, $layer['name']);
+            $planner = GlyphTilePlanner::fromPieces($pieces, $layer['name'], $stackLayers);
             $planners[$layer['id']] = $planner;
             foreach ($planner->listRoles() as $glyph => $roles) {
                 foreach ($roles as $role) {
@@ -66,20 +68,27 @@ final readonly class TileGlyphBinding
     }
 
     /**
-     * The tile entries glyph-less pieces draw, such as a rug or a wall cap,
-     * by tile layer name. Such a tile may stand on any cell without its glyph.
+     * The tile entries no glyph carries, by tile layer name: those glyph-less
+     * pieces draw, such as a rug or a wall cap, and those a stack lays, such as
+     * a hill crest's, whose footprint glyphs carry no tiles. Such a tile may
+     * stand on any cell without its glyph.
      *
      * @param iterable<TilesetPiece> $pieces
+     * @param list<string> $stackLayers Tile layers of the tileset's stacks ({@see \Ichiloto\Engine\Rendering\Tilesets\Tileset::getStackLayers()}).
      * @return array<string, array<string, true>>
      */
-    public static function findFreeEntries(iterable $pieces): array
+    public static function findFreeEntries(iterable $pieces, array $stackLayers): array
     {
         $free = [];
         foreach ($pieces as $piece) {
-            if ($piece->connects !== null || PieceRole::readPiece($piece) !== []) {
+            if ($piece->connects !== null) {
                 continue;
             }
+            $glyphless = PieceRole::readPiece($piece) === [];
             foreach ($piece->tiles as $tileLayer => $rows) {
+                if (! $glyphless && ! in_array((string) $tileLayer, $stackLayers, true)) {
+                    continue;
+                }
                 foreach ($rows as $entries) {
                     foreach ($entries as $entry) {
                         if ($entry !== (string) TileId::EMPTY) {

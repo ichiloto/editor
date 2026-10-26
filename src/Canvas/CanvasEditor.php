@@ -550,11 +550,13 @@ final class CanvasEditor
         }
         try {
             $pieces = $map->loadPlacements();
+            // A stack lays its pieces' tiles itself, so no glyph carries them.
+            $excludedLayers = [...$excludedLayers, ...$map->loadTileset()?->getStackLayers() ?? []];
         } catch (InvalidArgumentException | RuntimeException) {
             return null;
         }
 
-        return $pieces === [] ? null : GlyphTilePlanner::fromPieces($pieces, $layer['name'], $excludedLayers);
+        return $pieces === [] ? null : GlyphTilePlanner::fromPieces($pieces, $layer['name'], array_values(array_unique($excludedLayers)));
     }
 
     /**
