@@ -55,12 +55,12 @@ it('marks which entry is selected', function () {
 
 it('says why a category cannot be edited rather than looking broken', function () {
     $root = makeTemporaryProject();
-    $database = loadRecordDatabase($root, 'types');
+    $category = makeUnwritableCategory($root);
+    $database = loadRecordDatabase($root, $category);
 
-    // Element and weapon types are PHP enum declarations, not data.
     expect($database->isEditable())->toBeFalse();
 
-    $text = implode("\n", databaseListLinesFor($root, 'types'));
+    $text = implode("\n", databaseListLinesFor($root, $category));
 
     expect($text)->toContain($database->getReadOnlyReason() ?? 'read only');
 });

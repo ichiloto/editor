@@ -1,0 +1,676 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Ichiloto\Editor\Maps;
+
+use Ichiloto\Editor\Database\RelativePositionFields;
+use Ichiloto\Editor\Events\CommandMapContext;
+use Ichiloto\Editor\Field\MapAreaAuthoring;
+use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
+
+/**
+ * Finds every coordinate a row or column insertion or removal moves, across
+ * the project's evaluated data files.
+ *
+ * A coordinate moves when it is in the edited map's space and at or beyond
+ * the edited line. One surely on a removed line has nowhere to go: it is
+ * reported as blocking, so the removal is refused until the author moves it,
+ * never dropped or clamped. Some places are always in a known map's space: the
+ * map's own NPCs, event areas and bed spawn points, a transfer's spawn point
+ * into the map from any file, a starting position. Script coordinates are in
+ * the space of the map the script is on at that command, which changes with
+ * every transfer. Scripts are followed the way validation follows them
+ * ({@see CommandMapContext}): a map's scripts start on that map, a cutscene
+ * starts on its start map, and a reusable event script starts on every map
+ * that runs it. A coordinate that may be on the edited map or another one
+ * is never guessed: it is reported for a hand edit.
+ *
+ * A context is the list of maps a command may run on; an empty list means
+ * nothing known runs it, and null means the map is not known at all.
+ *
+ * @package Ichiloto\Editor\Maps
+ */
+final class MapLineInventory
+{
+    /** @var array<string, array<string, array{path: list<int|string>, value: int}>> Moves by file, keyed by path. */
+    private array $shifts = [];
+
+    /** @var array<string, array<string, array{path: list<int|string>, reason: string}>> Hand edits by file, keyed by path. */
+    private array $handEdits = [];
+
+    /** @var array<string, array<string, array{path: list<int|string>, reason: string}>> What stands on a removed line, by file, keyed by path. */
+    private array $blocked = [];
+
+    /** @var array<string, array<string, list<string>|null>> The contexts each reusable event script is started from, each once. */
+    private array $commonEventStarts = [];
+
+    /** @var array<string, list<string>> The maps whose events start each cutscene. */
+    private array $cinematicTriggerMaps = [];
+
+    /** @var list<list<string>|null> Every context a walk reached through a transfer. */
+    private array $transferContexts = [];
+
+    /**
+     * @param MapLineEdit $edit The insertion or removal.
+     * @param array<string, array{file: string, commands: mixed}> $commonEvents Reusable event scripts by id.
+     * @param MapSubjectCells|null $subjects Where the edited map's subjects stood before the edit.
+     */
+    public function __construct(
+        private readonly MapLineEdit $edit,
+        private readonly array $commonEvents,
+        private readonly ?MapSubjectCells $subjects = null,
+    ) {
+    }
+
+    /**
+     * Moves by file, in the order found.
+     *
+     * @return array<string, list<array{path: list<int|string>, value: int}>>
+     */
+    public function getShifts(): array
+    {
+        return array_map(array_values(...), $this->shifts);
+    }
+
+    /**
+     * Coordinates that must be moved by hand, by file.
+     *
+     * @return array<string, list<array{path: list<int|string>, reason: string}>>
+     */
+    public function getHandEdits(): array
+    {
+        return array_map(array_values(...), $this->handEdits);
+    }
+
+    /**
+     * What stands on a removed line, by file; empty for an insertion.
+     *
+     * @return array<string, list<array{path: list<int|string>, reason: string}>>
+     */
+    public function getBlocked(): array
+    {
+        return array_map(array_values(...), $this->blocked);
+    }
+
+    /**
+     * Adds one map's data file: its own coordinates when it is the edited
+     * map, and everything in it that leads into the edited map.
+     *
+     * @param array<string, mixed> $data The evaluated data file.
+     */
+    public function addMapData(string $file, string $mapId, array $data): void
+    {
+        $isTarget = $mapId === $this->edit->mapId;
+        $here = [$mapId];
+
+        if ($isTarget) {
+            foreach ((array) ($data[MapAreaAuthoring::KEY] ?? []) as $index => $entry) {
+                if (is_array($entry) && is_array($entry['area'] ?? null)) {
+                    $this->shiftNamedArea($file, [MapAreaAuthoring::KEY, $index, 'area'], $entry['area'], strval($entry['id'] ?? $index));
+                }
+            }
+            foreach (($data['worldObjects'] ?? []) as $index => $object) {
+                $this->shiftPoint($file, ['worldObjects', $index, 'anchor'], $object['anchor']);
+                foreach (($object['covers']['cells'] ?? []) as $cellIndex => $cell) {
+                    $axis = $this->edit->axis === 'x' ? 0 : 1;
+                    $coordinate = $cell[$axis];
+                    if (is_int($coordinate) && $coordinate >= $this->edit->at) {
+                        $path = ['worldObjects', $index, 'covers', 'cells', $cellIndex, $axis];
+                        $shifted = $this->edit->getShiftedCoordinate($coordinate);
+                        // An object is drawn whole; cutting the cells it covers would change what it hides.
+                        if ($shifted === null) {
+                            $this->reportBlocked($file, $path, sprintf('world object %s covers a cell on a removed line', strval($object['id'] ?? $index)));
+                        } else {
+                            $this->shifts[$file][self::formatKey($path)] = ['path' => $path, 'value' => $shifted];
+                        }
+                    }
+                }
+            }
+        }
+
+        foreach ((array) ($data['npcs'] ?? []) as $index => $npc) {
+            if (! is_array($npc)) {
+                continue;
+            }
+            if ($isTarget) {
+                $this->shiftPoint($file, ['npcs', $index], $npc);
+                if (is_array($npc['wanderArea'] ?? null)) {
+                    $this->shiftArea($file, ['npcs', $index, 'wanderArea'], $npc['wanderArea']);
+                }
+            }
+            $this->walkCommands($npc['script'] ?? [], ['npcs', $index, 'script'], $here, $file);
+            foreach ((array) ($npc['dialogue'] ?? []) as $variantIndex => $variant) {
+                if (is_array($variant) && is_array($variant['script'] ?? null)) {
+                    $this->walkCommands($variant['script'], ['npcs', $index, 'dialogue', $variantIndex, 'script'], $here, $file);
+                }
+                // A page runs a shared event script or a Cinematic as a map event does.
+                $scriptId = is_array($variant) ? trim(strval($variant['scriptId'] ?? '')) : '';
+                if ($scriptId !== '') {
+                    $this->addCommonEventStart($scriptId, $here);
+                }
+                $cinematicId = is_array($variant) ? trim(strval($variant['cinematicId'] ?? '')) : '';
+                if ($cinematicId !== '') {
+                    $this->cinematicTriggerMaps[$cinematicId][] = $mapId;
+                }
+            }
+        }
+
+        foreach ((array) ($data['events'] ?? []) as $marker => $event) {
+            if (! is_array($event)) {
+                continue;
+            }
+            if ($isTarget && is_array($event['area'] ?? null)) {
+                $this->shiftArea($file, ['events', $marker, 'area'], $event['area']);
+            }
+            $eventData = is_array($event['data'] ?? null) ? $event['data'] : [];
+            $destination = trim(strval($eventData['destinationMap'] ?? ''));
+            $isBed = $destination === '' && $isTarget
+                && ltrim(strval($event['class'] ?? ''), '\\') === SleepEventTrigger::class;
+            if (is_array($eventData['spawnPoint'] ?? null) && ($destination === $this->edit->mapId || $isBed)) {
+                $this->shiftPoint($file, ['events', $marker, 'data', 'spawnPoint'], $eventData['spawnPoint']);
+            }
+            if (is_array($eventData['script'] ?? null) && $eventData['script'] !== []) {
+                $this->walkCommands($eventData['script'], ['events', $marker, 'data', 'script'], $here, $file);
+            } elseif (trim(strval($eventData['scriptId'] ?? '')) !== '') {
+                $this->addCommonEventStart(trim(strval($eventData['scriptId'])), $here);
+            }
+            $cinematicId = trim(strval($eventData['cinematicId'] ?? ''));
+            if ($cinematicId !== '') {
+                $this->cinematicTriggerMaps[$cinematicId][] = $mapId;
+            }
+        }
+
+        foreach ((array) ($data['triggers'] ?? []) as $index => $trigger) {
+            if (! is_array($trigger)) {
+                continue;
+            }
+            if ($isTarget && is_array($trigger['trigger_area'] ?? null)) {
+                $this->shiftArea($file, ['triggers', $index, 'trigger_area'], $trigger['trigger_area']);
+            }
+            if (trim(strval($trigger['destinationMap'] ?? '')) === $this->edit->mapId && is_array($trigger['spawn_point'] ?? null)) {
+                $this->shiftPoint($file, ['triggers', $index, 'spawn_point'], $trigger['spawn_point']);
+            }
+        }
+    }
+
+    /**
+     * Adds the system data file's starting positions on the edited map.
+     *
+     * @param array<string, mixed> $system The evaluated system data.
+     */
+    public function addSystemData(string $file, array $system): void
+    {
+        foreach ((array) ($system['startingPositions'] ?? []) as $key => $position) {
+            if (is_array($position) && trim(strval($position['destinationMap'] ?? '')) === $this->edit->mapId
+                && is_array($position['spawnPoint'] ?? null)) {
+                $this->shiftPoint($file, ['startingPositions', $key, 'spawnPoint'], $position['spawnPoint']);
+            }
+        }
+    }
+
+    /**
+     * Adds one cutscene: its cast and script start on its start map (or on
+     * the maps whose events start it), and its finalizer may run from any
+     * map the script reaches, since a skip can end the script anywhere.
+     * Add every map first, so the maps that start it are known.
+     *
+     * @param array<string, mixed> $data The evaluated data file.
+     */
+    public function addCutscene(string $dataFile, string $scriptFile, string $id, array $data, mixed $commands): void
+    {
+        $startMap = trim(strval($data['startMap'] ?? ''));
+        $start = $startMap !== ''
+            ? [$startMap]
+            : self::mergeContexts(array_map(static fn(string $map): array => [$map], $this->cinematicTriggerMaps[$id] ?? []));
+        foreach ((array) ($data['cast'] ?? []) as $index => $entry) {
+            if (is_array($entry)) {
+                $this->shiftPositionIn($dataFile, ['cast', $index], $entry, $start);
+            }
+        }
+        $this->transferContexts = [];
+        $end = $this->walkCommands($commands, [], $start, $scriptFile);
+        $this->walkCommands($data['finalizer'] ?? [], ['finalizer'], self::mergeContexts([$start, $end, ...$this->transferContexts]), $dataFile);
+    }
+
+    /**
+     * Adds every reusable event script, each starting on every map that
+     * runs it. Add every map and cutscene first, so those starts are known.
+     * A reusable event script runs others on the maps it is on, so every
+     * script's starts are followed through the scripts that run it before
+     * anything moves. Starts only grow and the maps are finite, so following
+     * them ends, also when scripts run each other in a cycle.
+     */
+    public function addCommonEvents(): void
+    {
+        do {
+            $known = $this->commonEventStarts;
+            foreach ($this->commonEvents as $id => $event) {
+                $this->walkCommands($event['commands'], [], $this->getCommonEventStart($id), null, [$id]);
+            }
+        } while ($this->commonEventStarts !== $known);
+
+        foreach ($this->commonEvents as $id => $event) {
+            $this->walkCommands($event['commands'], [], $this->getCommonEventStart($id), $event['file'], [$id]);
+        }
+    }
+
+    /**
+     * Records a context a reusable event script is started from.
+     *
+     * @param list<string>|null $context
+     */
+    private function addCommonEventStart(string $id, ?array $context): void
+    {
+        $context = $context === null ? null : self::mergeContexts([$context]);
+        $this->commonEventStarts[$id][json_encode($context, JSON_THROW_ON_ERROR)] = $context;
+    }
+
+    /**
+     * The maps a reusable event script may start on; none when nothing known runs it.
+     *
+     * @return list<string>|null
+     */
+    private function getCommonEventStart(string $id): ?array
+    {
+        return isset($this->commonEventStarts[$id]) ? self::mergeContexts(array_values($this->commonEventStarts[$id])) : [];
+    }
+
+    /**
+     * Walks a command list from a context, moving coordinates in the edited
+     * map's space when `$file` is given, and returns the context it ends in.
+     * A reusable event script it runs is followed inline, without moving
+     * anything, for the map it leaves the caller on and the scripts it runs.
+     *
+     * A parallel block's lanes run together on one current map, as
+     * {@see CommandMapContext} describes, so each lane can also be on any
+     * map a sibling lane transfers to.
+     *
+     * @param list<int|string> $path The list's path in its file.
+     * @param list<string>|null $context
+     * @param list<string> $stack Reusable event scripts being followed.
+     * @param list<string> $concurrent Maps a concurrent parallel lane can transfer to at any point.
+     * @return list<string>|null
+     */
+    private function walkCommands(mixed $commands, array $path, ?array $context, ?string $file, array $stack = [], array $concurrent = []): ?array
+    {
+        if (! is_array($commands)) {
+            return $context;
+        }
+
+        foreach ($commands as $index => $command) {
+            if (! is_array($command)) {
+                continue;
+            }
+            $at = [...$path, $index];
+            $type = strval($command['type'] ?? '');
+            if ($file !== null) {
+                $this->shiftCommand($file, $type, $command, $at, $context);
+            }
+
+            if ($type === 'sequence') {
+                $context = $this->walkCommands($command['commands'] ?? [], [...$at, 'commands'], $context, $file, $stack, $concurrent);
+            }
+
+            if ($type === 'parallel') {
+                $lanes = CommandMapContext::getLanes($command);
+                $findCommonEvent = fn(string $id): ?array => is_array($this->commonEvents[$id]['commands'] ?? null)
+                    ? $this->commonEvents[$id]['commands']
+                    : null;
+                $destinations = array_map(
+                    static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, $stack),
+                    $lanes,
+                );
+                // The block ends where a transferring lane can leave it, or where it started.
+                $ends = [];
+                foreach ($lanes as $laneIndex => $lane) {
+                    $siblings = array_values(array_unique(array_merge([], ...array_values(array_diff_key($destinations, [$laneIndex => true])))));
+                    $start = self::mergeContexts([$context, ...array_map(self::getTransferContext(...), $siblings)]);
+                    $end = $this->walkCommands($lane['commands'], [...$at, ...$lane['path']], $start, $file, $stack, array_values(array_unique([...$concurrent, ...$siblings])));
+                    if ($destinations[$laneIndex] !== []) {
+                        $ends[] = $end;
+                    }
+                }
+                if ($ends !== []) {
+                    $context = self::mergeContexts($ends);
+                }
+            }
+
+            if ($type === 'common_event') {
+                $id = trim(strval($command['id'] ?? ''));
+                $this->addCommonEventStart($id, $context);
+                if (isset($this->commonEvents[$id]) && ! in_array($id, $stack, true)) {
+                    $context = $this->walkCommands($this->commonEvents[$id]['commands'], [], $context, null, [...$stack, $id], $concurrent);
+                }
+            }
+
+            $arms = CommandMapContext::getArms($command);
+            if ($arms !== []) {
+                $ends = [];
+                foreach ($arms as $arm) {
+                    $ends[] = $this->walkCommands($arm['commands'], [...$at, ...$arm['path']], $context, $file, $stack, $concurrent);
+                }
+                if (CommandMapContext::canSkipArms($command)) {
+                    $ends[] = $context;
+                }
+                $context = self::mergeContexts($ends);
+            }
+
+            if ($type === 'transfer') {
+                $destination = trim(strval($command['map'] ?? ''));
+                if ($file !== null && $destination === $this->edit->mapId) {
+                    $this->shiftPoint($file, $at, $command);
+                }
+                $context = self::mergeContexts(array_map(self::getTransferContext(...), [$destination, ...$concurrent]));
+                $this->transferContexts[] = $context;
+            }
+        }
+
+        return $context;
+    }
+
+    /**
+     * Moves the map-space coordinates one command names. Relative movement
+     * (route steps, retracing) and screen positions are not map cells.
+     *
+     * @param array<string, mixed> $command
+     * @param list<int|string> $at The command's path.
+     * @param list<string>|null $context
+     */
+    private function shiftCommand(string $file, string $type, array $command, array $at, ?array $context): void
+    {
+        switch ($type) {
+            case 'move_player':
+                $this->shiftPointIn($file, $at, $command, $context);
+                break;
+            case 'move_route':
+                foreach ((array) ($command['waypoints'] ?? []) as $index => $waypoint) {
+                    if (is_array($waypoint)) {
+                        $this->shiftPositionIn($file, [...$at, 'waypoints', $index], $waypoint, $context);
+                    }
+                }
+                // Steps are relative, so they cannot be rewritten, but a walk across the edited lines now ends elsewhere.
+                if (array_key_exists('steps', $command) && ($context === null || in_array($this->edit->mapId, $context, true))) {
+                    $this->reportHandEdit($file, [...$at, 'steps'], sprintf('its relative steps may cross the %s lines; check where the route ends',
+                        $this->edit instanceof LineRemoval ? 'removed' : 'inserted'));
+                }
+                break;
+            case 'camera':
+                $this->shiftTargetIn($file, $at, $command, $context);
+                foreach ((array) ($command['points'] ?? []) as $index => $point) {
+                    if (is_array($point)) {
+                        $this->shiftTargetIn($file, [...$at, 'points', $index], $point, $context);
+                    }
+                }
+                break;
+            case 'field_animation':
+                $this->shiftTargetIn($file, $at, $command, $context);
+                break;
+            case 'stage_actor':
+                is_array($command['actor'] ?? null)
+                    ? $this->shiftPositionIn($file, [...$at, 'actor'], $command['actor'], $context)
+                    : $this->shiftPositionIn($file, $at, $command, $context);
+                break;
+        }
+    }
+
+    /**
+     * Moves a subject reference that names a map position, as the Engine
+     * resolves one: the source's `target`, or the source itself.
+     *
+     * @param list<int|string> $path
+     * @param array<string, mixed> $source
+     * @param list<string>|null $context
+     */
+    private function shiftTargetIn(string $file, array $path, array $source, ?array $context): void
+    {
+        [$reference, $referencePath] = is_array($source['target'] ?? null)
+            ? [$source['target'], [...$path, 'target']]
+            : [$source, $path];
+        $kind = strtolower(trim(strval($reference['kind'] ?? $reference['subject'] ?? '')));
+        if ($kind === 'position') {
+            $this->shiftPointIn($file, $referencePath, $reference, $context);
+        }
+    }
+
+    /**
+     * Moves a staged position: a map cell like any other point, or one relative to a map subject, which moves with
+     * its subject and is never rewritten. A relative offset counts cells, so when the edited lines fall between the
+     * subject and the point, or may, the point is reported for a hand edit.
+     *
+     * @param list<int|string> $path
+     * @param array<string, mixed> $point
+     * @param list<string>|null $context
+     */
+    private function shiftPositionIn(string $file, array $path, array $point, ?array $context): void
+    {
+        if (! RelativePositionFields::isRelative($point)) {
+            $this->shiftPointIn($file, $path, $point, $context);
+            return;
+        }
+        if ($context !== null && ! in_array($this->edit->mapId, $context, true)) {
+            return;
+        }
+        $axis = $this->edit->axis;
+        $offset = is_array($point['offset'] ?? null) && is_int($point['offset'][$axis] ?? null) ? $point['offset'][$axis] : 0;
+        if ($offset === 0) {
+            return;
+        }
+        $lines = $this->edit instanceof LineRemoval ? 'removed' : 'inserted';
+        $position = RelativePositionFields::describePosition($point);
+        $cell = $context === [$this->edit->mapId] && is_array($point['at'] ?? null)
+            ? ($this->subjects?->resolveCell($point['at'])['cell'] ?? null) : null;
+        if ($cell === null) {
+            $this->reportHandEdit($file, [...$path, 'offset', $axis], sprintf('it stands %s, and the %s lines may fall between them; check its offset', $position, $lines));
+            return;
+        }
+        $from = $cell[$axis === 'x' ? 0 : 1];
+        $shiftedFrom = $this->edit->getShiftedCoordinate($from);
+        $shiftedTo = $this->edit->getShiftedCoordinate($from + $offset);
+        if ($shiftedFrom === null || $shiftedTo === null || $shiftedTo - $shiftedFrom !== $offset) {
+            $this->reportHandEdit($file, [...$path, 'offset', $axis], sprintf('it stands %s, and the %s lines fall between them; check its offset', $position, $lines));
+        }
+    }
+
+    /**
+     * Moves a point whose map is the script's current map: surely when that
+     * is the edited map, never when it is surely another, and otherwise
+     * reports it for a hand edit when it would move.
+     *
+     * @param list<int|string> $path
+     * @param array<string, mixed> $point
+     * @param list<string>|null $context
+     */
+    private function shiftPointIn(string $file, array $path, array $point, ?array $context): void
+    {
+        if ($context === [$this->edit->mapId]) {
+            $this->shiftPoint($file, $path, $point);
+            return;
+        }
+        if ($context !== null && ! in_array($this->edit->mapId, $context, true)) {
+            return;
+        }
+        $key = $this->edit->axis;
+        if (array_key_exists($key, $point) && (! is_int($point[$key]) || $point[$key] >= $this->edit->at)) {
+            $this->reportHandEdit($file, [...$path, $key], $context === null
+                ? 'it runs on a map that is not known here'
+                : sprintf('it may run on %s', implode(' or ', $context)));
+        }
+    }
+
+    /**
+     * Moves a point surely in the edited map's space. Only the edited axis
+     * moves; a point naming only the other axis stays. A point on a removed
+     * line blocks the removal.
+     *
+     * @param list<int|string> $path
+     * @param array<string, mixed> $point
+     */
+    private function shiftPoint(string $file, array $path, array $point): void
+    {
+        $key = $this->edit->axis;
+        if (! array_key_exists($key, $point)) {
+            return;
+        }
+        $value = $point[$key];
+        if (is_int($value)) {
+            $shifted = $this->edit->getShiftedCoordinate($value);
+            if ($shifted === null) {
+                $this->reportBlocked($file, [...$path, $key], 'it stands on a removed line');
+            } elseif ($shifted !== $value) {
+                $this->shifts[$file][self::formatKey([...$path, $key])] = ['path' => [...$path, $key], 'value' => $shifted];
+            }
+            return;
+        }
+        $this->reportHandEdit($file, [...$path, $key], 'it is not a whole number');
+    }
+
+    /**
+     * Moves an area surely in the edited map's space: one starting at or
+     * beyond the line moves, one straddling inserted lines stretches, one
+     * straddling removed lines shrinks, and one wholly on removed lines
+     * blocks the removal.
+     *
+     * @param list<int|string> $path
+     * @param array<string, mixed> $area
+     */
+    private function shiftArea(string $file, array $path, array $area): void
+    {
+        $startKey = $this->edit->axis;
+        $sizeKey = $startKey === 'x' ? 'width' : 'height';
+        $start = $area[$startKey] ?? 0;
+        $size = $area[$sizeKey] ?? 1;
+        if (! is_int($start) || ! is_int($size)) {
+            $this->reportHandEdit($file, $path, 'its position or size is not a whole number');
+            return;
+        }
+        $span = $this->edit->getShiftedSpan($start, $size);
+        if ($span === null) {
+            $this->reportBlocked($file, $path, 'the whole area is on removed lines');
+            return;
+        }
+        [$newStart, $newSize] = $span;
+        if ($newStart !== $start) {
+            $this->shifts[$file][self::formatKey([...$path, $startKey])] = ['path' => [...$path, $startKey], 'value' => $newStart];
+        }
+        if ($newSize !== $size) {
+            $this->shifts[$file][self::formatKey([...$path, $sizeKey])] = ['path' => [...$path, $sizeKey], 'value' => $newSize];
+        }
+    }
+
+    /**
+     * Moves a named area with the lines: a rectangle as an event's area
+     * moves, shrinking with removed lines; exact cells each move with their
+     * line. A cell on a removed line stops the removal, since dropping it
+     * would change the territory the area names; reshape the area first.
+     * Exact cells on both sides of inserted lines leave the new cells between
+     * them outside the area, which a rectangle would take in, so that is
+     * reported for the author to reshape, never guessed.
+     *
+     * @param list<int|string> $path
+     * @param array<string, mixed> $area
+     */
+    private function shiftNamedArea(string $file, array $path, array $area, string $id): void
+    {
+        if (! array_key_exists('cells', $area)) {
+            $this->shiftArea($file, $path, $area);
+            return;
+        }
+        $axis = $this->edit->axis === 'x' ? 0 : 1;
+        if ($this->edit instanceof LineInsertion && self::spansLine((array) $area['cells'], $axis, $this->edit->at)) {
+            $this->reportHandEdit($file, [...$path, 'cells'], sprintf('area %s has cells on both sides of the inserted lines, which leave a gap in it; reshape it over them', $id));
+        }
+        foreach ((array) $area['cells'] as $cellIndex => $cell) {
+            $coordinate = is_array($cell) ? ($cell[$axis] ?? null) : null;
+            if (! is_int($coordinate)) {
+                $this->reportHandEdit($file, [...$path, 'cells', $cellIndex], 'its position is not a whole number');
+                continue;
+            }
+            if ($coordinate < $this->edit->at) {
+                continue;
+            }
+            $cellPath = [...$path, 'cells', $cellIndex, $axis];
+            $shifted = $this->edit->getShiftedCoordinate($coordinate);
+            if ($shifted === null) {
+                $this->reportBlocked($file, $cellPath, sprintf('area %s has a cell on a removed line', $id));
+            } else {
+                $this->shifts[$file][self::formatKey($cellPath)] = ['path' => $cellPath, 'value' => $shifted];
+            }
+        }
+    }
+
+    /**
+     * Whether exact cells stand on both sides of a line at the same place across it: on the line before it and on
+     * the line itself.
+     *
+     * @param array<mixed> $cells
+     */
+    private static function spansLine(array $cells, int $axis, int $at): bool
+    {
+        $before = [];
+        $on = [];
+        foreach ($cells as $cell) {
+            if (! is_array($cell) || ! is_int($cell[0] ?? null) || ! is_int($cell[1] ?? null)) {
+                continue;
+            }
+            $across = $cell[1 - $axis];
+            if ($cell[$axis] === $at - 1) {
+                $before[$across] = true;
+            } elseif ($cell[$axis] === $at) {
+                $on[$across] = true;
+            }
+        }
+
+        return array_intersect_key($before, $on) !== [];
+    }
+
+    /** @param list<int|string> $path */
+    private function reportHandEdit(string $file, array $path, string $reason): void
+    {
+        $this->handEdits[$file][self::formatKey($path)] = ['path' => $path, 'reason' => $reason];
+    }
+
+    /** @param list<int|string> $path */
+    private function reportBlocked(string $file, array $path, string $reason): void
+    {
+        $this->blocked[$file][self::formatKey($path)] = ['path' => $path, 'reason' => $reason];
+    }
+
+    /** @param list<int|string> $path */
+    private static function formatKey(array $path): string
+    {
+        return implode("\0", $path);
+    }
+
+    /**
+     * The context a transfer arrives in: its map, or an unknown map when it
+     * names none.
+     *
+     * @return list<string>|null
+     */
+    private static function getTransferContext(string $destination): ?array
+    {
+        return $destination !== '' ? [$destination] : null;
+    }
+
+    /**
+     * The maps any of several contexts may be on; unknown when any is.
+     *
+     * @param list<list<string>|null> $contexts
+     * @return list<string>|null
+     */
+    private static function mergeContexts(array $contexts): ?array
+    {
+        $maps = [];
+        foreach ($contexts as $context) {
+            if ($context === null) {
+                return null;
+            }
+            array_push($maps, ...$context);
+        }
+        $maps = array_values(array_unique($maps));
+        sort($maps, SORT_STRING);
+
+        return $maps;
+    }
+}

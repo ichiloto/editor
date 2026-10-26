@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
-use Ichiloto\Editor\Playtest\PlaytestOverlay;
+use Ichiloto\Editor\Playtest\PlaytestLaunch;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\UI\CutscenesScreen;
 use Ichiloto\Editor\Validation\Issue;
@@ -261,25 +261,16 @@ it('authors an original opening cinematic end to end through the editor, preview
     $cutsceneIssues = array_values(array_filter($issues, static fn(Issue $issue): bool => str_starts_with($issue->where, 'cinematic ')));
     expect(array_map(static fn(Issue $issue): string => $issue->message, $cutsceneIssues))->toBe([]);
 
-    // 16. The playtest route: an overlay whose start map launches the cinematic on arrival.
-    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['party' => ['members' => ['Kaelion']], 'startingPositions' => ['player' => ['destinationMap' => 'harbour', 'spawnPoint' => ['x' => 1, 'y' => 1], 'spawnSprite' => ['^']]]];\n");
-    $overlay = PlaytestOverlay::createForCinematic($root, 'skyfield-night', 2, 2, 'dawn-crossing');
+    // 16. The playtest route: a new game on the cinematic's origin that the Engine plays it on, the project untouched.
+    $mapFiles = sourceHashTree($root . '/assets/Maps');
+    $launch = PlaytestLaunch::fromCinematic($root, 'skyfield-night', 2, 2, 'dawn-crossing');
 
     try {
-        $mapData = require $overlay->root . '/assets/Maps/skyfield-night/skyfield-night.data.php';
-        $eventLayer = require $overlay->root . '/assets/Maps/skyfield-night/skyfield-night.event.php';
-        $triggers = array_filter($mapData['events'], static fn(array $event): bool => str_contains($event['class'], 'CinematicEventTrigger'));
-        $marker = array_key_first($triggers);
-        expect($triggers)->toHaveCount(1)
-            ->and($triggers[$marker]['data'])->toBe(['cinematicId' => 'dawn-crossing', 'mode' => 'auto', 'reusable' => false])
-            ->and(explode("\n", $eventLayer)[2][2])->toBe($marker)
-            ->and(is_link($overlay->root . '/assets/Maps/skyfield-night/skyfield-night.map.php'))->toBeTrue()
-            ->and(is_link($overlay->root . '/assets/Maps/skyfield-dawn'))->toBeTrue()
-            ->and(is_link($overlay->root . '/assets/Cutscenes'))->toBeTrue();
-        // The real project's map is untouched.
-        expect(file_get_contents($root . '/assets/Maps/skyfield-night/skyfield-night.event.php'))->not->toContain($marker === ' ' ? 'never' : $marker . ' ');
+        expect($launch->getContext())->toBe(['mode' => 'new-game', 'start' => ['mapId' => 'skyfield-night', 'x' => 2, 'y' => 2],
+                'cinematicId' => 'dawn-crossing', 'dataRoot' => $launch->dataRoot])
+            ->and(sourceHashTree($root . '/assets/Maps'))->toBe($mapFiles);
     } finally {
-        $overlay->destroy();
+        $launch->destroy();
     }
 
     // 17. & 18. Exactly-once completion, and the session released so a save may follow.

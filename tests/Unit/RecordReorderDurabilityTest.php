@@ -219,10 +219,12 @@ it('describes the record keys in help only where they actually work', function (
         expect($help)->toContain('[ / ]              move the entry')
             ->and($help)->toContain('Shift+D            duplicate the entry');
 
+        // Numbered record files: a copy is numbered last, and the order is
+        // the files' own, so nothing moves.
         openDatabaseCategory($editor, 'items');
         $help = implode("\n", callEditorMethod($editor, 'getHelpLines'));
-        expect($help)->not->toContain('move the entry up or down')
-            ->and($help)->not->toContain('Shift+D            duplicate the entry');
+        expect($help)->toContain('Shift+D            duplicate the entry')
+            ->and($help)->not->toContain('move the entry');
 
         openDatabaseCategory($editor, 'states');
         $help = implode("\n", callEditorMethod($editor, 'getHelpLines'));

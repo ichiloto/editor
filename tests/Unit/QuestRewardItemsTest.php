@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use Ichiloto\Editor\ProjectQuestDatabase;
 use Ichiloto\Editor\ProjectWorkspace;
 
 /**
@@ -40,13 +39,21 @@ function selectQuestField(object $editor, string $fieldId): void
     throw new RuntimeException("No field {$fieldId} in the settings pane.");
 }
 
-it('shows each reward item as a picked row, not a line to type', function () {
-    $root = makeTemporaryProject();
-    $database = ProjectQuestDatabase::fromProject($root);
-    $database->getQuestByIndex(0)->setRewardItems(['S-Potion', 'Wooden Sword']);
-    $database->save();
+/** The open quest's reward items, as the record holds them. */
+function questRewardItems(object $editor): mixed
+{
+    return getEditorProperty($editor, 'workspace')->getRecordDatabase('quests')->getRecordByIndex(0)->get('rewards.items');
+}
 
-    $editor = editorOnQuests($root);
+/** Gives the first quest reward items, authored as bare names. */
+function giveQuestRewards(object $editor, array $items): void
+{
+    getEditorProperty($editor, 'workspace')->getRecordDatabase('quests')->getRecordByIndex(0)->set('rewards.items', $items);
+}
+
+it('shows each reward item as a picked row, not a line to type', function () {
+    $editor = editorOnQuests(makeTemporaryProject());
+    giveQuestRewards($editor, ['S-Potion', 'Wooden Sword']);
     $byField = [];
 
     foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $field) {
@@ -55,80 +62,105 @@ it('shows each reward item as a picked row, not a line to type', function () {
 
     // Names resolve through the engine's item store, so a misspelling is a
     // reward that silently never arrives. Chosen, never spelled.
-    expect($byField['rewardItem0']['reference'] ?? null)->toBe('inventory')
-        ->and($byField['rewardItem0']['value'] ?? null)->toBe('S-Potion')
-        ->and($byField['rewardItem1']['value'] ?? null)->toBe('Wooden Sword')
-        ->and($byField['rewardItem0'] ?? [])->not->toHaveKey('control')
-        ->and($byField)->not->toHaveKey('rewardItems');
+    expect($byField['reward0Item']['reference'] ?? null)->toBe('inventory')
+        ->and($byField['reward0Item']['value'] ?? null)->toBe('S-Potion')
+        ->and($byField['reward1Item']['value'] ?? null)->toBe('Wooden Sword')
+        ->and($byField['reward0Item'] ?? [])->not->toHaveKey('control')
+        ->and($byField['rewardList']['value'] ?? null)->toBe('2');
 });
 
-it('adds a reward slot from the reward rows and removes it again', function () {
-    $root = makeTemporaryProject();
-    $editor = editorOnQuests($root);
+it('adds a reward item from the reward heading and removes it again', function () {
+    $editor = editorOnQuests(makeTemporaryProject());
 
-    // Adding the first slot works from the Reward Gold row, since there is
-    // no reward row to stand on yet.
-    selectQuestField($editor, 'rewardGold');
-    callEditorMethod($editor, 'addDatabaseQuestObjective');
+    // The heading is where the first one is added, as there is no reward
+    // row to stand on yet.
+    selectQuestField($editor, 'rewardList');
+    callEditorMethod($editor, 'addDatabaseRecordSubItem');
 
-    $quest = getEditorProperty($editor, 'workspace')->questDatabase->getQuestByIndex(0);
+    expect(questRewardItems($editor))->toHaveCount(1);
 
-    expect($quest->getRewardItems())->toHaveCount(1);
+    selectQuestField($editor, 'reward0Item');
+    callEditorMethod($editor, 'removeDatabaseRecordSubItem');
 
-    selectQuestField($editor, 'rewardItem0');
-    callEditorMethod($editor, 'removeDatabaseQuestObjective');
-
-    expect($quest->getRewardItems())->toBe([]);
+    expect(questRewardItems($editor))->toBeNull();
 });
 
 it('still adds an objective when the cursor is not on a reward row', function () {
-    $root = makeTemporaryProject();
-    $editor = editorOnQuests($root);
-    $quest = getEditorProperty($editor, 'workspace')->questDatabase->getQuestByIndex(0);
-    $objectivesBefore = count($quest->getObjectives());
+    $editor = editorOnQuests(makeTemporaryProject());
+    $database = getEditorProperty($editor, 'workspace')->getRecordDatabase('quests');
+    $objectivesBefore = count($database->getSubItems(0));
 
     selectQuestField($editor, 'name');
-    callEditorMethod($editor, 'addDatabaseQuestObjective');
+    callEditorMethod($editor, 'addDatabaseRecordSubItem');
 
-    expect(count($quest->getObjectives()))->toBe($objectivesBefore + 1)
-        ->and($quest->getRewardItems())->toBe([]);
+    expect(count($database->getSubItems(0)))->toBe($objectivesBefore + 1)
+        ->and(questRewardItems($editor))->toBeNull();
 });
 
 it('puts back what undo removed, in the same slot', function () {
-    $root = makeTemporaryProject();
-    $editor = editorOnQuests($root);
-    $database = getEditorProperty($editor, 'workspace')->questDatabase;
-    $database->getQuestByIndex(0)->setRewardItems(['S-Potion', 'Wooden Sword', 'S-Mana']);
+    $editor = editorOnQuests(makeTemporaryProject());
+    giveQuestRewards($editor, ['S-Potion', 'Wooden Sword', 'S-Mana']);
 
-    selectQuestField($editor, 'rewardItem1');
-    callEditorMethod($editor, 'removeDatabaseQuestObjective');
+    selectQuestField($editor, 'reward1Item');
+    callEditorMethod($editor, 'removeDatabaseRecordSubItem');
 
-    expect($database->getQuestByIndex(0)->getRewardItems())->toBe(['S-Potion', 'S-Mana']);
+    expect(questRewardItems($editor))->toBe(['S-Potion', 'S-Mana']);
 
     callEditorMethod($editor, 'performUndo');
 
-    expect($database->getQuestByIndex(0)->getRewardItems())->toBe(['S-Potion', 'Wooden Sword', 'S-Mana']);
+    expect(questRewardItems($editor))->toBe(['S-Potion', 'Wooden Sword', 'S-Mana']);
 });
 
-it('round-trips picked rewards through the saved file', function () {
+it('round-trips picked rewards through the saved file, a bare name until given a quantity', function () {
     $root = makeTemporaryProject();
-    $database = ProjectQuestDatabase::fromProject($root);
-    $quest = $database->getQuestByIndex(0);
-    $quest->addRewardItem();
-    $quest->setField('rewardItem0', 'Wooden Sword');
+    $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('quests');
+    $first = $database->addSubItem(0, listKey: 'rewards.items');
+    $database->setField(0, 'reward' . $first . 'Item', 'Wooden Sword');
+    $second = $database->addSubItem(0, listKey: 'rewards.items');
+    $database->setField(0, 'reward' . $second . 'Item', 'S-Potion');
+    $database->setField(0, 'reward' . $second . 'Quantity', '3');
     $database->save();
 
-    $reloaded = ProjectQuestDatabase::fromProject($root);
-
-    expect($reloaded->getQuestByIndex(0)->getRewardItems())->toBe(['Wooden Sword']);
+    expect((require $root . '/assets/Data/quests.php')[0]['rewards']['items'])
+        ->toBe(['Wooden Sword', ['item' => 'S-Potion', 'quantity' => 3]]);
 });
 
 it('drops the items key entirely when the last reward goes', function () {
-    $quest = ProjectQuestDatabase::fromProject(makeTemporaryProject())->getQuestByIndex(0);
-    $quest->setRewardItems(['S-Potion']);
-    $quest->removeRewardItem(0);
+    $editor = editorOnQuests(makeTemporaryProject());
+    giveQuestRewards($editor, ['S-Potion']);
+
+    selectQuestField($editor, 'reward0Item');
+    callEditorMethod($editor, 'removeDatabaseRecordSubItem');
 
     // An empty list would read as "rewards nothing, explicitly"; absence is
     // what the authored files use.
-    expect($quest->getRewards())->not->toHaveKey('items');
+    expect(getEditorProperty($editor, 'workspace')->getRecordDatabase('quests')->getRecordByIndex(0)->get('rewards'))
+        ->not->toHaveKey('items');
+});
+
+it('lets the GUI add to a list beside the record\'s own from its heading, and rename with a note', function () {
+    $session = \Ichiloto\Editor\Session\EditorSession::open(makeTemporaryProject());
+    $rows = $session->readDatabaseRecord('quests', 0)['rows'];
+    $heading = array_find($rows, static fn(array $row): bool => ($row['key']['field'] ?? null) === 'rewardList');
+
+    expect($heading)->toMatchArray(['label' => 'Reward Items', 'value' => '0', 'item' => true, 'listHeading' => true, 'childNoun' => 'reward item']);
+
+    $session->addDatabaseItem('quests', 0, $heading['key'], true);
+    $rows = $session->readDatabaseRecord('quests', 0)['rows'];
+    $item = array_find($rows, static fn(array $row): bool => ($row['key']['field'] ?? null) === 'reward0Item');
+
+    expect($item)->toMatchArray(['item' => true, 'itemNoun' => 'reward item', 'reference' => 'inventory'])
+        ->and($item)->not->toHaveKey('listHeading');
+
+    $name = array_find($rows, static fn(array $row): bool => ($row['key']['field'] ?? null) === 'name');
+
+    expect($session->applyDatabaseRecord('quests', 0, $name['key'], 'Morning Errand')['note'] ?? null)
+        ->toBe('Its id stays breakfast-duty, which other things point at.');
+});
+
+it('names the record\'s own list for an add with no row, not the list beside it', function () {
+    $session = \Ichiloto\Editor\Session\EditorSession::open(makeTemporaryProject());
+
+    expect($session->readDatabaseRecord('quests', 0)['listNoun'])->toBe('objective')
+        ->and($session->readDatabaseRecord('states', 0)['listNoun'] ?? null)->toBeNull();
 });

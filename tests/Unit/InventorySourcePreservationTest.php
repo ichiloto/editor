@@ -7,25 +7,52 @@ use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 
 /**
- * Copies the real project's authored items.php into a throwaway project.
- *
- * The point of these tests is the actual authored source -- named arguments,
- * fully qualified classes, nested constructors, emoji icons -- not a
- * simplified stand-in, so the file is copied rather than written.
- *
- * @return array{0: string, 1: string}|null The project root and items path.
+ * Editing an inventory record changes the value asked for in that record's
+ * own file and nothing else: not the record's other lines, not its comments
+ * or imports, and not any other file in the project.
  */
-function projectWithAuthoredInventory(): ?array
+
+/**
+ * The authored weapon record these tests edit: an import, comments, an emoji
+ * icon and a nested map, written the way an author writes one.
+ */
+const AUTHORED_WEAPON_RECORD = <<<'PHP'
+<?php
+
+use Ichiloto\Engine\Entities\Inventory\InventoryItem;
+
+// The blade the smith sells first.
+return [
+  'class' => InventoryItem::class,
+  'data' => [
+    'kind' => 'weapon',
+    'id' => 'equipment.ember-blade',
+    'name' => 'Ember Blade',
+    'description' => 'Warm to the touch.', // Not hot.
+    'icon' => '🗡️',
+    'price' => 300,
+    'equipmentType' => 'Sword',
+    /* Balanced for the first town. */
+    'parameterChanges' => [
+      'attack' => 6,
+      'speed' => 1,
+    ],
+    'element' => 'Fire',
+  ],
+];
+PHP;
+
+/**
+ * Returns a project whose weapons are the fixture's sword and the authored
+ * Ember Blade, and the blade's record file.
+ *
+ * @return array{0: string, 1: string} The project root and the record file.
+ */
+function projectWithAuthoredWeapon(): array
 {
-    $game = gameSourceRoot();
-
-    if ($game === null) {
-        return null;
-    }
-
     $root = makeTemporaryProject('ichiloto-source-');
-    $path = $root . '/assets/Data/items.php';
-    copy($game . '/assets/Data/items.php', $path);
+    $path = $root . '/assets/Data/Weapons/0002-ember-blade.php';
+    file_put_contents($path, AUTHORED_WEAPON_RECORD);
 
     return [$root, $path];
 }
@@ -38,57 +65,51 @@ function inventoryDatabase(string $root, string $category): ProjectRecordDatabas
     return ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey($category));
 }
 
+/**
+ * Returns the lines of an edited file that differ from the original.
+ *
+ * @return string[] The changed lines.
+ */
+function changedLines(string $before, string $after): array
+{
+    $beforeLines = explode("\n", $before);
+
+    return array_values(array_filter(
+        explode("\n", $after),
+        static fn(string $line, int $index): bool => ($beforeLines[$index] ?? null) !== $line,
+        ARRAY_FILTER_USE_BOTH,
+    ));
+}
+
 it('changes one authored value and leaves every other byte alone', function () {
-    $project = projectWithAuthoredInventory();
+    [$root, $path] = projectWithAuthoredWeapon();
+    $database = inventoryDatabase($root, 'weapons');
+    $index = array_search('Ember Blade', $database->getEntryLabels(), true);
 
-    if ($project === null) {
-        $this->markTestSkipped('The game project is not reachable from this checkout.');
-    }
-
-    [$root, $path] = $project;
-    $before = (string) file_get_contents($path);
-
-    $database = inventoryDatabase($root, 'items');
-    $database->setField(0, 'price', '55');
+    $database->setField($index, 'price', '450');
     $database->save();
 
     $after = (string) file_get_contents($path);
-    $beforeLines = explode("\n", $before);
-    $afterLines = explode("\n", $after);
-    $changed = [];
 
-    foreach ($afterLines as $index => $line) {
-        if (($beforeLines[$index] ?? null) !== $line) {
-            $changed[] = $line;
-        }
-    }
+    expect(substr_count($after, "\n"))->toBe(substr_count(AUTHORED_WEAPON_RECORD, "\n"))
+        ->and(changedLines(AUTHORED_WEAPON_RECORD, $after))->toBe(["    'price' => 450,"])
+        ->and(inventoryDatabase($root, 'weapons')->getRecordByIndex($index)?->get('price'))->toBe(450);
+});
 
-    // Exactly one line differs, and it is the one asked for.
-    expect($afterLines)->toHaveCount(count($beforeLines))
-        ->and($changed)->toHaveCount(1)
-        ->and(trim($changed[0]))->toBe('price: 55,')
-        // The authored spelling of everything else survives.
-        ->and($after)->toContain("new \\Ichiloto\\Engine\\Entities\\Inventory\\Items\\Item(")
-        ->and($after)->toContain("id: 'item.s-potion',")
-        ->and($after)->toContain('use Ichiloto\Engine\Entities\Effects\HPRecoveryEffect;')
-        ->and($after)->toContain('equipmentType: \Ichiloto\Engine\Entities\Enumerations\WeaponType::SWORD,')
-        // The file is still PHP, and still the same list of definitions.
-        ->and(PhpSourceDocument::parse($after)->entryCount())->toBe(PhpSourceDocument::parse($before)->entryCount());
+it('edits a nested value in place, keeping the comments around it', function () {
+    [$root, $path] = projectWithAuthoredWeapon();
+    $database = inventoryDatabase($root, 'weapons');
+    $index = array_search('Ember Blade', $database->getEntryLabels(), true);
 
-    $reloaded = inventoryDatabase($root, 'items');
-    expect($reloaded->getRecordByIndex(0)?->get('price'))->toBe(55);
-})->group('engine');
+    $database->setField($index, 'parameterChanges.attack', '9');
+    $database->save();
+
+    expect((string) file_get_contents($path))->toBe(str_replace("'attack' => 6,", "'attack' => 9,", AUTHORED_WEAPON_RECORD));
+});
 
 it('writes nothing at all when nothing changed', function () {
-    $project = projectWithAuthoredInventory();
-
-    if ($project === null) {
-        $this->markTestSkipped('The game project is not reachable from this checkout.');
-    }
-
-    [$root, $path] = $project;
-    $before = (string) file_get_contents($path);
-    $modifiedAt = filemtime($path);
+    [$root] = projectWithAuthoredWeapon();
+    $before = sourceHashTree($root);
 
     foreach (['items', 'weapons', 'armors'] as $category) {
         $database = inventoryDatabase($root, $category);
@@ -103,79 +124,20 @@ it('writes nothing at all when nothing changed', function () {
         $database->save();
     }
 
-    expect((string) file_get_contents($path))->toBe($before)
-        ->and(filemtime($path))->toBe($modifiedAt);
-})->group('engine');
+    expect(sourceHashTree($root))->toBe($before);
+});
 
-it('edits a weapon inside its nested constructor without touching the others', function () {
-    $project = projectWithAuthoredInventory();
-
-    if ($project === null) {
-        $this->markTestSkipped('The game project is not reachable from this checkout.');
-    }
-
-    [$root, $path] = $project;
-    $before = (string) file_get_contents($path);
-
-    $database = inventoryDatabase($root, 'weapons');
-    $database->setField(0, 'parameterChanges.attack', '9');
-    $database->save();
-
-    $after = (string) file_get_contents($path);
-    $changed = array_values(array_filter(
-        array_map(
-            static fn(string $line, int $index): ?string => ($line !== (explode("\n", $before)[$index] ?? null)) ? $line : null,
-            explode("\n", $after),
-            array_keys(explode("\n", $after)),
-        ),
-        static fn(?string $line): bool => $line !== null,
-    ));
-
-    expect($changed)->toHaveCount(1)
-        ->and(trim($changed[0]))->toBe('attack: 9,')
-        // The nested constructor itself is untouched, not rebuilt.
-        ->and($after)->toContain('parameterChanges: new \Ichiloto\Engine\Entities\ParameterChanges(');
-
-    $reloaded = inventoryDatabase($root, 'weapons');
-    expect($reloaded->getRecordByIndex(0)?->get('parameterChanges.attack'))->toBe(9);
-})->group('engine');
-
-it('leaves every unrelated file in the project byte-identical', function () {
-    $project = projectWithAuthoredInventory();
-
-    if ($project === null) {
-        $this->markTestSkipped('The game project is not reachable from this checkout.');
-    }
-
-    [$root, $path] = $project;
+it('leaves every other file in the project byte-identical', function () {
+    [$root] = projectWithAuthoredWeapon();
     $before = sourceHashTree($root);
 
     $database = inventoryDatabase($root, 'items');
-    $database->setField(1, 'description', 'A potion that restores rather more HP.');
+    $database->setField(1, 'description', 'Cures poison, and tastes of it.');
     $database->save();
 
-    $after = sourceHashTree($root);
-
-    expect(array_keys(array_diff_assoc($after, $before)))->toBe(['assets/Data/items.php']);
-})->group('engine');
-
-it('keeps an authored file whose entries are not named-argument calls working as before', function () {
-    // The fixture project authors its items positionally, which cannot be
-    // patched by argument name. That file still saves through the ordinary
-    // writer rather than failing, and the record still changes.
-    $root = makeTemporaryProject('ichiloto-source-');
-    $path = $root . '/assets/Data/items.php';
-
-    expect((string) file_get_contents($path))->toContain("new Item('S-Potion'");
-
-    $database = inventoryDatabase($root, 'items');
-    $database->setField(0, 'price', '77');
-    $database->save();
-
-    $reloaded = inventoryDatabase($root, 'items');
-
-    expect($reloaded->getRecordByIndex(0)?->get('price'))->toBe(77);
+    expect(array_keys(array_diff_assoc(sourceHashTree($root), $before)))->toBe(['assets/Data/Items/0002-antidote.php']);
 });
+
 
 // -- The document itself ---------------------------------------------------
 
@@ -223,6 +185,8 @@ it('reads, replaces, adds and removes one argument at a time', function () {
     // A single-line call takes an argument inline.
     $inline = $document->withArgument(1, 'sellable', 'false');
     expect($inline->argumentSource(1, 'sellable'))->toBe('false')
+        ->and($inline->source)->toContain('new Item(')
+        ->and($inline->source)->toContain('new \Ichiloto\Engine\Entities\Inventory\Items\Item(')
         ->and($inline->source)->toContain("price: 80, sellable: false)");
 });
 
@@ -276,4 +240,14 @@ it('adds and removes a whole entry, and puts the file back', function () {
     $emptied = $added->withoutEntry(0);
     expect($emptied->entryCount())->toBe(1)
         ->and($emptied->argumentSource(0, 'name'))->toBe("'Two'");
+});
+
+it('refuses to regenerate a commented file it cannot edit in place, rather than drop the comments', function () {
+    $root = makeTemporaryProject('ichiloto-source-');
+    $path = $root . '/assets/Data/states.php';
+    file_put_contents($path, "<?php\n\nreturn array_merge(\n  // keep me\n  [['id' => 'poison', 'name' => 'Poison']],\n);\n");
+    $file = \Ichiloto\Editor\Database\PhpDataFile::load($path);
+
+    expect($file->isEditable())->toBeFalse()
+        ->and($file->readOnlyReason)->toContain('comments inside its data');
 });

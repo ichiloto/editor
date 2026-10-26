@@ -12,6 +12,7 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\ProjectValidator;
 use Ichiloto\Editor\Validation\Severity;
+use Ichiloto\Engine\IO\Console\TerminalText;
 
 /**
  * Writes a map's data file from an array, the way the fixtures are written.
@@ -240,6 +241,20 @@ it('measures sprites the way the terminal draws them, with or without the engine
         ->and(ProjectNpc::strippedGlyph('<'))->toBe('<');
 });
 
+it('keeps explicit empty NPC sprites distinct from missing sprites and diagnostic fallbacks', function () {
+    $entry = ['id' => 'notice', 'name' => 'Notice', 'x' => 2, 'y' => 1];
+    $empty = new ProjectNpc($entry + ['sprite' => '']);
+
+    expect($empty->getSprite())->toBe('')
+        ->and($empty->getVisibleSprite())->toBe('')
+        ->and(ProjectNpc::visibleGlyph(''))->toBe('')
+        ->and($empty->getSpriteWidth())->toBe(1, 'interaction and selection retain their anchor')
+        ->and($empty->toArray()['sprite'])->toBe('')
+        ->and(new ProjectNpc($entry)->getVisibleSprite())->toBe('@')
+        ->and(ProjectNpc::visibleGlyph('<fg=red></>'))->toBe('@')
+        ->and(ProjectNpc::visibleGlyph(' '))->toBe(' ');
+});
+
 it('refuses to change an id through with(), and folds dialogue both ways', function () {
     $npc = ProjectNpc::createAt('a', 'A', 0, 0);
 
@@ -402,6 +417,50 @@ it('draws NPCs as an overlay: wide glyphs own two columns, styled ones one, the 
     expect($previewed[3])->toBe('#       [^]#');
 });
 
+it('leaves map-owned NPC glyphs untouched and highlights only their selected anchor', function (bool $layered, string $prefix, string $suffix) {
+    $root = $layered ? layeredMapProject() : npcProject([])[0];
+    $map = ProjectWorkspace::fromProject($root)->getMapByIndex(0);
+    $map->setLayerCell($map->getBaseLayerId(), 1, 0, 'T', $prefix, $suffix);
+    $map->setNpcs(NpcCollection::fromMapData([
+        ['id' => 'notice', 'name' => 'Notice', 'sprite' => '', 'x' => 1, 'y' => 0, 'movement' => 'fixed', 'dialogue' => [['text' => 'Read me.']]],
+    ]));
+    $before = $map->captureLayerSnapshot();
+    $files = npcHashTree($root);
+    $plain = $map->renderPreview(4, 2, showEventOverlay: false);
+    $selected = $map->renderPreview(4, 2, showEventOverlay: false, showNpcOverlay: true, selectedNpcIndex: 0);
+
+    expect($map->renderPreview(4, 2, showEventOverlay: false, showNpcOverlay: true))->toBe($plain)
+        ->and(array_map(TerminalText::stripAnsi(...), $selected))->toBe(array_map(TerminalText::stripAnsi(...), $plain))
+        ->and($selected[0])->toContain("\033[7m")
+        ->and(TerminalText::stripAnsi($selected[0]))->not->toContain('@', '[', ']')
+        ->and($map->getNpcs()->indexAt(1, 0))->toBe(0);
+
+    // Highlight the actual visible stack, respecting hidden layers and dimming.
+    $hidden = ['map:4' => false];
+    $plainHidden = $map->renderPreview(4, 2, layerVisibility: $hidden, activeLayer: 'event', dimInactive: true);
+    $selectedHidden = $map->renderPreview(4, 2, showNpcOverlay: true, selectedNpcIndex: 0, layerVisibility: $hidden, activeLayer: 'event', dimInactive: true);
+    expect(array_map(TerminalText::stripAnsi(...), $selectedHidden))->toBe(array_map(TerminalText::stripAnsi(...), $plainHidden))
+        ->and($selectedHidden[0])->toContain("\033[7m")
+        ->and($map->renderPreview(4, 2, terminalPreview: true, showNpcOverlay: true, selectedNpcIndex: 0))->toBe($map->renderPreview(4, 2, terminalPreview: true));
+    if ($layered) {
+        expect($selectedHidden[0])->toContain("\033[7mT");
+    }
+
+    $allHidden = array_fill_keys(array_column($map->getLayers(), 'id'), false);
+    $anchor = $map->renderPreview(4, 2, showNpcOverlay: true, selectedNpcIndex: 0, layerVisibility: $allHidden);
+    expect($anchor[0])->toContain("\033[7m \033[0m")
+        ->and($anchor[0])->not->toContain('@');
+
+    $directional = $map->renderPreview(4, 2, showNpcOverlay: true, selectedNpcIndex: 0, selectedNpcSprite: '^');
+    expect($directional[0])->toContain('[^]')
+        ->and($map->captureLayerSnapshot())->toBe($before)
+        ->and(npcHashTree($root))->toBe($files);
+})->with([
+    'legacy' => [false, '<fg=green>', '</>'],
+    'layered' => [true, '<fg=green>', '</>'],
+    'layered ANSI reset' => [true, "\033[0m\033[32m", "\033[0m"],
+]);
+
 it('moves an NPC on the canvas, and undoes and redoes the move', function () {
     [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
     $editor = npcEditor($root);
@@ -487,8 +546,8 @@ it('refuses to delete an NPC that a move_route names, and says where', function 
 
 // -- Inspector: every field through the shared pane ----------------------
 
-it('edits name, sprite, coordinates and movement without touching the id, hiding wander bounds while fixed', function () {
-    [$root, $path] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
+it('edits name, sprite, coordinates and movement, hiding wander bounds while fixed', function () {
+    [$root, $path] = npcProject([['id' => 'ann', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
     $editor = npcEditor($root);
     $map = npcMap($editor);
     callEditorMethod($editor, 'selectNpc', 0);
@@ -503,7 +562,8 @@ it('edits name, sprite, coordinates and movement without touching the id, hiding
     setNpcField($editor, 'movement', 'wander');
 
     $npc = $map->getNpcs()->get(0);
-    expect($npc?->getId())->toBe('a')
+    // Nothing names Ann and her id is the one her name derived, so it follows her new name.
+    expect($npc?->getId())->toBe('annabel')
         ->and($npc?->getName())->toBe('Annabel')
         ->and($npc?->getSprite())->toBe('<fg=green>a</>')
         ->and($npc?->getX())->toBe(5)
@@ -536,6 +596,151 @@ it('edits name, sprite, coordinates and movement without touching the id, hiding
     expect(getEditorProperty($editor, 'history')->count())->toBe($before);
 });
 
+it('shows Direction Fix beside Movement, round-trips it source-preserved, and undoes it', function () {
+    $entry = ['id' => 'clerk', 'name' => 'Clerk', 'sprite' => 'C', 'x' => 3, 'y' => 2, 'movement' => 'fixed', 'dialogue' => [['text' => 'Welcome.']], 'authorNote' => 'keep'];
+    [$root, $path] = npcProject([$entry]);
+    $source = file_get_contents($path);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+    callEditorMethod($editor, 'selectNpc', 0);
+
+    // Grouped under Movement, right after the movement mode, and read as the game's default.
+    $rows = callEditorMethod($editor, 'getInspectorFields');
+    $ids = array_map(static fn(array $f): string => (string) ($f['field'] ?? ''), $rows);
+    $labels = array_map(static fn(array $f): string => trim((string) ($f['label'] ?? '')), $rows);
+    $movement = array_search('movement', $ids, true);
+    expect($ids[$movement + 1])->toBe('directionFix')
+        ->and(array_slice($labels, 0, $movement))->toContain('Movement')
+        ->and(npcField($editor, 'directionFix')['label'])->toContain('Direction Fix')
+        ->and(npcField($editor, 'directionFix')['value'])->toBe('false')
+        ->and(npcField($editor, 'directionFix')['editable'] ?? true)->toBeTrue();
+
+    // Right cycles the option in place, as every Database boolean does.
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+    restNpcCursorOn($editor, 'directionFix');
+    callEditorMethod($editor, 'dispatchInput', "\033[C");
+    expect($map->getNpcs()->get(0)?->toArray()['directionFix'] ?? null)->toBeTrue()
+        ->and(npcField($editor, 'directionFix')['value'])->toBe('true')
+        ->and($map->getNpcs()->get(0)?->getUnknownFields())->toBe(['authorNote']);
+
+    callEditorMethod($editor, 'saveSelectedMap');
+    $edited = file_get_contents($path);
+    expect(npcsOnDisk($path)[0])->toBe($entry + ['directionFix' => true])
+        ->and($edited)->toContain("'directionFix' => true");
+
+    // A fresh editor reads it back, and the engine loads it as direction-fixed.
+    $reloaded = npcEditor($root);
+    callEditorMethod($reloaded, 'selectNpc', 0);
+    expect(npcField($reloaded, 'directionFix')['value'])->toBe('true');
+    $scene = new class extends \Ichiloto\Engine\Scenes\Game\GameScene {
+        public function __construct()
+        {
+            $this->currentMapId = 'test-map';
+            $this->gameState = new \Ichiloto\Engine\Core\GameState();
+            $this->party = new \Ichiloto\Engine\Entities\Party();
+        }
+    };
+    $manager = new \Ichiloto\Engine\Field\NpcManager($scene);
+    $manager->configure(npcsOnDisk($path));
+    expect($manager->findById('clerk')?->directionFix)->toBeTrue();
+
+    // Undo restores the file byte for byte; redo brings the flag back.
+    callEditorMethod($editor, 'performUndo');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(file_get_contents($path))->toBe($source);
+    callEditorMethod($editor, 'performRedo');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(file_get_contents($path))->toBe($edited);
+
+    // False is the game's default, so it removes the key rather than writing false.
+    setNpcField($editor, 'directionFix', 'false');
+    expect($map->getNpcs()->get(0)?->toArray())->not->toHaveKey('directionFix');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(file_get_contents($path))->toBe($source);
+});
+
+it('reports a directionFix that is not a bool, and accepts true and false', function () {
+    [$root] = npcProject([
+        ['id' => 'word', 'name' => 'Word', 'x' => 1, 'y' => 1, 'directionFix' => 'yes'],
+        ['id' => 'number', 'name' => 'Number', 'x' => 2, 'y' => 1, 'directionFix' => 1],
+        ['id' => 'fixed', 'name' => 'Fixed', 'x' => 3, 'y' => 1, 'directionFix' => true],
+        ['id' => 'turns', 'name' => 'Turns', 'x' => 4, 'y' => 1, 'directionFix' => false],
+    ]);
+
+    $errors = implode("\n", npcIssueLines($root, Severity::ERROR));
+    $all = implode("\n", npcIssueLines($root));
+
+    expect($errors)->toContain('NPC Word: Its directionFix is string, not true or false.')
+        ->toContain('NPC Number: Its directionFix is int, not true or false.')
+        ->and($all)->not->toContain('NPC Fixed')
+        ->and($all)->not->toContain('NPC Turns')
+        ->and($all)->not->toContain('directionFix, which the game does not read');
+});
+
+it('re-derives an NPC\'s id from its new name while nothing refers to it, in the same undo step', function () {
+    [$root] = npcProject([['id' => 'gate-guard', 'name' => 'Gate Guard', 'sprite' => 'G', 'x' => 6, 'y' => 3]]);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+
+    createNpcThroughCanvas($editor, 2, 1, '');
+    expect($map->getNpcs()->get(1)?->getId())->toBe('new-npc');
+    callEditorMethod($editor, 'selectNpc', 1);
+    getEditorProperty($editor, 'toasts')->clear();
+    setNpcField($editor, 'name', 'Old Mara');
+    expect($map->getNpcs()->get(1)?->getId())->toBe('old-mara')
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('old-mara');
+
+    // A name another NPC's id already takes is numbered, as at creation.
+    setNpcField($editor, 'name', 'Gate Guard');
+    expect($map->getNpcs()->get(1)?->getId())->toBe('gate-guard-2');
+
+    callEditorMethod($editor, 'performUndo');
+    expect($map->getNpcs()->get(1)?->getId())->toBe('old-mara')
+        ->and($map->getNpcs()->get(1)?->getName())->toBe('Old Mara');
+    callEditorMethod($editor, 'performUndo');
+    expect($map->getNpcs()->get(1)?->getId())->toBe('new-npc');
+});
+
+it('keeps the id of an NPC something already names when it is renamed, and says what', function (array $events, array $scriptOwner, string $names) {
+    [$root] = npcProject([
+        ['id' => 'mara', 'name' => 'Mara', 'sprite' => 'M', 'x' => 2, 'y' => 1],
+        ['id' => 'bob', 'name' => 'Bob', 'sprite' => 'B', 'x' => 6, 'y' => 3, ...$scriptOwner],
+    ], $events);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+
+    callEditorMethod($editor, 'selectNpc', 0);
+    setNpcField($editor, 'name', 'Old Mara');
+
+    expect($map->getNpcs()->get(0)?->getId())->toBe('mara')
+        ->and($map->getNpcs()->get(0)?->getName())->toBe('Old Mara')
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Its id stays mara')->toContain($names);
+})->with([
+    'a dialogue event' => [['T' => ['class' => 'Ichiloto\\Engine\\Events\\Triggers\\DialogueEventTrigger', 'data' => ['npcId' => 'mara']]], [], 'test-map event T'],
+    'a camera target nested in a sequence' => [[], ['script' => [['type' => 'sequence', 'commands' => [
+        ['type' => 'camera', 'target' => ['kind' => 'npc', 'id' => 'mara']],
+    ]]]], 'NPC Bob script'],
+]);
+
+it('keeps the id of an NPC only an event script reached through common_event chains names, on rename and on its Id row', function (array $bob, array $events, array $scripts) {
+    [$root] = npcProject([
+        ['id' => 'mara', 'name' => 'Mara', 'sprite' => 'M', 'x' => 2, 'y' => 1],
+        ['id' => 'bob', 'name' => 'Bob', 'sprite' => 'B', 'x' => 6, 'y' => 3, ...$bob],
+    ], $events);
+    writeNpcEventScripts($root, $scripts);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+
+    callEditorMethod($editor, 'selectNpc', 0);
+    setNpcField($editor, 'name', 'Old Mara');
+    expect($map->getNpcs()->get(0)?->getId())->toBe('mara')
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Its id stays mara')->toContain('event script b (via event script a)');
+
+    setNpcField($editor, 'id', 'mara-at-home');
+    expect($map->getNpcs()->get(0)?->getId())->toBe('mara')
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('keeps the id "mara": event script b (via event script a)');
+})->with(npcEventScriptChains());
+
 it('reads Movement and Sprite as their runtime defaults when unset', function () {
     [$root] = npcProject([['name' => 'Legacy', 'x' => 2, 'y' => 1]]);
     $editor = npcEditor($root);
@@ -544,6 +749,68 @@ it('reads Movement and Sprite as their runtime defaults when unset', function ()
     expect(npcField($editor, 'movement')['value'])->toBe('fixed')
         ->and(npcField($editor, 'sprite')['value'])->toBe('@');
 });
+
+it('authors an explicit empty base sprite through Inspector input and round-trips it with undo', function (?string $initialSprite) {
+    $entry = ['id' => 'notice', 'name' => 'Notice', 'x' => 3, 'y' => 2, 'movement' => 'fixed', 'dialogue' => [['text' => 'Read me.']], 'authorNote' => 'keep'];
+    if ($initialSprite !== null) {
+        $entry['sprite'] = $initialSprite;
+    }
+    [$root, $path] = npcProject([$entry]);
+    $source = file_get_contents($path);
+    $grids = npcHashTree($root . '/assets/Maps');
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+    callEditorMethod($editor, 'selectNpc', 0);
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+    restNpcCursorOn($editor, 'sprite');
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    expect(getEditorProperty($editor, 'isDatabaseEditing'))->toBeTrue()
+        ->and(getEditorProperty($editor, 'databaseEditBuffer'))->toBe($initialSprite ?? '@');
+    callEditorMethod($editor, 'dispatchInput', "\x7f");
+    expect(getEditorProperty($editor, 'databaseEditBuffer'))->toBe('');
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    expect($map->getNpcs()->get(0)?->toArray()['sprite'])->toBe('')
+        ->and(npcField($editor, 'sprite')['value'])->toBe('')
+        ->and(getEditorProperty($editor, 'statusMessage'))->toBe('Sprite updated.');
+    callEditorMethod($editor, 'saveSelectedMap');
+    $edited = file_get_contents($path);
+    expect(npcsOnDisk($path)[0])->toBe(array_replace($entry, ['sprite' => '']))
+        ->and($edited)->toContain("'sprite' => ''");
+    $reloaded = npcEditor($root);
+    setEditorProperty($reloaded, 'cursorX', 3);
+    setEditorProperty($reloaded, 'cursorY', 2);
+    callEditorMethod($reloaded, 'dispatchInput', "\r");
+    expect(getEditorProperty($reloaded, 'selectedNpcIndex'))->toBe(0)
+        ->and(npcMap($reloaded)->getNpcs()->count())->toBe(1)
+        ->and(npcField($reloaded, 'sprite')['value'])->toBe('')
+        ->and(npcMap($reloaded)->getNpcs()->get(0)?->getVisibleSprite())->toBe('');
+
+    // The installed Engine keeps identity, dialogue and the occupied anchor without a sprite.
+    $scene = new class extends \Ichiloto\Engine\Scenes\Game\GameScene {
+        public function __construct()
+        {
+            $this->currentMapId = 'test-map';
+            $this->gameState = new \Ichiloto\Engine\Core\GameState();
+            $this->party = new \Ichiloto\Engine\Entities\Party();
+        }
+    };
+    $manager = new \Ichiloto\Engine\Field\NpcManager($scene);
+    $manager->configure(npcsOnDisk($path));
+    expect($manager->findById('notice')?->sprite)->toBe('')
+        ->and($manager->findById('notice')?->pages)->toEqual(\Ichiloto\Engine\Field\NpcPages::fromEntry($entry))
+        ->and($manager->npcAt(3, 2)?->id)->toBe('notice')
+        ->and($manager->visibleNpcs())->toHaveCount(1);
+
+    callEditorMethod($editor, 'performUndo');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(file_get_contents($path))->toBe($source);
+    callEditorMethod($editor, 'performRedo');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(file_get_contents($path))->toBe($edited);
+    $after = npcHashTree($root . '/assets/Maps');
+    unset($grids['test-map/test-map.data.php'], $after['test-map/test-map.data.php']);
+    expect($after)->toBe($grids, 'NPC appearance never rewrites map or event grids');
+})->with(['authored sprite' => 'N', 'missing sprite' => [null]]);
 
 it('authors directional sprites, previews the one under the cursor, and removes them cleanly', function () {
     [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
@@ -733,7 +1000,7 @@ it('saves nothing for a clean inspection, and only the map data file for an NPC 
 });
 
 it('places the saved checkpoint in the middle of history and follows it with undo and redo', function () {
-    [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
+    [$root] = npcProject([['id' => 'ann', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
     $editor = npcEditor($root);
     $map = npcMap($editor);
     callEditorMethod($editor, 'selectNpc', 0);
@@ -762,7 +1029,7 @@ it('places the saved checkpoint in the middle of history and follows it with und
     callEditorMethod($editor, 'dispatchInput', "\033[3~");
     callEditorMethod($editor, 'performUndo');
     callEditorMethod($editor, 'saveSelectedMap');
-    expect(ProjectWorkspace::fromProject($root)->getMapByIndex(0)->getNpcs()->ids())->toBe(['a']);
+    expect(ProjectWorkspace::fromProject($root)->getMapByIndex(0)->getNpcs()->ids())->toBe(['three']);
 });
 
 it('duplicates a map with its NPC collection and internal routes intact', function () {
@@ -812,6 +1079,22 @@ it('refuses a shrink that would strand an NPC or its wander area, and grows free
 });
 
 // -- Validation ------------------------------------------------------------
+
+it('accepts explicit empty base sprites but still warns on whitespace and style-only sprites', function (array $appearance, bool $warns) {
+    [$root] = npcProject([
+        ['id' => 'notice', 'name' => 'Notice', 'x' => 3, 'y' => 2, 'movement' => 'fixed'] + $appearance,
+    ]);
+    $messages = implode("\n", npcIssueLines($root));
+    expect(str_contains($messages, 'NPC Notice: Its sprite draws nothing.'))->toBe($warns)
+        ->and(implode("\n", npcIssueLines($root, Severity::ERROR)))->not->toContain('NPC Notice');
+})->with([
+    'explicit empty' => [['sprite' => ''], false],
+    'missing' => [[], false],
+    'spaces' => [['sprite' => '   '], true],
+    'formatter only' => [['sprite' => '<fg=red></>'], true],
+    'ANSI only' => [['sprite' => "\033[31m\033[0m"], true],
+    'non-string false' => [['sprite' => false], true],
+]);
 
 it('reports every malformed NPC shape with the runtime consequence', function () {
     [$root] = npcProject([
@@ -980,7 +1263,7 @@ it('enters and leaves script frames from the hosted Inspector with Enter and Esc
     restNpcCursorOn($editor, 'variant1Script');
     callEditorMethod($editor, 'dispatchInput', "\r");
     expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([1, 'script'])
-        ->and(getEditorProperty($editor, 'statusMessage'))->toBe('Dialogue › Dialogue variant 2 › Script.');
+        ->and(getEditorProperty($editor, 'statusMessage'))->toBe('Dialogue › Page 2 › Script.');
     callEditorMethod($editor, 'dispatchInput', 'O');
     expect($map->getNpcs()->get(0)?->getDialogue()[1]['script'])->toHaveCount(1);
     callEditorMethod($editor, 'dispatchInput', "\033");
@@ -1096,7 +1379,7 @@ it('types shortcut glyphs into hosted text fields and the name prompt instead of
 
 // -- Readable rows ---------------------------------------------------------
 
-it('heads each dialogue variant and shortens its rows, without touching field ids', function () {
+it('heads each NPC page and shortens its rows, without touching field ids', function () {
     [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1, 'dialogue' => [
         ['lines' => [['text' => 'Hi.']]],
         ['conditions' => [['type' => 'switch', 'name' => 'gate_open']], 'lines' => [['text' => 'The gate is open.']]],
@@ -1109,20 +1392,26 @@ it('heads each dialogue variant and shortens its rows, without touching field id
             static fn(array $f): array => ['label' => (string) ($f['label'] ?? ''), 'field' => $f['field'] ?? null, 'editable' => $f['editable'] ?? null],
             callEditorMethod($editor, 'getInspectorFields'),
         ),
-        static fn(array $r): bool => str_starts_with($r['label'], 'Dialogue variant') || str_starts_with((string) $r['field'], 'variant'),
+        static fn(array $r): bool => preg_match('/^Page \d/', $r['label']) === 1 || str_starts_with((string) $r['field'], 'variant'),
     ));
+    $page = ['When', 'Then Set', 'Cue Symbol', 'Cue Colour', 'Cue When', 'Event Script', 'Cinematic', 'Repeats', 'Page Id',
+        'Staged Speakers', 'Script Commands', 'Line 1 Speaker', 'Line 1 Emotion', 'Line 1 Text'];
+    $fields = static fn(int $n): array => ["variant{$n}Conditions", "variant{$n}Sets", "variant{$n}Cuesymbol", "variant{$n}Cuecolor",
+        "variant{$n}Cueconditions", "variant{$n}ScriptId", "variant{$n}CinematicId", "variant{$n}Reusable", "variant{$n}Id",
+        "variant{$n}Speakers", "variant{$n}Script", "variant{$n}Line0Name", "variant{$n}Line0Emotion", "variant{$n}Line0Text"];
+    $next = count($page) + 1;
 
-    expect($rows[0])->toBe(['label' => 'Dialogue variant 1', 'field' => null, 'editable' => false])
-        ->and(callEditorMethod($editor, 'getInspectorFields')[array_search('Dialogue variant 1', array_column(callEditorMethod($editor, 'getInspectorFields'), 'label'), true)]['value'])->toBe('')
-        ->and(array_column(array_slice($rows, 1, 5), 'label'))->toBe(['When', 'Then Set', 'Script Commands', 'Line 1 Speaker', 'Line 1 Text'])
-        ->and(array_column(array_slice($rows, 1, 5), 'field'))->toBe(['variant0Conditions', 'variant0Sets', 'variant0Script', 'variant0Line0Name', 'variant0Line0Text'])
-        // The second variant's heading carries its condition line as its
-        // value: "Dialogue variant 2 · when switch:gate_open" on a wide pane,
+    expect($rows[0])->toBe(['label' => 'Page 1', 'field' => null, 'editable' => false])
+        ->and(callEditorMethod($editor, 'getInspectorFields')[array_search('Page 1', array_column(callEditorMethod($editor, 'getInspectorFields'), 'label'), true)]['value'])->toBe('')
+        ->and(array_column(array_slice($rows, 1, count($page)), 'label'))->toBe($page)
+        ->and(array_column(array_slice($rows, 1, count($page)), 'field'))->toBe($fields(0))
+        // The second page's heading carries its condition line as its
+        // value: "Page 2 · when switch:gate_open" on a wide pane,
         // the "when …" wrapped under the heading on a narrow one.
-        ->and($rows[6]['label'])->toBe('Dialogue variant 2')
-        ->and($rows[6]['editable'])->toBeFalse()
-        ->and(preg_replace('/\s+/', ' ', implode(' ', callEditorMethod($editor, 'getDatabaseSettingsLines'))))->toContain('Dialogue variant 2 when switch:gate_open')
-        ->and(array_column(array_slice($rows, 7, 5), 'field'))->toBe(['variant1Conditions', 'variant1Sets', 'variant1Script', 'variant1Line0Name', 'variant1Line0Text']);
+        ->and($rows[$next]['label'])->toBe('Page 2')
+        ->and($rows[$next]['editable'])->toBeFalse()
+        ->and(preg_replace('/\s+/', ' ', implode(' ', callEditorMethod($editor, 'getDatabaseSettingsLines'))))->toContain('Page 2 · when switch:gate_open')
+        ->and(array_column(array_slice($rows, $next + 1, count($page)), 'field'))->toBe($fields(1));
 });
 
 it('wraps a long dialogue line in the hosted Inspector, keeps the edited row single, and maps rows to fields', function () {
@@ -1168,4 +1457,104 @@ it('wraps a long dialogue line in the hosted Inspector, keeps the edited row sin
         // The caret sits at the end of the buffer, so the window shows its tail.
         ->and($editedLine)->toEndWith(mb_substr($long, -10));
     callEditorMethod($editor, 'dispatchInput', "\033");
+});
+
+it('allows an NPC on an event while the event keeps a free tile, and reports one that covers it', function () {
+    [$root] = npcProject([
+        ['id' => 'keeper', 'name' => 'Keeper', 'x' => 5, 'y' => 1],
+    ]);
+    // A three-tile area, the way a shop counter or a gathering spot is drawn.
+    file_put_contents($root . '/assets/Maps/test-map/test-map.event.php', "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n            \n    EEE     \n            \n            \n            \nICHILOTO_EVENT_MAP;\n");
+
+    expect(implode("\n", npcIssueLines($root)))->not->toContain('Keeper');
+
+    // Fixed NPCs on every tile of it leave the player nowhere to stand.
+    [$covered] = npcProject([
+        ['id' => 'keeper', 'name' => 'Keeper', 'x' => 5, 'y' => 1],
+        ['id' => 'left', 'name' => 'Left', 'x' => 4, 'y' => 1],
+        ['id' => 'right', 'name' => 'Right', 'x' => 6, 'y' => 1, 'movement' => 'wander'],
+    ]);
+    file_put_contents($covered . '/assets/Maps/test-map/test-map.event.php', "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n            \n    EEE     \n            \n            \n            \nICHILOTO_EVENT_MAP;\n");
+
+    // A wanderer covering the last free tile blocks it only while there.
+    expect(implode("\n", npcIssueLines($covered, Severity::WARNING)))
+        ->toContain('NPC Keeper: It starts on event marker E (ChestEventTrigger) at (5, 1), and NPCs cover every tile of that event')
+        ->and(implode("\n", npcIssueLines($covered, Severity::ERROR)))->not->toContain('event marker');
+});
+
+it('steps through the phases sharing a tile with Enter on the canvas', function () {
+    [$root] = npcProject([
+        ['id' => 'ivara', 'name' => 'Ivara', 'x' => 2, 'y' => 1, 'conditions' => [['type' => 'event', 'name' => 'evidence', 'negate' => true]]],
+        ['id' => 'ann', 'name' => 'Ann', 'x' => 6, 'y' => 1],
+        ['id' => 'ivara-returned', 'name' => 'Ivara Returned', 'x' => 2, 'y' => 1, 'conditions' => [['type' => 'event', 'name' => 'evidence']]],
+    ]);
+    $editor = npcEditor($root);
+    setEditorProperty($editor, 'cursorX', 2);
+    setEditorProperty($editor, 'cursorY', 1);
+    $selected = [];
+
+    foreach ([1, 2, 3] as $press) {
+        callEditorMethod($editor, 'dispatchInput', "\r");
+        $selected[] = getEditorProperty($editor, 'selectedNpcIndex');
+    }
+
+    expect($selected)->toBe([2, 0, 2])
+        ->and(npcMap($editor)->getNpcs()->count())->toBe(3);
+});
+
+it('moves the page under the cursor with [ and ], keeping the cursor on it, as one undo step', function () {
+    [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1, 'dialogue' => [
+        ['lines' => [['text' => 'Hello.']]],
+        ['conditions' => [['type' => 'event', 'name' => 'arrived']], 'lines' => [['text' => 'You made it.']]],
+    ]]]);
+    $editor = npcEditor($root);
+    callEditorMethod($editor, 'selectNpc', 0);
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+    restNpcCursorOn($editor, 'variant1Line0Text');
+    $map = callEditorMethod($editor, 'getSelectedMap');
+    $texts = static fn(): array => array_map(static fn(array $page): string => $page['lines'][0]['text'], $map->getNpcs()->get(0)->getDialogue());
+
+    callEditorMethod($editor, 'dispatchInput', '[');
+    $selected = callEditorMethod($editor, 'getInspectorFields')[getEditorProperty($editor, 'databaseSelectedSettingIndex')]['field'] ?? null;
+
+    expect($texts())->toBe(['You made it.', 'Hello.'])->and($selected)->toBe('variant0Line0Text');
+    callEditorMethod($editor, 'dispatchInput', '[');
+    expect($texts())->toBe(['You made it.', 'Hello.']);
+    callEditorMethod($editor, 'performUndo');
+    expect($texts())->toBe(['Hello.', 'You made it.']);
+});
+
+it('stands an NPC facing a chosen heading, removed when cleared, and the game loads it', function () {
+    $entry = ['id' => 'clerk', 'name' => 'Clerk', 'sprite' => 'C', 'x' => 3, 'y' => 2, 'movement' => 'fixed', 'dialogue' => [['text' => 'Welcome.']]];
+    [$root, $path] = npcProject([$entry]);
+    $source = file_get_contents($path);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+    callEditorMethod($editor, 'selectNpc', 0);
+
+    $ids = array_map(static fn(array $f): string => (string) ($f['field'] ?? ''), callEditorMethod($editor, 'getInspectorFields'));
+    expect($ids[array_search('directionFix', $ids, true) + 1])->toBe('facing')
+        ->and(npcField($editor, 'facing')['label'])->toContain('Stands Facing')
+        ->and(npcField($editor, 'facing')['value'])->toBe('south');
+
+    setNpcField($editor, 'facing', 'north');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(npcsOnDisk($path)[0])->toBe($entry + ['facing' => 'north']);
+    $scene = new class extends \Ichiloto\Engine\Scenes\Game\GameScene {
+        public function __construct()
+        {
+            $this->currentMapId = 'test-map';
+            $this->gameState = new \Ichiloto\Engine\Core\GameState();
+            $this->party = new \Ichiloto\Engine\Entities\Party();
+        }
+    };
+    $manager = new \Ichiloto\Engine\Field\NpcManager($scene);
+    $manager->configure(npcsOnDisk($path));
+    expect($manager->findById('clerk')?->heading)->toBe(\Ichiloto\Engine\Core\Enumerations\MovementHeading::NORTH);
+
+    // Clearing it returns to the game's default, south, by removing the key.
+    setNpcField($editor, 'facing', '');
+    expect($map->getNpcs()->get(0)?->toArray())->not->toHaveKey('facing');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(file_get_contents($path))->toBe($source);
 });

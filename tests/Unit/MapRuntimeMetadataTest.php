@@ -92,6 +92,49 @@ it('undoes a music edit back to pristine, and redoes it', function () {
     expect(require $root . '/assets/Maps/test-map/test-map.data.php')->not->toHaveKey('bgm');
 });
 
+// -- Movement ----------------------------------------------------------------
+
+it('turns dashing off for one map with a switch, writing the Engine\'s key and removing it again', function () {
+    $root = metadataProject();
+    $editor = metadataEditor($root);
+    $map = callEditorMethod($editor, 'getSelectedMap');
+
+    expect(inspectorValueOf($editor, 'Disable Dashing'))->toBe('false')
+        ->and(mapDataOf($editor))->not->toHaveKey('disableDashing');
+
+    // A switch toggles in place in the Terminal editor.
+    selectInspectorField($editor, 'Disable Dashing');
+    callEditorMethod($editor, 'activateInspectorField');
+    expect(mapDataOf($editor)['disableDashing'])->toBeTrue()
+        ->and(inspectorValueOf($editor, 'Disable Dashing'))->toBe('true')
+        ->and(Ichiloto\Engine\Field\DashSettings::readMapDisablesDashing(mapDataOf($editor)))->toBeTrue()
+        ->and($map->isDirty())->toBeTrue();
+    $map->save();
+    expect((require $root . '/assets/Maps/test-map/test-map.data.php')['disableDashing'])->toBeTrue();
+
+    // Allowing it again removes the key: an absent key follows the project's dash.
+    selectInspectorField($editor, 'Disable Dashing');
+    callEditorMethod($editor, 'activateInspectorField');
+    expect(mapDataOf($editor))->not->toHaveKey('disableDashing');
+    $map->save();
+    expect(require $root . '/assets/Maps/test-map/test-map.data.php')->not->toHaveKey('disableDashing');
+});
+
+it('serves Disable Dashing to the GUI session as a switch, one undo step each way', function () {
+    $root = metadataProject();
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    $source = (string) file_get_contents($path);
+    $session = Ichiloto\Editor\Session\EditorSession::open($root);
+    $row = static fn(): array => array_find($session->readInspector('test-map')['rows'],
+        static fn(array $row): bool => $row['label'] === 'Disable Dashing') ?? throw new RuntimeException('Missing Disable Dashing row');
+
+    expect($row())->toMatchArray(['kind' => 'boolean', 'value' => 'false', 'depth' => 1]);
+    $session->applyInspector('test-map', $session->readInspector('test-map')['revision'], $row()['key'], 'true');
+    expect($row()['value'])->toBe('true');
+    $session->undo();
+    expect($row()['value'])->toBe('false')->and((string) file_get_contents($path))->toBe($source);
+});
+
 // -- Encounters --------------------------------------------------------------
 
 it('reads the engine\'s defaults without writing them, and shows them as defaults', function () {
@@ -266,7 +309,7 @@ it('refuses to edit an encounter block it cannot hold, and says which shape', fu
     'a block that is not an array' => ['every few steps', 'is string, not an array'],
     'troops that are not troop weights' => [['troops' => 'Bat x 2'], 'troops are string'],
     'a troop keyed by number' => [['troops' => [5 => 'Bat x 2']], 'keyed by int'],
-    'a weight that is an array' => [['troops' => ['Bat x 2' => ['weight' => 3]]], 'weight that is array'],
+    'a weight that is an array' => [['troops' => ['Bat x 2' => ['weight' => [3]]]], 'weight that is array'],
 ]);
 
 // -- Validation --------------------------------------------------------------
@@ -451,8 +494,8 @@ it('reads what the engine will make of a block without changing it', function ()
 
     $authored = MapEncounters::of(['troops' => ['Bat x 2' => 3, 'Lone Rat' => 1], 'rate' => 22, 'tiles' => 'any']);
     expect($authored->rows())->toBe([
-        ['name' => 'Bat x 2', 'weight' => 3],
-        ['name' => 'Lone Rat', 'weight' => 1],
+        ['name' => 'Bat x 2', 'weight' => 3, 'arena' => null, 'areas' => [], 'entry' => null],
+        ['name' => 'Lone Rat', 'weight' => 1, 'arena' => null, 'areas' => [], 'entry' => null],
     ])
         ->and($authored->rate())->toBe(22)
         ->and($authored->authoredRate())->toBe(22)

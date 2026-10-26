@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
-use Ichiloto\Editor\IO\AtomicFile;
+use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Editor\Storage\PreparedSave;
+use Ichiloto\Editor\Storage\SaveSet;
 use RuntimeException;
 
 /**
@@ -56,67 +58,164 @@ final class SharedFileTransaction
     /**
      * Writes one file for every dirty category that shares it.
      *
-     * The file is read once. If every dirty category can say what it wants
-     * as edits to the author's own source, those edits are composed against
-     * that one reading and written in one replacement. Otherwise every dirty
-     * category folds its records into that one reading's payload, in turn,
-     * and the result is written in one replacement -- unless a category's
-     * entries are constructor calls whose list has changed, which is
-     * refused with the reason rather than regenerated. Either way there is
-     * one payload, one write, and no baseline moves until it has succeeded.
-     *
      * @param array<array-key, object> $databases The categories sharing one file.
-     * @return bool True when the file was written.
+     * @return bool True when the categories were saved.
      * @throws SourceIdentityConflict When an entry cannot be addressed with certainty.
      * @throws RuntimeException When the write is refused or fails.
      */
     public static function commit(array $databases): bool
     {
-        $dirty = array_values(array_filter(
+        $prepared = self::prepare($databases);
+
+        if ($prepared === null) {
+            return false;
+        }
+
+        SaveSet::commitOne(dirname(self::listDirty($databases)[0]->backingFilePath()), $prepared);
+
+        return true;
+    }
+
+    /**
+     * Works out exactly what {@see commit()} would write, refusing what it
+     * would refuse, and writes nothing: an edit the file's own source cannot
+     * take is refused when it is made, not when it is saved.
+     *
+     * @param array<array-key, object> $databases The categories sharing one file.
+     * @throws SourceIdentityConflict When an entry cannot be addressed with certainty.
+     * @throws RuntimeException When the write would be refused.
+     */
+    public static function preview(array $databases): void
+    {
+        self::compose($databases, forSave: false);
+    }
+
+    /**
+     * Works out the one write for every dirty category sharing a file, for
+     * {@see SaveSet} to install alone or with the rest of a change set. No
+     * category's baseline moves until the file is installed. Null when no
+     * category sharing it is dirty.
+     *
+     * The file is read once. If every dirty category can say what it wants
+     * as edits to the author's own source, those edits are composed against
+     * that one reading. Otherwise every dirty category folds its records into
+     * that one reading's payload, in turn -- unless a category's entries are
+     * constructor calls whose list has changed, which is refused with the
+     * reason rather than regenerated. Either way there is one payload and
+     * one write.
+     *
+     * @param array<array-key, object> $databases The categories sharing one file.
+     * @throws SourceIdentityConflict When an entry cannot be addressed with certainty.
+     * @throws RuntimeException When the write would be refused.
+     */
+    public static function prepare(array $databases): ?PreparedSave
+    {
+        return self::compose($databases, forSave: true);
+    }
+
+    /**
+     * @param array<array-key, object> $databases
+     * @return list<ProjectRecordDatabase>
+     */
+    private static function listDirty(array $databases): array
+    {
+        return array_values(array_filter(
             $databases,
             static fn(object $database): bool => $database instanceof ProjectRecordDatabase
                 && $database->sharesBackingFile()
                 && $database->isEditable()
                 && $database->isDirty(),
         ));
+    }
+
+    /**
+     * @param array<array-key, object> $databases
+     * @param bool $forSave Whether the result is to be saved, checked as a save is, or only worked out.
+     */
+    private static function compose(array $databases, bool $forSave): ?PreparedSave
+    {
+        $dirty = self::listDirty($databases);
 
         if ($dirty === []) {
-            return false;
+            return null;
+        }
+
+        foreach ($dirty as $database) {
+            $database->assertUnchangedSource();
         }
 
         $first = $dirty[0];
         $path = $first->backingFilePath();
         $file = PhpDataFile::load($path, $first->projectRoot());
+        $label = implode(', ', array_map(static fn(ProjectRecordDatabase $database): string => $database->schema->key, $dirty));
+        $adopt = static fn() => self::adopt($dirty);
+
+        if ($forSave) {
+            self::checkSave($databases, $dirty, $file);
+        }
 
         // One snapshot of the source, and every category's wants resolved
         // against it before a byte is written.
-        if (self::commitToSource($dirty, $file)) {
-            self::adopt($dirty);
+        $composed = self::composeSource($dirty, $file);
 
-            return true;
-        }
+        if ($composed === null) {
+            foreach ($dirty as $database) {
+                $refusal = $database->regenerationRefusal($file);
 
-        foreach ($dirty as $database) {
-            $refusal = $database->regenerationRefusal($file);
-
-            if ($refusal !== null) {
-                throw new RuntimeException($refusal);
+                if ($refusal !== null) {
+                    throw new RuntimeException($refusal);
+                }
             }
+
+            // One authoritative payload: the file as it is now, with every dirty
+            // category's part folded in, in turn, and written once. No category
+            // describes the whole file from its own older reading of it.
+            $payload = is_array($file->payload) ? $file->payload : [];
+
+            foreach ($dirty as $database) {
+                $payload = $database->foldInto($payload);
+            }
+
+            $composed = $file->composeContents($payload, checkDisk: $forSave);
         }
 
-        // One authoritative payload: the file as it is now, with every dirty
-        // category's part folded in, in turn, and written once. No category
-        // describes the whole file from its own older reading of it.
-        $payload = is_array($file->payload) ? $file->payload : [];
+        if ($composed === '') {
+            // Nothing to write, but the categories are still adopted so a
+            // save that found no work leaves them clean.
+            return PreparedSave::adoptOnly($label, $adopt);
+        }
 
+        return new PreparedSave($label, static function (FileSetTransaction $transaction) use ($file, $path, $composed): void {
+            $file->expectUnchanged($transaction);
+            $transaction->write($path, $composed);
+        }, adopt: $adopt);
+    }
+
+    /**
+     * Refuses a save the runtime could not read: the file as every dirty
+     * category would leave it is put to each sharing category's own check.
+     *
+     * @param array<array-key, object> $databases The categories sharing the file.
+     * @param ProjectRecordDatabase[] $dirty The dirty ones.
+     * @throws RecordRefusal With the first check's reason.
+     */
+    private static function checkSave(array $databases, array $dirty, PhpDataFile $file): void
+    {
+        $checks = array_filter($databases, static fn(object $database): bool => $database instanceof ProjectRecordDatabase
+            && $database->schema->saveCheck !== null);
+        if ($checks === []) {
+            return;
+        }
+        $payload = is_array($file->payload) ? $file->payload : [];
         foreach ($dirty as $database) {
             $payload = $database->foldInto($payload);
         }
-
-        $file->save($payload);
-        self::adopt($dirty);
-
-        return true;
+        foreach ($checks as $database) {
+            $reason = ($database->schema->saveCheck)($payload, (string) $database->projectRoot());
+            if ($reason !== null) {
+                throw new RecordRefusal($reason);
+            }
+        }
     }
 
     /**
@@ -125,12 +224,13 @@ final class SharedFileTransaction
      *
      * @param ProjectRecordDatabase[] $dirty The dirty categories.
      * @param PhpDataFile $file The file, read once.
-     * @return bool True when the file was written this way.
+     * @return string|null The file's new contents, an empty string when there is nothing to write, or null when
+     *     a category cannot say what it wants in the source's terms.
      */
-    private static function commitToSource(array $dirty, PhpDataFile $file): bool
+    private static function composeSource(array $dirty, PhpDataFile $file): ?string
     {
         if (! is_file($file->path)) {
-            return false;
+            return null;
         }
 
         $document = PhpSourceDocument::parse((string) file_get_contents($file->path));
@@ -142,7 +242,7 @@ final class SharedFileTransaction
             $plan = $database->sourcePlan($document, $file);
 
             if ($plan === null) {
-                return false;
+                return null;
             }
 
             $patches = [...$patches, ...$plan['patches']];
@@ -151,9 +251,7 @@ final class SharedFileTransaction
         }
 
         if ($patches === [] && $removals === [] && $insertions === []) {
-            // Nothing to write, but the categories are still adopted so a
-            // save that found no work leaves them clean.
-            return true;
+            return '';
         }
 
         // Values first, while every position still means what the snapshot
@@ -198,9 +296,7 @@ final class SharedFileTransaction
             $document = $document->withNewEntry($insertion['class'], $insertion['arguments']);
         }
 
-        AtomicFile::write($file->path, $document->source);
-
-        return true;
+        return $document->source;
     }
 
     /**

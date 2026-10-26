@@ -332,7 +332,7 @@ it('keeps a save all atomic: a failing category does not truncate its file', fun
             $database->save();
         } catch (Throwable $refusal) {
             // A refused save is allowed; a half-written file is not.
-            expect($refusal->getMessage())->toContain('Unable to write temporary file');
+            expect($refusal->getMessage())->toContain('Unable to write a temporary file');
         }
 
         expect((string) file_get_contents($path))->toBe($before);

@@ -6,13 +6,36 @@ namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectActor;
-use Ichiloto\Editor\ProjectClass;
+use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
-use Ichiloto\Editor\ProjectSkill;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Dialogue\DialogueCatalogFile;
+use Ichiloto\Editor\Dialogue\DialogueEmotionFields;
+use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
+use Ichiloto\Editor\Dialogue\DialoguePortraitFields;
+use Ichiloto\Editor\Dialogue\DialogueSpeakerFields;
+use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePresentationCatalog;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
+use Ichiloto\Engine\Progress\Knowledge\KnowledgeRecordType;
+use Ichiloto\Engine\Rendering\Presentation\Text\ProjectTextCatalog;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Battle\CounterAttackRule;
+use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Engine\Entities\Enumerations\ArmorType;
+use Ichiloto\Engine\Entities\Enumerations\Occasion;
+use Ichiloto\Engine\Entities\Skills\BasicSkill;
+use Ichiloto\Engine\Entities\Skills\Skill;
+use Ichiloto\Engine\Entities\Enumerations\WeaponType;
+use Ichiloto\Engine\Battle\Resolution\ResolutionKind;
+use Ichiloto\Engine\Entities\Magic\MagicEffectType;
+use Ichiloto\Engine\Battle\Insight\RevealFact;
+use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
+use InvalidArgumentException;
+use Throwable;
 
 /**
  * What a field pointing at another resource may point at.
@@ -29,12 +52,33 @@ final class ReferenceCatalog
     /**
      * The kinds of reference a field may declare.
      */
+    /** The encounter terrains the project's terrain kinds meet ({@see \Ichiloto\Engine\Rendering\Tilesets\TerrainKind::$encounters}). */
+    public const string ENCOUNTER_TERRAINS = 'encounter_terrains';
+
     public const array CATEGORIES = [
         'actors',
         'actor_ids',
         'classes',
+        'attack_skills',
+        'counter_skills',
+        'resolution_kinds',
+        'piece_connections',
+        'resolution_scopes',
+        'magic_effect_types',
+        // What a reveal effect can uncover about a foe: the Engine's own facts.
+        'reveal_facts',
+        'weapon_types',
+        'armor_types',
         'skills',
+        // The regions every Mastery Map shares, by id.
+        'mastery_regions',
+        // The mastery tree's branches, by id: what a branch may grow within.
+        MasteryFields::BRANCHES,
+        // Every node of the mastery tree, by id: what a character's map gives terms for.
+        MasteryFields::NODES,
         'quests',
+        // Income schedules, by stable id, for the income script commands.
+        'income_schedules',
         'maps',
         'items',
         'weapons',
@@ -43,14 +87,22 @@ final class ReferenceCatalog
         'troops',
         'states',
         'animations',
+        'animation_ids',
         'skits',
         'common_events',
         'inventory',
         'bgm',
         'sfx',
         'enemy_sprites',
+        'png_assets',
         'elements',
         'map_npcs',
+        'map_world_objects',
+        // A map's minimap landmarks, by stable id.
+        'map_landmarks',
+        'world_object_tile_layers',
+        // A map event condition's marker, listed for the map that condition names.
+        'map_event_markers',
         'knowledge_subjects',
         'knowledge_reports',
         'knowledge_record_types',
@@ -65,8 +117,42 @@ final class ReferenceCatalog
         'cinematic_cast',
         'cinematic_subjects',
         'cinematic_checkpoints',
+        'cinematic_movement_routes',
         'summon_cues',
+        'effect_cues',
+        'stage_subjects',
+        'stage_attachments',
         'event_markers',
+        'tilesets',
+        'effects',
+        'stage_timelines',
+        'field_resources',
+        'text_roles',
+        'font_assets',
+        'map_regions',
+        // A map's role, by stable id, from the Map Roles page.
+        'map_roles',
+        // A map's place type, by stable id, from the Place Types page.
+        'place_types',
+        'animation_roles',
+        'battle_arenas',
+        self::ENCOUNTER_TERRAINS,
+        // The dialogue catalogue's identities, actor and non-actor, whose artwork lines show.
+        'dialogue_identities',
+    ];
+
+    /**
+     * The reference kinds whose values are pictures an author looks at or
+     * sounds an author listens to: how an interface shows or plays each
+     * value, and the folder under the project root its values are found in.
+     * An interface knows a value is a picture or a sound from this, never
+     * from the kind's name.
+     */
+    private const array MEDIA = [
+        'png_assets' => ['kind' => 'image', 'root' => 'assets'],
+        // Music and sound are named without their extension; the game's players find the file and play it.
+        'bgm' => ['kind' => 'audio', 'root' => 'assets/Audio/BGM'],
+        'sfx' => ['kind' => 'audio', 'root' => 'assets/Audio/SFX'],
     ];
 
     /**
@@ -78,6 +164,30 @@ final class ReferenceCatalog
     ];
 
     /**
+     * How an interface shows or plays the values of a reference kind, when
+     * they are pictures or sounds: `kind` (`image` or `audio`) and `root`,
+     * the folder under the project root the values are found in. Null for
+     * any other kind.
+     *
+     * @return array{kind: string, root: string}|null
+     */
+    public static function describeMedia(string $category): ?array
+    {
+        return self::MEDIA[$category] ?? null;
+    }
+
+    /** The same live workspace root that supplies the project image picker. */
+    public function getAssetRoot(): string
+    {
+        return rtrim($this->workspace->projectRoot, '/') . '/assets';
+    }
+
+    public function describeWorldObjectReferences(ProjectMap $map, string $id): array
+    {
+        return new \Ichiloto\Editor\Field\WorldObjectReferences($this->workspace)->describeReferences($map, $id);
+    }
+
+    /**
      * @param ProjectWorkspace $workspace The project.
      * @param ProjectMap|null $currentMap The map the author is working in,
      *   for reference kinds that are map-local (an NPC id).
@@ -87,10 +197,14 @@ final class ReferenceCatalog
      */
     private ?InventoryCatalog $inventoryCatalog = null;
 
+    /** @var array<string, string>|null The battle presentation's arenas, read once. */
+    private ?array $arenaNames = null;
+
     public function __construct(
         private readonly ProjectWorkspace $workspace,
         private readonly ?ProjectMap $currentMap = null,
         private readonly ?CutsceneAsset $currentCutscene = null,
+        private readonly ?array $movementCommands = null,
     ) {
     }
 
@@ -116,20 +230,35 @@ final class ReferenceCatalog
             // definition id, which is the one thing a rename never changes.
             'actor_ids' => array_map(
                 static fn(ProjectActor $actor): string => $actor->getDefinitionId(),
-                $this->workspace->actorDatabase->getActors()
+                array_values(array_filter($this->workspace->actorDatabase->getActors(),
+                    static fn(ProjectActor $actor): bool => $actor->hasDefinitionId()))
             ),
-            'classes' => array_map(
-                static fn(ProjectClass $class): string => $class->getName(),
-                $this->workspace->classDatabase->getClasses()
-            ),
-            'skills' => array_map(
-                static fn(ProjectSkill $skill): string => $skill->getName(),
-                $this->workspace->skillDatabase->getSkills()
-            ),
-            'quests' => array_map(
-                static fn(ProjectQuest $quest): string => $quest->getId(),
-                $this->workspace->questDatabase->getQuests()
-            ),
+            // What an actor's Attack command may use: a basic skill from the
+            // catalogue that can be used in battle.
+            'attack_skills' => $this->attackSkillNames(),
+            // What a counter attack may respond with, by the Engine's own rule.
+            'counter_skills' => $this->counterSkillNames(),
+            // A class restricts what its members equip by the engine's type names.
+            // How a skill effect resolves, how often a skill rolls, and what
+            // kind of spell it is: the Engine's own vocabularies.
+            'resolution_kinds' => array_map(static fn(ResolutionKind $kind): string => $kind->value, ResolutionKind::cases()),
+            // How a tileset piece joins the cells beside it.
+            'piece_connections' => [\Ichiloto\Engine\Rendering\Tilesets\TilesetPiece::LINES],
+            'resolution_scopes' => array_map(static fn(SkillResolutionScope $scope): string => $scope->value, SkillResolutionScope::cases()),
+            'magic_effect_types' => array_map(static fn(MagicEffectType $type): string => $type->value, MagicEffectType::cases()),
+            'reveal_facts' => array_map(static fn(RevealFact $fact): string => $fact->value, RevealFact::cases()),
+            'weapon_types' => array_map(static fn(WeaponType $type): string => $type->value, WeaponType::cases()),
+            'armor_types' => array_map(static fn(ArmorType $type): string => $type->value, ArmorType::cases()),
+            // Spells and abilities may be authored in any of the Engine's
+            // skill files; a reference names the skill wherever it lives.
+            'skills' => $this->workspace->getSkillNames(),
+            'mastery_regions' => array_map(static fn(ProjectRecord $record): string => strval($record->get('id')),
+                $this->workspace->getRecordDatabase(MasteryFields::REGIONS)?->getRecords() ?? []),
+            MasteryFields::NODES => $this->masteryNodeIds(),
+            MasteryFields::BRANCHES => array_map(static fn(ProjectRecord $record): string => strval($record->get('id')),
+                $this->workspace->getRecordDatabase(MasteryFields::BRANCHES)?->getRecords() ?? []),
+            'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
+            'income_schedules' => array_keys($this->incomeScheduleNames()),
             'maps' => $this->workspace->mapIds,
             // A shop's stock is whatever the engine's ItemStore holds, and
             // that is everything in items.php: items, weapons and armors
@@ -137,15 +266,16 @@ final class ReferenceCatalog
             // entitled to sell. What is offered -- and stored -- is the
             // stable definition id, which is the identity the runtime
             // resolves and the one thing a rename does not change.
-            'inventory' => $this->inventoryCatalog()->ids(),
-            'items' => $this->inventoryCatalog()->idsIn('items'),
-            'weapons' => $this->inventoryCatalog()->idsIn('weapons'),
-            'armors' => $this->inventoryCatalog()->idsIn('armors'),
+            'inventory' => $this->getInventoryCatalog()->ids(),
+            'items' => $this->getInventoryCatalog()->idsIn('items'),
+            'weapons' => $this->getInventoryCatalog()->idsIn('weapons'),
+            'armors' => $this->getInventoryCatalog()->idsIn('armors'),
             'bgm', 'sfx' => $this->audioValues($category),
             // The engine loads an enemy's image as
             // Graphics/Enemies/<value>.txt, appending the extension itself,
             // so the file stems are the values.
             'enemy_sprites' => $this->fileValues('assets/Graphics/Enemies'),
+            'png_assets' => self::getPngAssets($this->workspace->projectRoot),
             'elements' => $this->elementValues(),
             // An Optimize weight may apply to one element or to whichever
             // element an outcome happened to be, which the runtime spells
@@ -154,7 +284,7 @@ final class ReferenceCatalog
             'equipment_availabilities' => $this->equipmentVocabulary('availability'),
             'equipment_acquisition_policies' => $this->equipmentVocabulary('acquisitionPolicy'),
             'equipment_special_properties' => $this->equipmentVocabulary('specialProperty'),
-            'permanent_growth' => PermanentGrowthCatalog::fromProject($this->workspace->projectRoot)->ids(),
+            'permanent_growth' => $this->workspace->catalogs->loadPermanentGrowth()->ids(),
             'knowledge_record_types' => $this->knowledgeRecordTypes(),
             'knowledge_observations' => $this->knowledgeObservations(),
             'knowledge_subjects' => $this->knowledgeIds('subjects'),
@@ -162,10 +292,20 @@ final class ReferenceCatalog
             // NPC ids are map-local, so the choices are the current map's:
             // read live from the collection, a just-created NPC is offered
             // at once and a deleted one is gone.
-            'map_npcs' => $this->currentMap?->getNpcs()->ids() ?? [],
+            'map_npcs' => $this->getSubjectMap()?->getNpcs()->ids() ?? [],
+            'map_world_objects' => $this->getSubjectMap() === null ? [] : array_column(\Ichiloto\Editor\Field\WorldObjectAuthoring::readEntries($this->getSubjectMap()), 'id'),
+            'map_landmarks' => array_values(array_filter(array_column($this->readSubjectMapLandmarks(), 'id'), is_string(...))),
+            'world_object_tile_layers' => $this->currentMap === null ? [] : array_column($this->currentMap->describeTileLayers()['layers'], 'name'),
+            // Only meaningful for a named map; the session lists them for the map a condition names.
+            'map_event_markers' => [],
+            // Older references name an animation; current ones store its id.
             'animations' => array_map(
-                static fn(object $animation): string => $animation->name ?? '',
-                $this->workspace->animationDatabase->getAnimations()
+                static fn(ProjectRecord $animation): string => strval($animation->get('name')),
+                $this->animationRecords(),
+            ),
+            'animation_ids' => array_map(
+                static fn(ProjectRecord $animation): string => strval($animation->get('id')),
+                $this->animationRecords(),
             ),
             // Cutscenes are folders, so the stable id is the folder name.
             'cinematics' => $this->workspace->cutscenes?->ids(CutsceneType::CINEMATIC) ?? [],
@@ -176,10 +316,194 @@ final class ReferenceCatalog
             'cinematic_cast' => $this->castIds(['staged_actor']),
             'cinematic_subjects' => $this->subjectIds(),
             'cinematic_checkpoints' => $this->checkpointIds(),
-            'summon_cues' => $this->summonCueIds(),
-            'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
+            'cinematic_movement_routes' => $this->getMovementRouteIds(),
+            'summon_cues' => $this->getTimelineCueIds(CutsceneType::SUMMON),
+            'effect_cues' => $this->getTimelineCueIds(CutsceneType::EFFECT),
+            // A summon sequence's stage: the subjects it registers, and every
+            // named point on them (each image picks one on its own subject).
+            'stage_subjects' => array_keys($this->getStageSubjects()),
+            'stage_attachments' => array_keys($this->getStageAttachments()),
+            'event_markers' => $this->getSubjectMap()?->getEventMarkers() ?? [],
+            // A map's kind is one of the project's tilesets, by file stem.
+            'tilesets' => array_keys($this->loadTilesetNames()),
+            // The scenes a graphical battle can take place in, by the key a
+            // map's encounters or a start_battle command name one with.
+            'battle_arenas' => array_map(strval(...), array_keys($this->loadArenaNames())),
+            // The encounter terrains the project's tilesets' kinds meet, each an arena may draw a variant for.
+            self::ENCOUNTER_TERRAINS => $this->loadEncounterTerrains(),
+            // A region is the display name the game shows for where the party
+            // is; choosing from the names the maps already use keeps one
+            // region spelled one way.
+            'map_regions' => $this->mapRegions(),
+            // The battle roles an animation can play, as the Engine resolves them.
+            'animation_roles' => \Ichiloto\Engine\Animations\ActionAnimationResolver::getSupportedRoles(),
+            // Effect timelines are folders the Engine lists by stable id.
+            'effects' => $this->workspace->catalogs->listEffectTimelineIds(),
+            'stage_timelines' => $this->stageTimelineIds(),
+            'field_resources' => array_map(strval(...), array_keys($this->loadFieldResourceNames())),
+            'text_roles' => $this->loadTextRoleIds(),
+            'font_assets' => self::getFontAssets($this->workspace->projectRoot),
+            'dialogue_identities' => array_column($this->listDialogueIdentities(), 'id'),
             default => $this->recordValues($category),
         };
+    }
+
+    /**
+     * The effect timelines the Engine admits as a stage of their own, such
+     * as an inn's rest, by stable id: those its stage loading accepts (fixed,
+     * once, a stage descriptor, stage images, no cues). Admission is the
+     * Engine's; a timeline it refuses is not offered.
+     *
+     * @return list<string>
+     */
+    /**
+     * The project's named field resources (assets/Data/Presentation/field.php), by stable id, with their display
+     * names. A catalogue that cannot be read offers none; project validation reports why.
+     *
+     * @return array<string, string>
+     */
+    private function loadFieldResourceNames(): array
+    {
+        try {
+            $catalog = $this->getFieldPresentationCatalog();
+        } catch (Throwable) {
+            return [];
+        }
+
+        return array_map(static fn($resource): string => $resource->name, $catalog->resources);
+    }
+
+    /**
+     * The project's field presentation (assets/Data/Presentation/field.php) as the Engine reads it, with the
+     * Field Resources page's records as it holds them, unsaved edits included: what saving would leave. Every
+     * reader of field resources (pickers, world objects, validation) reads it, so a resource added in this
+     * session is usable at once.
+     *
+     * @throws \InvalidArgumentException When the catalogue is read-only or the Engine refuses it.
+     */
+    public function getFieldPresentationCatalog(): FieldPresentationCatalog
+    {
+        return $this->workspace->catalogs->loadFieldPresentation();
+    }
+
+    /**
+     * The project's text roles (assets/Data/Presentation/text.php), by stable id. A catalogue that cannot be read
+     * offers none; project validation reports why.
+     *
+     * @return list<string>
+     */
+    private function loadTextRoleIds(): array
+    {
+        try {
+            $catalog = $this->workspace->catalogs->loadTextCatalog();
+        } catch (Throwable) {
+            return [];
+        }
+
+        return $catalog === null ? [] : array_map(strval(...), array_keys($catalog->toArray()['roles']));
+    }
+
+    /**
+     * The project's font files under assets, as asset-root-relative paths: what a text role's fonts are chosen
+     * from. The project owns its fonts; nothing is offered from the machine.
+     *
+     * @return list<string>
+     */
+    public static function getFontAssets(string $projectRoot): array
+    {
+        $root = realpath(rtrim($projectRoot, '/') . '/assets');
+        if ($root === false) {
+            return [];
+        }
+        $paths = [];
+        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS));
+        foreach ($files as $file) {
+            $resolved = $file->getRealPath();
+            if ($file->isFile() && in_array(strtolower($file->getExtension()), ['ttf', 'otf', 'ttc', 'otc'], true)
+                && $resolved !== false && str_starts_with($resolved, $root . DIRECTORY_SEPARATOR)) {
+                $paths[] = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($root) + 1));
+            }
+        }
+        sort($paths);
+
+        return $paths;
+    }
+
+    private function stageTimelineIds(): array
+    {
+        $catalogs = $this->workspace->catalogs;
+
+        return array_values(array_filter(
+            $catalogs->listEffectTimelineIds(),
+            static function (string $id) use ($catalogs): bool {
+                try {
+                    $catalogs->loadEffectTimeline($id, forStage: true);
+
+                    return true;
+                } catch (Throwable) {
+                    return false;
+                }
+            },
+        ));
+    }
+
+    /** @return string[] The catalogue's basic skills usable in battle, in catalogue order. */
+    private function attackSkillNames(): array
+    {
+        return array_keys(array_filter(
+            $this->workspace->loadSkillCatalog()->getSkills(),
+            static fn(Skill $skill): bool => $skill instanceof BasicSkill
+                && in_array($skill->occasion, [Occasion::ALWAYS, Occasion::BATTLE_SCREEN], true),
+        ));
+    }
+
+    /**
+     * The skills a counter attack may respond with: those the Engine's
+     * CounterAttackRule accepts (a battle-usable basic or special skill
+     * targeting one living opponent, without summon or required weapons).
+     *
+     * @return list<string>
+     */
+    private function counterSkillNames(): array
+    {
+        $catalog = $this->workspace->loadSkillCatalog();
+        $names = [];
+        foreach (array_keys($catalog->getSkills()) as $name) {
+            try {
+                new CounterAttackRule((string) $name)->resolveSkill($catalog);
+                $names[] = (string) $name;
+            } catch (\InvalidArgumentException) {
+                continue;
+            }
+        }
+
+        return $names;
+    }
+
+    /** @return ProjectRecord[] The project's animations, in file order. */
+    private function animationRecords(): array
+    {
+        return $this->workspace->getRecordDatabase('animations')?->getRecords() ?? [];
+    }
+
+    /**
+     * The region names the project's maps use, each once, in name order.
+     *
+     * @return string[]
+     */
+    private function mapRegions(): array
+    {
+        $regions = [];
+        foreach ($this->workspace->maps as $map) {
+            $region = $map->getMapField('region');
+            if (is_string($region) && trim($region) !== '') {
+                $regions[trim($region)] = true;
+            }
+        }
+        $regions = array_keys($regions);
+        natcasesort($regions);
+
+        return array_values($regions);
     }
 
     /**
@@ -267,10 +591,84 @@ final class ReferenceCatalog
     {
         return array_values(array_unique([
             ...$this->castIds(['staged_actor', 'npc', 'party_actor', 'player']),
-            ...($this->currentMap?->getNpcs()->ids() ?? []),
+            ...($this->getSubjectMap()?->getNpcs()->ids() ?? []),
+            ...$this->valuesFor('map_world_objects'),
             ...$this->valuesFor('actors'),
-            ...($this->currentMap?->getEventMarkers() ?? []),
+            ...($this->getSubjectMap()?->getEventMarkers() ?? []),
         ]));
+    }
+
+    /** @return list<array<string, mixed>> The landmark declarations of the map a reference reads, or none when unreadable. */
+    private function readSubjectMapLandmarks(): array
+    {
+        $map = $this->getSubjectMap();
+        if ($map === null) { return []; }
+        try {
+            return \Ichiloto\Editor\Field\MapLandmarks::readMap($map)->entries;
+        } catch (\InvalidArgumentException) {
+            return [];
+        }
+    }
+
+    /**
+     * The map whose NPCs, world objects and markers a subject reference names: the explicitly selected map, or
+     * without one a cinematic's declared start map.
+     */
+    /**
+     * The values a field chooses among that its own entry decides ({@see RecordField::$entryChoices}), read from
+     * what the field lives in. `world_object_attachments`: the attachments declared by the resource of the world
+     * object a subject reference (`at`) names, on the subject map; none until it names an object that has some.
+     * `terrain_grounds`: the ground kinds of the tileset a terrain kind belongs to, those that stand on nothing,
+     * other than the kind itself. `tileset_whole_pieces`: the pieces of the tileset a place icon belongs to that are
+     * stamped whole, any of which can show a place type. `tileset_thickets`: the thickets of the tileset a terrain
+     * kind belongs to.
+     *
+     * @param array<string, mixed> $holder What the field lives in.
+     * @param array<string, mixed> $owner The record holding the entry.
+     * @return list<string>
+     * @throws InvalidArgumentException For a source nothing reads.
+     */
+    public function listEntryChoices(string $source, array $holder, array $owner = []): array
+    {
+        if ($source === 'terrain_grounds') {
+            // A keyed entry carries its key as its id while edited, and not as stored.
+            $self = array_diff_key($holder, ['id' => true]);
+            $kinds = is_array($owner['kinds'] ?? null) ? $owner['kinds'] : [];
+            return array_values(array_map(strval(...), array_keys(array_filter($kinds, static fn(mixed $kind, int|string $id): bool =>
+                is_array($kind) && ($kind['ground'] ?? null) === null && (string) $id !== ($holder['id'] ?? null)
+                && array_diff_key($kind, ['id' => true]) !== $self, ARRAY_FILTER_USE_BOTH))));
+        }
+        if ($source === 'tileset_whole_pieces') {
+            $pieces = is_array($owner['pieces'] ?? null) ? $owner['pieces'] : [];
+            return array_values(array_map(strval(...), array_keys(array_filter($pieces, static fn(mixed $piece): bool
+                => is_array($piece) && ($piece['connects'] ?? null) === null))));
+        }
+        if ($source === 'tileset_thickets') {
+            $thickets = is_array($owner['thickets'] ?? null) ? $owner['thickets'] : [];
+            return array_values(array_map(strval(...), array_keys($thickets)));
+        }
+        if ($source !== 'world_object_attachments') {
+            throw new InvalidArgumentException(sprintf('There is no entry choice source %s.', $source));
+        }
+        $objectId = ($holder['kind'] ?? null) === 'world_object' ? ($holder['id'] ?? null) : null;
+        $map = $this->getSubjectMap();
+        $found = $map === null || !is_string($objectId) ? null : \Ichiloto\Editor\Field\WorldObjectAuthoring::findAttachments($map, $objectId);
+        return array_map(static fn(\Ichiloto\Engine\Field\WorldObjectAttachment $attachment): string => $attachment->id, $found['attachments'] ?? []);
+    }
+
+    public function getSubjectMap(): ?ProjectMap
+    {
+        if ($this->currentMap !== null) {
+            return $this->currentMap;
+        }
+        if ($this->currentCutscene?->type === CutsceneType::CINEMATIC) {
+            $id = $this->currentCutscene->data()['startMap'] ?? null;
+            if (is_string($id) && $id !== '') {
+                return array_find($this->workspace->maps, static fn(ProjectMap $map): bool => $map->mapId === $id);
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -290,14 +688,72 @@ final class ReferenceCatalog
         ), static fn(string $checkpoint): bool => $checkpoint !== ''));
     }
 
+    /** A cutscene's own references: its cast, and the map-local subjects on the map it declares it starts on. */
+    public function createCutsceneContext(CutsceneAsset $cutscene): self
+    {
+        return new self($this->workspace, $this->currentMap, $cutscene, $this->movementCommands);
+    }
+
     /**
-     * Returns the stable cue ids declared by the current summon's timeline.
+     * A reusable event script's references: its map-local subjects are on the map its callers run it on, when they
+     * all run it on one ({@see \Ichiloto\Editor\Events\CommonEventMaps}); otherwise it names none.
+     */
+    public function createCommonEventContext(string $scriptId): self
+    {
+        $maps = \Ichiloto\Editor\Events\CommonEventMaps::read($this->workspace)->findMaps($scriptId);
+        $map = count($maps) === 1 ? array_find($this->workspace->maps, static fn(ProjectMap $map): bool => $map->mapId === $maps[0]) : null;
+        return new self($this->workspace, $map, null, $this->movementCommands);
+    }
+
+    /** A projection keeps the actual invocation as reference owner, rather than its one displayed command. */
+    public function createMovementContext(array $commands): self
+    {
+        return new self($this->workspace, $this->currentMap, $this->currentCutscene, $commands);
+    }
+
+    /** Live invocation-local declarations; runtime checks completion, subject and one-time consumption. */
+    public function getMovementRouteIds(?ProjectRecord $record = null, array $path = []): array
+    {
+        $commands = $this->movementCommands ?? ($record === null
+            ? ($this->currentCutscene?->type === CutsceneType::CINEMATIC ? $this->currentCutscene->commands() : [])
+            : MovementRouteFields::getOwnerCommands((array) $record->toArray(), $path));
+        $ids = $visited = $events = [];
+        foreach ($this->workspace->getRecordDatabase('common_events')?->getRecords() ?? [] as $eventRecord) {
+            $events[$eventRecord->recordId] = $eventRecord->getSubList('commands');
+        }
+        $walk = static function (array $commands) use (&$walk, &$ids, &$visited, $events): void {
+            foreach ($commands as $value) {
+                if (!is_array($value)) { continue; }
+                if (($value['type'] ?? '') === 'move_route' && is_string($value['remember'] ?? null)
+                    && preg_match('/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/', $value['remember']) === 1
+                    && strtolower(trim(strval($value['subject'] ?? 'player'))) !== 'staged_actor') {
+                    $ids[$value['remember']] = $value['remember'];
+                }
+                $eventId = is_string($value['id'] ?? null) ? trim($value['id']) : '';
+                if (($value['type'] ?? '') === 'common_event'
+                    && isset($events[$eventId]) && !isset($visited[$eventId])) {
+                    $visited[$eventId] = true;
+                    $walk($events[$eventId]);
+                }
+                foreach (MovementRouteFields::getChildCommandLists($value) as $child) {
+                    $walk($child);
+                }
+            }
+        };
+        $walk($commands);
+        return array_values($ids);
+    }
+
+    /**
+     * Returns the stable cue ids the current summon's or effect's timeline declares.
      *
      * @return string[]
      */
-    private function summonCueIds(): array
+    private function getTimelineCueIds(CutsceneType $type): array
     {
-        if ($this->currentCutscene?->type !== CutsceneType::SUMMON) {
+        // An effect's payload is the sequence being edited, so its cues are
+        // that sequence's.
+        if ($this->currentCutscene?->type !== $type) {
             return [];
         }
 
@@ -315,6 +771,54 @@ final class ReferenceCatalog
     }
 
     /**
+     * The subjects of the stage the current timeline sequence declares, by id.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function getStageSubjects(): array
+    {
+        if (! in_array($this->currentCutscene?->type, [CutsceneType::SUMMON, CutsceneType::EFFECT], true)) {
+            return [];
+        }
+
+        $stage = $this->currentCutscene->payload()['stage'] ?? null;
+        $subjects = [];
+
+        foreach (is_array($stage) && is_array($stage['subjects'] ?? null) ? $stage['subjects'] : [] as $subject) {
+            $id = is_array($subject) ? trim(strval($subject['id'] ?? '')) : '';
+
+            if ($id !== '') {
+                $subjects[$id] ??= $subject;
+            }
+        }
+
+        return $subjects;
+    }
+
+    /**
+     * The named points of the current stage's subjects, by id, each with the
+     * subjects that name it.
+     *
+     * @return array<string, list<string>>
+     */
+    private function getStageAttachments(): array
+    {
+        $points = [];
+
+        foreach ($this->getStageSubjects() as $subject => $data) {
+            foreach (is_array($data['attachments'] ?? null) ? $data['attachments'] : [] as $point) {
+                $id = is_array($point) ? trim(strval($point['id'] ?? '')) : '';
+
+                if ($id !== '') {
+                    $points[$id][] = $subject;
+                }
+            }
+        }
+
+        return $points;
+    }
+
+    /**
      * Returns how each value of a reference kind should be shown, when the
      * value stored is not what an author recognises.
      *
@@ -323,10 +827,96 @@ final class ReferenceCatalog
      * identity that will actually be written.
      *
      * @param string $category The kind of reference.
-     * @return array<string, string> Labels keyed by stored value.
+     * @return array<string|int, string> Labels keyed by stored value; PHP converts numeric ids to integer keys.
      */
     public function labelsFor(string $category): array
     {
+        if ($category === 'event_markers') {
+            // Each event read as what it is ("H · Script tracks"), from the map the picker reads.
+            $map = $this->getSubjectMap();
+            return $map === null ? [] : $this->listMapEventMarkers($map->mapId)['labels'];
+        }
+
+        if ($category === 'map_landmarks') {
+            $labels = [];
+            foreach ($this->readSubjectMapLandmarks() as $entry) {
+                $name = is_array($entry['name'] ?? null) ? ($entry['name']['default'] ?? null) : ($entry['name'] ?? null);
+                if (is_string($entry['id'] ?? null) && is_string($name) && $name !== '') {
+                    $labels[$entry['id']] = sprintf('%s (%s)', $name, $entry['id']);
+                }
+            }
+            return $labels;
+        }
+
+        if ($category === 'tilesets') {
+            return $this->loadTilesetNames();
+        }
+
+        if ($category === 'income_schedules') {
+            $labels = [];
+            foreach ($this->incomeScheduleNames() as $id => $name) {
+                $labels[$id] = sprintf('%s (%s)', $name, $id);
+            }
+            return $labels;
+        }
+
+        if ($category === 'battle_arenas') {
+            return $this->loadArenaNames();
+        }
+
+        if ($category === 'field_resources') {
+            $labels = [];
+            foreach ($this->loadFieldResourceNames() as $id => $name) {
+                $labels[(string) $id] = sprintf('%s (%s)', $name, $id);
+            }
+
+            return $labels;
+        }
+
+        if ($category === 'dialogue_identities') {
+            $labels = [];
+            foreach ($this->listDialogueIdentities() as $identity) {
+                $labels[$identity['id']] = $identity['label'];
+            }
+
+            return $labels;
+        }
+
+        if ($category === 'animation_ids') {
+            $labels = [];
+            foreach ($this->animationRecords() as $animation) {
+                $labels[strval($animation->get('id'))] = sprintf('%s (%s)', strval($animation->get('name')), strval($animation->get('id')));
+            }
+            return $labels;
+        }
+
+        if ($category === 'animation_roles') {
+            // A role plays one animation, so the picker says which holds it.
+            $database = $this->workspace->getRecordDatabase('animations');
+            $owners = [];
+            foreach ($database?->getRecords() ?? [] as $record) {
+                foreach ((array) $record->get('roles') as $role) {
+                    $owners[(string) $role] ??= $database->getEntryLabel($record);
+                }
+            }
+            $labels = [];
+            foreach ($this->valuesFor('animation_roles') as $role) {
+                $labels[$role] = isset($owners[$role]) ? sprintf('%s (on %s)', $role, $owners[$role]) : $role;
+            }
+
+            return $labels;
+        }
+
+        if ($category === 'stage_attachments') {
+            // A point is picked on the image's own subject: the label says which have it.
+            $labels = [];
+            foreach ($this->getStageAttachments() as $id => $subjects) {
+                $labels[$id] = sprintf('%s (on %s)', $id, implode(', ', $subjects));
+            }
+
+            return $labels;
+        }
+
         if ($category === 'elements_or_any') {
             return ['*' => '* (whichever element it was)'];
         }
@@ -337,6 +927,7 @@ final class ReferenceCatalog
             foreach ($this->workspace->actorDatabase->getActors() as $actor) {
                 $id = $actor->getDefinitionId();
                 $name = $actor->getName();
+                if ($id === '') { continue; }
 
                 if ($name !== '' && $name !== $id) {
                     $labels[$id] = sprintf('%s (%s)', $name, $id);
@@ -346,8 +937,34 @@ final class ReferenceCatalog
             return $labels;
         }
 
+        if ($category === 'map_roles') {
+            // Each role read by its name, from the catalogue as its page holds it.
+            $labels = [];
+            try {
+                $roles = $this->getMapRoleCatalog();
+                foreach ($roles->getIds() as $id) { $labels[$id] = sprintf('%s (%s)', $roles->getName($id), $id); }
+            } catch (\InvalidArgumentException) {
+                // An unreadable catalogue offers its ids as they are; validation names why.
+            }
+
+            return $labels;
+        }
+
+        if ($category === 'place_types') {
+            // Each type read by its name, from the catalogue as its page holds it.
+            $labels = [];
+            try {
+                $types = $this->getPlaceTypeCatalog();
+                foreach ($types->getIds() as $id) { $labels[$id] = sprintf('%s (%s)', $types->getName($id), $id); }
+            } catch (\InvalidArgumentException) {
+                // An unreadable catalogue offers no types; validation names why.
+            }
+
+            return $labels;
+        }
+
         if ($category === 'permanent_growth') {
-            $catalog = PermanentGrowthCatalog::fromProject($this->workspace->projectRoot);
+            $catalog = $this->workspace->catalogs->loadPermanentGrowth();
             $labels = [];
 
             foreach ($catalog->ids() as $id) {
@@ -363,8 +980,8 @@ final class ReferenceCatalog
 
         $labels = [];
 
-        foreach ($this->inventoryCatalog()->definitions() as $id => $definition) {
-            $labels[$id] = $this->inventoryCatalog()->describe($id);
+        foreach ($this->getInventoryCatalog()->definitions() as $id => $definition) {
+            $labels[$id] = $this->getInventoryCatalog()->describe($id);
         }
 
         return $labels;
@@ -375,7 +992,7 @@ final class ReferenceCatalog
      *
      * @return InventoryCatalog The catalogue.
      */
-    private function inventoryCatalog(): InventoryCatalog
+    public function getInventoryCatalog(): InventoryCatalog
     {
         return $this->inventoryCatalog ??= InventoryCatalog::fromWorkspace($this->workspace);
     }
@@ -386,6 +1003,27 @@ final class ReferenceCatalog
      * @param string $category The kind of reference.
      * @return bool True when it is.
      */
+    /**
+     * The events of a map a map event condition names, each read as what it is
+     * ("E · Chest"): what a marker is chosen from in both editors.
+     *
+     * @return array{values: list<string>, labels: array<string, string>}
+     */
+    public function listMapEventMarkers(string $mapId): array
+    {
+        $index = array_search($mapId, $this->workspace->mapIds, true);
+        $map = $index === false ? null : ($this->workspace->maps[$index] ?? null);
+        $events = $map?->getMapDataField(['events']);
+        $values = $labels = [];
+        foreach (is_array($events) ? $events : [] as $marker => $event) {
+            $kind = preg_replace('/(EventTrigger|Trigger)$/', '', basename(str_replace('\\', '/', strval($event['class'] ?? ''))));
+            $what = $event['data']['scriptId'] ?? $event['data']['cinematicId'] ?? $event['data']['destinationMap'] ?? null;
+            $values[] = (string) $marker;
+            $labels[(string) $marker] = trim(sprintf('%s · %s %s', $marker, $kind, is_string($what) ? $what : ''));
+        }
+        return ['values' => $values, 'labels' => $labels];
+    }
+
     public static function knows(string $category): bool
     {
         return in_array($category, self::CATEGORIES, true);
@@ -439,9 +1077,10 @@ final class ReferenceCatalog
      *
      * An availability, an acquisition policy and a special property are all
      * project words -- the runtime imposes no list of them -- so what a
-     * picker can offer is what the project has already said somewhere. A
-     * special property is a shape rather than a string, and it is the `type`
-     * inside it that Optimize weighs.
+     * picker can offer is what the project has already said somewhere,
+     * including what a record says by leaving the engine's default in place.
+     * A special property is a shape rather than a string, and it is the
+     * `type` inside it that Optimize weighs.
      *
      * @param string $field The equipment field.
      * @return string[] The distinct values, sorted.
@@ -458,7 +1097,8 @@ final class ReferenceCatalog
             }
 
             foreach ($database->getRecords() as $record) {
-                $value = $record->get($field);
+                $definition = InventoryCatalog::readDefinition($record);
+                $value = $definition !== null && property_exists($definition, $field) ? $definition->{$field} : null;
 
                 if ($field === 'specialProperty') {
                     $value = is_array($value) ? ($value['type'] ?? null) : null;
@@ -485,10 +1125,17 @@ final class ReferenceCatalog
     {
         $catalog = $this->knowledgeCatalog();
 
-        return array_values(array_filter(
-            array_map(strval(...), (array) ($catalog['recordTypes'] ?? [])),
-            static fn(string $type): bool => trim($type) !== '',
-        ));
+        $types = [];
+
+        foreach ((array) ($catalog['recordTypes'] ?? []) as $entry) {
+            try {
+                $types[] = KnowledgeRecordType::fromEntry($entry)->id;
+            } catch (InvalidArgumentException) {
+                // Validation reports an entry the runtime cannot read.
+            }
+        }
+
+        return $types;
     }
 
     /**
@@ -552,52 +1199,26 @@ final class ReferenceCatalog
      */
     private function knowledgeCatalog(): array
     {
-        $path = rtrim($this->workspace->projectRoot, '/') . '/assets/Data/knowledge.php';
-
-        if (! is_file($path)) {
-            return [];
-        }
-
         try {
-            $catalog = (static fn(): mixed => require $path)();
+            return $this->workspace->catalogs->readKnowledgeData();
         } catch (\Throwable) {
             return [];
         }
-
-        return is_array($catalog) ? $catalog : [];
     }
 
     /**
-     * Returns the elements the project's own element enum declares.
+     * Returns the elements the game knows ({@see ProjectWorkspace::getElementIdentities()}).
+     * A list the game would refuse offers nothing; validation says why.
      *
-     * A project defines its elements as a PHP enum under assets/Data/Types
-     * (the Types category), and the engine matches them by their string
-     * values. The cases are read from the source, so the list is available
-     * whether or not the enum is loaded.
-     *
-     * @return string[] The element values, in declaration order.
+     * @return string[] The element identities, in authored order.
      */
     private function elementValues(): array
     {
-        $directory = rtrim($this->workspace->projectRoot, '/') . '/assets/Data/Types';
-
-        if (! is_dir($directory)) {
+        try {
+            return $this->workspace->getElementIdentities();
+        } catch (InvalidArgumentException) {
             return [];
         }
-
-        foreach (glob($directory . '/*.php') ?: [] as $path) {
-            $source = (string) file_get_contents($path);
-
-            if (preg_match('/^\s*enum\s+\w*Element\w*\s*:/m', $source) !== 1) {
-                continue;
-            }
-
-            preg_match_all("/^\\s*case\\s+\\w+\\s*=\\s*'([^']+)'\\s*;/m", $source, $matches);
-
-            return $matches[1];
-        }
-
-        return [];
     }
 
     /**
@@ -625,6 +1246,283 @@ final class ReferenceCatalog
         $names = array_values(array_unique($names));
         sort($names);
 
+        return $names;
+    }
+
+    /**
+     * The name of every tileset in assets/Data/Tilesets that loads, by id. One
+     * that cannot load is not offered; validation reports it.
+     *
+     * @return array<string, string>
+     */
+    /**
+     * The encounter terrains every terrain kind of the project's tilesets
+     * meets, each once, in tileset then kind order. A tileset that cannot be
+     * read offers none; project validation reports why.
+     *
+     * @return list<string>
+     */
+    private function loadEncounterTerrains(): array
+    {
+        $catalogs = $this->workspace->catalogs;
+        $terrains = [];
+        foreach ($catalogs->listTilesetIds() as $id) {
+            try {
+                foreach ($catalogs->loadTileset($id)->kinds as $kind) {
+                    if ($kind->encounters !== null) {
+                        $terrains[$kind->encounters] = $kind->encounters;
+                    }
+                }
+            } catch (\Throwable) {
+                continue;
+            }
+        }
+
+        return array_values($terrains);
+    }
+
+    private function loadTilesetNames(): array
+    {
+        $catalogs = $this->workspace->catalogs;
+        $names = [];
+        foreach ($catalogs->listTilesetIds() as $id) {
+            try {
+                $names[$id] = $catalogs->loadTileset($id)->name;
+            } catch (\Throwable) {
+                continue;
+            }
+        }
+
+        return $names;
+    }
+
+    /** A project map by id, unsaved edits included, as the workspace holds it. */
+    public function findMap(string $mapId): ?ProjectMap
+    {
+        $index = array_search($mapId, $this->workspace->mapIds, true);
+        return is_int($index) ? ($this->workspace->maps[$index] ?? null) : null;
+    }
+
+    /** @return list<ProjectMap> Every project map, unsaved edits included. */
+    public function listMaps(): array
+    {
+        return array_values($this->workspace->maps);
+    }
+
+    /**
+     * The project's place categories as the Engine reads them: its generic ones and those the project declares,
+     * as its Place Categories page holds them.
+     *
+     * @throws \InvalidArgumentException When the project's catalogue cannot be read.
+     */
+    /**
+     * The project's dialogue catalogue as the Engine makes it, from its Dialogue Portraits and Speaker Names pages
+     * with their unsaved edits, or from the file when those pages are not open.
+     *
+     * @throws \InvalidArgumentException|\RuntimeException When the Engine would refuse the catalogue.
+     */
+    public function getDialoguePresentationCatalog(): DialoguePresentationCatalog
+    {
+        return $this->workspace->catalogs->loadDialoguePresentation();
+    }
+
+    /**
+     * The identities and speaker names of the project's dialogue catalogue as its Dialogue Portraits and Speaker
+     * Names pages hold them, unsaved edits included, in the catalogue's own shape; null when those pages are not
+     * open, where the file is the Engine's to read.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getDialogueCatalogPayload(): ?array
+    {
+        $portraits = $this->workspace->getRecordDatabase(DialoguePortraitFields::CATEGORY);
+        $speakers = $this->workspace->getRecordDatabase(DialogueSpeakerFields::CATEGORY);
+        if ($portraits?->schema->projection === null || $speakers?->schema->projection === null) {
+            return null;
+        }
+        $whole = $this->workspace->catalogs->readData(DialoguePresentationCatalog::FILE)['payload'];
+
+        return is_array($whole) ? $whole : ['schema' => DialogueCatalogFile::SCHEMA];
+    }
+
+    /**
+     * The catalogue's identities, actors first, each with how a picker shows it.
+     *
+     * @return list<array{id: string, label: string}>
+     */
+    private function listDialogueIdentities(): array
+    {
+        try {
+            $catalogue = $this->getDialoguePresentationCatalog();
+        } catch (Throwable) {
+            // Validation reports a catalogue that cannot be read; nothing can be chosen from it.
+            return [];
+        }
+        $identities = [];
+        foreach (array_keys($catalogue->actors) as $id) {
+            $identities[] = ['id' => (string) $id, 'label' => sprintf('%s (actor)', $id)];
+        }
+        foreach (array_keys($catalogue->resources) as $id) {
+            $identities[] = ['id' => (string) $id, 'label' => sprintf('%s (character)', $id)];
+        }
+
+        return $identities;
+    }
+
+    /**
+     * The emotions one line may show, as its speaker's catalogue identity names them: who speaks, the identity
+     * whose artwork shows (null when the speaker has none), the emotions offered, and why none beyond Neutral are
+     * offered when the catalogue cannot be read.
+     *
+     * @return array{speaker: string, identity: ?string, emotions: list<string>, issue: ?string}
+     */
+    public function describeDialogueEmotions(DialogueLineSpeaker $rule, array $line, array $owner = []): array
+    {
+        try {
+            $catalogue = $this->getDialoguePresentationCatalog();
+        } catch (Throwable $error) {
+            return DialogueEmotionFields::describeUnreadableCatalogue($rule, $line, $owner, $error);
+        }
+
+        return DialogueEmotionFields::describeChoices($rule, $line, $owner, $catalogue);
+    }
+
+    /**
+     * The project's map roles as the Map Roles page holds them, unsaved edits included.
+     *
+     * @throws \InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function getMapRoleCatalog(): \Ichiloto\Engine\Field\MapRoleCatalog
+    {
+        $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\MapRoleFields::CATEGORY);
+        if (($reason = $database?->getReadOnlyReason()) !== null) {
+            throw new \InvalidArgumentException($reason);
+        }
+
+        return $this->workspace->catalogs->loadMapRoles();
+    }
+
+    /**
+     * The project's place types as the Place Types page holds them, unsaved edits included.
+     *
+     * @throws \InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function getPlaceTypeCatalog(): \Ichiloto\Engine\Field\PlaceTypeCatalog
+    {
+        $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\PlaceTypeFields::CATEGORY);
+        if (($reason = $database?->getReadOnlyReason()) !== null) {
+            throw new \InvalidArgumentException($reason);
+        }
+
+        return $this->workspace->catalogs->loadPlaceTypes();
+    }
+
+    /**
+     * The project's regions as the Regions page holds them, unsaved edits included.
+     *
+     * @throws \InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function getRegionCatalog(): \Ichiloto\Engine\Field\RegionCatalog
+    {
+        $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\RegionFields::CATEGORY);
+        if (($reason = $database?->getReadOnlyReason()) !== null) {
+            throw new \InvalidArgumentException($reason);
+        }
+
+        return $this->workspace->catalogs->loadRegions();
+    }
+
+    public function getMapCategoryCatalog(): \Ichiloto\Engine\Field\MapCategoryCatalog
+    {
+        // The project's own categories as the Place Categories page holds them, unsaved edits included.
+        $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY);
+        if (($reason = $database?->getReadOnlyReason()) !== null) {
+            throw new \InvalidArgumentException($reason);
+        }
+
+        return $this->workspace->catalogs->loadMapCategories();
+    }
+
+    /**
+     * Returns the arenas the project declares, key => display name, in
+     * authored order: those its battle presentation code declares, then
+     * those bound as data (unsaved edits included). None for a project
+     * without either, or whose arenas cannot be read, which validation
+     * reports.
+     *
+     * @return array<string, string>
+     */
+    private function loadArenaNames(): array
+    {
+        try {
+            // The code never changes in a session; the data is read as it is now.
+            $this->arenaNames ??= BattlePresentationCatalog::loadCode(rtrim($this->workspace->projectRoot, '/') . '/assets')?->getArenaChoices() ?? [];
+            $data = array_map(static fn(array $arena): string => $arena['name'], $this->workspace->catalogs->loadArenaBindings()?->arenas ?? []);
+
+            return [...$this->arenaNames, ...$data];
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /** Returns asset-root-relative PNG choices without following paths outside the asset root. */
+    public static function getPngAssets(string $projectRoot): array
+    {
+        $root = realpath(rtrim($projectRoot, '/') . '/assets');
+        if ($root === false) {
+            return [];
+        }
+        $paths = [];
+        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS));
+        foreach ($files as $file) {
+            $resolved = $file->getRealPath();
+            if ($file->isFile() && strtolower($file->getExtension()) === 'png' && $resolved !== false
+                && str_starts_with($resolved, $root . DIRECTORY_SEPARATOR)) {
+                $paths[] = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($root) + 1));
+            }
+        }
+        sort($paths);
+        return $paths;
+    }
+
+    /**
+     * Every node of the mastery tree, by id, as the regions and branches are
+     * being edited: trunk nodes region by region, then each branch's nodes.
+     *
+     * @return list<string>
+     */
+    private function masteryNodeIds(): array
+    {
+        $ids = [];
+        foreach ([MasteryFields::REGIONS, MasteryFields::BRANCHES] as $category) {
+            foreach ($this->workspace->getRecordDatabase($category)?->getRecords() ?? [] as $record) {
+                foreach ($record->getSubList('nodes') as $node) {
+                    $id = trim(strval($node['id'] ?? ''));
+                    if ($id !== '') {
+                        $ids[] = $id;
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    /**
+     * The project's income schedules as the Income page holds them, unsaved
+     * edits included: name by stable id.
+     *
+     * @return array<string, string>
+     */
+    private function incomeScheduleNames(): array
+    {
+        $names = [];
+        foreach ($this->workspace->getRecordDatabase('income_schedules')?->getRecords() ?? [] as $record) {
+            $id = trim(strval($record->get('id')));
+            if ($id !== '') {
+                $names[$id] = trim(strval($record->get('name'))) ?: $id;
+            }
+        }
         return $names;
     }
 

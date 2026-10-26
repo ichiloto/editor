@@ -2,6 +2,13 @@
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\TroopEventPageContract;
+use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
+use Ichiloto\Engine\Battle\Presentation\BattleFooting;
+use Ichiloto\Editor\ProjectConfig;
+use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
+use Ichiloto\Engine\Quests\QuestWaymark;
 use Ichiloto\Editor\Database\BattleEntryActorResolver;
 use Ichiloto\Editor\Database\BattleEntryRuleContract;
 use Ichiloto\Editor\Database\InventoryCatalog;
@@ -12,19 +19,41 @@ use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
+use Ichiloto\Engine\Core\WorldConditionExclusion;
+use Ichiloto\Editor\Events\CommandMapContext;
+use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Editor\Field\MapAreaAuthoring;
+use Ichiloto\Editor\Field\MapAreaRefusal;
 use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
+use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
 use Ichiloto\Editor\PermanentGrowthCatalog;
+use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Field\EncounterArenaCoverage;
+use Ichiloto\Engine\Field\EncounterEntry;
+use Ichiloto\Engine\Field\EncounterTable;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
+use Ichiloto\Engine\Field\SkitSpeaker;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
+use Ichiloto\Engine\Events\MapEventDefinition;
+use Ichiloto\Engine\Events\Triggers\EventCueKind;
+use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\IO\Console\TerminalText;
+use Ichiloto\Engine\Progress\Knowledge\KnowledgeRecordType;
 use InvalidArgumentException;
 use Throwable;
 use Symfony\Component\Console\Formatter\OutputFormatterStyle;
@@ -70,9 +99,40 @@ class ProjectValidator
   protected array $legacyCommonEventIds = [];
 
   /**
-   * @var string|null The project root, for the catalogue a command names.
+   * @var ProjectWorkspace|null The project being validated, for the catalogues a command names.
    */
-  protected ?string $projectRootForKnowledge = null;
+  protected ?ProjectWorkspace $validatedWorkspace = null;
+
+
+  /**
+   * The arena keys the project's battle presentation declares, read once per
+   * validation; null when it declares no battle presentation, or one that
+   * cannot be read ({@see $arenaCatalogProblem}).
+   *
+   * @var list<string>|null
+   */
+  protected ?array $arenaKeys = null;
+
+  /** Why the battle presentation cannot be read, or null. */
+  protected ?string $arenaCatalogProblem = null;
+
+  /**
+   * Each arena's footing and the arena a battle naming none is fought on,
+   * read with the arena keys.
+   *
+   * @var array<string, BattleFooting>
+   */
+  protected array $arenaFootings = [];
+  protected ?string $defaultArena = null;
+  /** The battle presentation itself, read with the arena keys, for the terrain variants it draws. */
+  protected ?BattlePresentationCatalog $arenaCatalog = null;
+
+  /**
+   * Each troop's members with where they live, read once per validation.
+   *
+   * @var array<string, list<array{enemy: string, habitat: EnemyHabitat}>>
+   */
+  protected array $troopHabitats = [];
 
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
   protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
@@ -85,7 +145,9 @@ class ProjectValidator
    */
   public function validate(ProjectWorkspace $workspace): array
   {
-    $this->projectRootForKnowledge = $workspace->projectRoot;
+    $this->validatedWorkspace = $workspace;
+    $this->readArenaKeys($workspace);
+    $this->troopHabitats = $this->readTroopHabitats($workspace);
     $this->knowledgeCatalogData = null;
     $this->commonEventScripts = $this->eventScriptsById($workspace);
     $this->cinematicCommonEventIds = [];
@@ -95,36 +157,49 @@ class ProjectValidator
       $this->inventoryCatalog = InventoryCatalog::fromWorkspace($workspace);
     } catch (Throwable $throwable) {
       return [Issue::error(
-        'assets/Data/items.php',
+        'assets/Data/Items, Weapons and Armors',
         sprintf('The inventory could not be read: %s', $throwable->getMessage()),
         'Until this is fixed the project has no items, weapons or armors at all.'
       )];
     }
 
-    $unreadableInventory = $this->describeUnreadableInventory($workspace);
-
-    if ($unreadableInventory !== null) {
-      // Every reference to an item would now fail for the same reason, and
-      // a page of "does not exist" would bury it. One accurate error beats
-      // the cascade it causes.
-      return [$unreadableInventory];
-    }
-
     $issues = [
+      ...$this->checkScriptCommandDeclarations($workspace),
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
       ...$this->checkTroops($workspace),
       ...$this->checkBattleEntryRules($workspace),
+      ...$this->checkSkillCatalog($workspace),
+      ...$this->checkItemCatalog($workspace),
       ...$this->checkSummons($workspace),
       ...$this->checkCutscenes($workspace),
       ...$this->checkReferences($workspace),
+      ...new AnimationReferenceValidator()->validate($workspace),
+      ...new CounterAttackValidator()->validate($workspace),
+      ...new TroopFormationValidator()->validate($workspace),
+      ...new BattleTestValidator()->validate($workspace),
+      ...new ProgressionValidator()->validate($workspace),
+      ...new DashValidator()->validate($workspace),
+      ...new MasteryValidator()->validate($workspace),
+      ...new IncomeValidator()->validate($workspace),
+      ...new WordFormValidator()->validate($workspace),
       ...$this->checkDefinitionIdentities($workspace),
       ...$this->checkActorDefinitions($workspace),
+      ...new ActorReferenceValidator()->validate($workspace),
+      ...new DialoguePresentationValidator()->validate($workspace),
+      ...new SkitBackdropValidator()->validate($workspace),
+      ...new RecordReferenceValidator()->validate($workspace),
       ...$this->checkKnowledgeCatalog($workspace),
       ...$this->checkSpecialProperties($workspace),
+      ...$this->checkElements($workspace),
+      ...$this->checkTilesets($workspace),
       ...$this->checkPermanentGrowth($workspace),
       ...$this->checkOptimizationPolicy($workspace),
       ...new SaveCompatibilityValidator()->validate($workspace),
+      ...new ScreenTransitionValidator()->validate($workspace),
+      ...new ReachabilityValidator()->validate($workspace),
+      ...new StoryGuidanceValidator()->validate($workspace),
+      ...new EffectValidator()->validate($workspace),
     ];
 
     usort(
@@ -133,51 +208,6 @@ class ProjectValidator
     );
 
     return $issues;
-  }
-
-  /**
-   * Returns the one error to report when a project has an inventory file
-   * the runtime cannot read, or null when it can.
-   *
-   * The engine's own constructors enforce a definition's bounds -- a sell
-   * rate outside 0 through 10000, a modifier outside -100 through 100, an
-   * affinity that is not a factor -- by refusing to build it, which takes
-   * the whole file with it. The catalogue is then empty, and every
-   * reference to an item in the project fails for a reason that has
-   * nothing to do with that reference.
-   *
-   * @param ProjectWorkspace $workspace The project.
-   * @return Issue|null The error, or null.
-   */
-  protected function describeUnreadableInventory(ProjectWorkspace $workspace): ?Issue
-  {
-    $path = rtrim($workspace->projectRoot, '/') . '/assets/Data/items.php';
-
-    // Whether the file loaded at all, which a catalogue whose every
-    // definition is contested still did.
-    if (! is_file($path) || $this->inventoryCatalog->claimants() !== []) {
-      return null;
-    }
-
-    try {
-      $payload = ProjectDirectoryContext::run($workspace->projectRoot, static fn(): mixed => require $path);
-    } catch (Throwable $throwable) {
-      return Issue::error(
-        'assets/Data/items.php',
-        sprintf('The inventory could not be read: %s', $throwable->getMessage()),
-        'Until this is fixed the project has no items, weapons or armors at all.'
-      );
-    }
-
-    if (is_array($payload) && $payload !== []) {
-      return Issue::error(
-        'assets/Data/items.php',
-        'The inventory holds entries the project could not read as definitions.',
-        'Until this is fixed the project has no items, weapons or armors at all.'
-      );
-    }
-
-    return null;
   }
 
   /**
@@ -260,11 +290,15 @@ class ProjectValidator
     $seen = [];
     $statKeys = ActorStatPreview::statKeys();
 
+    // What an actor's Attack command may use, by the rule its picker offers.
+    $attackSkills = new ReferenceCatalog($workspace)->valuesFor('attack_skills');
+
     foreach ($workspace->actorDatabase->getActors() as $actor) {
       $where = sprintf('actor %s', $actor->getName());
       $id = $actor->getDefinitionId();
 
-      if (isset($seen[$id])) {
+      $identityKey = strtolower($id);
+      if ($id !== '' && isset($seen[$identityKey])) {
         $issues[] = Issue::error(
           $where,
           sprintf('Two actors resolve to the identity "%s".', $id),
@@ -272,13 +306,28 @@ class ProjectValidator
         );
       }
 
-      $seen[$id] = true;
+      if ($id !== '') { $seen[$identityKey] = true; }
 
-      // An actor without its own id is resolved by display name, which the
-      // runtime supports deliberately. That is a convention worth adopting
-      // rather than a defect, so the Inspector says so on the row where it
-      // can be acted on; a validator reporting it on every legacy actor
-      // would be noise in front of the findings that are defects.
+      if (! $actor->hasDefinitionId()) {
+        $issues[] = Issue::error($where, 'Actor has no explicit stable id.',
+          'For an absent id, use Freeze current name as ID in the actor editor or the CLI validation migration before renaming. Malformed explicit ids require manual correction; no file is repaired automatically.');
+      }
+
+      if ($actor->getAttackStyle() !== '' && ProjectActor::findAttackStyleType($actor->getAttackStyle()) === null) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its attack style "%s" is not a weapon type the Engine knows.', $actor->getAttackStyle()),
+          'Choose one on the Attack Style row, or remove it to fight unarmed.'
+        );
+      }
+
+      if ($actor->getAttackSkill() !== '' && ! in_array($actor->getAttackSkill(), $attackSkills, true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its attack skill "%s" is not a basic skill usable in battle.', $actor->getAttackSkill()),
+          'Choose one on the Attack Skill row, or clear it for the built-in attack.'
+        );
+      }
 
       $variants = $actor->getNaturalVariants();
       $default = $actor->getDefaultNaturalVariantId();
@@ -329,6 +378,62 @@ class ProjectValidator
    * @param ProjectWorkspace $workspace The project.
    * @return Issue[] The issues found.
    */
+  /**
+   * Checks every tileset as the Engine reads it, unsaved edits included:
+   * one the Engine refuses leaves every map that names it without its
+   * pieces and graphics, used by a map yet or not. Terrain kinds still
+   * awaiting their art are listed.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkTilesets(ProjectWorkspace $workspace): array
+  {
+    $issues = [];
+
+    foreach ($workspace->getRecordDatabase('tilesets')?->getRecords() ?? [] as $record) {
+      try {
+        $tileset = Tileset::fromArray($record->recordId, (array) $record->toArray());
+        // A kind whose art is still to be drawn paints its glyph alone, by an authored state, until its autotile is bound.
+        $awaiting = array_filter($tileset->kinds, static fn(\Ichiloto\Engine\Rendering\Tilesets\TerrainKind $kind): bool => $kind->awaitingArt);
+        if ($awaiting !== []) {
+          $issues[] = Issue::warning(
+            sprintf('assets/%s/%s.php', Tileset::DIRECTORY, $record->recordId),
+            sprintf('%d terrain %s awaiting art: %s. Maps show %s glyph graphically.', count($awaiting), count($awaiting) === 1 ? 'kind is' : 'kinds are',
+              implode(', ', array_map(static fn($kind): string => $kind->name, $awaiting)), count($awaiting) === 1 ? 'its' : 'their'),
+            'Bind each kind\'s autotile in Database > Tilesets once its art is drawn.',
+          );
+        }
+      } catch (InvalidArgumentException $refused) {
+        $issues[] = Issue::error(
+          sprintf('assets/%s/%s.php', Tileset::DIRECTORY, $record->recordId),
+          $refused->getMessage(),
+          'Correct it in Database > Tilesets.',
+        );
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks the project's elements as the game reads them at start: a name
+   * twice, or an empty one, stops the game from starting at all.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkElements(ProjectWorkspace $workspace): array
+  {
+    try {
+      $workspace->getElementIdentities();
+    } catch (InvalidArgumentException $refused) {
+      return [Issue::error('assets/Data/system.php elements', $refused->getMessage(), 'Give each element one distinct name in Types.')];
+    }
+
+    return [];
+  }
+
   /**
    * Checks the special properties a project's equipment declares.
    *
@@ -405,17 +510,18 @@ class ProjectValidator
   protected function checkPermanentGrowth(ProjectWorkspace $workspace): array
   {
     $where = PermanentGrowthCatalog::RELATIVE_PATH;
-    $path = rtrim($workspace->projectRoot, '/') . '/' . $where;
-
-    if (! is_file($path)) {
-      return [];
-    }
 
     try {
-      $payload = (static fn(): mixed => require $path)();
+      $file = $workspace->catalogs->readData(PermanentGrowthCatalog::ASSET_PATH);
     } catch (Throwable $throwable) {
       return [Issue::error($where, 'The definitions could not be loaded: ' . $throwable->getMessage())];
     }
+
+    if (! $file['exists']) {
+      return [];
+    }
+
+    $payload = $file['payload'];
 
     if (! is_array($payload)) {
       return [Issue::error($where, 'The file must return a list of definitions.')];
@@ -485,17 +591,18 @@ class ProjectValidator
   protected function checkOptimizationPolicy(ProjectWorkspace $workspace): array
   {
     $where = EquipmentOptimizationPolicy::RELATIVE_PATH;
-    $path = rtrim($workspace->projectRoot, '/') . '/' . $where;
-
-    if (! is_file($path)) {
-      return [];
-    }
 
     try {
-      $policy = (static fn(): mixed => require $path)();
+      $file = $workspace->catalogs->readData(EquipmentOptimizationPolicy::ASSET_PATH);
     } catch (Throwable $throwable) {
       return [Issue::error($where, 'The policy could not be loaded: ' . $throwable->getMessage())];
     }
+
+    if (! $file['exists']) {
+      return [];
+    }
+
+    $policy = $file['payload'];
 
     if (! is_array($policy)) {
       return [Issue::error($where, 'The file must return the policy as an array.')];
@@ -513,12 +620,12 @@ class ProjectValidator
       }
     }
 
-    if (EquipmentOptimizationPolicy::isAvailable() && EquipmentOptimizationPolicy::enginePolicyFor($workspace->projectRoot) === null) {
+    if (EquipmentOptimizationPolicy::isAvailable() && EquipmentOptimizationPolicy::enginePolicyFor($workspace) === null) {
       // The engine refuses a weight key it does not have and a weight that
       // is not an integer, by throwing rather than by ignoring them.
       $issues[] = Issue::error(
         $where,
-        $this->describePolicyRefusal($workspace->projectRoot),
+        $this->describePolicyRefusal($workspace),
         'Until this is fixed the game falls back to the legacy equal-weight policy.'
       );
     }
@@ -640,12 +747,12 @@ class ProjectValidator
    * Returns why the engine refused to build the declared policy, in its own
    * words.
    *
-   * @param string $projectRoot The project root.
+   * @param ProjectWorkspace $workspace The project.
    * @return string The message.
    */
-  protected function describePolicyRefusal(string $projectRoot): string
+  protected function describePolicyRefusal(ProjectWorkspace $workspace): string
   {
-    $declared = EquipmentOptimizationPolicy::declaredIn($projectRoot) ?? [];
+    $declared = EquipmentOptimizationPolicy::declaredIn($workspace) ?? [];
 
     try {
       new \Ichiloto\Engine\Entities\EquipmentOptimization\DeclaredEquipmentOptimizationPolicy(
@@ -708,17 +815,17 @@ class ProjectValidator
 
   protected function checkKnowledgeCatalog(ProjectWorkspace $workspace): array
   {
-    $path = rtrim($workspace->projectRoot, '/') . '/assets/Data/knowledge.php';
-
-    if (! is_file($path)) {
-      return [];
-    }
-
     try {
-      $catalog = (static fn(): mixed => require $path)();
+      $file = $workspace->catalogs->readData(ProjectCatalogs::KNOWLEDGE_FILE);
     } catch (Throwable $throwable) {
       return [Issue::error('assets/Data/knowledge.php', 'The catalogue could not be loaded: ' . $throwable->getMessage())];
     }
+
+    if (! $file['exists']) {
+      return [];
+    }
+
+    $catalog = $file['payload'];
 
     if (! is_array($catalog)) {
       return [Issue::error('assets/Data/knowledge.php', 'The catalogue must return an array.')];
@@ -739,7 +846,15 @@ class ProjectValidator
       }
     }
 
-    $recordTypes = array_map(strval(...), (array) ($catalog['recordTypes'] ?? []));
+    $summons = $workspace->cutscenes?->ids(CutsceneType::SUMMON) ?? [];
+    $recordTypes = [];
+    foreach ((array) ($catalog['recordTypes'] ?? []) as $entry) {
+      try {
+        $recordTypes[] = KnowledgeRecordType::fromEntry($entry)->id;
+      } catch (InvalidArgumentException) {
+        // checkKnowledgeIdentities() reports an entry the runtime cannot read.
+      }
+    }
     $subjectIds = [];
 
     foreach ((array) ($catalog['subjects'] ?? []) as $index => $subject) {
@@ -770,7 +885,14 @@ class ProjectValidator
       }
 
       if (trim(strval($subject['quickCard'] ?? '')) === '') {
-        $issues[] = Issue::error($where, sprintf('%s has no quick card.', $label), 'A record shows its quick card first.');
+        $issues[] = Issue::warning($where, sprintf('%s has no quick card yet.', $label),
+          'Its record lists and counts without one; write it when its wording is ready.');
+      }
+
+      $summon = trim(strval($subject['summon'] ?? ''));
+      if ($summon !== '' && ! in_array($summon, $summons, true)) {
+        $issues[] = Issue::warning($where, sprintf('%s is a record of the summon "%s", which the project does not have.', $label, $summon),
+          'Its record shows no Summon Info until it names a summon the project has.');
       }
     }
 
@@ -986,19 +1108,11 @@ class ProjectValidator
       return $this->knowledgeCatalogData;
     }
 
-    $path = rtrim($this->projectRootForKnowledge ?? '', '/') . '/assets/Data/knowledge.php';
-
-    if ($this->projectRootForKnowledge === null || ! is_file($path)) {
-      return $this->knowledgeCatalogData = [];
-    }
-
     try {
-      $catalog = (static fn(): mixed => require $path)();
+      return $this->knowledgeCatalogData = $this->validatedWorkspace?->catalogs->readKnowledgeData() ?? [];
     } catch (Throwable) {
       return $this->knowledgeCatalogData = [];
     }
-
-    return $this->knowledgeCatalogData = is_array($catalog) ? $catalog : [];
   }
 
   /**
@@ -1069,13 +1183,18 @@ class ProjectValidator
     $issues = [];
     $recordTypes = [];
 
-    foreach ((array) ($catalog['recordTypes'] ?? []) as $index => $type) {
-      $type = is_scalar($type) ? trim(strval($type)) : '';
+    foreach ((array) ($catalog['recordTypes'] ?? []) as $index => $entry) {
+      $type = is_scalar($entry) ? trim(strval($entry)) : (is_array($entry) && is_scalar($entry['id'] ?? null) ? trim(strval($entry['id'])) : '');
 
       if ($type === '') {
         $issues[] = Issue::error($where, sprintf('Record type %s is empty.', strval($index)));
 
         continue;
+      }
+
+      if (is_array($entry) && array_diff(array_keys($entry), ['id', 'label']) !== []) {
+        $issues[] = Issue::error($where, sprintf('Record type "%s" holds more than its id and label.', $type),
+          'The runtime refuses the catalogue until it is only an id, or an id with a label.');
       }
 
       if (isset($recordTypes[$type])) {
@@ -1193,6 +1312,19 @@ class ProjectValidator
     }
 
     foreach ($database->getRecords() as $record) {
+      $problem = is_array($record->toArray()) ? TroopEventPageContract::findProblem((array) $record->toArray()) : null;
+
+      if ($problem !== null) {
+        // The Engine refuses the troop when its battle starts, with this message.
+        $issues[] = Issue::error(
+          'troop ' . (trim(strval($record->get('name') ?? '')) ?: '(unnamed)'),
+          $problem,
+          'Fix the event page or member in the troop, as the message says.',
+        );
+      }
+    }
+
+    foreach ($database->getRecords() as $record) {
       $name = trim(strval($record->get('name') ?? '')) ?: '(unnamed)';
       $problem = BattleEntryRuleContract::classificationProblem(
         $record->get('classification'),
@@ -1293,6 +1425,48 @@ class ProjectValidator
   }
 
   /**
+   * Reports what the Engine's skill catalogue cannot identify: a record the
+   * runtime cannot read, or a skill whose name another skill already uses.
+   *
+   * @return Issue[]
+   */
+  protected function checkSkillCatalog(ProjectWorkspace $workspace): array
+  {
+    return array_map(
+      static fn(string $problem): Issue => Issue::error(
+        'assets/Data/Skills',
+        $problem,
+        'Each skill is one record file; correct the file named, and give each skill a name no other skill uses.',
+      ),
+      $workspace->loadSkillCatalog()->getProblems(),
+    );
+  }
+
+  /**
+   * Reports the inventory records the Engine's item catalogue cannot read.
+   *
+   * The engine's own constructors enforce a definition's bounds (a sell rate
+   * outside 0 through 10000, a modifier outside -100 through 100, an
+   * affinity that is not a factor) by refusing to build it. The game then
+   * leaves that one record out, so it is reported against its own file in
+   * the engine's own words; a reference to it is still a reference to the
+   * definition the author meant, and is not reported again.
+   *
+   * @return Issue[]
+   */
+  protected function checkItemCatalog(ProjectWorkspace $workspace): array
+  {
+    return array_map(
+      static fn(string $problem): Issue => Issue::error(
+        'assets/Data/' . strstr($problem, ':', true),
+        ltrim((string) strstr($problem, ':'), ': '),
+        'Each item, weapon and armor is one record file; correct the file named in Database > Items, Weapons or Armors.',
+      ),
+      $workspace->catalogs->listItemRecordProblems(),
+    );
+  }
+
+  /**
    * Checks authored summon gates, wielder policies, linked actions, and
    * actor starting assignments without imposing any game-specific names.
    *
@@ -1300,8 +1474,7 @@ class ProjectValidator
    */
   protected function checkSummons(ProjectWorkspace $workspace): array
   {
-    $root = $workspace->projectRoot . '/assets/Cutscenes/Summons';
-    $paths = glob($root . '/*/*.data.php') ?: [];
+    $paths = $workspace->catalogs->listSummonDataPaths();
 
     if ($paths === []) {
       return $this->checkActorSummonAssignments($workspace, []);
@@ -1312,23 +1485,16 @@ class ProjectValidator
       'quests' => $catalog->valuesFor('quests'),
       'inventory' => $catalog->valuesFor('inventory'),
     ];
-    $actorNames = array_map(
-      static fn(\Ichiloto\Editor\ProjectActor $actor): string => $actor->getName(),
-      $workspace->actorDatabase->getActors(),
-    );
-    $skillNames = array_map(
-      static fn(\Ichiloto\Editor\ProjectSkill $skill): string => $skill->getName(),
-      $workspace->skillDatabase->getSkills(),
-    );
+    $skillNames = $workspace->getSkillNames();
+
     $definitions = [];
     $issues = [];
 
     foreach ($paths as $path) {
-      $file = ProjectDirectoryContext::run(
+      $data = ($workspace->readCurrentData($path) ?? ['payload' => ProjectDirectoryContext::run(
         $workspace->projectRoot,
         static fn(): PhpDataFile => PhpDataFile::load($path),
-      );
-      $data = $file->payload;
+      )->payload])['payload'];
       $fallbackId = basename(dirname($path));
 
       if (! is_array($data)) {
@@ -1357,14 +1523,14 @@ class ProjectValidator
         $issues[] = Issue::error(
           $where,
           sprintf('It links to action "%s", which does not exist.', $linkedAction),
-          'Choose an action from assets/Data/skills.php.',
+          'Choose one of the skills under assets/Data/Skills.',
         );
       }
 
       $issues = [
         ...$issues,
         ...$this->checkSummonAvailability($data, $where, $known),
-        ...$this->checkSummonWielders($data, $where, $actorNames),
+        ...$this->checkSummonWielders($data, $where),
       ];
     }
 
@@ -1432,8 +1598,13 @@ class ProjectValidator
     return [...$issues, ...$this->checkConditions($conditions, $where, $known)];
   }
 
-  /** @return Issue[] */
-  protected function checkSummonWielders(array $data, string $where, array $actorNames): array
+  /**
+   * The wielder policy's shape. Which actors it names is checked with every
+   * other actor reference, by stable id, by ActorReferenceValidator.
+   *
+   * @return Issue[]
+   */
+  protected function checkSummonWielders(array $data, string $where): array
   {
     if (! array_key_exists('wielders', $data)) {
       return [];
@@ -1464,18 +1635,6 @@ class ProjectValidator
 
       if (! is_array($characters) || $characters === []) {
         $issues[] = Issue::error($where, 'Its character eligibility list is empty or malformed.', 'Name at least one project actor.');
-      } else {
-        foreach ($characters as $character) {
-          $name = is_string($character) ? trim($character) : '';
-
-          if ($name === '' || ! in_array($name, $actorNames, true)) {
-            $issues[] = Issue::error(
-              $where,
-              sprintf('Its eligible character "%s" does not exist.', $name !== '' ? $name : '(malformed)'),
-              'Use an exact actor identity from assets/Data/Actors.',
-            );
-          }
-        }
       }
     }
 
@@ -1514,7 +1673,7 @@ class ProjectValidator
       $where = 'actor ' . $actor->getName();
       $reported = [];
 
-      foreach ($diagnostics->forActor($actor->getName(), $actor->getClassName(), $actor->getSummons()) as $row) {
+      foreach ($diagnostics->forActor($actor->getRuntimeId(), $actor->getClassName(), $actor->getSummons()) as $row) {
         foreach ($row['problems'] as $problem) {
           // One assignment list reports duplicates once, as before.
           if (str_starts_with($problem['message'], 'Its summon assignments contain duplicate ids') && isset($reported['duplicates'])) {
@@ -1555,17 +1714,36 @@ class ProjectValidator
   {
     $issues = [];
     $troops = $this->labelsOf($workspace, 'troops');
+    $mapsById = array_column(array_map(static fn(ProjectMap $map): array => ['id' => $map->mapId, 'map' => $map], $workspace->maps), 'map', 'id');
 
     foreach ($workspace->maps as $map) {
+      if (($sourceIssue = $map->getGridSourceIssue()) !== null) {
+        $issues[] = new Issue(Severity::ERROR,
+          $map->mapId,
+          "Map source is read-only: {$sourceIssue}",
+          'Repair the source by hand, then reopen the project. Other maps remain editable.',
+          map: $map->mapId,
+        );
+        continue;
+      }
+
       $issues = [
         ...$issues,
-        ...$this->checkLayers($map),
-        ...$this->checkEventMarkers($map),
-        ...$this->checkDoors($map, $workspace->mapIds),
-        ...$this->checkEncounters($map, $troops),
-        ...$this->checkNpcs($map, $workspace),
-        ...$this->checkDuplicateKeys($map),
-        ...$this->checkMapSource($map),
+        ...Issue::attributeToMap([
+          ...$this->checkLayers($map),
+          ...MapGraphicsValidator::validate($map),
+          ...MapGraphicsValidator::validateCoverage($map),
+          ...PassageAgreementCheck::validate($map),
+          ...$this->checkRetiredMapData($map),
+          ...MapCompletenessCheck::validate($map, $this->inventoryCatalog),
+          ...$this->checkDoors($map, $workspace->mapIds),
+          ...MapRoleCheck::validate($map, $mapsById),
+          ...PlaceIconCheck::validate($map, $mapsById),
+          ...$this->checkEncounters($map, $troops),
+          ...$this->checkNpcs($map, $workspace),
+          ...$this->checkDuplicateKeys($map),
+          ...$this->checkMapSource($map),
+        ], $map->mapId),
       ];
     }
 
@@ -1580,6 +1758,14 @@ class ProjectValidator
    */
   protected function checkLayers(ProjectMap $map): array
   {
+    if (! $map->isLegacyMap()) {
+      try {
+        $map->validateLayerContracts();
+      } catch (\Throwable $error) {
+        return [Issue::error($map->mapId, $error->getMessage(), 'Repair the authored layer or the collision dictionary before saving.')];
+      }
+      return [];
+    }
     $tileRows = count($map->tileLines);
     $eventRows = count($map->eventLines);
 
@@ -1595,45 +1781,24 @@ class ProjectValidator
   }
 
   /**
-   * Checks that placed markers and event definitions agree.
+   * Checks for map data the Engine no longer reads.
    *
    * @param ProjectMap $map The map.
    * @return Issue[] The issues found.
    */
-  protected function checkEventMarkers(ProjectMap $map): array
+  protected function checkRetiredMapData(ProjectMap $map): array
   {
-    $issues = [];
-    $defined = array_keys((array) ($map->data['events'] ?? []));
-    $placed = $map->getPlacedEventMarkers();
-
-    foreach (array_diff($placed, $defined) as $marker) {
-      $issues[] = Issue::error(
-        $map->mapId,
-        sprintf('The event layer places marker "%s", which the map does not define.', $marker),
-        'The engine throws "Unmapped event markers" when the map loads. Define it, or clear the marker.'
-      );
+    if (! array_key_exists('tiles2d', $map->getEditableData())) {
+      return [];
     }
 
-    foreach (array_diff($defined, $placed) as $marker) {
-      $issues[] = Issue::warning(
-        $map->mapId,
-        sprintf('Marker "%s" is defined but never placed on the event layer.', $marker),
-        'Nothing can trigger it. Place it, or remove the definition.'
-      );
-    }
-
-    foreach ($placed as $marker) {
-      if (! $map->isEventMarkerSolidRectangle($marker)) {
-        $issues[] = Issue::error(
-          $map->mapId,
-          sprintf('Marker "%s" does not occupy one solid rectangle.', $marker),
-          'The engine rejects sparse, cross-shaped, and disconnected event markers when the map loads.'
-        );
-      }
-    }
-
-    return $issues;
+    return [Issue::warning(
+      $map->mapId,
+      'Its tiles2d crop table is no longer read.',
+      'Glyph-keyed crops are retired; the map shows its terminal glyphs until it has a tileset. Remove the tiles2d key.'
+    )];
   }
+
 
   /**
    * Checks that doors lead somewhere.
@@ -1646,7 +1811,7 @@ class ProjectValidator
   {
     $issues = [];
 
-    foreach ((array) ($map->data['events'] ?? []) as $marker => $event) {
+    foreach ((array) ($map->getEditableData()['events'] ?? []) as $marker => $event) {
       if (! is_array($event)) {
         continue;
       }
@@ -1675,6 +1840,22 @@ class ProjectValidator
       }
     }
 
+    // Edge triggers lead off the map the same way doors do.
+    foreach (array_values((array) ($map->getEditableData()['triggers'] ?? [])) as $index => $trigger) {
+      $destination = is_array($trigger) ? trim(strval($trigger['destinationMap'] ?? '')) : '';
+
+      if ($destination === '') {
+        $issues[] = Issue::error($map->mapId, sprintf('Edge trigger %d names no destinationMap.', $index + 1),
+          'Add destinationMap, or remove the trigger.');
+      } elseif (! in_array($destination, $mapIds, true)) {
+        $issues[] = Issue::error(
+          $map->mapId,
+          sprintf('Edge trigger %d leads to "%s", which is not a map in this project.', $index + 1, $destination),
+          'Walking off this edge crashes the game. Check the map id.'
+        );
+      }
+    }
+
     return $issues;
   }
 
@@ -1694,7 +1875,7 @@ class ProjectValidator
    */
   protected function checkEncounters(ProjectMap $map, array $troops): array
   {
-    $authored = $map->data['encounters'] ?? null;
+    $authored = $map->getEditableData()['encounters'] ?? null;
 
     if ($authored === null) {
       return [];
@@ -1761,7 +1942,300 @@ class ProjectValidator
       }
     }
 
+    $issues = [...$issues, ...$this->checkEncounterAreas($map, $rows), ...$this->checkEncounterTerrains($map, $rows)];
+    $issues = [...$issues, ...$this->checkBattleArena($encounters->mapArena(), $map->mapId, 'The encounters')];
+
+    foreach ($rows as $row) {
+      $issues = [...$issues, ...$this->checkBattleArena($row['arena'], $map->mapId, sprintf('The encounter with "%s"', $row['name']))];
+      $issues = [...$issues, ...$this->checkEncounterHabitats($map, $row['name'], $row['arena'] ?? $encounters->mapArena())];
+    }
+
+    $issues = [...$issues, ...$this->checkEncounterArenaCoverage($map, $encounters)];
+
     return [...$issues, ...$this->checkEncounterRate($map, $encounters), ...$this->checkEncounterTiles($map, $encounters), ...$this->checkEncounterTroopDuplicates($map)];
+  }
+
+  /**
+   * Checks the map's battle arena rules and which arena art covers every
+   * random battle the map can start. The Engine reads the rules and draws
+   * the battles ({@see EncounterTable}, {@see EncounterArenaCoverage}); this
+   * reports what it leaves out and every arena and encounter terrain pair a
+   * battle is drawn on without a variant for, which falls back to the arena's
+   * own background. Every encounter cell counts, reached or not.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterArenaCoverage(ProjectMap $map, MapEncounters $encounters): array
+  {
+    $issues = [];
+
+    foreach ($encounters->arenaRules() as $index => $rule) {
+      $issues = [...$issues, ...$this->checkBattleArena($rule['arena'], $map->mapId, sprintf('Battle arena rule %d', $index + 1))];
+    }
+
+    try {
+      $block = $map->getEditableData()[MapEncounters::KEY] ?? null;
+      $table = EncounterTable::readBlock(is_array($block) ? $block : null, MapAreaAuthoring::readCatalog($map), $map->resolveEncounterTerrain());
+      $collisions = $map->getResolvedCollisionMap();
+    } catch (Throwable) {
+      // A map the Engine cannot read is reported by the checks that read it.
+      return $issues;
+    }
+
+    foreach ($table->ignored as $ignored) {
+      if (str_starts_with($ignored, 'Battle arena rule') || str_contains($ignored, MapEncounters::ARENA_RULES_KEY)) {
+        $issues[] = Issue::error($map->mapId, $ignored,
+          'A rule names one of the map\'s areas, an encounter terrain its kinds meet, or both, and the arena it picks.');
+      }
+    }
+
+    if ($this->arenaCatalog === null) {
+      return $issues;
+    }
+
+    $coverage = EncounterArenaCoverage::measure($table, $collisions, $this->arenaCatalog);
+    foreach ($coverage->findMissingVariants() as $missing) {
+      $issues[] = Issue::warning($map->mapId,
+        sprintf('Battles on the arena "%s" start on %s (%s, %d %s), which it has no variant for, so they are drawn on its own background.',
+          $missing['arena'], $missing['terrain'], implode('; ', $missing['scopes']), $missing['cells'], $missing['cells'] === 1 ? 'cell' : 'cells'),
+        sprintf('Add a %s variant to "%s" on its Battle Arenas page, naming the arena itself if its picture already shows %s, or give this map an arena rule for it.',
+          $missing['terrain'], $missing['arena'], $missing['terrain']));
+    }
+
+    // A troop drawn on a variant or a rule's arena still needs somewhere there for its members to stand;
+    // the arena it is named on is checked with its row.
+    $named = array_column(array_map(fn(array $row): array => [$row['name'], $row['arena'] ?? $encounters->mapArena() ?? $this->defaultArena],
+      $encounters->rows()), 1, 0);
+    $habitats = [];
+    foreach ($coverage->rows as $row) {
+      foreach ($row['drawn'] === null ? [] : $row['troops'] as $troop) {
+        if (($named[$troop] ?? null) === $row['drawn']) {
+          continue;
+        }
+        foreach ($this->checkEncounterHabitats($map, $troop, $row['drawn']) as $issue) {
+          $habitats[$issue->message] = $issue;
+        }
+      }
+    }
+
+    return [...$issues, ...array_values($habitats)];
+  }
+
+  /**
+   * Checks that every encounter terrain a troop is limited to is one the
+   * map's terrain kinds meet, in a scope the engine reads: the engine never
+   * meets such a troop rather than meeting it on any terrain.
+   *
+   * @param array<int, array{name: string, terrains: list<string>}> $rows
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterTerrains(ProjectMap $map, array $rows): array
+  {
+    $scoped = array_filter($rows, static fn(array $row): bool => $row['terrains'] !== []);
+
+    if ($scoped === []) {
+      return [];
+    }
+
+    try {
+      $known = $map->loadTerrainKinds()?->getEncounterTerrains();
+    } catch (InvalidArgumentException) {
+      // The kinds themselves are reported with the map's completeness.
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($scoped as $row) {
+      if (EncounterEntry::getFromValue(['weight' => 1, MapEncounters::TERRAINS_KEY => $row['terrains']]) === null) {
+        $issues[] = Issue::error($map->mapId,
+          sprintf('The troop "%s" is limited to terrains the engine cannot read (%s), so it is never met.', $row['name'], implode(', ', $row['terrains'])),
+          'List each encounter terrain id once.');
+
+        continue;
+      }
+
+      foreach (array_diff($row['terrains'], $known ?? []) as $terrain) {
+        $issues[] = Issue::error($map->mapId,
+          sprintf('The troop "%s" is limited to the encounter terrain "%s", which no terrain kind of this map meets, so it is never met.', $row['name'], $terrain),
+          $known === null ? 'Paint the map in terrain kinds first.' : sprintf('This map\'s kinds meet %s.', $known === [] ? 'no encounter terrain' : implode(', ', $known)));
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks that every area an encounter troop is limited to is one the map
+   * declares, and that its scope is one the engine reads: the engine never
+   * meets a troop whose scope it cannot place, rather than meeting it
+   * map-wide.
+   *
+   * @param array<int, array{name: string, areas: list<string>}> $rows
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterAreas(ProjectMap $map, array $rows): array
+  {
+    $scoped = array_filter($rows, static fn(array $row): bool => $row['areas'] !== []);
+
+    if ($scoped === []) {
+      return [];
+    }
+
+    try {
+      $declared = array_keys(MapAreaAuthoring::readCatalog($map)->areas);
+    } catch (MapAreaRefusal) {
+      // The areas themselves are reported where they are declared.
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($scoped as $row) {
+      if (EncounterEntry::getFromValue(['weight' => 1, MapEncounters::AREAS_KEY => $row['areas']]) === null) {
+        $issues[] = Issue::error($map->mapId,
+          sprintf('The troop "%s" is limited to areas the engine cannot read (%s), so it is never met.', $row['name'], implode(', ', $row['areas'])),
+          'List each of the map\'s area ids once.');
+
+        continue;
+      }
+
+      foreach (array_diff($row['areas'], $declared) as $area) {
+        $issues[] = Issue::error($map->mapId,
+          sprintf('The troop "%s" is limited to the area "%s", which this map does not declare, so it is never met.', $row['name'], $area),
+          $declared === [] ? 'Declare the area on the map first.' : sprintf('This map\'s areas are %s.', implode(', ', $declared)));
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Reads the arena keys a battle may name, once per validation.
+   */
+  protected function readArenaKeys(ProjectWorkspace $workspace): void
+  {
+    $this->arenaKeys = null;
+    $this->arenaCatalogProblem = null;
+    $this->arenaFootings = [];
+    $this->defaultArena = null;
+    $this->arenaCatalog = null;
+
+    try {
+      $catalog = $workspace->catalogs->loadBattlePresentation();
+      $this->arenaCatalog = $catalog;
+      $this->arenaKeys = $catalog === null ? null : array_map(strval(...), array_keys($catalog->getArenaChoices()));
+      $this->arenaFootings = array_map(static fn($arena): BattleFooting => $arena->footing, $catalog?->arenas ?? []);
+      $this->defaultArena = $catalog?->defaultArena;
+    } catch (Throwable $problem) {
+      $this->arenaCatalogProblem = $problem->getMessage();
+    }
+  }
+
+  /**
+   * Each troop's members with where they live, from the troops and enemies
+   * as they are now. An enemy the project does not define, or whose habitat
+   * cannot be read, is reported where it is authored, so it is left out.
+   *
+   * @return array<string, list<array{enemy: string, habitat: EnemyHabitat}>>
+   */
+  protected function readTroopHabitats(ProjectWorkspace $workspace): array
+  {
+    $troops = $workspace->getRecordDatabase('troops');
+    $enemies = $workspace->getRecordDatabase('enemies');
+
+    if (! $troops instanceof ProjectRecordDatabase || ! $enemies instanceof ProjectRecordDatabase) {
+      return [];
+    }
+
+    $habitats = [];
+
+    foreach ($enemies->getRecords() as $record) {
+      $habitat = $record->get('habitat');
+      $habitats[strval($record->get('name'))] = $habitat === null ? EnemyHabitat::LAND : (is_string($habitat) ? EnemyHabitat::tryFrom($habitat) : null);
+    }
+
+    $members = [];
+
+    foreach ($troops->getRecords() as $record) {
+      foreach ($record->getSubList('enemies') as $member) {
+        $enemy = is_array($member) && is_string($member['enemy'] ?? null) ? $member['enemy'] : null;
+
+        if ($enemy !== null && ($habitats[$enemy] ?? null) !== null) {
+          $members[strval($record->get('name'))][] = ['enemy' => $enemy, 'habitat' => $habitats[$enemy]];
+        }
+      }
+    }
+
+    return $members;
+  }
+
+  /**
+   * Checks that every member of an encounter's troop has somewhere to stand
+   * on the arena it is fought on: a water creature needs the arena's water,
+   * a land beast its land. Graphical presentation only, so a battle still
+   * starts; the member would stand wherever its side's area allows.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterHabitats(ProjectMap $map, string $troop, mixed $arena): array
+  {
+    $arena = is_string($arena) && $arena !== '' ? $arena : $this->defaultArena;
+    $footing = $arena === null ? null : ($this->arenaFootings[$arena] ?? null);
+
+    if ($footing === null) {
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($this->troopHabitats[$troop] ?? [] as ['enemy' => $enemy, 'habitat' => $habitat]) {
+      if (! $footing->hasFootingFor($habitat)) {
+        $issues[$enemy] = Issue::warning($map->mapId,
+          sprintf('The encounter with "%s" is fought on the arena "%s", which has no %s for %s to stand on.',
+            $troop, $arena, $habitat->value, $enemy),
+          sprintf('Mark the arena\'s %s footing on its Battle Arenas page, fight this troop on another arena, or change %s\'s habitat.',
+            $habitat->value, $enemy));
+      }
+    }
+
+    return array_values($issues);
+  }
+
+  /**
+   * Checks an arena a battle names: graphical presentation only, so it is
+   * checked against what the battle presentation declares, and a battle
+   * that names none takes the presentation's default.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkBattleArena(mixed $arena, string $where, string $subject): array
+  {
+    if ($arena === null) {
+      return [];
+    }
+
+    if (! is_string($arena) || trim($arena) === '') {
+      return [Issue::error($where, sprintf('%s names a battleArena that is not an arena key.', $subject),
+        'Name one of the battle presentation\'s arenas, or remove it to use the default arena.')];
+    }
+
+    if ($this->arenaCatalogProblem !== null) {
+      return [Issue::error($where, sprintf('%s names the arena "%s", but the battle presentation cannot be read: %s', $subject, $arena, $this->arenaCatalogProblem),
+        sprintf('Correct assets/%s.', BattlePresentationCatalog::FILE))];
+    }
+
+    if ($this->arenaKeys === null) {
+      return [Issue::error($where, sprintf('%s names the arena "%s", but the project declares no battle presentation to draw it in.', $subject, $arena),
+        sprintf('Remove the battleArena, or declare arenas in assets/%s.', BattlePresentationCatalog::FILE))];
+    }
+
+    if (! in_array($arena, $this->arenaKeys, true)) {
+      return [Issue::error($where, sprintf('%s names the arena "%s", which the battle presentation does not declare.', $subject, $arena),
+        'Choose one of its arenas, or remove the battleArena to use the default arena.')];
+    }
+
+    return [];
   }
 
   /**
@@ -1815,7 +2289,7 @@ class ProjectValidator
    */
   protected function checkEncounterTiles(ProjectMap $map, MapEncounters $encounters): array
   {
-    $tiles = $map->data['encounters']['tiles'] ?? null;
+    $tiles = $map->getEditableData()['encounters']['tiles'] ?? null;
 
     if ($tiles === null) {
       return [];
@@ -1861,8 +2335,10 @@ class ProjectValidator
    * `NpcManager::configure()` skips an entry silently when it is not an
    * array, has no name, or has no coordinates; ignores a wander area or
    * directional map that is not an array; treats any movement but `wander`
-   * as fixed; clamps wander dimensions to 1; and throws on a duplicate id.
-   * `Player::interact()` talks to the NPC on the faced tile, and
+   * as fixed; reads `directionFix` as set only when it is exactly true;
+   * clamps wander dimensions to 1; and throws on a duplicate id.
+   * `Player::interact()` turns the NPC on the faced tile toward the player
+   * unless its direction is fixed, then talks to it, and
    * `MapManager::canMoveTo()` refuses a tile an NPC stands on. Every check
    * here follows from one of those, with an error where the authored
    * content cannot happen and a warning where it can but probably not as
@@ -1874,14 +2350,14 @@ class ProjectValidator
    */
   protected function checkNpcs(ProjectMap $map, ProjectWorkspace $workspace): array
   {
-    if (! array_key_exists('npcs', $map->data) || $map->data['npcs'] === null) {
+    if (! array_key_exists('npcs', $map->getEditableData()) || $map->getEditableData()['npcs'] === null) {
       return [];
     }
 
-    if (! is_array($map->data['npcs'])) {
+    if (! is_array($map->getEditableData()['npcs'])) {
       return [Issue::error(
         $map->mapId,
-        sprintf('The npcs block is %s, not a list of NPC entries.', get_debug_type($map->data['npcs'])),
+        sprintf('The npcs block is %s, not a list of NPC entries.', get_debug_type($map->getEditableData()['npcs'])),
         'The game reads npcs as a list; every NPC on this map is dropped until it is one.'
       )];
     }
@@ -1891,7 +2367,7 @@ class ProjectValidator
     $height = $map->getHeight();
     $anchors = [];
 
-    foreach ($map->data['npcs'] as $index => $entry) {
+    foreach ($map->getEditableData()['npcs'] as $index => $entry) {
       $ordinal = is_int($index) ? $index + 1 : strval($index);
 
       if (! is_array($entry)) {
@@ -1905,6 +2381,16 @@ class ProjectValidator
 
       $name = is_scalar($entry['name'] ?? null) ? trim(strval($entry['name'])) : '';
       $where = sprintf('%s NPC %s', $map->mapId, $name !== '' ? $name : sprintf('entry %s', $ordinal));
+
+      if (array_key_exists('sprites2d', $entry)) {
+        try {
+          if (! is_array($entry['sprites2d'])) { throw new \RuntimeException('sprites2d must be a character sheet definition array.'); }
+          \Ichiloto\Editor\Field\NpcCharacterSheet::validate($entry['sprites2d'], $workspace->projectRoot . '/assets');
+        } catch (\Throwable $error) {
+          $issues[] = Issue::warning($where, 'Invalid sprites2d: ' . $error->getMessage(),
+            'The game keeps the terminal appearance and interaction. Name an RPG Maker character sheet (sheet, optional index and layer), or remove the optional sprites2d.');
+        }
+      }
 
       if ($name === '') {
         $issues[] = Issue::error(
@@ -1941,7 +2427,7 @@ class ProjectValidator
    * @param string $where Where it lives.
    * @param int $width The map width.
    * @param int $height The map height.
-   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int}> $anchors Anchors seen so far, appended to.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>}> $anchors Anchors seen so far, appended to.
    * @param string $name The NPC's name.
    * @param int|string $index The entry index.
    * @return Issue[] The issues found.
@@ -1986,6 +2472,7 @@ class ProjectValidator
       'where' => $where,
       'wanders' => strval($entry['movement'] ?? 'fixed') === 'wander',
       'width' => ProjectNpc::glyphWidth($sprite),
+      'conditions' => is_array($entry['conditions'] ?? null) ? $entry['conditions'] : [],
     ];
 
     if ($x < 0 || $y < 0 || $x >= $width || $y >= $height) {
@@ -2000,7 +2487,8 @@ class ProjectValidator
   }
 
   /**
-   * Checks the base sprite: present as text, visible, and inside the map.
+   * Checks the base sprite: text and inside the map, with explicit empty
+   * text reserved for an interaction whose appearance belongs to the map.
    *
    * @param array<string, mixed> $entry The NPC entry.
    * @param string $where Where it lives.
@@ -2019,6 +2507,10 @@ class ProjectValidator
         sprintf('Its sprite is %s, not text.', get_debug_type($entry['sprite'])),
         'Write the glyph as a string, with optional <fg=...> style tags.'
       )];
+    }
+
+    if ($entry['sprite'] === '') {
+      return [];
     }
 
     $sprite = strval($entry['sprite']);
@@ -2045,8 +2537,9 @@ class ProjectValidator
   }
 
   /**
-   * Checks the movement mode and the wander area against how the game
-   * wanders: only into tiles inside the area, never off the map.
+   * Checks the movement mode, the direction fix and the wander area against
+   * how the game moves: wandering only into tiles inside the area, never off
+   * the map, and turning to the player unless the heading is fixed.
    *
    * @param array<string, mixed> $entry The NPC entry.
    * @param string $where Where it lives.
@@ -2075,6 +2568,23 @@ class ProjectValidator
     }
 
     $wanders = $movement === 'wander';
+
+    if (array_key_exists('directionFix', $entry) && ! is_bool($entry['directionFix'])) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('Its directionFix is %s, not true or false.', get_debug_type($entry['directionFix'])),
+        'The game keeps its heading only for exactly true, so it turns to face the player. Write true or false.'
+      );
+    }
+
+    if (array_key_exists('facing', $entry)
+      && (! is_string($entry['facing']) || ! in_array(strtolower(trim($entry['facing'])), ProjectNpc::DIRECTIONS, true))) {
+      $issues[] = Issue::warning(
+        $where,
+        sprintf('Its facing %s is not north, south, east or west.', is_string($entry['facing']) ? "\"{$entry['facing']}\"" : get_debug_type($entry['facing'])),
+        'The game stands it facing south instead. Choose one of the four headings.'
+      );
+    }
 
     if (! array_key_exists('wanderArea', $entry)) {
       return $issues;
@@ -2263,14 +2773,9 @@ class ProjectValidator
       );
     }
 
-    $isVariantList = false;
-
-    foreach ($dialogue as $page) {
-      if (is_array($page) && (isset($page['lines']) || isset($page['script']) || isset($page['conditions']))) {
-        $isVariantList = true;
-        break;
-      }
-    }
+    // The Engine's own test, so the editor never disagrees with the game about which it is reading.
+    $isVariantList = ConditionalDialogue::isVariantList($dialogue);
+    $isPage = static fn(array $page): bool => array_intersect(array_keys($page), ConditionalDialogue::VARIANT_FIELDS) !== [];
 
     foreach ($dialogue as $position => $page) {
       if (! is_array($page)) {
@@ -2280,7 +2785,7 @@ class ProjectValidator
       $ordinal = is_int($position) ? $position + 1 : strval($position);
 
       if ($isVariantList) {
-        if (! isset($page['lines']) && ! isset($page['script']) && ! isset($page['conditions'])) {
+        if (! $isPage($page)) {
           $issues[] = Issue::error(
             $where,
             sprintf('Dialogue entry %s is a plain page inside a list of variants.', $ordinal),
@@ -2332,6 +2837,29 @@ class ProjectValidator
   }
 
   /**
+   * Returns each event marker's tiles on a map, keyed "x,y".
+   *
+   * @param ProjectMap $map The map.
+   * @return array<string, array<string, true>> Tiles keyed by marker.
+   */
+  protected function eventAreaCells(ProjectMap $map): array
+  {
+    $cells = [];
+
+    for ($y = 0; $y < $map->getHeight(); $y++) {
+      for ($x = 0; $x < $map->getWidth(); $x++) {
+        $marker = $map->getEventSymbol($x, $y);
+
+        if (trim($marker) !== '') {
+          $cells[$marker]["{$x},{$y}"] = true;
+        }
+      }
+    }
+
+    return $cells;
+  }
+
+  /**
    * Reports fields the runtime does not read. They are preserved by the
    * editor, so this is a warning, not a loss.
    *
@@ -2361,25 +2889,43 @@ class ProjectValidator
    * Checks where NPCs stand against each other, against event tiles and
    * spawn tiles.
    *
-   * The game refuses to move onto a tile an NPC stands on, so a fixed NPC
-   * on an event tile makes that event unreachable; a wanderer only blocks
-   * it while there. Two NPCs on one tile: `npcAt` finds the first, so the
-   * second can never be spoken to while both stand still.
+   * The game refuses to move onto a tile an NPC stands on. An NPC on one
+   * tile of an event's area is fine while the area has another tile to step
+   * onto (a shopkeeper behind the counter of a shop area, a guest inside a
+   * celebration area). Only when fixed NPCs cover every tile of the area can
+   * the event never fire; a wanderer only blocks it while there. Two NPCs on
+   * one tile: `npcAt` finds the first, so the second can never be spoken to
+   * while both stand still, unless their visibility conditions exclude each
+   * other, as phases of one presence do.
    *
    * @param ProjectMap $map The map.
    * @param ProjectWorkspace $workspace The project.
-   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int}> $anchors The NPC anchors.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>}> $anchors The NPC anchors.
    * @return Issue[] The issues found.
    */
   protected function checkNpcCollisions(ProjectMap $map, ProjectWorkspace $workspace, array $anchors): array
   {
     $issues = [];
-    $definitions = (array) ($map->data['events'] ?? []);
+    $definitions = (array) ($map->getEditableData()['events'] ?? []);
     $spawns = $this->spawnTilesOn($map, $workspace);
+    $occupiedBy = ['fixed' => [], 'any' => []];
+
+    foreach ($anchors as $anchor) {
+      $cell = $anchor['x'] . ',' . $anchor['y'];
+      $occupiedBy['any'][$cell] = true;
+
+      if (! $anchor['wanders']) {
+        $occupiedBy['fixed'][$cell] = true;
+      }
+    }
+
+    $areaCells = $this->eventAreaCells($map);
 
     foreach ($anchors as $index => $anchor) {
       foreach ($anchors as $otherIndex => $other) {
-        if ($otherIndex <= $index) {
+        // Phases whose visibility conditions exclude each other are never
+        // on the field together, so they may share or overlap a tile.
+        if ($otherIndex <= $index || WorldConditionExclusion::proveExclusive($anchor['conditions'], $other['conditions'])) {
           continue;
         }
 
@@ -2411,19 +2957,21 @@ class ProjectValidator
 
       $marker = $map->getEventSymbol($anchor['x'], $anchor['y']);
 
-      if (trim($marker) !== '' && isset($definitions[$marker])) {
+      $isAreaCovered = static fn(array $occupied): bool => array_diff_key($areaCells[$marker] ?? [], $occupied) === [];
+
+      if (trim($marker) !== '' && isset($definitions[$marker]) && $isAreaCovered($occupiedBy['any'])) {
         $class = is_array($definitions[$marker]) ? strval($definitions[$marker]['class'] ?? '') : '';
         $classLabel = $class !== '' ? sprintf(' (%s)', basename(str_replace('\\', '/', $class))) : '';
-        $issues[] = $anchor['wanders']
+        $issues[] = ! $isAreaCovered($occupiedBy['fixed'])
           ? Issue::warning(
             $anchor['where'],
-            sprintf('It starts on event marker %s%s at (%d, %d).', $marker, $classLabel, $anchor['x'], $anchor['y']),
-            'The player cannot step onto that tile while the NPC stands there, so the event cannot fire until it wanders off.'
+            sprintf('It starts on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $marker, $classLabel, $anchor['x'], $anchor['y']),
+            'The player cannot step onto the event while they stand there, so it cannot fire until a wanderer moves off.'
           )
           : Issue::error(
             $anchor['where'],
-            sprintf('It stands on event marker %s%s at (%d, %d).', $marker, $classLabel, $anchor['x'], $anchor['y']),
-            'The player can never step onto that tile, so the event never fires. Move the NPC or the marker.'
+            sprintf('It stands on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $marker, $classLabel, $anchor['x'], $anchor['y']),
+            'The player can never step onto the event, so it never fires. Move the NPC, or give the event a free tile.'
           );
       }
 
@@ -2456,7 +3004,7 @@ class ProjectValidator
   protected function spawnTilesOn(ProjectMap $map, ProjectWorkspace $workspace): array
   {
     $spawns = [];
-    $positions = $workspace->systemDatabase->getField('startingPositions');
+    $positions = $workspace->getSystemField('startingPositions');
     $start = is_array($positions) ? ($positions['player'] ?? null) : null;
 
     if (
@@ -2474,7 +3022,7 @@ class ProjectValidator
     }
 
     foreach ($workspace->maps as $source) {
-      foreach ((array) ($source->data['events'] ?? []) as $marker => $definition) {
+      foreach ((array) ($source->getEditableData()['events'] ?? []) as $marker => $definition) {
         if (! is_array($definition)) {
           continue;
         }
@@ -2515,7 +3063,7 @@ class ProjectValidator
     $seen = [];
     $issues = [];
 
-    foreach ((array) ($map->data['npcs'] ?? []) as $index => $npc) {
+    foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $index => $npc) {
       if (! is_array($npc)) {
         continue;
       }
@@ -2633,7 +3181,7 @@ class ProjectValidator
 
     $names = [];
 
-    foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+    foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $npc) {
       if (! is_array($npc) || trim(strval($npc['id'] ?? '')) !== '') {
         continue;
       }
@@ -2688,10 +3236,22 @@ class ProjectValidator
     $keyOfArray = [];
     $pendingKey = null;
     $occurrences = [];
+    // Whether each open bracket or parenthesis opened an array: `[...]`, or
+    // `array(...)` as var_export writes it, beside the parentheses of calls.
+    $opened = [];
+    $previous = null;
 
     foreach ($tokens as $index => $token) {
+      if (is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+        continue;
+      }
+      $after = $previous;
+      $previous = $token;
+
       if (! is_array($token)) {
-        if ($token === '[') {
+        $opens = $token === '[' || ($token === '(' && is_array($after) && $after[0] === T_ARRAY);
+        if ($opens) {
+          $opened[] = true;
           $depth++;
           // The key this array was written against, so a nested block knows
           // its own name.
@@ -2701,10 +3261,18 @@ class ProjectValidator
           continue;
         }
 
-        if ($token === ']') {
-          unset($keyOfArray[$depth]);
-          $depth = max(0, $depth - 1);
-          $pendingKey = null;
+        if ($token === '(') {
+          $opened[] = false;
+
+          continue;
+        }
+
+        if ($token === ']' || $token === ')') {
+          if (array_pop($opened) === true) {
+            unset($keyOfArray[$depth]);
+            $depth = max(0, $depth - 1);
+            $pendingKey = null;
+          }
 
           continue;
         }
@@ -2770,7 +3338,7 @@ class ProjectValidator
    */
   protected function checkQuests(ProjectWorkspace $workspace): array
   {
-    $quests = $workspace->questDatabase->getQuests();
+    $quests = $workspace->getQuests();
 
     if ($quests === []) {
       return [];
@@ -2794,8 +3362,9 @@ class ProjectValidator
 
       $issues = [
         ...$issues,
-        ...$this->checkObjectives($quest, $where, $workspace->mapIds, $items, $foes, $known),
+        ...$this->checkObjectives($quest, $where, $workspace->mapIds, $items, $foes, $known, $workspace),
         ...$this->checkConditions($quest->getPrerequisites(), $where, $known, true),
+        ...$this->checkWaymarks($quest->getStartWaymarks(), $where . ' start', $workspace->mapIds, $known, $workspace),
       ];
     }
 
@@ -2820,6 +3389,7 @@ class ProjectValidator
     array $items,
     array $foes,
     array $known,
+    ?ProjectWorkspace $workspace = null,
   ): array
   {
     $objectives = $quest->getObjectives();
@@ -2867,6 +3437,8 @@ class ProjectValidator
         ];
       }
 
+      $issues = [...$issues, ...$this->checkWaymarks($objective['waymarks'] ?? [], $where, $mapIds, $known, $workspace)];
+
       if ($target === '') {
         $issues[] = Issue::error($where, sprintf('A "%s" objective names no target.', $type), 'It can never advance.');
         continue;
@@ -2886,6 +3458,55 @@ class ProjectValidator
           'The objective can never be satisfied.'
         );
       }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks a list of quest waymarks (an objective's, or a quest's start
+   * waymarks): the Engine's own shape rules, a map the project defines, a
+   * subject that map still has, and their conditions.
+   *
+   * @param mixed $waymarks The authored list.
+   * @param string[] $mapIds Every map in the project.
+   * @param array<string, string[]> $known Known project references.
+   * @return Issue[] The issues found.
+   */
+  protected function checkWaymarks(mixed $waymarks, string $where, array $mapIds, array $known, ?ProjectWorkspace $workspace): array
+  {
+    if (! is_array($waymarks) || ! array_is_list($waymarks)) {
+      return [Issue::error($where, 'The waymarks are malformed.', 'Use a list of waymarks, each naming a map.')];
+    }
+
+    $issues = [];
+    $categories = ['event' => 'event_markers', 'npc' => 'map_npcs', 'object' => 'map_world_objects', 'landmark' => 'map_landmarks'];
+
+    foreach ($waymarks as $index => $entry) {
+      $at = sprintf('%s waymark %d', $where, $index + 1);
+
+      try {
+        $waymark = QuestWaymark::fromArray($entry);
+      } catch (InvalidArgumentException $exception) {
+        $issues[] = Issue::error($at, 'The waymark cannot be read: ' . $exception->getMessage(), 'The quest is skipped until it is fixed.');
+        continue;
+      }
+
+      if (! in_array($waymark->map, $mapIds, true)) {
+        $issues[] = Issue::error($at, sprintf('The waymark names the map "%s", which the project does not define.', $waymark->map),
+          'Choose one of the project\'s maps.');
+        continue;
+      }
+
+      $map = $workspace === null ? null : (new ReferenceCatalog($workspace))->findMap($waymark->map);
+
+      if ($waymark->subject !== null && $map !== null
+        && ! in_array($waymark->subjectId, (new ReferenceCatalog($workspace, $map))->valuesFor($categories[$waymark->subject->value]), true)) {
+        $issues[] = Issue::error($at, sprintf('The waymark points at %s "%s", which %s does not have.',
+          $waymark->subject->value, $waymark->subjectId, $waymark->map), 'It would never be shown; choose what is on that map now.');
+      }
+
+      $issues = [...$issues, ...$this->checkConditions($waymark->conditions, $at, $known)];
     }
 
     return $issues;
@@ -2943,14 +3564,39 @@ class ProjectValidator
       'sfx' => $catalog->valuesFor('sfx'),
       'common_events' => $catalog->valuesFor('common_events'),
       'cinematics' => $catalog->valuesFor('cinematics'),
+      'animations' => $catalog->valuesFor('animations'),
+      'effects' => $catalog->valuesFor('effects'),
+      'actors' => $catalog->valuesFor('actors'),
+      'income_schedules' => $catalog->valuesFor('income_schedules'),
     ];
 
     return [
+      ...$this->checkConfigReferences($workspace, $known),
       ...$this->checkSkitReferences($workspace, $known),
       ...$this->checkMapReferences($workspace, $known),
       ...$this->checkScriptReferences($workspace, $known),
+      ...$this->checkTroopEventReferences($workspace, $known),
       ...$this->checkAchievementReferences($workspace, $known),
     ];
+  }
+
+  /**
+   * Checks the config.php settings that name another resource, where this
+   * validation knows the resources of that kind.
+   *
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkConfigReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $issues = [];
+    foreach (ProjectConfig::ENGINE_REFERENCES as $path => $category) {
+      $value = $workspace->config?->getRecord($path)->get('value');
+      if (is_string($value) && isset($known[$category])) {
+        $issues = [...$issues, ...$this->checkReference($value, $category, 'setting ' . $path, 'config.php: ' . $path, $known)];
+      }
+    }
+    return $issues;
   }
 
   /**
@@ -3008,6 +3654,12 @@ class ProjectValidator
     }
 
     $issues = [];
+    try {
+      $actors = $workspace->actorDatabase->createActorStore();
+    } catch (InvalidArgumentException|\RuntimeException $exception) {
+      $actors = null;
+      $issues[] = Issue::error('skit actors', $exception->getMessage(), 'Repair the actor registry before validating skit actor references.');
+    }
 
     foreach ($database->getRecords() as $record) {
       $skit = (array) $record->toArray();
@@ -3023,6 +3675,26 @@ class ProjectValidator
       }
 
       $issues = [...$issues, ...$this->checkConditions((array) ($skit['conditions'] ?? []), $where, $known)];
+      foreach ($skit['beats'] ?? [] as $index => $beat) {
+        if (! is_array($beat)) {
+          $issues[] = Issue::error($where, 'Each skit beat must be a data record.');
+          continue;
+        }
+        if ($actors === null) { continue; }
+        $speaker = SkitSpeaker::getFromBeat($beat, $actors);
+        $beatLocation = sprintf('%s beat %d', $where, $index + 1);
+        foreach ($speaker->notices as $notice) {
+          $issues[] = Issue::warning($beatLocation, $notice, 'Choose the Actor picker to persist the stable actor id.');
+        }
+        foreach ($speaker->errors as $error) {
+          $hint = array_key_exists('actor', $beat) && array_key_exists('speaker', $beat)
+            ? 'Choose an Actor, or enter a non-actor speaker, not both.'
+            : (array_key_exists('actor', $beat)
+              ? 'Choose an existing actor from the Actor picker; the reference must use its stable id, not its display name.'
+              : 'Enter plain display text for a non-actor speaker.');
+          $issues[] = Issue::error($beatLocation, $error, $hint);
+        }
+      }
     }
 
     return $issues;
@@ -3035,6 +3707,33 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issues found.
    */
+  /**
+   * Checks what each troop event page's commands name (items, sounds,
+   * Common Events, switches) as a script's commands are checked.
+   *
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[]
+   */
+  protected function checkTroopEventReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $database = $workspace->getRecordDatabase('troops');
+    $issues = [];
+
+    foreach ($database instanceof ProjectRecordDatabase ? $database->getRecords() : [] as $record) {
+      $name = trim(strval($record->get('name') ?? '')) ?: '(unnamed)';
+      $pages = $record->get('events');
+
+      foreach (is_array($pages) ? $pages : [] as $page => $entry) {
+        if (is_array($entry) && is_array($entry['commands'] ?? null)) {
+          $issues = [...$issues, ...$this->checkCommands($entry['commands'],
+            sprintf('troop %s event page %d', $name, intval($page) + 1), $known)];
+        }
+      }
+    }
+
+    return $issues;
+  }
+
   protected function checkScriptReferences(ProjectWorkspace $workspace, array $known): array
   {
     $database = $workspace->getRecordDatabase('common_events');
@@ -3097,6 +3796,22 @@ class ProjectValidator
     array $commonEventStack = [],
   ): array
   {
+    $context = ['map' => ScriptMapState::startOn($mapId, $npcIds), 'npcIdsByMap' => $npcIdsByMap];
+
+    return $this->walkEventCommands($commands, $where, $known, $context, $commonEventStack);
+  }
+
+  /**
+   * Nested sequences and Common Events share the caller's current map.
+   * Independent entry points receive a fresh context through checkCommands().
+   * @param array<int, mixed> $commands
+   * @param array<string, string[]> $known
+   * @param array{map: ScriptMapState, npcIdsByMap: array<string, string[]>} $context
+   * @param string[] $commonEventStack
+   * @return Issue[]
+   */
+  protected function walkEventCommands(array $commands, string $where, array $known, array &$context, array $commonEventStack = []): array
+  {
     $issues = [];
 
     foreach ($commands as $command) {
@@ -3106,17 +3821,19 @@ class ProjectValidator
 
       $type = strval($command['type'] ?? '');
 
-      if (! in_array($type, EventInterpreter::COMMAND_TYPES, true)) {
+      $registered = ScriptCommandRegistry::getCatalog()->findDefinition($type);
+
+      if ($registered !== null) {
+        $issues = [...$issues, ...$this->checkRegisteredCommand($registered, $command, $where, $known)];
+      } elseif (! in_array($type, EventInterpreter::COMMAND_TYPES, true)) {
         $issues[] = Issue::error(
           $where,
           sprintf('It uses the unknown event command type "%s".', $type !== '' ? $type : '(empty)'),
-          'Choose a command supported by the runtime EventInterpreter.'
+          'Choose a command built into the runtime, or one the Engine or the project registers.'
         );
       }
 
-      if ($type === 'knowledge') {
-        $issues = [...$issues, ...$this->checkKnowledgeCommand($command, $where)];
-      }
+      $issues = [...$issues, ...$this->checkSharedCommandSemantics($command, $where, $context['map']->npcIds, $context['map']->description)];
 
       $named = match ($type) {
         'give_item' => ['inventory', 'item', 'item'],
@@ -3136,11 +3853,15 @@ class ProjectValidator
         ];
       }
 
-      if ($type === 'move_route') {
-        $issues = [
-          ...$issues,
-          ...$this->checkMovementRoute($command, $where, $npcIds, $mapId),
-        ];
+      if ($type === 'field_animation') {
+        // An event script runs the same command a cinematic does, and the
+        // runtime holds it to the same contract.
+        try {
+          CinematicScriptValidator::validateFieldAnimation($command, $where, 'command');
+          $issues = [...$issues, ...$this->checkFieldAnimationReference($command, $where, $known)];
+        } catch (InvalidArgumentException $exception) {
+          $issues[] = Issue::error($where, $exception->getMessage(), 'The runtime stops the script at this command.');
+        }
       }
 
       if ($type === 'common_event') {
@@ -3164,13 +3885,11 @@ class ProjectValidator
             if (in_array($eventId, $commonEventStack, true)) {
               $issues[] = $this->getCommonEventCycleIssue($where, [...$commonEventStack, $eventId]);
             } else {
-              $issues = [...$issues, ...$this->checkCommands(
+              $issues = [...$issues, ...$this->walkEventCommands(
                 $this->commonEventScripts[$eventId],
                 sprintf('%s common event %s', $where, $eventId),
                 $known,
-                $npcIds,
-                $mapId,
-                $npcIdsByMap,
+                $context,
                 [...$commonEventStack, $eventId],
               )];
             }
@@ -3178,83 +3897,59 @@ class ProjectValidator
         }
       }
 
-      if ($type === 'start_battle') {
-        $issues = [
-          ...$issues,
-          ...$this->checkBattleContinuation($command, $where),
-        ];
-      }
-
       $issues = [...$issues, ...$this->checkConditions((array) ($command['conditions'] ?? []), $where, $known)];
 
       if ($type === 'sequence') {
-        $issues = [...$issues, ...$this->checkCommands(
+        $issues = [...$issues, ...$this->walkEventCommands(
           (array) ($command['commands'] ?? []),
           $where,
           $known,
-          $npcIds,
-          $mapId,
-          $npcIdsByMap,
+          $context,
           $commonEventStack,
         )];
       }
 
       if ($type === 'parallel') {
-        foreach ((array) ($command['lanes'] ?? []) as $lane) {
-          if (! is_array($lane)) {
-            continue;
-          }
+        [$laneIssues, $context['map']] = $this->walkParallelLanes(
+          $command,
+          $context['map'],
+          $context['npcIdsByMap'],
+          $commonEventStack,
+          function (array $laneCommands, ScriptMapState $laneStart) use (&$context, $where, $known, $commonEventStack): array {
+            $context['map'] = $laneStart;
+            $laneIssues = $this->walkEventCommands($laneCommands, $where, $known, $context, $commonEventStack);
 
-          $laneCommands = array_is_list($lane) ? $lane : (array) ($lane['commands'] ?? []);
-          $issues = [...$issues, ...$this->checkCommands(
-            $laneCommands,
-            $where,
-            $known,
-            $npcIds,
-            $mapId,
-            $npcIdsByMap,
-            $commonEventStack,
-          )];
-        }
+            return [$laneIssues, $context['map']];
+          },
+        );
+        $issues = [...$issues, ...$laneIssues];
       }
 
-      // A choice hides its commands one level down, per option.
-      foreach ((array) ($command['options'] ?? []) as $option) {
-        if (is_array($option)) {
-          $issues = [...$issues, ...$this->checkCommands(
-            (array) ($option['then'] ?? []),
-            $where,
-            $known,
-            $npcIds,
-            $mapId,
-            $npcIdsByMap,
-            $commonEventStack,
-          )];
-        }
-      }
-
-      foreach (['then', 'else', 'cancel'] as $arm) {
-        $issues = [...$issues, ...$this->checkCommands(
-          (array) ($command[$arm] ?? []),
+      // Alternative arms start on the same map, not at the end of a sibling arm.
+      $branchContexts = [];
+      foreach (CommandMapContext::getArms($command) as $arm) {
+        $branchContext = $context;
+        $issues = [...$issues, ...$this->walkEventCommands(
+          $arm['commands'],
           $where,
           $known,
-          $npcIds,
-          $mapId,
-          $npcIdsByMap,
+          $branchContext,
           $commonEventStack,
         )];
+        $branchContexts[] = $branchContext;
+      }
+
+      if ($branchContexts !== []) {
+        // An omitted alternative can leave the current map unchanged.
+        if (CommandMapContext::canSkipArms($command)) {
+          $branchContexts[] = $context;
+        }
+        // A command after a branch can address only NPCs present on every possible map.
+        $context['map'] = ScriptMapState::mergeStates(array_column($branchContexts, 'map'));
       }
 
       if ($type === 'transfer') {
-        $destination = trim(strval($command['map'] ?? ''));
-
-        if ($destination !== '' && array_key_exists($destination, $npcIdsByMap)) {
-          $mapId = $destination;
-          $npcIds = $npcIdsByMap[$destination];
-        } else {
-          $mapId = $destination !== '' ? $destination : $mapId;
-          $npcIds = null;
-        }
+        $context['map'] = $context['map']->transferTo(trim(strval($command['map'] ?? '')), $context['npcIdsByMap']);
       }
     }
 
@@ -3262,13 +3957,77 @@ class ProjectValidator
   }
 
   /**
-   * Checks one deterministic, awaited movement route.
+   * Walks a parallel command's lanes as the Engine runs them: together, on
+   * the one current map, which a transfer in any lane changes for every lane.
+   * Each lane starts on the incoming map or any map a sibling lane transfers
+   * to, and its own transfers can be overtaken by a sibling's. The block ends
+   * where its transferring lanes can finish, or where it started when no
+   * lane transfers.
+   *
+   * @param array<string, mixed> $command The parallel command.
+   * @param array<string, string[]> $npcIdsByMap Each known map's NPCs.
+   * @param string[] $commonEventStack Reusable event scripts being followed.
+   * @param callable(array<int, mixed>, ScriptMapState): array{Issue[], ScriptMapState} $walkLane Walks one lane from its start state, returning its issues and end state.
+   * @return array{Issue[], ScriptMapState} The lanes' issues and the state after the block.
+   */
+  protected function walkParallelLanes(
+    array $command,
+    ScriptMapState $start,
+    array $npcIdsByMap,
+    array $commonEventStack,
+    callable $walkLane,
+  ): array
+  {
+    $lanes = CommandMapContext::getLanes($command);
+    $findCommonEvent = fn(string $id): ?array => $this->commonEventScripts[$id] ?? null;
+    $destinations = array_map(
+      static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, array_values($commonEventStack)),
+      $lanes,
+    );
+    $issues = [];
+    $ends = [];
+
+    foreach ($lanes as $index => $lane) {
+      $siblings = array_values(array_unique(array_merge([], ...array_values(array_diff_key($destinations, [$index => true])))));
+      $laneStart = ScriptMapState::mergeStates([
+        $start,
+        ...array_map(static fn(string $map): ScriptMapState => $start->arriveOn($map, $npcIdsByMap), $siblings),
+      ])->setConcurrentMaps([...$start->concurrentMaps, ...$siblings]);
+      [$laneIssues, $end] = $walkLane($lane['commands'], $laneStart);
+      $issues = [...$issues, ...$laneIssues];
+
+      if ($destinations[$index] !== []) {
+        $ends[] = $end;
+      }
+    }
+
+    return [$issues, $ends !== [] ? ScriptMapState::mergeStates($ends)->setConcurrentMaps($start->concurrentMaps) : $start];
+  }
+
+  /**
+   * Shared project/runtime checks used by both event ownership paths.
+   * @param array<string, mixed> $command
+   * @param string[]|null $npcIds
+   * @return Issue[]
+   */
+  protected function checkSharedCommandSemantics(array $command, string $where, ?array $npcIds, ?string $mapId, bool $cinematic = false): array
+  {
+    return match ($command['type'] ?? '') {
+      'knowledge' => $this->checkKnowledgeCommand($command, $where),
+      'start_battle' => $this->checkBattleContinuation($command, $where),
+      'move_route' => $this->checkMovementRoute($command, $where, $npcIds, $mapId, $cinematic),
+      default => [],
+    };
+  }
+
+  /**
+   * Checks one deterministic, awaited movement route in its owning lifecycle.
    *
    * @param array<string, mixed> $command The route command.
    * @param string[]|null $npcIds Current-map NPC ids, or null without map context.
    * @return Issue[] The issues found.
    */
-  protected function checkMovementRoute(array $command, string $where, ?array $npcIds, ?string $mapId): array
+  protected function checkMovementRoute(array $command, string $where, ?array $npcIds, ?string $mapId, bool $cinematic = false): array
   {
     $issues = [];
 
@@ -3284,15 +4043,17 @@ class ProjectValidator
 
     $subject = strtolower(trim(strval($command['subject'] ?? 'player')));
 
-    if (! in_array($subject, ['player', 'npc'], true)) {
+    $subjects = $cinematic ? ['player', 'npc', 'staged_actor'] : ['player', 'npc'];
+
+    if (! in_array($subject, $subjects, true)) {
       $issues[] = Issue::error(
         $where,
         sprintf('A movement route uses unsupported subject "%s".', $subject !== '' ? $subject : '(empty)'),
-        'Choose player or npc.'
+        'Choose ' . implode(', ', $subjects) . '.'
       );
     }
 
-    if (array_key_exists('remember', $command) || array_key_exists('retrace', $command)) {
+    if (! $cinematic && (array_key_exists('remember', $command) || array_key_exists('retrace', $command))) {
       $issues[] = Issue::error(
         $where,
         'Recorded movement routes require an active cinematic session.',
@@ -3304,12 +4065,24 @@ class ProjectValidator
 
     if ($subject === 'npc' && $npcId === '') {
       $issues[] = Issue::error($where, 'An NPC movement route has no npcId.', 'Choose a stable current-map NPC id.');
-    } elseif ($subject === 'npc' && $npcIds !== null && ! in_array($npcId, $npcIds, true)) {
+    } elseif (! $cinematic && $subject === 'npc' && $npcIds !== null && ! in_array($npcId, $npcIds, true)) {
       $issues[] = Issue::error(
         $where,
         sprintf('The route targets NPC id "%s", which is not on map "%s".', $npcId, $mapId ?? '(unknown)'),
         'Add that stable id to the map NPC or choose an id that exists.'
       );
+    }
+
+    foreach ((array) ($command['waypoints'] ?? []) as $waypoint) {
+      $at = is_array($waypoint) && is_array($waypoint['at'] ?? null) ? $waypoint['at'] : null;
+      $atNpc = $at !== null && ($at['kind'] ?? null) === 'npc' ? trim(strval($at['id'] ?? '')) : '';
+      if (! $cinematic && $atNpc !== '' && $npcIds !== null && ! in_array($atNpc, $npcIds, true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('A route waypoint is relative to NPC id "%s", which is not on map "%s".', $atNpc, $mapId ?? '(unknown)'),
+          'Choose an NPC on the map the route runs on.'
+        );
+      }
     }
 
     $wait = $command['wait'] ?? true;
@@ -3416,6 +4189,10 @@ class ProjectValidator
       $issues[] = Issue::error($where, 'A start_battle command names no troop.', 'Choose a configured troop.');
     }
 
+    if (array_key_exists(MapEncounters::ARENA_KEY, $command)) {
+      $issues = [...$issues, ...$this->checkBattleArena($command[MapEncounters::ARENA_KEY] ?? '', $where, 'A start_battle command')];
+    }
+
     if (
       array_key_exists('resultVariable', $command)
       && (! is_string($command['resultVariable']) || trim($command['resultVariable']) === '')
@@ -3434,6 +4211,18 @@ class ProjectValidator
         $where,
         sprintf('A start_battle command uses invalid defeatPolicy "%s".', $defeatPolicy),
         'Choose game_over or continue.'
+      );
+    }
+
+    if (
+      array_key_exists('reservePolicy', $command)
+      && ! in_array($command['reservePolicy'], ['none', 'replace_after_wipeout'], true)
+    ) {
+      $reservePolicy = $command['reservePolicy'];
+      $issues[] = Issue::error(
+        $where,
+        sprintf('A start_battle command uses invalid reservePolicy "%s".', is_scalar($reservePolicy) ? strval($reservePolicy) : get_debug_type($reservePolicy)),
+        'Choose none or replace_after_wipeout, or remove it: by default a wiped-out frontline loses the battle.'
       );
     }
 
@@ -3466,109 +4255,111 @@ class ProjectValidator
     $eventScripts = $this->commonEventScripts;
 
     foreach ($workspace->maps as $map) {
-      $issues = [
-        ...$issues,
-        ...$this->checkReference(strval($map->data['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
-        ...$this->checkBgmVariants($map, $known),
-      ];
-
-      foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
-        if (! is_array($definition)) {
-          continue;
-        }
-
-        $where = sprintf('%s event %s', $map->mapId, strval($marker));
-        $data = (array) ($definition['data'] ?? []);
-        $class = strval($definition['class'] ?? '');
-        $currentNpcIds = $npcIdsByMap[$map->mapId] ?? [];
-
-        $issues = [
-          ...$issues,
-          ...$this->checkEventCue($definition['cue'] ?? null, $where, $known),
-          ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
-          ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
-          ...$this->checkCommands(
-            (array) ($data['script'] ?? []),
-            $where,
-            $known,
-            $currentNpcIds,
-            $map->mapId,
-            $npcIdsByMap,
-          ),
-          ...$this->checkReference(strval($data['bgm'] ?? ''), 'bgm', 'track', $where, $known),
-          ...$this->checkReference(strval($data['sfx'] ?? ''), 'sfx', 'sound', $where, $known),
-        ];
-
-        if (str_contains($class, 'CinematicEventTrigger')) {
-          $issues = [...$issues, ...$this->checkCinematicTrigger($definition, $where, $known)];
-        }
-
-        if (str_contains($class, self::SCRIPT_TRIGGER)) {
-          $issues = [
-            ...$issues,
-            ...$this->checkScriptTrigger(
-              $definition,
-              $where,
-              $known,
-              $eventScripts,
-              $currentNpcIds,
-              $map->mapId,
-              $npcIdsByMap,
-            ),
-          ];
-        }
-
-        foreach ((array) ($data['items'] ?? []) as $stock) {
-          if (is_array($stock)) {
-            $issues = [
-              ...$issues,
-              ...$this->checkReference(strval($stock['item'] ?? ''), 'inventory', 'item', $where, $known),
-            ];
-          }
-        }
-
-        $issues = [...$issues, ...$this->checkChestLoot($data, $where, $known)];
-      }
-
-      foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
-        if (! is_array($npc)) {
-          continue;
-        }
-
-        $where = sprintf('%s NPC %s', $map->mapId, strval($npc['name'] ?? '(unnamed)'));
-        $issues = [
-          ...$issues,
-          ...$this->checkConditions((array) ($npc['conditions'] ?? []), $where, $known),
-          ...$this->checkDialogueVariants((array) ($npc['dialogue'] ?? []), $where, $known),
-          ...$this->checkCommands(
-            (array) ($npc['script'] ?? []),
-            $where,
-            $known,
-            $npcIdsByMap[$map->mapId] ?? [],
-            $map->mapId,
-            $npcIdsByMap,
-          ),
-          ...$this->checkStateWrites((array) ($npc['sets'] ?? []), $where),
-        ];
-      }
+      $issues = [...$issues, ...Issue::attributeToMap($this->checkMapContentReferences($map, $known, $npcIdsByMap, $eventScripts), $map->mapId)];
     }
 
     return $issues;
   }
 
   /**
-   * Checks what a chest gives out.
+   * Checks what one map's music, events and NPCs name.
    *
-   * A chest names its loot by kind: an inventory definition, a skill, or an
-   * amount of gold or experience. An inventory reference that resolves to
-   * nothing opens a chest that gives nothing, which looks exactly like a
-   * chest an author meant to leave empty.
-   *
-   * @param array<string, mixed> $data The trigger's data.
-   * @param string $where Where it lives.
-   * @param array<string, string[]> $known What the project defines.
+   * @param array<string, string[]> $known The known reference values.
+   * @param array<string, string[]> $npcIdsByMap Stable NPC ids by map id.
+   * @param array<string, array<int, mixed>> $eventScripts Script payloads by id.
    * @return Issue[] The issues found.
    */
+  protected function checkMapContentReferences(ProjectMap $map, array $known, array $npcIdsByMap, array $eventScripts): array
+  {
+    $issues = [
+      ...$this->checkReference(strval($map->getEditableData()['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
+      ...$this->checkBgmVariants($map, $known),
+    ];
+
+    foreach ((array) ($map->getEditableData()['events'] ?? []) as $marker => $definition) {
+      if (! is_array($definition)) {
+        continue;
+      }
+
+      $where = sprintf('%s event %s', $map->mapId, strval($marker));
+      $data = (array) ($definition['data'] ?? []);
+      $class = strval($definition['class'] ?? '');
+      $currentNpcIds = $npcIdsByMap[$map->mapId] ?? [];
+
+      $issues = [
+        ...$issues,
+        ...$this->checkEventCue($definition['cue'] ?? null, $where, $known),
+        ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
+        ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
+        ...$this->checkCommands(
+          (array) ($data['script'] ?? []),
+          $where,
+          $known,
+          $currentNpcIds,
+          $map->mapId,
+          $npcIdsByMap,
+        ),
+        ...$this->checkReference(strval($data['bgm'] ?? ''), 'bgm', 'track', $where, $known),
+        ...$this->checkReference(strval($data['sfx'] ?? ''), 'sfx', 'sound', $where, $known),
+      ];
+
+      if (str_contains($class, 'CinematicEventTrigger')) {
+        $issues = [...$issues, ...$this->checkCinematicTrigger($definition, $where, $known)];
+      }
+
+      if (str_contains($class, self::SCRIPT_TRIGGER)) {
+        $issues = [
+          ...$issues,
+          ...$this->checkScriptTrigger(
+            $definition,
+            $where,
+            $known,
+            $eventScripts,
+            $currentNpcIds,
+            $map->mapId,
+            $npcIdsByMap,
+          ),
+        ];
+      }
+
+      foreach ((array) ($data['items'] ?? []) as $stock) {
+        if (is_array($stock)) {
+          $issues = [
+            ...$issues,
+            ...$this->checkReference(strval($stock['item'] ?? ''), 'inventory', 'item', $where, $known),
+          ];
+        }
+      }
+    }
+
+    foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $npc) {
+      if (! is_array($npc)) {
+        continue;
+      }
+
+      $where = sprintf('%s NPC %s', $map->mapId, strval($npc['name'] ?? '(unnamed)'));
+      $issues = [
+        ...$issues,
+        ...$this->checkConditions((array) ($npc['conditions'] ?? []), $where, $known),
+        // An NPC's cue is the same contract as an event's, checked the same way.
+        ...$this->checkEventCue($npc['cue'] ?? null, $where, $known),
+        ...$this->checkDialogueVariants((array) ($npc['dialogue'] ?? []), $where, $known),
+        ...$this->checkNpcPageReferences((array) ($npc['dialogue'] ?? []), $where, $known),
+        ...$this->checkCommands(
+          (array) ($npc['script'] ?? []),
+          $where,
+          $known,
+          $npcIdsByMap[$map->mapId] ?? [],
+          $map->mapId,
+          $npcIdsByMap,
+        ),
+        ...$this->checkStateWrites((array) ($npc['sets'] ?? []), $where),
+      ];
+    }
+
+    return $issues;
+  }
+
   /**
    * Checks a map's conditional music the way the engine reads it: an
    * ordered list whose first matching variant selects the track.
@@ -3583,11 +4374,11 @@ class ProjectValidator
    */
   protected function checkBgmVariants(ProjectMap $map, array $known): array
   {
-    if (! array_key_exists('bgmVariants', $map->data)) {
+    if (! array_key_exists('bgmVariants', $map->getEditableData())) {
       return [];
     }
 
-    $variants = $map->data['bgmVariants'];
+    $variants = $map->getEditableData()['bgmVariants'];
     $where = $map->mapId;
 
     if (! is_array($variants) || ! array_is_list($variants)) {
@@ -3687,72 +4478,6 @@ class ProjectValidator
     return $issues;
   }
 
-  protected function checkChestLoot(array $data, string $where, array $known): array
-  {
-    if (! array_key_exists('lootType', $data) && ! array_key_exists('loot', $data)) {
-      return [];
-    }
-
-    // A chest may declare its kind as the runtime enum or as its value.
-    $rawType = $data['lootType'] ?? '';
-    $lootType = strtolower(trim($rawType instanceof \BackedEnum ? strval($rawType->value) : (is_scalar($rawType) ? strval($rawType) : '')));
-    $loot = $data['loot'] ?? null;
-    $issues = [];
-    $kinds = ['item', 'gold', 'experience', 'skill', 'spell', 'weapon', 'armor', 'accessory'];
-
-    if ($lootType !== '' && ! in_array($lootType, $kinds, true)) {
-      $issues[] = Issue::error(
-        $where,
-        sprintf('Its loot type "%s" is not one the game knows.', $lootType),
-        'Choose item, gold, experience, skill, spell, weapon, armor, or accessory.'
-      );
-
-      return $issues;
-    }
-
-    if ($loot === null || (is_string($loot) && trim($loot) === '')) {
-      // An unconfigured chest is a chest an author has not finished, not a
-      // broken reference.
-      return $issues;
-    }
-
-    if (in_array($lootType, ['gold', 'experience'], true)) {
-      if (! is_numeric($loot)) {
-        $issues[] = Issue::error(
-          $where,
-          sprintf('It gives %s "%s", which is not an amount.', $lootType, strval(is_scalar($loot) ? $loot : get_debug_type($loot))),
-          'Write a whole number.'
-        );
-      }
-
-      return $issues;
-    }
-
-    if ($loot instanceof \BackedEnum) {
-      $loot = $loot->value;
-    }
-
-    if (! is_scalar($loot)) {
-      $issues[] = Issue::error(
-        $where,
-        sprintf('Its loot is %s, not a reference.', get_debug_type($loot)),
-        'Choose the loot from the picker.'
-      );
-
-      return $issues;
-    }
-
-    // Only inventory loot is resolved here. A chest may also give a skill
-    // or a spell, and the same check would apply, but skill loot is not this
-    // boundary's subject and enabling it now would report existing project
-    // content that this work is not permitted to change. The gap is recorded
-    // for whoever owns that content rather than left to be rediscovered.
-    return [...$issues, ...match ($lootType) {
-      'skill', 'spell' => [],
-      // No kind declared: the runtime reads the loot as an item.
-      default => $this->checkReference(strval($loot), 'inventory', 'item', $where, $known),
-    }];
-  }
 
   /**
    * Checks ScriptEventTrigger's runtime-recognized fields and script picker.
@@ -3774,13 +4499,13 @@ class ProjectValidator
     array $npcIdsByMap,
   ): array {
     $issues = [];
-    $allowedRootFields = ['class', 'data', 'conditions', 'sets', 'whenBlocked', 'cue'];
-
-    foreach (array_diff(array_keys($definition), $allowedRootFields) as $field) {
+    // The Engine owns both vocabularies: the envelope every map event shares
+    // (whose combinations MapEventResolver checks) and this trigger's data.
+    foreach (array_diff(array_keys($definition), MapEventDefinition::ROOT_FIELDS) as $field) {
       $issues[] = Issue::error(
         $where,
         sprintf('ScriptEventTrigger uses unsupported root field "%s".', $field),
-        'Use class, data, conditions, sets, whenBlocked, or cue.'
+        sprintf('Use %s.', implode(', ', MapEventDefinition::ROOT_FIELDS))
       );
     }
 
@@ -3790,13 +4515,11 @@ class ProjectValidator
       return [...$issues, Issue::error($where, 'ScriptEventTrigger data is malformed.', 'Store its settings in a data array.')];
     }
 
-    $allowedDataFields = ['scriptId', 'script', 'mode', 'reusable'];
-
-    foreach (array_diff(array_keys($data), $allowedDataFields) as $field) {
+    foreach (array_diff(array_keys($data), ScriptEventTrigger::DATA_FIELDS) as $field) {
       $issues[] = Issue::error(
         $where,
         sprintf('ScriptEventTrigger uses unsupported data field "%s".', $field),
-        'Use scriptId, script, mode, or reusable.'
+        sprintf('Use %s.', implode(', ', ScriptEventTrigger::DATA_FIELDS))
       );
     }
 
@@ -3834,13 +4557,13 @@ class ProjectValidator
       }
     }
 
-    $mode = strval($data['mode'] ?? 'action');
+    $mode = strval($data['mode'] ?? ScriptEventTrigger::MODE_ACTION);
 
-    if (! in_array($mode, ['action', 'auto'], true)) {
+    if (! in_array($mode, ScriptEventTrigger::MODES, true)) {
       $issues[] = Issue::error(
         $where,
         sprintf('ScriptEventTrigger uses unsupported mode "%s".', $mode),
-        'Choose action or auto.'
+        sprintf('Choose %s.', implode(' or ', ScriptEventTrigger::MODES))
       );
     }
 
@@ -3862,6 +4585,8 @@ class ProjectValidator
    *
    * @return Issue[] The issues found.
    */
+
+
   protected function checkEventCue(mixed $cue, string $where, array $known): array
   {
     if ($cue === null) {
@@ -3873,8 +4598,14 @@ class ProjectValidator
     }
 
     $issues = [];
-    foreach (array_diff(array_keys($cue), ['symbol', 'color', 'conditions']) as $field) {
-      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol, color, or conditions.');
+    foreach (array_diff(array_keys($cue), ['symbol', 'color', 'conditions', 'kind']) as $field) {
+      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol, color, conditions, or kind.');
+    }
+
+    // Kind is a contract even for a cue whose blank symbol disables display.
+    if (array_key_exists('kind', $cue)
+      && (! is_string($cue['kind']) || EventCueKind::tryFrom($cue['kind']) === null)) {
+      $issues[] = Issue::error($where, 'Its authored event cue kind must be story or route.', 'Choose story or route, or omit kind for an unclassified cue.');
     }
 
     $issues = [
@@ -3923,7 +4654,7 @@ class ProjectValidator
     foreach ($workspace->maps as $map) {
       $idsByMap[$map->mapId] = [];
 
-      foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+      foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $npc) {
         if (! is_array($npc)) {
           continue;
         }
@@ -4000,6 +4731,46 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issues found.
    */
+  /**
+   * Checks what an NPC's pages name beyond their lines: the event script or
+   * Cinematic a page runs, and its cue. Their shape is the Engine's
+   * `npc.page` rule, reported with the map's completeness.
+   *
+   * @param array<int, mixed> $dialogue The NPC's dialogue as authored.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcPageReferences(array $dialogue, string $where, array $known): array
+  {
+    if (! ConditionalDialogue::isVariantList(array_values(array_filter($dialogue, is_array(...))))) {
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($dialogue as $index => $page) {
+      if (! is_array($page)) {
+        continue;
+      }
+
+      $here = sprintf('%s page %d', $where, intval($index) + 1);
+
+      if (is_string($page['scriptId'] ?? null) && trim($page['scriptId']) !== '') {
+        $issues = [...$issues, ...$this->checkReference(trim($page['scriptId']), 'common_events', 'event script', $here, $known)];
+      }
+
+      if (is_string($page['cinematicId'] ?? null) && trim($page['cinematicId']) !== '') {
+        $issues = [...$issues, ...$this->checkReference(trim($page['cinematicId']), 'cinematics', 'Cinematic', $here, $known)];
+      }
+
+      if (array_key_exists('cue', $page)) {
+        $issues = [...$issues, ...$this->checkEventCue($page['cue'], $here, $known)];
+      }
+    }
+
+    return $issues;
+  }
+
   protected function checkDialogueVariants(array $dialogue, string $where, array $known): array
   {
     $issues = [];
@@ -4116,6 +4887,112 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issue, if there is one.
    */
+  /**
+   * Checks what a `field_animation` command plays: a legacy animation by
+   * name, or an effect timeline that exists and plays once on the field.
+   *
+   * @param array<string, mixed> $command The command.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkFieldAnimationReference(array $command, string $where, array $known): array
+  {
+    if (! array_key_exists('effect', $command)) {
+      return $this->checkReference(strval($command['animation'] ?? ''), 'animations', 'animation', $where, $known);
+    }
+
+    $effect = is_string($command['effect']) ? $command['effect'] : '';
+    $issues = $this->checkReference($effect, 'effects', 'effect', $where, $known);
+
+    if ($issues !== [] || $effect === '') {
+      return $issues;
+    }
+
+    return $this->validatedWorkspace === null ? [] : EffectValidator::checkOneShotFieldEffect($this->validatedWorkspace->catalogs, $effect, $where);
+  }
+
+  /**
+   * Reports a project's command declarations the game would refuse to start
+   * with.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkScriptCommandDeclarations(ProjectWorkspace $workspace): array
+  {
+    $problem = $workspace->scriptCommands?->declarationProblem;
+
+    return $problem === null ? [] : [Issue::error(
+      'assets/' . ScriptCommandRegistry::PROJECT_FILE,
+      sprintf('The project\'s script commands could not be read: %s', $problem),
+      'The game will not start until it is fixed, and scripts using these commands are reported as unknown.'
+    )];
+  }
+
+  /**
+   * Checks a registered command against its declaration: everything the
+   * runtime would refuse it for, and every resource it names.
+   *
+   * @param array<string, mixed> $command The authored command.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkRegisteredCommand(ScriptCommandDefinition $definition, array $command, string $where, array $known): array
+  {
+    $issues = array_map(
+      static fn(string $problem): Issue => Issue::error(
+        $where,
+        sprintf('Its %s command cannot run: %s', $definition->type, $problem),
+        'The runtime stops the script at this command.'
+      ),
+      $definition->findProblems($command),
+    );
+
+    return [...$issues, ...$this->checkRegisteredReferences($definition, $command, $where, $known)];
+  }
+
+  /**
+   * Checks every resource a registered command names, in its list entries
+   * too.
+   *
+   * @param array<string, mixed> $command The authored command.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkRegisteredReferences(ScriptCommandDefinition $definition, array $command, string $where, array $known): array
+  {
+    $check = function (ScriptCommandField $field, array $data) use (&$check, $where, $known): array {
+      $value = ScriptCommandField::readPath($data, $field->key);
+
+      $category = $field->reference === null ? null : ProjectScriptCommands::getReferenceCategory($field->reference);
+
+      if ($field->kind === ScriptCommandFieldKind::REFERENCE && $category !== null && is_string($value)) {
+        return $this->checkReference($value, $category, strtolower($field->label), $where, $known);
+      }
+
+      if ($field->kind !== ScriptCommandFieldKind::LIST || ! is_array($value)) {
+        return [];
+      }
+
+      $issues = [];
+
+      foreach (array_filter($value, is_array(...)) as $entry) {
+        foreach ($field->fields as $entryField) {
+          $issues = [...$issues, ...$check($entryField, $entry)];
+        }
+      }
+
+      return $issues;
+    };
+    $issues = [];
+
+    foreach ($definition->fields as $field) {
+      $issues = [...$issues, ...$check($field, $command)];
+    }
+
+    return $issues;
+  }
+
   protected function checkReference(string $value, string $category, string $noun, string $where, array $known): array
   {
     $value = trim($value);

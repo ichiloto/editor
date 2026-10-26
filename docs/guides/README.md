@@ -19,6 +19,16 @@ Read these in order the first time:
    through the engine from the editor.
 7. [Author a Summon Cutscene](author-a-summon-cutscene.md) — a frame-driven
    battle presentation: tracks, keyframes, cues, and the actor assignment.
+8. [Make a Building](make-a-building.md): bring a building's art into a
+   tileset, define its piece, place it with its collision and give its door an
+   entrance, in the GUI editor.
+
+## For Agents And Scripts
+
+- [Change Maps From A Script](change-maps-from-a-script.md): every map change
+  an agent or script makes goes through the editor session, as a batch with
+  `ichiloto map:apply` or over `ichiloto edit:host`, and is written only when
+  the project it leaves is valid.
 
 ## What The Editor Can Do Today
 
@@ -29,8 +39,9 @@ Read these in order the first time:
   scripts, and completion writes.
 - Place and configure the event types: Dialogue, Transfer Player, Shop,
   Sleep, Chest, Story Script, and Cinematic.
-- Author cinematic and summon cutscenes on the Cutscenes screen (`F4`), and
-  preview both through the engine itself without writing a file.
+- Author cinematic and summon cutscenes and standalone effect timelines on
+  the Cutscenes screen (`F4`), and preview each through the engine itself
+  without writing a file.
 - Author actors, classes, skills, quests, animations, states, troops, skits,
   event scripts, terms, and system settings.
 - Browse items, weapons, armors, and enemies.

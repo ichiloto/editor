@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database\Projections;
 
+use Ichiloto\Editor\Database\OwnsFileKeys;
 use Ichiloto\Editor\Database\RecordProjection;
 
 /**
@@ -16,13 +17,19 @@ use Ichiloto\Editor\Database\RecordProjection;
  *
  * @package Ichiloto\Editor\Database\Projections
  */
-final readonly class KeyedListProjection implements RecordProjection
+final readonly class KeyedListProjection implements RecordProjection, OwnsFileKeys
 {
     /**
      * @param string $key The key holding this category's list.
      */
     public function __construct(private string $key)
     {
+    }
+
+    /** @inheritDoc */
+    public function listOwnedKeys(): array
+    {
+        return [$this->key];
     }
 
     /**

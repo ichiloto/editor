@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
 
 /**
  * One editable field on a Database record.
@@ -40,6 +42,16 @@ final readonly class RecordField
      * types this surface may author, when the runtime restricts it to fewer
      * than the writer's full vocabulary (a transactional boundary rejects
      * quest acceptance). Null offers everything the writer applies.
+     * @param bool $uniqueAcrossRecords For a list field, whether a member may
+     * be held by one record of the category at most (an animation role plays
+     * one animation), so taking one another record holds is refused.
+     * @param string|null $referenceMapKey For a map-local reference (an event
+     * marker, an NPC), the entry field naming the map its choices come from,
+     * when that is not the map the author has selected.
+     * @param string|null $entryChoices For a field chosen among values its own
+     * entry decides (an attachment of the world object the entry names), the
+     * source {@see ReferenceCatalog::listEntryChoices()} reads them from. The
+     * row offers them as options, and an edit outside them is refused.
      */
     public function __construct(
         public string $key,
@@ -56,7 +68,60 @@ final readonly class RecordField
         public ?string $displayDefault = null,
         public ?string $blankLabel = null,
         public ?array $writeTypes = null,
+        public bool $uniqueAcrossRecords = false,
+        /** For a line's emotion, how the line names its speaker, whose catalogue emotions it is chosen from. */
+        public ?DialogueLineSpeaker $dialogueSpeaker = null,
+        public ?string $referenceMapKey = null,
+        public ?string $entryChoices = null,
     ) {
+    }
+
+    /**
+     * Returns a member of the troop that owns the entry, chosen by number and
+     * enemy name and stored as its index in the troop's enemies.
+     *
+     * @param bool $required Whether the entry must name one; an optional one can be None.
+     */
+    public static function troopMember(string $key, string $label, bool $required = true): self
+    {
+        return new self($key, $label, InputControlType::INTEGER, removeWhenEmpty: ! $required,
+            codec: RecordFieldCodec::TROOP_MEMBER, allowsNone: ! $required);
+    }
+
+    /**
+     * Returns an optional field chosen among the values its own entry
+     * decides, read from a {@see ReferenceCatalog::listEntryChoices()} source.
+     */
+    public static function entryChoice(string $key, string $label, string $source, string $noneLabel): self
+    {
+        return new self($key, $label, options: [''], removeWhenEmpty: true, displayDefault: $noneLabel, entryChoices: $source);
+    }
+
+    /**
+     * Returns a reference to something on a map the entry itself names: a
+     * quest waymark's event marker is chosen from the waymark's map.
+     *
+     * @param string $key The payload key.
+     * @param string $label The settings-pane label.
+     * @param string $category The map-local kind of resource it names.
+     * @param string $mapKey The entry field holding the map id.
+     * @return self The field, unset by default.
+     */
+    public static function mapReference(string $key, string $label, string $category, string $mapKey): self
+    {
+        return new self($key, $label, removeWhenEmpty: true, reference: $category, allowsNone: true, referenceMapKey: $mapKey);
+    }
+
+    /**
+     * Returns a dialogue line's emotion: chosen among the emotions the line's speaker has in the game's dialogue
+     * catalogue, as the rule says who speaks. Absent, the Engine shows Neutral.
+     *
+     * @param DialogueLineSpeaker $speaker How the line names its speaker.
+     * @return self The field.
+     */
+    public static function emotion(DialogueLineSpeaker $speaker): self
+    {
+        return new self('emotion', 'Emotion', removeWhenEmpty: true, displayDefault: DialogueContext::DEFAULT_EMOTION, dialogueSpeaker: $speaker);
     }
 
     /**
@@ -122,6 +187,8 @@ final readonly class RecordField
             $this->displayDefault,
             $this->blankLabel,
             $this->writeTypes,
+            dialogueSpeaker: $this->dialogueSpeaker,
+            entryChoices: $this->entryChoices,
         );
     }
 
@@ -135,9 +202,10 @@ final readonly class RecordField
      * @param string $key The payload key.
      * @param string $label The settings-pane label.
      * @param bool $removeWhenEmpty Whether `false` drops the key (matching engine defaults).
+     * @param string|null $displayDefault What an absent key reads as, such as the engine's `false`.
      * @return self
      */
-    public static function boolean(string $key, string $label, bool $removeWhenEmpty = true): self
+    public static function boolean(string $key, string $label, bool $removeWhenEmpty = true, ?string $displayDefault = null): self
     {
         return new self(
             $key,
@@ -145,6 +213,7 @@ final readonly class RecordField
             InputControlType::BOOLEAN,
             ['false', 'true'],
             $removeWhenEmpty,
+            displayDefault: $displayDefault,
         );
     }
 }

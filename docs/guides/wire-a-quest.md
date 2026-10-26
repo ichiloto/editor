@@ -43,6 +43,72 @@ from its type and target.
 
 Press `Ctrl+S` to save the category.
 
+## Point The Way
+
+Each objective has a `Waymarks` row. A waymark tells the player where to go:
+the field shows it on screen, or as an arrow hugging the screen edge when it
+is off screen, and the local and world maps mark it. When it is on another
+map, the exit that leads there is marked instead.
+
+- `Shift+O` on an objective's `Waymarks` row adds a waymark to it (on the
+  objective's other rows it still adds an objective).
+- Pick its `Map` first. `Event`, `NPC`, `Object` and `Landmark` then offer
+  what that map holds; choose one, or none to mean the whole map. Choosing
+  one clears the others, since a waymark points at one thing.
+- `Shows When` takes a condition line. Use it for phases (show the next
+  step only once the previous one's flag is set) and for free-order work
+  (several waymarks, each hidden once its own part is done).
+
+Waymarks store the subject's stable id, never coordinates, so moving an NPC
+or an event moves its waymark too. Validation reports a waymark whose map or
+subject no longer exists. The `Field Cues` Database category sets how they
+look: a terminal colour (which also picks the cue art drawn in graphics), a
+one-cell symbol and how far edge markers sit in from the edge, along with the
+cue plate, bob and pointer images every cue mark shares.
+
+## Lead To The Quest's Start
+
+Objectives only lead once the quest is in the journal. To lead the player to
+whoever hands it over before that, use the quest's `Start Waymarks` heading:
+
+- `Shift+O` on the `Start Waymarks` row adds a start waymark.
+- Pick its `Map`, then the `NPC` or `Event` that starts the quest, the same
+  way as an objective's waymark. `Shows When` limits it further.
+
+A start waymark shows while the quest can start: it is not yet accepted or
+finished and its `Prereqs` hold. Once the quest is accepted its objectives
+take over. The story's opening is the first main quest's start waymark: a
+new game leads to its giver.
+
+## Keep The Story Path Led
+
+Validation warns where the wayfinder would have nothing authored to lead with:
+
+- A main quest's prerequisite, or a door that turns the player back
+  (`whenBlocked`), needs a story flag that nothing in the project sets, or
+  that no objective or start waymark of a main quest leads to. An objective
+  leads to a flag when it tracks the flag, or when its waymark points at what
+  sets it: the event or NPC, or, for a flag set in a battle (its script after
+  `start_battle`, or the troop's event pages), the event that starts the
+  battle or the map whose encounters bring it.
+- Nothing in the project starts a main quest, or nothing leads to what does.
+  The warning names where the quest starts. Lead there with the quest's own
+  start waymark, or with an objective of the main quest active before it.
+
+Guidance counts only when it can show before the step: a waymark waiting for
+the step, or a quest that needs it, does not lead to it. A start waymark
+disappears once its quest starts, so it leads to what starts its quest (and
+to a flag set by the same NPC page or event). When whoever starts the quest
+is there, or speaks, only once a flag is set, the quest cannot start before
+that step, so its start waymarks lead to whatever sets the flag too. That is
+how to lead between quests through a step that opens the next one: give the
+next quest `Prereqs` the player already meets (`quest:<previous>:completed`)
+and two start waymarks, one on what sets the flag shown while it is unset
+(`!event:<flag>`), and one on the giver shown once it is set
+(`event:<flag>`). Should a gap reach the
+game anyway, the game leads to what takes the next step itself and notes the
+gap in `logs/warning.log`; close it with an authored waymark all the same.
+
 ## Condition Lines
 
 Quest prerequisites, skit conditions, and event `branch` arms share one grammar,

@@ -35,6 +35,14 @@ trait TracksPersistedState
     private string $currentFingerprint = '';
 
     /**
+     * The fingerprint of what this asset holds now, saved or not: two
+     * readings of one asset with the same fingerprint hold the same content.
+     */
+    public string $contentFingerprint {
+        get => $this->stateFingerprint();
+    }
+
+    /**
      * Builds the exact persisted form this asset's save would write.
      *
      * @return string The bytes, concatenated when the asset spans files.
@@ -85,6 +93,18 @@ trait TracksPersistedState
     }
 
     /**
+     * Returns a key that changes whenever this asset's content may have,
+     * its children's included, so a caller can tell whether a step touched
+     * it without fingerprinting anything.
+     *
+     * @return string The key.
+     */
+    public function getContentVersion(): string
+    {
+        return $this->stateGeneration . '|' . $this->dependencyVersion();
+    }
+
+    /**
      * Returns the combined version of children this asset's payload embeds.
      *
      * An aggregate's bytes change when a child mutates, even though none of
@@ -108,7 +128,7 @@ trait TracksPersistedState
      */
     protected function stateFingerprint(): string
     {
-        $version = $this->stateGeneration . '|' . $this->dependencyVersion();
+        $version = $this->getContentVersion();
 
         if ($this->fingerprintedVersion !== $version) {
             $this->currentFingerprint = sha1($this->buildPersistedPayload());

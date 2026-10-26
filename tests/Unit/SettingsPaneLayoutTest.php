@@ -110,3 +110,12 @@ it('wraps prose keeping its indent, and leaves fitting prose alone', function ()
         ->toBe(['  None. Nothing changes when', '  this completes.'])
         ->and(SettingsPaneLayout::wrapProse('  a to add a write.', 30))->toBe(['  a to add a write.']);
 });
+
+it('keeps text deeper than the pane is wide, shortening its indent instead of losing it', function () {
+    $lines = \Ichiloto\Editor\UI\SettingsPaneLayout::wrapProse(str_repeat(' ', 24) . '// preserved nested source', 16);
+
+    expect(array_filter($lines, static fn(string $line): bool => mb_strwidth($line) > 16))->toBe([])
+        // A word longer than the room left is split, never dropped.
+        ->and(preg_replace('/\s+/', '', implode('', $lines)))->toBe('//preservednestedsource')
+        ->and($lines[0])->toStartWith(str_repeat(' ', 8) . '//');
+});

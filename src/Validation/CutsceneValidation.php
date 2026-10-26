@@ -9,8 +9,10 @@ use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Throwable;
 
 /**
@@ -58,7 +60,9 @@ trait CutsceneValidation
                 $issues[] = Issue::error(
                     sprintf('%s %s', $type->noun(), basename($finding['folder'])),
                     $finding['message'],
-                    sprintf('A %s is one folder holding <id>.data.php and <id>%s, named after its folder.', $type->noun(), $type->partnerSuffix()),
+                    $type->hasDataFile()
+                        ? sprintf('A %s is one folder holding <id>.data.php and <id>%s, named after its folder.', $type->noun(), $type->partnerSuffix())
+                        : sprintf('An %s is one folder holding <id>%s, named after its folder.', $type->noun(), $type->partnerSuffix()),
                 );
             }
 
@@ -89,6 +93,18 @@ trait CutsceneValidation
             return [];
         }
 
+        if ($asset->type === CutsceneType::EFFECT) {
+            // An effect's id is its folder alone. Where it is used, and so in
+            // which context it must play, the effect validation checks.
+            try {
+                $asset->hydrate();
+            } catch (Throwable $throwable) {
+                return [Issue::error($where, $throwable->getMessage(), 'Fix the timeline until each presentation plays in battle or on the field.')];
+            }
+
+            return [];
+        }
+
         $data = $asset->data();
         $declared = trim(strval($data['id'] ?? ''));
 
@@ -110,10 +126,14 @@ trait CutsceneValidation
             return [...$issues, ...$this->checkCinematicReferences($workspace, $asset, $definition->commands, $definition->finalizer)];
         }
 
-        try {
-            $asset->compiledSummon();
-        } catch (Throwable $throwable) {
-            return [...$issues, Issue::error($where, $throwable->getMessage(), 'The Engine refuses this summon as it stands; the message names what it needs.')];
+        // The terminal and the graphical presentation each compile the summon as they play it.
+        foreach (EffectPresentation::cases() as $presentation) {
+            try {
+                $asset->compiledSummon($presentation);
+            } catch (Throwable $throwable) {
+                return [...$issues, Issue::error($where, sprintf('%s presentation: %s', ucfirst($presentation->value), $throwable->getMessage()),
+                    'The Engine refuses this summon as it stands; the message names what it needs.')];
+            }
         }
 
         return $issues;
@@ -168,7 +188,16 @@ trait CutsceneValidation
             }
         }
 
-        $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'npcIds' => $npcIds, 'mapId' => $startMap !== '' ? $startMap : null, 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => []];
+        $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'map' => ScriptMapState::startOn($startMap !== '' ? $startMap : null, $npcIds), 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => [],
+            'attachmentsByMap' => $this->readAttachmentsByMap($workspace), 'graphicalMaps' => $this->listGraphicalMaps($workspace)];
+        foreach ((array) ($data['cast'] ?? []) as $entry) {
+            if (is_array($entry) && is_array($entry['at'] ?? null)) {
+                $issues = [...$issues, ...$this->checkCinematicSubject(['subject' => $entry['at']], $where . ' cast', $context)];
+            }
+            if (is_array($entry) && strtolower(trim(strval($entry['kind'] ?? 'staged_actor'))) === 'staged_actor') {
+                $issues = [...$issues, ...$this->checkStagedActorLook($entry, $where . ' cast', $context)];
+            }
+        }
         $issues = [...$issues, ...$this->walkCinematicCommands($commands, $where, $known, $context)];
         $issues = [...$issues, ...$this->walkCinematicCommands($finalizer, $where . ' finalizer', $known, $context)];
 
@@ -176,11 +205,33 @@ trait CutsceneValidation
     }
 
     /**
+     * The attachments each map's world objects offer, by map and object id, as their field resources declare them.
+     *
+     * @return array<string, array<string, list<string>>>
+     */
+    protected function readAttachmentsByMap(ProjectWorkspace $workspace): array
+    {
+        $byMap = [];
+        foreach ($workspace->maps as $map) {
+            try {
+                $entries = \Ichiloto\Editor\Field\WorldObjectAuthoring::readEntries($map);
+            } catch (\InvalidArgumentException) {
+                continue;
+            }
+            foreach ($entries as $entry) {
+                $found = is_string($entry['id'] ?? null) ? \Ichiloto\Editor\Field\WorldObjectAuthoring::findAttachments($map, $entry['id']) : null;
+                $byMap[$map->mapId][strval($entry['id'] ?? '')] = array_map(static fn($attachment): string => $attachment->id, $found['attachments'] ?? []);
+            }
+        }
+        return $byMap;
+    }
+
+    /**
      * Walks a cinematic command list, nested blocks and lanes included.
      *
      * @param array<int, mixed> $commands
      * @param array<string, string[]> $known
-     * @param array{castIds: string[], checkpoints: string[], npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
      * @return Issue[]
      */
     protected function walkCinematicCommands(
@@ -201,8 +252,20 @@ trait CutsceneValidation
             $type = strval($command['type'] ?? '');
 
             if (! in_array($type, CinematicCommandSchema::COMMAND_TYPES, true)) {
-                continue; // The Engine already refused the tree.
+                // The Engine already refused an unknown or malformed command;
+                // what is left to check of a registered one is what it names.
+                $registered = ScriptCommandRegistry::getCatalog()->findDefinition($type);
+
+                if ($registered !== null) {
+                    $issues = [...$issues, ...$this->checkRegisteredReferences($registered, $command, $where, $known)];
+                }
+
+                continue;
             }
+
+            $issues = [...$issues, ...$this->checkSharedCommandSemantics(
+                $command, $where, $context['map']->npcIds, $context['map']->description, cinematic: true,
+            )];
 
             $named = match ($type) {
                 'give_item' => ['inventory', 'item', 'item'],
@@ -213,13 +276,17 @@ trait CutsceneValidation
                 'transfer' => ['maps', 'map', 'map'],
                 'start_battle' => ['troops', 'troop', 'troop'],
                 'common_event' => ['common_events', 'id', 'common event'],
-                'show_animation', 'field_animation' => ['animations', 'animation', 'animation'],
+                'show_animation' => ['animations', 'animation', 'animation'],
                 default => null,
             };
 
             if (is_array($named)) {
                 [$category, $key, $noun] = $named;
                 $issues = [...$issues, ...$this->checkReference(strval($command[$key] ?? ''), $category, $noun, $where, $known)];
+            }
+
+            if ($type === 'field_animation') {
+                $issues = [...$issues, ...$this->checkFieldAnimationReference($command, $where, $known)];
             }
 
             if ($type === 'checkpoint') {
@@ -234,12 +301,18 @@ trait CutsceneValidation
                 }
             }
 
+            // A relative position names its subject as the command runs: before this actor is staged.
+            foreach (self::listRelativeSubjects($command) as $reference) {
+                $issues = [...$issues, ...$this->checkCinematicSubject(['subject' => $reference], $where, $context)];
+            }
+
             if ($type === 'stage_actor') {
                 $id = trim(strval($command['id'] ?? $command['actorId'] ?? ''));
 
                 if ($id !== '') {
                     $context['castIds'][] = $id;
                 }
+                $issues = [...$issues, ...$this->checkStagedActorLook($command, $where, $context)];
             }
 
             if (in_array($type, ['remove_actor', 'show_actor', 'hide_actor'], true)) {
@@ -270,10 +343,20 @@ trait CutsceneValidation
             }
 
             if ($type === 'parallel') {
-                foreach ((array) ($command['lanes'] ?? []) as $lane) {
-                    $laneCommands = is_array($lane) && array_is_list($lane) ? $lane : (is_array($lane) ? (array) ($lane['commands'] ?? []) : []);
-                    $issues = [...$issues, ...$this->walkCinematicCommands($laneCommands, $where, $known, $context, $commonEventStack)];
-                }
+                // Lanes share the stage; only the map follows the Engine's lane timing.
+                [$laneIssues, $context['map']] = $this->walkParallelLanes(
+                    $command,
+                    $context['map'],
+                    $context['npcIdsByMap'],
+                    $commonEventStack,
+                    function (array $laneCommands, ScriptMapState $laneStart) use (&$context, $where, $known, $commonEventStack): array {
+                        $context['map'] = $laneStart;
+                        $laneIssues = $this->walkCinematicCommands($laneCommands, $where, $known, $context, $commonEventStack);
+
+                        return [$laneIssues, $context['map']];
+                    },
+                );
+                $issues = [...$issues, ...$laneIssues];
             }
 
             foreach (['then', 'else', 'cancel'] as $arm) {
@@ -289,13 +372,30 @@ trait CutsceneValidation
             }
 
             if ($type === 'transfer') {
-                $destination = trim(strval($command['map'] ?? ''));
-                $context['mapId'] = $destination !== '' ? $destination : $context['mapId'];
-                $context['npcIds'] = $destination !== '' && array_key_exists($destination, $context['npcIdsByMap']) ? $context['npcIdsByMap'][$destination] : null;
+                $context['map'] = $context['map']->transferTo(trim(strval($command['map'] ?? '')), $context['npcIdsByMap']);
             }
         }
 
         return $issues;
+    }
+
+    /**
+     * The map subjects a command's relative positions name: each relative waypoint's, or an independent staged
+     * actor's.
+     *
+     * @param array<string, mixed> $command
+     * @return list<array<string, mixed>>
+     */
+    protected static function listRelativeSubjects(array $command): array
+    {
+        $points = match ($command['type'] ?? null) {
+            'move_route' => (array) ($command['waypoints'] ?? []),
+            'stage_actor' => [is_array($command['actor'] ?? null) ? $command['actor'] : $command],
+            default => [],
+        };
+
+        return array_values(array_map(static fn(array $point): array => $point['at'],
+            array_filter($points, static fn(mixed $point): bool => is_array($point) && is_array($point['at'] ?? null))));
     }
 
     /**
@@ -306,7 +406,7 @@ trait CutsceneValidation
      * Event files, cast ids, current-map NPCs, and recursion safety.
      *
      * @param array<string, string[]> $known
-     * @param array{castIds: string[], checkpoints: string[], npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
      * @param string[] $commonEventStack
      * @return Issue[]
      */
@@ -329,24 +429,25 @@ trait CutsceneValidation
 
         $commands = $this->commonEventScripts[$eventId];
         $eventWhere = sprintf('%s common event %s', $where, $eventId);
+        $issues = [];
 
         try {
             CinematicScriptValidator::validate($commands, sprintf('%s:common_event:%s', $where, $eventId));
         } catch (Throwable $throwable) {
-            return [Issue::error(
+            $issues[] = Issue::error(
                 $eventWhere,
                 $throwable->getMessage(),
                 'The Engine refuses this Common Event in a cinematic session; the message names the command path.',
-            )];
+            );
         }
 
-        return $this->walkCinematicCommands(
+        return [...$issues, ...$this->walkCinematicCommands(
             $commands,
             $eventWhere,
             $known,
             $context,
             [...$commonEventStack, $eventId],
-        );
+        )];
     }
 
     /**
@@ -354,7 +455,7 @@ trait CutsceneValidation
      * NPC on the map the cinematic is on.
      *
      * @param array<string, mixed> $command
-     * @param array{castIds: string[], checkpoints: string[], npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
      * @return Issue[]
      */
     protected function checkCinematicSubject(array $command, string $where, array $context): array
@@ -363,6 +464,16 @@ trait CutsceneValidation
         $kind = is_array($subject) ? strtolower(trim(strval($subject['kind'] ?? ''))) : strtolower(trim(strval($subject ?? '')));
         $fields = is_array($subject) ? $subject : $command;
 
+        if ($kind === 'world_object' && is_string($fields['attachment'] ?? null)) {
+            $objectId = trim(strval($fields['id'] ?? ''));
+            foreach ($context['map']->mapIds ?? [] as $mapId) {
+                if (! in_array($fields['attachment'], $context['attachmentsByMap'][$mapId][$objectId] ?? [], true)) {
+                    return [Issue::error($where, sprintf('It sits on attachment "%s" of world object "%s", which %s does not offer.', $fields['attachment'], $objectId, $mapId),
+                        'Choose an attachment the object\'s field resource declares, or declare it on the resource.')];
+                }
+            }
+        }
+
         if ($kind === 'staged_actor') {
             return $this->checkStagedActorReference(trim(strval($fields['actorId'] ?? $fields['id'] ?? '')), $where, $context);
         }
@@ -370,8 +481,8 @@ trait CutsceneValidation
         if ($kind === 'npc') {
             $npcId = trim(strval($fields['npcId'] ?? $fields['id'] ?? ''));
 
-            if ($npcId !== '' && $context['npcIds'] !== null && ! in_array($npcId, $context['npcIds'], true)) {
-                return [Issue::error($where, sprintf('It addresses NPC "%s", which is not on %s.', $npcId, $context['mapId'] ?? '(unknown map)'), 'Use a stable NPC id from the map the cinematic is on at that point.')];
+            if ($npcId !== '' && $context['map']->npcIds !== null && ! in_array($npcId, $context['map']->npcIds, true)) {
+                return [Issue::error($where, sprintf('It addresses NPC "%s", which is not on %s.', $npcId, $context['map']->description ?? '(unknown map)'), 'Use a stable NPC id from the map the cinematic is on at that point.')];
             }
         }
 
@@ -379,7 +490,45 @@ trait CutsceneValidation
     }
 
     /**
-     * @param array{castIds: string[], checkpoints: string[], npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * A staged actor on a map drawn from a tileset needs a graphical look
+     * ({@see CinematicCommandSchema::STAGED_ACTOR_GRAPHICAL_FIELDS}); without
+     * one the graphical field can only draw its terminal glyph there.
+     *
+     * @param array<string, mixed> $entry A cast entry or stage_actor command.
+     * @param array{map: ScriptMapState, graphicalMaps?: list<string>} $context
+     * @return Issue[]
+     */
+    protected function checkStagedActorLook(array $entry, string $where, array $context): array
+    {
+        $looks = array_filter(array_intersect_key($entry, array_flip(CinematicCommandSchema::STAGED_ACTOR_GRAPHICAL_FIELDS)),
+            static fn(mixed $look): bool => $look !== null);
+        $maps = array_values(array_intersect($context['map']->mapIds ?? [], $context['graphicalMaps'] ?? []));
+        if ($looks !== [] || $maps === []) {
+            return [];
+        }
+
+        return [Issue::error($where, sprintf('Staged actor "%s" has no graphical look, so the graphical field draws its terminal glyph on %s.',
+            trim(strval($entry['id'] ?? $entry['actorId'] ?? '')), implode(', ', $maps)),
+            'Give it sprites2d art, the subject it stands for, or the appearance of the map NPC it stands in for.', 'cinematic.actor-look')];
+    }
+
+    /**
+     * The maps drawn from a tileset: the graphical field shows them in art,
+     * so nothing on them may fall back to a terminal glyph.
+     *
+     * @return list<string>
+     */
+    protected function listGraphicalMaps(ProjectWorkspace $workspace): array
+    {
+        $maps = [];
+        foreach ($workspace->maps as $map) {
+            if ($map->getMapDataField(['tileset']) !== null) { $maps[] = $map->mapId; }
+        }
+        return $maps;
+    }
+
+    /**
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
      * @return Issue[]
      */
     protected function checkStagedActorReference(string $actorId, string $where, array $context): array
@@ -452,7 +601,7 @@ trait CutsceneValidation
         $catalog = new \Ichiloto\Editor\Database\ReferenceCatalog($workspace);
         $known = [];
 
-        foreach (['quests', 'maps', 'troops', 'inventory', 'bgm', 'sfx', 'common_events', 'animations', 'cinematics', 'summons'] as $category) {
+        foreach (['quests', 'maps', 'troops', 'inventory', 'bgm', 'sfx', 'common_events', 'animations', 'effects', 'cinematics', 'summons'] as $category) {
             try {
                 $known[$category] = $catalog->valuesFor($category);
             } catch (Throwable) {

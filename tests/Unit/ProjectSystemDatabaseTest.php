@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
-use Ichiloto\Editor\ProjectSystemDatabase;
+use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Session\EditorSession;
 
 function scratchSystemProject(): string
 {
@@ -12,10 +14,23 @@ function scratchSystemProject(): string
     return $root;
 }
 
-it('round-trips every system field including extended and unknown ATB settings', function (): void {
-    $root = scratchSystemProject();
-    $path = $root . '/assets/Data/system.php';
-    $original = [
+function systemRecords(string $root): ProjectRecordDatabase
+{
+    return ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('system'));
+}
+
+/** What the System page shows for a field, as both editors read it. */
+function systemSettingsValue(string $root, string $field): ?string
+{
+    $row = array_find(systemRecords($root)->getSettingsFields(0), static fn(array $row): bool => ($row['field'] ?? null) === $field);
+
+    return is_array($row) ? (string) $row['value'] : null;
+}
+
+/** @return array<string, mixed> */
+function productionSystem(): array
+{
+    return [
         'title' => 'Production Fixture',
         'currency' => ['amount' => 400, 'symbol' => 'G'],
         'startingParty' => ['Kaelion', 'Liora', 'Drazek', 'Seraphis'],
@@ -36,54 +51,298 @@ it('round-trips every system field including extended and unknown ATB settings',
                 'speedFactorPercent' => 100,
                 'openingVariance' => 24,
                 'openingSpeedFactorPercent' => 250,
-                'surpriseAttackChancePercent' => 8,
-                'backAttackChancePercent' => 6,
                 'futureTuningKey' => 17,
             ],
         ],
         'unknownSystemSetting' => ['preserve' => 'yes'],
     ];
-    file_put_contents($path, "<?php\n\nreturn " . var_export($original, true) . ";\n");
+}
 
-    $database = ProjectSystemDatabase::fromProject($root);
+it('round-trips every system field, extended and unknown ones included, byte for byte', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\n// Keep this header.\nreturn " . var_export(productionSystem(), true) . ";\n");
+    $source = (string) file_get_contents($path);
+
+    $database = systemRecords($root);
+    $database->setField(0, 'title', 'Changed');
+    $database->setField(0, 'title', 'Production Fixture');
     $database->save();
 
-    $saved = require $path;
-    $reloaded = ProjectSystemDatabase::fromProject($root);
-    $reloaded->save();
-    $reloadedAgain = require $path;
-
-    expect($saved)->toBe($original)
-        ->and($saved['battle']['activeTime'])->toBe($original['battle']['activeTime'])
-        ->and($saved['battle']['unknownBattleSetting'])->toBe(['future' => true])
-        ->and($saved['unknownSystemSetting'])->toBe(['preserve' => 'yes'])
-        ->and($reloadedAgain)->toBe($original);
+    expect((string) file_get_contents($path))->toBe($source);
 });
 
 it('merges an edited system field without removing unedited settings', function (): void {
     $root = scratchSystemProject();
     $path = $root . '/assets/Data/system.php';
-    $original = [
-        'title' => 'Production Fixture',
-        'battle' => [
-            'engine' => 'active_time',
-            'activeTime' => [
-                'mode' => 'wait',
-                'baseFillRate' => 35,
-                'speedFactorPercent' => 100,
-                'openingVariance' => 24,
-                'futureTuningKey' => 17,
-            ],
-        ],
-    ];
-    file_put_contents($path, "<?php\n\nreturn " . var_export($original, true) . ";\n");
+    file_put_contents($path, "<?php\n\nreturn " . var_export(productionSystem(), true) . ";\n");
 
-    $database = ProjectSystemDatabase::fromProject($root);
-    $database->setField('atbBaseFillRate', 42);
+    $database = systemRecords($root);
+    $database->setField(0, 'battle.activeTime.baseFillRate', '42');
+    $database->setField(0, 'startingPositions.player.spawnSprite.0', 'West');
+    $database->save();
+    $saved = require $path;
+    $expected = productionSystem();
+    $expected['battle']['activeTime']['baseFillRate'] = 42;
+    $expected['startingPositions']['player']['spawnSprite'] = ['West'];
+
+    expect($saved)->toBe($expected);
+});
+
+it('edits the starting party as actor ids and the starting inventory as items with quantities', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn " . var_export(productionSystem(), true) . ";\n");
+
+    $database = systemRecords($root);
+    $database->removeSubItem(0, 1, 'startingParty');
+    $stock = $database->addSubItem(0, listKey: 'startingInventory');
+    $database->setField(0, "stock{$stock}Item", 'Ether');
+    $database->setField(0, "stock{$stock}Quantity", '3');
     $database->save();
     $saved = require $path;
 
-    expect($saved['battle']['activeTime']['baseFillRate'])->toBe(42)
-        ->and($saved['battle']['activeTime']['openingVariance'])->toBe(24)
-        ->and($saved['battle']['activeTime']['futureTuningKey'])->toBe(17);
+    // A party member stays a bare id, as the file authors it.
+    expect($saved['startingParty'])->toBe(['Kaelion', 'Drazek', 'Seraphis'])
+        ->and($saved['startingInventory'])->toBe([['item' => 'S-Potion', 'quantity' => 10], ['item' => 'Ether', 'quantity' => 3]]);
+});
+
+it('keeps the file as the category\'s one record, only ever edited', function (): void {
+    $root = scratchSystemProject();
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn " . var_export(productionSystem(), true) . ";\n");
+    $database = systemRecords($root);
+
+    expect($database->getEntryLabels())->toBe(['Production Fixture'])
+        ->and($database->isEditable())->toBeTrue()
+        ->and($database->supportsRecordCreation())->toBeFalse()
+        ->and($database->supportsRecordDeletion())->toBeFalse()
+        ->and($database->duplicateRecordSupported())->toBeFalse()
+        ->and($database->addRecord())->toBeNull();
+});
+
+it('opens System in the GUI session with its lists under their headings', function (): void {
+    $session = EditorSession::open(makeTemporaryProject());
+    $records = $session->listDatabaseRecords('system');
+    $rows = $session->readDatabaseRecord('system', 0)['rows'];
+    $labels = array_column($rows, 'label');
+
+    expect($records['editable'])->toBeTrue()
+        ->and($records['canCreate'])->toBeFalse()
+        ->and($labels)->toContain('Title', 'Starting Gold', 'Start Map', 'Battle Engine', 'Level Up HP/MP', 'Starting Party', 'Starting Inventory');
+});
+
+it('keeps a value written as an enum case\'s value written that way, as the new case', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nuse Ichiloto\\Engine\\Core\\Enumerations\\MovementHeading;\n\nreturn [\n  'title' => 'Fixture',\n  'startingPositions' => ['player' => ['spawnSprite' => [MovementHeading::SOUTH->value]]],\n];\n");
+
+    $database = systemRecords($root);
+    new \Ichiloto\Editor\Database\RecordAuthoring()->applyField($database, 0, [], 'startingPositions.player.spawnSprite.0', 'West', 'Start Facing');
+    $database->save();
+
+    expect((string) file_get_contents($path))->toContain('[MovementHeading::WEST->value]')
+        ->and((require $path)['startingPositions']['player']['spawnSprite'])->toBe(['West']);
+});
+
+it('refuses an edit to a value the file writes as an expression when it is made, not at save', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn ['title' => strtoupper('fixture'), 'currency' => ['amount' => 5]];\n");
+    $database = systemRecords($root);
+
+    expect(fn() => new \Ichiloto\Editor\Database\RecordAuthoring()->applyField($database, 0, [], 'title', 'Renamed', 'Title'))
+        ->toThrow(\Ichiloto\Editor\Database\RecordRefusal::class, 'expression')
+        ->and($database->getRecordByIndex(0)->get('title'))->toBe('FIXTURE')
+        ->and($database->isDirty())->toBeFalse();
+
+    // Values written as plain data stay editable beside it.
+    new \Ichiloto\Editor\Database\RecordAuthoring()->applyField($database, 0, [], 'currency.amount', '9', 'Starting Gold');
+    $database->save();
+
+    expect((string) file_get_contents($path))->toContain("strtoupper('fixture')", "'amount' => 9");
+});
+
+it('saves System and Types, which share system.php, each with only its own keys', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn " . var_export([...productionSystem(), 'elements' => ['Fire', 'Ice']], true) . ";\n");
+    $system = systemRecords($root);
+    $types = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('types'));
+
+    $types->setField(0, ProjectRecordDatabase::subFieldId('element', 1, 'name'), 'Frost');
+    $system->setField(0, 'currency.amount', '900');
+    $system->save();
+    $types->save();
+    $saved = require $path;
+
+    expect($saved['currency']['amount'])->toBe(900)
+        ->and($saved['elements'])->toBe(['Fire', 'Frost'])
+        ->and($saved['unknownSystemSetting'])->toBe(['preserve' => 'yes'])
+        ->and(array_keys($system->getRecordByIndex(0)?->toArray() ?? []))->not->toContain('elements')
+        ->and(fn() => new Ichiloto\Editor\Database\RecordSchema(
+            key: 'stray',
+            entryNoun: 'stray',
+            storage: Ichiloto\Editor\Database\RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/system.php',
+            fields: [new Ichiloto\Editor\Database\RecordField('title', 'Title')],
+            projection: new Ichiloto\Editor\Database\Projections\WholeFileProjection(['elements']),
+        ))->toThrow(LogicException::class, 'The stray category edits "title", a key its file projection does not own.');
+});
+
+it('chooses what a level up does to current HP and MP, reading an absent rule as the Engine\'s default, and keeps the rest', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn " . var_export(productionSystem(), true) . ";\n");
+    $field = array_find(RecordSchemaCatalog::forKey('system')->fields,
+        static fn($field): bool => $field->key === 'progression.levelUpRecovery');
+    $read = static fn(array $system): Ichiloto\Engine\Progression\LevelUpRecovery
+        => Ichiloto\Engine\Progression\ProgressionSettings::fromSystemData($system)->levelUpRecovery;
+
+    expect($field->options)->toBe(['full', 'increase', 'none'])
+        ->and($field->displayDefault)->toBe('full')
+        ->and($read(productionSystem()))->toBe(Ichiloto\Engine\Progression\LevelUpRecovery::FULL)
+        ->and(systemSettingsValue($root, 'progression.levelUpRecovery'))->toBe('full');
+
+    foreach (['none', 'increase', 'full'] as $mode) {
+        $database = systemRecords($root);
+        $database->setField(0, 'progression.levelUpRecovery', $mode);
+        $database->save();
+        $saved = require $path;
+
+        expect($saved)->toBe([...productionSystem(), 'progression' => ['levelUpRecovery' => $mode]])
+            ->and($read($saved)->value)->toBe($mode)
+            ->and(systemSettingsValue($root, 'progression.levelUpRecovery'))->toBe($mode);
+    }
+});
+
+it('serves the level up rule to the GUI session as a choice that keeps the file\'s own writing', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/system.php';
+    $source = "<?php\n\nuse Ichiloto\\Engine\\Core\\Enumerations\\MovementHeading;\n\nreturn [\n  'title' => 'Fixture',\n"
+        . "  // Where the story starts.\n  'startingPositions' => ['player' => ['spawnSprite' => [MovementHeading::SOUTH->value]]],\n];\n";
+    file_put_contents($path, $source);
+    $session = EditorSession::open($root);
+    $row = static fn(): array => array_find($session->readDatabaseRecord('system', 0)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'progression.levelUpRecovery')
+        ?? throw new RuntimeException('Missing Level Up HP/MP row');
+
+    expect($row())->toMatchArray(['label' => 'Level Up HP/MP', 'kind' => 'options', 'options' => ['full', 'increase', 'none'], 'value' => 'full']);
+
+    $session->applyDatabaseRecord('system', 0, $row()['key'], 'increase');
+    $session->saveDatabase('system');
+    $written = (string) file_get_contents($path);
+
+    expect($row()['value'])->toBe('increase')
+        ->and($written)->toContain('// Where the story starts.', '[MovementHeading::SOUTH->value]')
+        ->and((require $path)['progression'])->toBe(['levelUpRecovery' => 'increase'])
+        ->and(Ichiloto\Engine\Progression\ProgressionSettings::fromSystemData(require $path)->levelUpRecovery)
+            ->toBe(Ichiloto\Engine\Progression\LevelUpRecovery::INCREASE);
+
+    $session->undo();
+    $session->saveDatabase('system');
+    expect((string) file_get_contents($path))->toBe($source);
+});
+
+it('reports progression rules the Engine would not read as an error', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/system.php';
+    $system = is_file($path) ? require $path : [];
+    $validate = static fn(): array => array_values(array_filter(
+        new Ichiloto\Editor\Validation\ProgressionValidator()->validate(Ichiloto\Editor\ProjectWorkspace::fromProject($root)),
+        static fn($issue): bool => str_contains($issue->where, 'progression')));
+
+    expect($validate())->toBe([]);
+
+    file_put_contents($path, "<?php\n\nreturn " . var_export([...$system, 'progression' => ['levelUpRecovery' => 'half']], true) . ";\n");
+    $issues = $validate();
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Ichiloto\Editor\Validation\Severity::ERROR)
+        ->and($issues[0]->message)->toContain('must be one of: full, increase, none');
+
+    file_put_contents($path, "<?php\n\nreturn " . var_export([...$system, 'progression' => ['restoreVitalsOnLevelUp' => false]], true) . ";\n");
+    $issues = $validate();
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->message)->toContain("replaced by levelUpRecovery: write 'full' for true or 'none' for false");
+});
+
+it('authors the dash in System as the Engine reads it, an absent dash reading as none, and keeps the rest', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn " . var_export(productionSystem(), true) . ";\n");
+    $read = static fn(array $system): Ichiloto\Engine\Field\DashSettings => Ichiloto\Engine\Field\DashSettings::fromSystemData($system);
+
+    expect(systemSettingsValue($root, 'dash.enabled'))->toBe('false')
+        ->and(systemSettingsValue($root, 'dash.speedMultiplier'))->toBe('2')
+        ->and($read(productionSystem())->enabled)->toBeFalse();
+
+    $database = systemRecords($root);
+    $database->setField(0, 'dash.enabled', 'true');
+    $database->setField(0, 'dash.speedMultiplier', '1.5');
+    $database->save();
+    $saved = require $path;
+    expect($saved)->toBe([...productionSystem(), 'dash' => ['enabled' => true, 'speedMultiplier' => 1.5]])
+        ->and($read($saved))->toEqual(new Ichiloto\Engine\Field\DashSettings(true, 1.5))
+        ->and(systemSettingsValue($root, 'dash.enabled'))->toBe('true');
+
+    // Turning the dash off leaves no enabled key to read: an absent dash is none.
+    $database = systemRecords($root);
+    $database->setField(0, 'dash.enabled', 'false');
+    $database->save();
+    expect($read(require $path)->enabled)->toBeFalse();
+});
+
+it('serves the dash to the GUI session as a switch and a number that keep the file\'s own writing', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/system.php';
+    $source = "<?php\n\nuse Ichiloto\\Engine\\Core\\Enumerations\\MovementHeading;\n\nreturn [\n  'title' => 'Fixture',\n"
+        . "  // Where the story starts.\n  'startingPositions' => ['player' => ['spawnSprite' => [MovementHeading::SOUTH->value]]],\n];\n";
+    file_put_contents($path, $source);
+    $session = EditorSession::open($root);
+    $row = static fn(string $field): array => array_find($session->readDatabaseRecord('system', 0)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === $field)
+        ?? throw new RuntimeException("Missing $field row");
+
+    expect($row('dash.enabled'))->toMatchArray(['label' => 'Dash', 'value' => 'false'])
+        ->and($row('dash.speedMultiplier'))->toMatchArray(['label' => 'Dash Speed Multiplier']);
+
+    $session->applyDatabaseRecord('system', 0, $row('dash.enabled')['key'], 'true');
+    $session->applyDatabaseRecord('system', 0, $row('dash.speedMultiplier')['key'], '2');
+    $session->saveDatabase('system');
+    $written = (string) file_get_contents($path);
+
+    expect($written)->toContain('// Where the story starts.', '[MovementHeading::SOUTH->value]')
+        ->and(Ichiloto\Engine\Field\DashSettings::fromSystemData(require $path))->toEqual(new Ichiloto\Engine\Field\DashSettings(true, 2.0));
+
+    $session->undo();
+    $session->undo();
+    $session->saveDatabase('system');
+    expect((string) file_get_contents($path))->toBe($source);
+});
+
+it('reports a dash or a map Disable Dashing the Engine would not read as an error', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/system.php';
+    $system = is_file($path) ? require $path : [];
+    $validate = static fn(): array => new Ichiloto\Editor\Validation\DashValidator()->validate(Ichiloto\Editor\ProjectWorkspace::fromProject($root));
+
+    expect($validate())->toBe([]);
+
+    foreach ([[['enabled' => true, 'speedMultiplier' => 1], 'greater than 1'], [['enabled' => 'yes'], 'true or false'],
+        [['run' => true], 'Unknown system.dash field']] as [$dash, $message]) {
+        file_put_contents($path, "<?php\n\nreturn " . var_export([...$system, 'dash' => $dash], true) . ";\n");
+        $issues = $validate();
+        expect($issues)->toHaveCount(1)
+            ->and($issues[0]->severity)->toBe(Ichiloto\Editor\Validation\Severity::ERROR)
+            ->and($issues[0]->message)->toContain($message);
+    }
+
+    file_put_contents($path, "<?php\n\nreturn " . var_export([...$system, 'dash' => ['enabled' => true]], true) . ";\n");
+    expect($validate())->toBe([]);
+    $map = Ichiloto\Editor\ProjectWorkspace::fromProject($root)->maps[0];
+    file_put_contents($map->dataPath, "<?php\n\nreturn " . var_export([...(require $map->dataPath), 'disableDashing' => 'yes'], true) . ";\n");
+    $issues = $validate();
+    expect($issues)->toHaveCount(1)->and($issues[0]->map)->toBe($map->mapId)
+        ->and($issues[0]->message)->toContain('disableDashing must be true or false');
 });

@@ -31,7 +31,8 @@ final class PermanentGrowthCatalog
     /**
      * Where a project defines its permanent growth.
      */
-    public const string RELATIVE_PATH = 'assets/Data/permanent-growth.php';
+    public const string ASSET_PATH = 'Data/permanent-growth.php';
+    public const string RELATIVE_PATH = 'assets/' . self::ASSET_PATH;
 
     /**
      * @param array<string, array<string, mixed>> $definitions By stable id, as authored.

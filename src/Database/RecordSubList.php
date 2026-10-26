@@ -35,6 +35,26 @@ final readonly class RecordSubList
      * @param array<string, array<string, string>> $variantArms Command lists
      * only some variants carry, variant => (key => label): a cinematic
      * `sequence` owns its `commands`, a `choice` its `cancel` arm.
+     * @param list<list<string>> $exclusiveFields Field groups where authoring one removes the others.
+     * @param string|null $scalarKey The field an entry authored as a bare value is (a
+     * reward item's `item`): read as that field, and written back bare while it holds nothing else.
+     * @param bool $removeWhenEmpty Whether the list's key is dropped when its last entry goes,
+     * as files that omit an empty list author it (a quest's reward items).
+     * @param string $heading What a list beside the record's own is headed as ("Reward Items"): its
+     * heading row names it, counts it, and is where an entry is added to it. A record-level command
+     * list is named by it on the row that opens it ("Stage Camera"), rather than by its key.
+     * @param string|null $keyField For a list stored as a map (a tileset's pieces, keyed by piece
+     * id): the field each entry carries its key as. Keys are unique and never empty.
+     * @param string|null $valueField For a keyed list whose values are not entries of their own (a
+     * piece's tiles: a layer name keyed to its rows): the field each entry carries its value as.
+     * @param Closure(array, string): array|null $prepareEdit Normalizes dependent fields after a field edit, before mutation.
+     * @param RecordSubList|null $armCommandList The command list this list's command arms hold, at
+     * every depth; the shared field-script command list when null. A troop's event pages hold the
+     * battle-scoped one.
+     * @param Closure(array<string, mixed>, Closure(int): ?int): array<string, mixed>|null $remapIndexReferences
+     * Rewrites the record's references to this list's entries by index when an entry is removed or
+     * inserted (a troop's event pages naming members), through the map from old index to new; null
+     * from the map is a removed entry, which the closure refuses with a RecordRefusal while it is named.
      */
     public function __construct(
         public string $key,
@@ -47,7 +67,121 @@ final readonly class RecordSubList
         public array $nestedLists = [],
         public array $commandArms = [],
         public array $variantArms = [],
+        public array $exclusiveFields = [],
+        public string $heading = '',
+        public ?string $scalarKey = null,
+        public bool $removeWhenEmpty = false,
+        public ?string $keyField = null,
+        public ?string $valueField = null,
+        public ?Closure $prepareEdit = null,
+        /** Dynamic entry fields independent of a persisted variant discriminator. */
+        public ?Closure $getFields = null,
+        public ?RecordSubList $armCommandList = null,
+        public ?Closure $remapIndexReferences = null,
+        /** The variant an entry that names none has, as its runtime reads it. */
+        public ?string $variantDefault = null,
     ) {
+    }
+
+    /** The variant an entry is: the one it names, or the list's default when it names none. */
+    public function getVariant(array $entry): string
+    {
+        return $this->variantKey === null ? '' : strval($entry[$this->variantKey] ?? $this->variantDefault ?? '');
+    }
+
+    /** Where a keyed list's entry keeps a value the editor does not read, to write it back as it was. */
+    public const string RAW_VALUE = '__value';
+
+    /**
+     * The entries a list holds, as the editor edits them. An entry authored
+     * as a bare value is its scalar field's value; in a list keyed by
+     * `keyField` each entry carries its key as that field. A value an
+     * unkeyed list holds that is neither stays as it is; a keyed list keeps
+     * it under its key, so writing the list back keeps it.
+     *
+     * @param mixed $stored The list as the file holds it.
+     * @return list<mixed>
+     */
+    public function readEntries(mixed $stored): array
+    {
+        if (! is_array($stored)) {
+            return [];
+        }
+
+        $entries = [];
+
+        foreach ($stored as $key => $value) {
+            $entry = match (true) {
+                $this->valueField !== null => [$this->valueField => $value],
+                is_array($value) => $value,
+                $this->scalarKey !== null && is_scalar($value) => [$this->scalarKey => $value],
+                default => null,
+            };
+
+            $entries[] = $this->keyField === null
+                ? $entry ?? $value
+                : [$this->keyField => (string) $key] + ($entry ?? [self::RAW_VALUE => $value]);
+        }
+
+        return $entries;
+    }
+
+    /**
+     * The form a list's entries are stored in: a map keyed by `keyField`
+     * where the list is one, and an entry holding nothing but its scalar
+     * field written bare.
+     *
+     * @param list<mixed> $entries The entries, as the editor edits them.
+     * @return array<array-key, mixed>
+     */
+    public function writeEntries(array $entries): array
+    {
+        $stored = [];
+
+        foreach (array_values($entries) as $entry) {
+            if (! is_array($entry)) {
+                $stored[] = $entry;
+                continue;
+            }
+
+            $key = null;
+
+            if ($this->keyField !== null) {
+                $key = (string) ($entry[$this->keyField] ?? '');
+                unset($entry[$this->keyField]);
+            }
+
+            $value = match (true) {
+                $this->valueField !== null => $entry[$this->valueField] ?? null,
+                array_key_exists(self::RAW_VALUE, $entry) => $entry[self::RAW_VALUE],
+                $this->scalarKey !== null && array_keys($entry) === [$this->scalarKey] => $entry[$this->scalarKey],
+                default => $entry,
+            };
+
+            if ($key === null) {
+                $stored[] = $value;
+            } else {
+                $stored[$key] = $value;
+            }
+        }
+
+        return $stored;
+    }
+
+    /** @param array<string, mixed> $entry @return array<string, mixed> */
+    public function removeConflictingFields(array $entry, string $editedField): array
+    {
+        if ($this->prepareEdit !== null) {
+            $entry = ($this->prepareEdit)($entry, $editedField);
+        }
+        if (! array_key_exists($editedField, $entry)) { return $entry; }
+        foreach ($this->exclusiveFields as $fields) {
+            if (! in_array($editedField, $fields, true)) { continue; }
+            foreach ($fields as $field) {
+                if ($field !== $editedField) { unset($entry[$field]); }
+            }
+        }
+        return $entry;
     }
 
     /**
@@ -62,7 +196,7 @@ final readonly class RecordSubList
         $arms = $this->commandArms;
 
         if ($this->variantKey !== null) {
-            $variant = strval($entry[$this->variantKey] ?? '');
+            $variant = $this->getVariant($entry);
 
             foreach ($this->variantArms[$variant] ?? [] as $key => $label) {
                 $arms[$key] = $label;
@@ -83,11 +217,12 @@ final readonly class RecordSubList
      */
     public function fieldsFor(array $entry): array
     {
+        if ($this->getFields !== null) { return ($this->getFields)($entry); }
         if ($this->variantKey === null) {
             return $this->fields;
         }
 
-        $variant = strval($entry[$this->variantKey] ?? '');
+        $variant = $this->getVariant($entry);
         $fields = $this->variants[$variant] ?? [];
 
         if ($fields instanceof Closure) {
@@ -117,7 +252,7 @@ final readonly class RecordSubList
             return null;
         }
 
-        $nested = $this->nestedLists[strval($entry[$this->variantKey] ?? '')] ?? null;
+        $nested = $this->nestedLists[$this->getVariant($entry)] ?? null;
 
         // A list some shapes of a variant carry and others do not -- a
         // camera route's points, but not a camera detach's -- is a closure

@@ -30,9 +30,7 @@ it('offers every project class plus a none sentinel in the actor picker', functi
     try {
         $editor = actorClassEditor($root);
 
-        expect(callEditorMethod($editor, 'getActorClassOptions'))->toBe(['none', 'Vanguard', 'Oracle']);
-
-        $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+        $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
         $classField = null;
 
         foreach ($fields as $field) {
@@ -58,7 +56,7 @@ it('cycles the class picker with the arrow keys and records undo', function () {
 
         /** @var ProjectWorkspace $workspace */
         $workspace = getEditorProperty($editor, 'workspace');
-        $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+        $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
         $classIndex = array_search('class', array_column($fields, 'field'), true);
         setEditorProperty($editor, 'databaseSelectedSettingIndex', $classIndex);
 
@@ -92,7 +90,7 @@ it('round-trips the class reference through a save into data[class]', function (
 
         /** @var ProjectWorkspace $workspace */
         $workspace = getEditorProperty($editor, 'workspace');
-        $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+        $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
         setEditorProperty($editor, 'databaseSelectedSettingIndex', array_search('class', array_column($fields, 'field'), true));
         callEditorMethod($editor, 'dispatchInput', "\033[C");
         callEditorMethod($editor, 'dispatchInput', "\x13");
@@ -161,6 +159,25 @@ it('accepts the engine role alias when reading an actor class', function () {
         PHP);
 
         expect(ProjectActor::fromFile($actorPath)->getClassName())->toBe('Oracle');
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
+it('saves a class cleared and chosen again where the file already holds it', function () {
+    $root = makeTemporaryProject();
+
+    try {
+        $path = $root . '/assets/Data/Actors/Kaelion.php';
+        file_put_contents($path, str_replace("    'level' => 1,", "    'class' => 'Vanguard',\n    'level' => 1,", (string) file_get_contents($path)));
+        $actor = ProjectActor::fromFile($path);
+
+        $actor->setField('class', 'none');
+        $actor->setField('class', 'Oracle');
+        $actor->save();
+
+        expect((string) file_get_contents($path))->toContain("    'class' => 'Oracle',\n    'level' => 1,")
+            ->and((require $path)['data']['class'])->toBe('Oracle');
     } finally {
         removeDirectoryRecursively($root);
     }

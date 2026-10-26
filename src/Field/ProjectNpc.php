@@ -4,22 +4,31 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Field;
 
+use Ichiloto\Editor\Dialogue\DialogueVariants;
+use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
+
 /**
  * One map-local NPC, as the engine's `Field\Npc` will read it.
  *
  * The runtime contract, verbatim from `NpcManager::configure()`: `name`,
  * `x`, `y` required; `sprite` (default `@`); `movement` `fixed`|`wander`;
+ * `directionFix` (bool, default false: true keeps the heading when the
+ * player talks to it instead of turning to face the player); `facing`
+ * (north|east|south|west, default south: the heading it stands with);
  * optional `wanderArea` {x,y,width,height}, unbounded when omitted;
- * `dialogue` (plain pages or conditional variants); `script` (event
- * commands, which take precedence over dialogue when non-empty);
+ * `dialogue` (plain lines, or the NPC's interaction pages as the Engine's
+ * `NpcPages` reads them); `script` (event commands, which take precedence
+ * over dialogue when non-empty); `cue` (only beside plain lines or a
+ * script: pages carry their own);
  * `conditions` (visibility); `sets` (world writes after each conversation);
  * `id` (stable map-local identity, targeted by `move_route`); `sprites`
  * (directional glyphs, either case of key accepted on load).
  *
  * The payload is kept verbatim: a key this class does not know survives
- * load, edit, save, and reload untouched. Identity is immutable after
- * creation — nothing here renames an id, because doors and routes that name
- * it would not follow.
+ * load, edit, save, and reload untouched. A field edit never changes the id:
+ * the editor gives an NPC a new id only through {@see withId()}, while
+ * nothing refers to it yet, because doors and routes that name an id would
+ * not follow.
  *
  * @package Ichiloto\Editor\Field
  */
@@ -29,8 +38,8 @@ final class ProjectNpc
      * The fields the runtime reads, in the order a fresh entry is written.
      */
     public const array KNOWN_FIELDS = [
-        'id', 'name', 'sprite', 'x', 'y', 'movement', 'wanderArea', 'sprites',
-        'conditions', 'dialogue', 'script', 'sets',
+        'id', 'name', 'sprite', 'x', 'y', 'movement', 'facing', 'directionFix', 'wanderArea', 'sprites',
+        'conditions', 'dialogue', 'script', 'sets', 'sprites2d', 'cue',
     ];
 
     public const array MOVEMENTS = ['fixed', 'wander'];
@@ -113,13 +122,18 @@ final class ProjectNpc
 
     /**
      * Returns a sprite as the terminal shows it: style tags stripped,
-     * measured the way the engine measures it, `@` when nothing is left.
+     * measured the way the engine measures it. An explicit empty sprite
+     * draws no overlay; style-only source retains the diagnostic fallback.
      *
      * @param string $sprite The sprite as authored.
      * @return string The visible glyph(s).
      */
     public static function visibleGlyph(string $sprite): string
     {
+        if ($sprite === '') {
+            return '';
+        }
+
         $stripped = self::strippedGlyph($sprite);
 
         return $stripped === '' ? '@' : $stripped;
@@ -252,13 +266,69 @@ final class ProjectNpc
      */
     public function hasDialogueVariants(): bool
     {
-        foreach ($this->getDialogue() as $entry) {
-            if (isset($entry['lines']) || isset($entry['script']) || isset($entry['conditions'])) {
-                return true;
-            }
+        return ConditionalDialogue::isVariantList($this->getDialogue());
+    }
+
+    /**
+     * Returns the NPC's pages as the editor edits them: plain lines folded
+     * into one page that also carries the NPC's cue, since the cue belongs
+     * to the page talking runs. An NPC whose top-level script replaces its
+     * dialogue keeps its cue with the script.
+     *
+     * @return array<int, array<string, mixed>> The pages.
+     */
+    public function getPages(): array
+    {
+        $pages = $this->getDialogueAsVariants();
+        $cue = $this->payload['cue'] ?? null;
+
+        if (is_array($cue) && $this->getScript() === [] && ! $this->hasDialogueVariants() && count($pages) === 1) {
+            $pages[0]['cue'] = $cue;
         }
 
-        return false;
+        return $pages;
+    }
+
+    /**
+     * Writes pages back into an entry in their stored form: one page of
+     * plain lines (with at most a cue) is stored as plain lines, its cue on
+     * the NPC, so content authored that way is saved that way. Once the
+     * pages become a list, the cue {@see getPages()} copied onto the first
+     * page stays there alone. A top-level script keeps the NPC's cue.
+     *
+     * @param array<string, mixed> $entry The entry, its other fields as edited.
+     * @param array<int, mixed> $pages The pages.
+     * @return array<string, mixed> The entry to store.
+     */
+    public static function storePages(array $entry, array $pages): array
+    {
+        // A page that runs an action without lines keeps no empty line list.
+        $pages = array_map(static fn(array $page): array => ($page['lines'] ?? null) === []
+            && array_intersect(array_keys($page), ['script', 'scriptId', 'cinematicId']) !== [] ? array_diff_key($page, ['lines' => true]) : $page,
+            array_values(array_filter($pages, is_array(...))));
+        $only = $pages[0] ?? null;
+        $script = array_filter((array) ($entry['script'] ?? []), is_array(...)) !== [];
+
+        if (! $script && count($pages) === 1 && array_diff(array_keys($only), ['lines', 'cue']) === []) {
+            if (is_array($only['cue'] ?? null)) {
+                $entry['cue'] = $only['cue'];
+            } else {
+                unset($entry['cue']);
+            }
+            unset($pages[0]['cue']);
+        } elseif (! $script && is_array($entry['cue'] ?? null) && ($only['cue'] ?? null) === $entry['cue']) {
+            unset($entry['cue']);
+        }
+
+        $dialogue = self::dialogueFromVariants($pages);
+
+        if ($dialogue === []) {
+            unset($entry['dialogue']);
+        } else {
+            $entry['dialogue'] = $dialogue;
+        }
+
+        return $entry;
     }
 
     /**
@@ -273,17 +343,7 @@ final class ProjectNpc
      */
     public function getDialogueAsVariants(): array
     {
-        $dialogue = $this->getDialogue();
-
-        if ($dialogue === []) {
-            return [];
-        }
-
-        if ($this->hasDialogueVariants()) {
-            return $dialogue;
-        }
-
-        return [['lines' => $dialogue]];
+        return DialogueVariants::fold($this->getDialogue());
     }
 
     /**
@@ -295,18 +355,7 @@ final class ProjectNpc
      */
     public static function dialogueFromVariants(array $variants): array
     {
-        $variants = array_values(array_filter($variants, is_array(...)));
-
-        if (count($variants) === 1) {
-            $only = $variants[0];
-            $extras = array_diff(array_keys($only), ['lines']);
-
-            if ($extras === [] && is_array($only['lines'] ?? null)) {
-                return array_values($only['lines']);
-            }
-        }
-
-        return $variants;
+        return DialogueVariants::unfold($variants);
     }
 
     /**
@@ -392,6 +441,21 @@ final class ProjectNpc
      * @param string $id The new id.
      * @return self The copy.
      */
+    /**
+     * Returns a copy under another id, in the id's place, for an NPC whose
+     * name changed while nothing refers to it yet.
+     *
+     * @param string $id The new id.
+     * @return self The NPC under that id.
+     */
+    public function withId(string $id): self
+    {
+        $payload = $this->payload;
+        $payload['id'] = $id;
+
+        return new self($payload);
+    }
+
     public function asCopyWithId(string $id): self
     {
         $payload = $this->payload;

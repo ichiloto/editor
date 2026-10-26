@@ -1,0 +1,2931 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Ichiloto\Editor\Inspector;
+
+use Ichiloto\Editor\Database\ConditionCodec;
+use Ichiloto\Editor\Dialogue\DialogueEmotionFields;
+use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
+use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\InnPresentationFields;
+use Ichiloto\Editor\Database\MovementRouteFields;
+use Ichiloto\Editor\Database\ProjectRecord;
+use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordField;
+use Ichiloto\Editor\Database\RecordFieldCodec;
+use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Events\ChestLoot;
+use Ichiloto\Editor\Events\EventAuthoring;
+use Ichiloto\Editor\Events\EventRecordPane;
+use Ichiloto\Editor\Events\EventRefusal;
+use Ichiloto\Editor\Events\EventTypeCatalog;
+use Ichiloto\Editor\Events\EventTypeDefinition;
+use Ichiloto\Editor\Field\MapBgmVariants;
+use Ichiloto\Editor\Field\MapEncounters;
+use Ichiloto\Editor\Field\MapAtlas;
+use Ichiloto\Editor\Field\MapAreaAuthoring;
+use Ichiloto\Editor\Field\MapAreaRefusal;
+use Ichiloto\Editor\Field\MapLandmarks;
+use Ichiloto\Editor\History\Command;
+use Ichiloto\Editor\History\CommandGroup;
+use Ichiloto\Editor\History\GenericCommand;
+use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Editor\Validation\ChestRewardValidator;
+use Ichiloto\Editor\Validation\Issue;
+use Ichiloto\Engine\Core\Enumerations\MovementHeading;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
+use Ichiloto\Engine\Events\Enumerations\ChestType;
+use Ichiloto\Engine\Events\Enumerations\EventEngagement;
+use Ichiloto\Engine\Events\Enumerations\LootType;
+use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
+use Ichiloto\Engine\Events\Triggers\EventCueKind;
+use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
+use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
+use Ichiloto\Engine\Field\DashSettings;
+use Ichiloto\Engine\Field\MapTerrainKinds;
+use Ichiloto\Engine\Field\MapRoleCatalog;
+use Ichiloto\Engine\Field\PlaceTypeCatalog;
+use Ichiloto\Engine\Field\RegionCatalog;
+use Ichiloto\Engine\Field\SkitBackdrop;
+use Ichiloto\Engine\Field\Enumerations\SkitBackdropSource;
+use Ichiloto\Engine\Rendering\Sprites\PngAssetPreflight;
+use Ichiloto\Engine\Field\PlayerSpriteSet;
+use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
+use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
+use Ichiloto\Engine\Field\MapGraphics;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
+use Closure;
+use InvalidArgumentException;
+use Throwable;
+
+/**
+ * The inspector rows of a map and of one of its events, and the edits they
+ * make, as every editor interface shows and applies them.
+ *
+ * A row is a descriptor array (`label`, `value`, and when it can be edited a
+ * `control`, `options` or `reference`, with the `target`, `field`, `path` or
+ * `marker` its edit is applied through). A row chosen from a picker rather
+ * than stepped through carries `choices` (value, label, description). A row
+ * inside a list an author adds to and removes from carries its list's place
+ * (`list`, `encounterList` or `bgmVariantList`). Nothing here knows a
+ * cursor, a selection or a pane: the caller names the map and the event,
+ * applies an edit through {@see apply()}, records the command it returns,
+ * and shows an {@see InspectorRefusal}'s reason.
+ *
+ * An inspector for a graphical editor also offers what only a graphical
+ * renderer shows (the arena an encounter's battle takes place in). The
+ * terminal editor's inspector does not: those values are kept exactly as
+ * authored, never offered there.
+ */
+final readonly class MapInspector
+{
+    public const string MAP_BGM_NONE = '(None)';
+    public const string MAP_KIND_NONE = 'Not set';
+    /** What a map without a role shows on its Role row. */
+    public const string MAP_ROLE_NONE = 'Not set';
+    /** What a map without a place type shows on its Place Type row. */
+    public const string PLACE_TYPE_NONE = 'Not set';
+    public const string MAP_ARENA_NONE = '(default arena)';
+    /** What an arena rule without an arena shows; the Engine leaves such a rule out. */
+    public const string RULE_ARENA_NONE = '(no arena)';
+    /** The row key marking a map arena rule's rows, for adding and removing rules. */
+    public const string ARENA_RULE_LIST = 'arenaRuleList';
+    public const string ENCOUNTER_ARENA_NONE = '(map arena)';
+
+    /** An encounter row met anywhere the map counts steps. */
+    public const string ENCOUNTER_AREAS_NONE = '(whole map)';
+    public const string ENCOUNTER_TERRAINS_NONE = '(any terrain)';
+
+    /** Classification is authored explicitly, never inferred from cue presentation. */
+    public const array EVENT_CUE_KIND_CHOICES = [
+        ['label' => 'Unclassified (clear kind)', 'value' => '', 'description' => 'Omit kind, preserving legacy unclassified guidance and the rest of the cue.'],
+        ['label' => 'Story', 'value' => EventCueKind::STORY->value, 'description' => 'Story guidance that persists at the screen edge.'],
+        ['label' => 'Route', 'value' => EventCueKind::ROUTE->value, 'description' => 'Route guidance that belongs to its map cell.'],
+    ];
+
+    /** Where the player stands to start an event, as an author picks it. */
+    public const array EVENT_ENGAGEMENT_CHOICES = [
+        ['label' => 'Stand on it', 'value' => 'inside', 'description' => 'The player starts it from one of its cells, as events always have.'],
+        ['label' => 'Face it from next to it', 'value' => 'facing', 'description' => 'Placed on an object: the player starts it from the next cell, facing the object.'],
+    ];
+
+    /** A chest event's presentations, as an author picks one. */
+    public const array CHEST_TYPE_CHOICES = [
+        ['label' => 'Common', 'value' => ChestType::COMMON->value, 'description' => 'Standard chest presentation for ordinary treasure.'],
+        ['label' => 'Rare', 'value' => ChestType::RARE->value, 'description' => 'Highlights a chest that should feel less common.'],
+        ['label' => 'Epic', 'value' => ChestType::EPIC->value, 'description' => 'Marks a chest carrying high-value treasure.'],
+        ['label' => 'Legendary', 'value' => ChestType::LEGENDARY->value, 'description' => 'Reserved for the most special chest rewards.'],
+    ];
+
+    /**
+     * Every loot type as an author reads it. Only the ones the Engine's chest
+     * can give are offered ({@see listLootTypeChoices()}).
+     */
+    private const array LOOT_TYPE_CHOICES = [
+        ['label' => 'Item', 'value' => LootType::ITEM->value, 'description' => 'Rewards an item from the project item database.'],
+        ['label' => 'Gold', 'value' => LootType::GOLD->value, 'description' => 'Awards currency directly when the chest is opened.'],
+        ['label' => 'Experience', 'value' => LootType::EXPERIENCE->value, 'description' => 'Awards experience directly when claimed.'],
+        ['label' => 'Skill', 'value' => LootType::SKILL->value, 'description' => 'Rewards a learnable skill identifier.'],
+        ['label' => 'Spell', 'value' => LootType::SPELL->value, 'description' => 'Rewards a spell identifier.'],
+        ['label' => 'Weapon', 'value' => LootType::WEAPON->value, 'description' => 'Rewards a weapon identifier.'],
+        ['label' => 'Armor', 'value' => LootType::ARMOR->value, 'description' => 'Rewards an armor identifier.'],
+        ['label' => 'Accessory', 'value' => LootType::ACCESSORY->value, 'description' => 'Rewards an accessory identifier.'],
+    ];
+
+    /**
+     * The loot types an author picks a chest's from: the kinds the Engine's
+     * chest can give, so a new choice never makes a chest that fails to open.
+     *
+     * @return list<array{label: string, value: string, description: string}>
+     */
+    public static function listLootTypeChoices(): array
+    {
+        return array_values(array_filter(
+            self::LOOT_TYPE_CHOICES,
+            static fn(array $choice): bool => ChestLoot::isGrantable(LootType::from($choice['value'])),
+        ));
+    }
+
+    /**
+     * @param ReferenceCatalog $references The project's references as the map sees them.
+     * @param bool $graphical Whether the editor shows graphical presentation, and so offers it.
+     */
+    public function __construct(private ReferenceCatalog $references, private bool $graphical = false)
+    {
+    }
+
+    /**
+     * The map's own rows: identity, kind, size, counts, music and encounters.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getMapFields(ProjectMap $map): array
+    {
+        return [
+            [
+                'label' => 'Name',
+                'value' => $map->getDisplayName(),
+                'control' => new InputControl(InputControlType::TEXT, $map->getDisplayName()),
+                'target' => 'map',
+                'field' => 'name',
+            ],
+            // Chosen from the region names the project's maps use, never typed.
+            [
+                'label' => 'Region',
+                'value' => $map->getRegion(),
+                'selectedValue' => $map->getRegion(),
+                'reference' => 'map_regions',
+                'target' => 'map',
+                'field' => 'region',
+            ],
+            $this->buildMapRoleField($map),
+            $this->buildPlaceTypeField($map),
+            $this->buildSkitBackdropField($map),
+            $this->buildMapKindField($map),
+            [
+                'label' => 'Description',
+                'value' => $map->getDescription(),
+                'control' => new InputControl(InputControlType::TEXT, $map->getDescription()),
+                'target' => 'map',
+                'field' => 'description',
+            ],
+            [
+                'label' => 'Size',
+                'value' => '',
+                'editable' => false,
+            ],
+            [
+                'label' => '  X',
+                'value' => (string) $map->getWidth(),
+                'control' => new InputControl(InputControlType::INTEGER, (string) $map->getWidth()),
+                'target' => 'map-size',
+                'field' => 'width',
+                'axis' => 'x',
+            ],
+            [
+                'label' => '  Y',
+                'value' => (string) $map->getHeight(),
+                'control' => new InputControl(InputControlType::INTEGER, (string) $map->getHeight()),
+                'target' => 'map-size',
+                'field' => 'height',
+                'axis' => 'y',
+            ],
+            [
+                'label' => 'Events',
+                'value' => (string) $map->getEventDefinitionCount(),
+                'editable' => false,
+            ],
+            [
+                'label' => 'Triggers',
+                'value' => (string) $map->getTriggerCount(),
+                'editable' => false,
+            ],
+            ...$this->mapRuntimeFields($map),
+            ...MapAtlasFields::describeMapFields($map, $this->references),
+            // Where the region map pins it, beside where the atlas places it.
+            MapStationField::describeField($map),
+            ...MapTerrainFields::describeMapFields($map),
+            ...MapAreaFields::describeMapFields($map),
+            ...$this->getLandmarkFields()->describeMapFields($map),
+        ];
+    }
+
+    /**
+     * One event's rows: its marker, type, position and size (or its painted
+     * cells), and its data.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getEventFields(ProjectMap $map, string $marker): array
+    {
+        $definition = $map->getEventDefinition($marker);
+        $bounds = $map->getEventBounds($marker);
+        $area = $map->getEventArea($marker);
+        $fields = [
+            [
+                'label' => 'Event',
+                'value' => $marker,
+                'editable' => false,
+            ],
+            [
+                'label' => 'Type',
+                'value' => EventTypeCatalog::describeClass(
+                    is_array($definition) && is_string($definition['class'] ?? null) ? $definition['class'] : null,
+                ),
+                'editable' => true,
+                // Chosen, never stepped through: changing an event's type
+                // replaces data another type gave it.
+                'choices' => array_map(static fn(EventTypeDefinition $type): array => [
+                    'label' => $type->label,
+                    'value' => $type->label,
+                    'description' => $type->description,
+                ], EventTypeCatalog::all()),
+                'target' => 'event-type',
+                'marker' => $marker,
+            ],
+            ...MapAreaFields::describeSubjectFields($map, $marker),
+            ...MapSpeakerFields::describeEventFields($map, $marker),
+        ];
+
+        if ($bounds !== null) {
+            $fields[] = ['label' => 'Position', 'value' => '', 'editable' => false];
+            foreach (['x' => '  X', 'y' => '  Y'] as $axis => $label) {
+                $fields[] = [
+                    'label' => $label,
+                    'value' => (string) $bounds[$axis],
+                    'control' => new InputControl(InputControlType::INTEGER, (string) $bounds[$axis]),
+                    'target' => 'event-bounds',
+                    'marker' => $marker,
+                    'field' => $axis,
+                    'axis' => $axis,
+                ];
+            }
+            if ($area?->isRectangle ?? true) {
+                $fields[] = ['label' => 'Size', 'value' => '', 'editable' => false];
+                foreach (['width' => '  X', 'height' => '  Y'] as $axis => $label) {
+                    $fields[] = [
+                        'label' => $label,
+                        'value' => (string) $bounds[$axis],
+                        'control' => new InputControl(InputControlType::INTEGER, (string) $bounds[$axis]),
+                        'target' => 'event-bounds',
+                        'marker' => $marker,
+                        'field' => $axis,
+                        'axis' => $axis === 'width' ? 'x' : 'y',
+                    ];
+                }
+            } else {
+                // Painted in its own shape: the event triggers on exactly these cells.
+                $pieces = count($area->findPieces());
+                $fields[] = [
+                    'label' => 'Cells',
+                    'value' => sprintf('%d in %d %s', count($area->cells), $pieces, $pieces === 1 ? 'shape' : 'places'),
+                    'editable' => false,
+                ];
+            }
+        }
+
+        if ($definition !== null) {
+            $fields = [...$fields, ...$this->buildEventDataFields($marker, $definition)];
+            $fields = $this->describeChestRewardFields($map, $marker, $definition, $fields);
+            $fields = \Ichiloto\Editor\Maps\MapPlacement::describeEventFields($definition, $fields);
+        }
+
+        return [...$fields, ...$this->getLandmarkFields()->describeEventFields($map, $marker)];
+    }
+
+    /**
+     * Applies one row's edit to the map and returns the command that undoes
+     * and redoes it, already applied; null when nothing changed or the row
+     * is not one an edit applies through: the map's kind, which may first
+     * ask to clear tiles ({@see changeMapKind()}).
+     *
+     * @param array<string, mixed> $field The row's descriptor.
+     * @throws InspectorRefusal When the edit cannot be made as asked, or the row is a transfer's
+     *     destination, which is set with its spawn point ({@see setTransferDestination()}).
+     */
+    public function apply(ProjectMap $map, array $field, string $rawValue): ?Command
+    {
+        if (($field['innPresentation'] ?? false) === true) {
+            return $this->applyInnPresentationField($map, $field, $rawValue);
+        }
+        if (isset($field['movementRouteField'])) {
+            return $this->applyMovementRouteField($map, $field, $rawValue);
+        }
+        if (($field['destination'] ?? false) === true) {
+            throw new InspectorRefusal('A destination is set with its spawn point; choose both together.');
+        }
+        if (($field['target'] ?? null) === EventRecordPane::TARGET) {
+            return $this->applyEventRecordField($map, $field, $rawValue);
+        }
+
+        $control = self::findControl($field);
+        $type = $control?->type ?? InputControlType::TEXT;
+        $value = match ($type) {
+            InputControlType::INTEGER => (int) trim($rawValue),
+            InputControlType::FLOAT => (float) trim($rawValue),
+            InputControlType::BOOLEAN => InputControl::parseBoolean($rawValue),
+            default => $rawValue,
+        };
+        $choices = self::findChoiceValues($field);
+
+        if ($control === null && $choices !== null && ! in_array($rawValue, $choices, true)) {
+            // A row picked from a list takes one of its choices, whatever
+            // interface sent the value.
+            throw new InspectorRefusal(sprintf('%s cannot be %s; choose one of: %s.',
+                trim((string) ($field['label'] ?? 'That row')), $rawValue, implode(', ', $choices)));
+        }
+
+        if (($field['mapConditions'] ?? false) === true) {
+            try {
+                $value = ConditionCodec::decodeAllStrictly($rawValue);
+            } catch (InvalidArgumentException $error) {
+                throw new InspectorRefusal($error->getMessage(), previous: $error);
+            }
+        }
+
+        return match ((string) ($field['target'] ?? 'map')) {
+            'map' => $this->applyMapField($map, (string) $field['field'], $value, (string) ($field['label'] ?? 'Field')),
+            'map-data' => ($path = array_values((array) ($field['path'] ?? []))) === []
+                ? null
+                : $this->writeMapData($map, $path, $value === '' ? null : $value, (string) ($field['label'] ?? 'Field')),
+            'map-encounters' => $this->applyMapEncounterValue($map, $field, $value),
+            'map-bgm-variants' => $this->applyMapBgmVariantValue($map, $field, $value),
+            'map-size' => $this->applyMapSize($map, (string) ($field['field'] ?? ''), (int) $value),
+            'event' => $this->applyEventField($map, $field, $value),
+            'event-type' => $this->applyEventType($map, (string) $field['marker'], $rawValue),
+            'event-bounds' => $this->applyEventBounds($map, (string) $field['marker'], (string) $field['field'], (int) $value),
+            MapLandmarkFields::TARGET, MapLandmarkFields::EVENT_TARGET, MapLandmarkFields::OBJECT_TARGET => $this->applyLandmarkValue($map, $field, $value),
+            MapAreaFields::TARGET, MapAreaFields::SUBJECT_TARGET => MapAreaFields::applyValue($map, $field, $rawValue),
+            MapSpeakerFields::TARGET => MapSpeakerFields::applyValue($map, $field, $rawValue),
+            MapAtlasFields::TARGET => $this->applyAtlasValue($map, $field, $value),
+            MapTerrainFields::TARGET => $this->applyTerrainValue($map, $field, $value),
+            MapStationField::TARGET => $this->applyStationValue($map, (string) $value),
+            self::ROLE_TARGET => $this->applyMapRole($map, trim((string) $value)),
+            self::PLACE_TYPE_TARGET => $this->applyPlaceType($map, trim((string) $value)),
+            self::SKIT_BACKDROP_TARGET => $this->applySkitBackdrop($map, trim((string) $value)),
+            self::DASHING_TARGET => $this->writeMapData($map, [DashSettings::MAP_DISABLE_DASHING], $value === true ? true : null,
+                'Disable Dashing'),
+            default => null,
+        };
+    }
+
+    /**
+     * Applies one minimap landmark row's edit: the declarations it leaves are checked by the Engine against the map
+     * as it stands, then written as one undo step.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the edit cannot be made or the map would not load the result.
+     */
+    private function applyLandmarkValue(ProjectMap $map, array $field, mixed $value): ?Command
+    {
+        if (($field['target'] ?? null) === MapLandmarkFields::TARGET && ($field['field'] ?? null) === MapLandmarkFields::ID_FIELD) {
+            return $this->renameLandmark($map, $field, (string) $value);
+        }
+        try {
+            $entries = $this->getLandmarkFields()->applyValue($map, $field, $value);
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+
+        return $entries === null ? null : $this->writeLandmarks($map, $entries, trim((string) ($field['label'] ?? 'Landmark')));
+    }
+
+    /**
+     * Renames a landmark and, in the same undo step, the atlas entry of every map that names it, so no local map
+     * loses its place above. When any of those maps cannot take the edit, nothing is renamed.
+     *
+     * @param array<string, mixed> $field The landmark's id row.
+     * @throws InspectorRefusal When the id is refused, the map would not load the result, or a map naming it cannot follow.
+     */
+    private function renameLandmark(ProjectMap $map, array $field, string $id): ?Command
+    {
+        try {
+            $rename = $this->getLandmarkFields()->renameEntry($map, $field, $id);
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+        if ($rename === null) { return null; }
+
+        $problem = $this->getLandmarkFields()->findCurrentProblem($map, $rename['entries']);
+        if ($problem !== null) { throw new InspectorRefusal($problem); }
+
+        // The maps naming it first: one that cannot follow refuses the rename before the landmark itself changes.
+        $commands = [];
+        try {
+            foreach ($rename['children'] as $child) {
+                $commands[] = $this->writeMapData($child, [MapAtlas::KEY, 'parent', 'landmark'], $rename['to'], sprintf('%s atlas entry', $child->mapId));
+            }
+            $commands[] = $this->writeMapData($map, [MapLandmarks::KEY], $rename['entries'], 'Landmark id');
+        } catch (MapSourceRefusal $refusal) {
+            foreach (array_reverse(array_filter($commands)) as $command) { $command->undo(); }
+            throw new InspectorRefusal(sprintf('Landmark %s was not renamed: %s', $rename['from'], $refusal->getMessage()), previous: $refusal);
+        }
+
+        $commands = array_values(array_filter($commands));
+
+        return $commands === [] ? null : new CommandGroup(sprintf('Landmark rename %s to %s', $rename['from'] ?? '(no id)', $rename['to']), $commands);
+    }
+
+    /**
+     * Applies one terrain row's edit: the atlas block it leaves is checked by the Engine against the map's source
+     * layers as they stand, then written as one undo step; an empty block removes the key.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the edit cannot be made or the Engine would refuse the terrain.
+     */
+    private function applyTerrainValue(ProjectMap $map, array $field, mixed $value): ?Command
+    {
+        try {
+            $block = MapTerrainFields::applyValue($map, $field, $value);
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+        if ($block === null) { return null; }
+        $problem = MapTerrainFields::findProblem($map, $block);
+        if ($problem !== null) { throw new InspectorRefusal($problem); }
+
+        return $this->writeMapData($map, [MapAtlas::KEY], $block === [] ? null : $block, 'Atlas terrain');
+    }
+
+    /**
+     * Pins the map to a cell of its region's map, or takes the pin away, as one undo step.
+     *
+     * @throws InspectorRefusal When the value is not an x, y pair of whole numbers.
+     */
+    private function applyStationValue(ProjectMap $map, string $value): ?Command
+    {
+        try {
+            $station = MapStationField::applyValue($map, $value);
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+
+        return $this->writeMapData($map, [MapStationField::KEY], $station, 'Station');
+    }
+
+    /** The landmark rows, over the project's place categories and maps as this inspector reads them. */
+    private function getLandmarkFields(): MapLandmarkFields
+    {
+        return new MapLandmarkFields($this->references);
+    }
+
+    /**
+     * Applies one atlas row's edit: the block it leaves is checked by the Engine through the parent chain, as the
+     * project's maps stand, then written as one undo step; an empty block removes the key.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the edit cannot be made or the atlas would not resolve.
+     */
+    private function applyAtlasValue(ProjectMap $map, array $field, mixed $value): ?Command
+    {
+        try {
+            $block = MapAtlasFields::applyValue($map, $field, $value);
+            if ($block === null) { return null; }
+            MapAtlas::resolveGlobal($map, $block, $this->references->findMap(...), $this->references->getMapCategoryCatalog());
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+
+        return $this->writeMapData($map, [MapAtlas::KEY], $block === [] ? null : $block, 'Atlas ' . strtolower(trim((string) ($field['label'] ?? 'edit'))));
+    }
+
+    /**
+     * Writes a map's landmark declarations once the Engine accepts them; none removes the key.
+     *
+     * @param list<array<string, mixed>> $entries
+     * @throws InspectorRefusal When the map would not load them.
+     */
+    private function writeLandmarks(ProjectMap $map, array $entries, string $label): ?Command
+    {
+        $problem = $this->getLandmarkFields()->findCurrentProblem($map, $entries);
+        if ($problem !== null) {
+            throw new InspectorRefusal($problem);
+        }
+
+        return $this->writeMapData($map, [MapLandmarks::KEY], $entries === [] ? null : $entries, 'Landmark ' . lcfirst($label));
+    }
+
+    /**
+     * What names a row so it can be found again among a map's current rows: its target and the members that tell
+     * it from its neighbours. Null for a row nothing is applied through. Every interface finds a row by this.
+     *
+     * @param array<string, mixed> $field
+     * @return array<string, mixed>|null
+     */
+    public static function describeRowKey(array $field): ?array
+    {
+        if (! is_string($field['target'] ?? null)) {
+            return null;
+        }
+
+        return array_filter([
+            'target' => $field['target'],
+            'field' => isset($field['field']) ? (string) $field['field'] : null,
+            'path' => isset($field['path']) ? array_values(array_map('strval', (array) $field['path'])) : null,
+            'marker' => isset($field['marker']) ? (string) $field['marker'] : null,
+            'index' => isset($field['index']) ? (int) $field['index'] : null,
+            // A list heading has no path of its own; its list's names it.
+            'list' => is_array($field['list']['path'] ?? null) ? array_values(array_map('strval', $field['list']['path'])) : null,
+            // An event record row is named within the frame of commands it is in.
+            'frame' => is_array($field['eventFrame'] ?? null) ? array_values($field['eventFrame']) : null,
+        ], static fn(mixed $value): bool => $value !== null);
+    }
+
+    /**
+     * The values a row is picked from: its `choices`, or the `options` it
+     * steps through. Null for a row that is typed or referenced.
+     *
+     * @param array<string, mixed> $field
+     * @return list<string>|null
+     */
+    public static function findChoiceValues(array $field): ?array
+    {
+        return match (true) {
+            is_array($field['choices'] ?? null) => array_values(array_map(static fn(array $choice): string => (string) $choice['value'], $field['choices'])),
+            is_array($field['options'] ?? null) => array_values(array_map('strval', $field['options'])),
+            default => null,
+        };
+    }
+
+    /**
+     * Sets a transfer event's destination: the map and the spawn point on
+     * it, and when given the heading the player faces there, as one undo
+     * step. Without a heading the spawn facing stays as it is.
+     *
+     * @param ProjectMap $destination The map it leads to.
+     * @param string|null $heading North, East, South or West; null leaves the facing unchanged.
+     * @throws InspectorRefusal When the event is not a transfer, the spawn point is off the destination map, or the heading is not one.
+     */
+    public function setTransferDestination(ProjectMap $map, string $marker, ProjectMap $destination, int $x, int $y, ?string $heading = null): ?Command
+    {
+        $current = $map->getEventDefinition($marker);
+
+        if (! is_array($current) || ! is_array($current['data'] ?? null) || ! array_key_exists('destinationMap', $current['data'])) {
+            throw new InspectorRefusal(sprintf('Event %s has no destination to set.', $marker));
+        }
+
+        if ($x < 0 || $y < 0 || $x >= $destination->getWidth() || $y >= $destination->getHeight()) {
+            throw new InspectorRefusal(sprintf('(%d, %d) is outside %s, which is %dx%d.',
+                $x, $y, $destination->mapId, $destination->getWidth(), $destination->getHeight()));
+        }
+
+        $facing = $heading === null ? null : (self::findSpawnHeading($heading)
+            ?? throw new InspectorRefusal(sprintf('%s is not a spawn facing; choose %s.', $heading, implode(', ', self::listSpawnHeadingNames()))));
+
+        $next = $current;
+        $next['data']['destinationMap'] = $destination->mapId;
+        $next['data']['spawnPoint'] = [...(is_array($current['data']['spawnPoint'] ?? null) ? $current['data']['spawnPoint'] : []), 'x' => $x, 'y' => $y];
+        if ($facing !== null) {
+            $next['data']['spawnSprite'] = [$facing->value];
+        }
+
+        if ($next === $current) {
+            return null;
+        }
+
+        $map->setEventDefinition($marker, $next);
+
+        return new GenericCommand(
+            'Destination change',
+            static fn() => $map->setEventDefinition($marker, $next),
+            static fn() => $map->setEventDefinition($marker, $current),
+        );
+    }
+
+    /**
+     * Adds an entry to the list a row belongs to: a troop to the map's
+     * encounters, a music variant, or an entry like its neighbour to an
+     * event's list. Null when the row is in a list but nothing changed.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the row is in no list, or its list cannot take an entry.
+     */
+    public function addListEntry(ProjectMap $map, array $field): ?InspectorListEdit
+    {
+        if (isset($field['innPresentationList'])) { return $this->editInnPresentationList($map, $field, false); }
+        if (($field['target'] ?? null) === 'map-encounters' && is_array($field[self::ARENA_RULE_LIST] ?? null)) {
+            return $this->addArenaRule($map, (int) $field[self::ARENA_RULE_LIST]['index']);
+        }
+        if (($field['target'] ?? null) === 'map-encounters' && is_array($field['encounterList'] ?? null)) {
+            $encounters = $this->requireEditableEncounters($map);
+            $troops = $this->references->valuesFor('troops');
+            $available = array_values(array_diff($troops, $encounters->troopNames()));
+
+            if ($available === []) {
+                throw new InspectorRefusal($troops === []
+                    ? 'This project defines no troops to encounter.'
+                    : 'Every troop this project defines is already in this table.');
+            }
+
+            $block = $encounters->withTroopAdded($available[0], (int) $field['encounterList']['index']);
+
+            return new InspectorListEdit($this->writeMapData($map, [MapEncounters::KEY], $block, 'Encounter troop add'),
+                sprintf('Added %s to the encounter table.', $available[0]));
+        }
+
+        if (($field['target'] ?? null) === MapLandmarkFields::TARGET && is_array($field['landmarkList'] ?? null)) {
+            return $this->editLandmarkList($map, fn(): array => $this->getLandmarkFields()->addEntry($map), 'add');
+        }
+
+        if (($field['target'] ?? null) === MapAreaFields::TARGET) {
+            // An area is its cells, which are chosen on the map, not here.
+            throw new InspectorRefusal('Select cells on the map, then make an area of them.');
+        }
+
+        if (($field['target'] ?? null) === MapSpeakerFields::TARGET) {
+            return MapSpeakerFields::addSpeaker($map, $field);
+        }
+
+        if (($field['target'] ?? null) === 'map-bgm-variants' && is_array($field['bgmVariantList'] ?? null)) {
+            $variants = $this->requireEditableBgmVariants($map);
+
+            return new InspectorListEdit($this->writeMapData($map, [MapBgmVariants::KEY], $variants->withVariantAdded(), 'Music variant add'),
+                sprintf('Added variant %d. Pick its track; it stays inactive until one is chosen.', $variants->count() + 1));
+        }
+
+        if (($field['target'] ?? null) === EventRecordPane::TARGET) {
+            return $this->editEventRecordItems($map, $field, false);
+        }
+
+        $list = self::findEventList($field) ?? throw new InspectorRefusal('Nothing here is a list to add to.');
+        $marker = (string) $field['marker'];
+        $entries = $map->getEventField($marker, $list['path']);
+        $entries = is_array($entries) ? array_values($entries) : [];
+        // The new entry is shaped like the one it follows -- the same keys,
+        // their values cleared -- because an author adding a second shop
+        // line means another line like the first, not an empty hole.
+        $routePoints = ($field['movementRoutePoints'] ?? false) === true;
+        $template = $routePoints ? $list['blank'] : ($entries[$list['index']] ?? ($list['blank'] ?? ($entries === [] ? '' : end($entries))));
+        $position = min(count($entries), $list['index'] + 1);
+        array_splice($entries, $position, 0, [$routePoints ? $template : self::createBlankLike($template)]);
+
+        return new InspectorListEdit($this->writeEventList($map, $marker, $list['path'], $entries, 'Add list entry'),
+            sprintf('Added %s %d.', self::describeListPath($list['path']), $position + 1));
+    }
+
+    /**
+     * Adds an arena rule after another: for the first of the map's encounter
+     * terrains no rule names yet, else its first area, on the map's arena
+     * (or the first declared), for the author to change.
+     *
+     * @throws InspectorRefusal When the map has no terrain or area to hold a rule for, or no arena to pick.
+     */
+    private function addArenaRule(ProjectMap $map, int $after): InspectorListEdit
+    {
+        $encounters = $this->requireEditableEncounters($map);
+
+        if ($encounters->rows() === []) {
+            throw new InspectorRefusal('Add an encounter troop first; arena rules choose where its battles are drawn.');
+        }
+
+        $arena = $encounters->mapArena() ?? ($this->references->valuesFor('battle_arenas')[0]
+            ?? throw new InspectorRefusal('The battle presentation declares no arena for a rule to pick.'));
+        $named = array_filter(array_column($encounters->arenaRules(), 'terrain'));
+        $terrain = array_values(array_diff($this->readEncounterTerrains($map) ?? [], $named))[0] ?? null;
+        $area = $terrain === null ? ($this->readMapAreaIds($map)[0] ?? null) : null;
+
+        if ($terrain === null && $area === null) {
+            throw new InspectorRefusal('An arena rule holds for an area or an encounter terrain; this map has none left to rule.');
+        }
+
+        return new InspectorListEdit($this->writeMapData($map, [MapEncounters::KEY], $encounters->withArenaRuleAdded($area, $terrain, $arena, $after),
+            'Arena rule add'), sprintf('Added an arena rule for %s.', $terrain ?? "area {$area}"));
+    }
+
+    /**
+     * Removes the entry a row belongs to. Removing the last troop disables
+     * encounters and the last music variant takes the variants key with it.
+     * Null when the row names no entry to remove.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the row is in no list, or its list cannot lose an entry.
+     */
+    public function removeListEntry(ProjectMap $map, array $field): ?InspectorListEdit
+    {
+        if (isset($field['innPresentationList'])) { return $this->editInnPresentationList($map, $field, true); }
+        if (($field['target'] ?? null) === 'map-encounters' && is_array($field[self::ARENA_RULE_LIST] ?? null)) {
+            $encounters = $this->requireEditableEncounters($map);
+            $index = (int) $field[self::ARENA_RULE_LIST]['index'];
+
+            if (! array_key_exists($index, $encounters->arenaRules())) {
+                throw new InspectorRefusal('No arena rule to remove.');
+            }
+
+            return new InspectorListEdit($this->writeMapData($map, [MapEncounters::KEY], $encounters->withArenaRuleRemovedAt($index),
+                'Arena rule remove'), sprintf('Removed arena rule %d.', $index + 1));
+        }
+        if (($field['target'] ?? null) === 'map-encounters' && is_array($field['encounterList'] ?? null)) {
+            $encounters = $this->requireEditableEncounters($map);
+            $index = (int) $field['encounterList']['index'];
+            $rows = $encounters->rows();
+
+            if (! array_key_exists($index, $rows)) {
+                throw new InspectorRefusal('No encounter troop to remove.');
+            }
+
+            $block = $encounters->withTroopRemovedAt($index);
+
+            return new InspectorListEdit($this->writeMapData($map, [MapEncounters::KEY], $block, 'Encounter troop remove'), $block === null
+                ? sprintf('Removed %s; this map no longer has random encounters.', $rows[$index]['name'])
+                : sprintf('Removed %s from the encounter table.', $rows[$index]['name']));
+        }
+
+        if (($field['target'] ?? null) === MapLandmarkFields::TARGET && is_array($field['landmarkList'] ?? null)) {
+            return $this->editLandmarkList($map, fn(): array => $this->getLandmarkFields()->removeEntry($map, $field), 'remove');
+        }
+
+        if (($field['target'] ?? null) === MapAreaFields::TARGET && is_array($field['areaList'] ?? null)) {
+            return MapAreaFields::removeEntry($map, $field);
+        }
+
+        if (($field['target'] ?? null) === MapSpeakerFields::TARGET && isset($field['index'])) {
+            return MapSpeakerFields::removeSpeaker($map, $field);
+        }
+
+        if (($field['target'] ?? null) === 'map-bgm-variants' && is_array($field['bgmVariantList'] ?? null)) {
+            $variants = $this->requireEditableBgmVariants($map);
+            $index = (int) $field['bgmVariantList']['index'];
+
+            if ($variants->count() === 0) {
+                throw new InspectorRefusal('There is no music variant here to remove.');
+            }
+
+            return new InspectorListEdit($this->writeMapData($map, [MapBgmVariants::KEY], $variants->withVariantRemovedAt($index), 'Music variant remove'),
+                sprintf('Removed variant %d.', $index + 1));
+        }
+
+        if (($field['target'] ?? null) === EventRecordPane::TARGET) {
+            return $this->editEventRecordItems($map, $field, true);
+        }
+
+        $list = self::findEventList($field) ?? throw new InspectorRefusal('Nothing here is a list entry to remove.');
+        $marker = (string) $field['marker'];
+        $entries = $map->getEventField($marker, $list['path']);
+        $entries = is_array($entries) ? array_values($entries) : [];
+
+        if (! array_key_exists($list['index'], $entries)) {
+            return null;
+        }
+
+        array_splice($entries, $list['index'], 1);
+
+        return new InspectorListEdit($this->writeEventList($map, $marker, $list['path'], $entries, 'Remove list entry'),
+            sprintf('Removed %s %d.', self::describeListPath($list['path']), $list['index'] + 1));
+    }
+
+    /**
+     * How many tile layers changing the map to this kind would clear: none
+     * when the kind is unchanged or the map has no kind yet, since a map
+     * without one keeps its tiles, which then draw from the new kind.
+     */
+    public function countTileLayersClearedBy(ProjectMap $map, string $tilesetId): int
+    {
+        $this->assertTilesetExists($tilesetId);
+        $current = $map->getMapDataField(['tileset']);
+
+        return $current === null || $current === $tilesetId ? 0 : count($map->getTileLayerSources());
+    }
+
+    /**
+     * Whether changing the map to this kind leaves its terrain kinds behind: it is painted in its tileset's terrain
+     * kinds ({@see MapTerrainKinds}) and the new tileset declares none, so its glyphs block or let pass as the
+     * collision dictionary says, as on any map not painted in kinds.
+     *
+     * @throws InspectorRefusal When the project has no tileset with the id.
+     */
+    public function isKindChangeLeavingTerrainKinds(ProjectMap $map, string $tilesetId): bool
+    {
+        $this->assertTilesetExists($tilesetId);
+        try {
+            return MapTerrainKinds::isDeclared($map->getEditableData()) && $map->loadTilesetById($tilesetId)->kinds === [];
+        } catch (InvalidArgumentException) {
+            return false; // A malformed declaration or an unreadable tileset is reported where each is checked.
+        }
+    }
+
+    /**
+     * Sets the map's kind, clearing its tile layers and their settings when
+     * asked, as one undo step. Null when it already was that kind. A map
+     * painted in terrain kinds stops being painted in them when the new
+     * tileset declares none ({@see isKindChangeLeavingTerrainKinds()}): kinds
+     * belong to the tileset that declares them, and a map naming a tileset
+     * without kinds cannot read its passage from them.
+     *
+     * @throws InspectorRefusal When the project has no tileset with the id.
+     * @throws Throwable When the map refuses the change; it is then exactly as it was.
+     */
+    public function changeMapKind(ProjectMap $map, string $tilesetId, bool $clearTiles): ?Command
+    {
+        $this->assertTilesetExists($tilesetId);
+
+        if ($map->getMapDataField(['tileset']) === $tilesetId) {
+            return null;
+        }
+
+        $hadKind = $map->hasMapDataField(['tileset']);
+        $oldKind = $map->getMapDataField(['tileset']);
+        $oldSources = $map->getTileLayerSources();
+        $hadSettings = $map->hasMapDataField([MapGraphics::SETTINGS_KEY]);
+        $oldSettings = $map->getMapDataField([MapGraphics::SETTINGS_KEY]);
+        $leavesKinds = $this->isKindChangeLeavingTerrainKinds($map, $tilesetId);
+        $apply = static function () use ($map, $tilesetId, $clearTiles, $leavesKinds): void {
+            $map->setMapDataField(['tileset'], $tilesetId);
+            if ($leavesKinds) {
+                $map->setMapDataField([MapTerrainKinds::DATA_KEY], null);
+            }
+            if ($clearTiles) {
+                $map->restoreTileLayerSources([]);
+                $map->setMapDataField([MapGraphics::SETTINGS_KEY], null);
+            }
+        };
+        $revert = static function () use ($map, $hadKind, $oldKind, $oldSources, $hadSettings, $oldSettings, $leavesKinds): void {
+            $map->setMapDataField(['tileset'], $hadKind ? $oldKind : null);
+            if ($leavesKinds) {
+                $map->setMapDataField([MapTerrainKinds::DATA_KEY], true);
+            }
+            $map->restoreTileLayerSources($oldSources);
+            $map->setMapDataField([MapGraphics::SETTINGS_KEY], $hadSettings ? $oldSettings : null);
+        };
+
+        try {
+            $apply();
+        } catch (Throwable $failure) {
+            // A change refused after the kind was written is undone before
+            // it is reported, so the kind never changes without its tiles.
+            // Refused at the kind itself, nothing changed to undo.
+            if ($map->getMapDataField(['tileset']) === $tilesetId) {
+                $revert();
+            }
+            throw $failure;
+        }
+
+        return new GenericCommand('Kind change', $apply, $revert);
+    }
+
+    /** @throws InspectorRefusal When the project has no tileset with the id. */
+    private function assertTilesetExists(string $tilesetId): void
+    {
+        if (! array_key_exists($tilesetId, $this->references->labelsFor('tilesets'))) {
+            throw new InspectorRefusal(sprintf('There is no tileset %s in assets/%s.', $tilesetId, Tileset::DIRECTORY));
+        }
+    }
+
+    /**
+     * Writes one value into the map's data and returns its command, or null
+     * when the data already held it. A null value removes the key.
+     *
+     * @param list<string> $path
+     */
+    public function writeMapData(ProjectMap $map, array $path, mixed $value, string $label): ?Command
+    {
+        $hadValue = $map->hasMapDataField($path);
+        $oldValue = $map->getMapDataField($path);
+        $map->setMapDataField($path, $value);
+
+        if ($map->getMapDataField($path) === $oldValue && $map->hasMapDataField($path) === $hadValue) {
+            return null;
+        }
+
+        return new GenericCommand(
+            sprintf('%s edit', $label),
+            static fn() => $map->setMapDataField($path, $value),
+            static fn() => $map->setMapDataField($path, $hadValue ? $oldValue : null),
+        );
+    }
+
+    /**
+     * Applies one music variant row's edit through the variants model, which
+     * owns the list's shape and preserves every key it does not edit.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the map's variants cannot be edited here.
+     */
+    public function applyMapBgmVariantValue(ProjectMap $map, array $field, mixed $value): ?Command
+    {
+        $variants = $this->requireEditableBgmVariants($map);
+        $index = (int) ($field['index'] ?? 0);
+        $block = match ((string) ($field['field'] ?? '')) {
+            'track' => $variants->withTrackAt($index, (string) $value),
+            'conditions' => is_array($value) ? $variants->withConditionsAt($index, $value) : null,
+            default => null,
+        };
+
+        return $block === null ? null : $this->writeMapData($map, [MapBgmVariants::KEY], $block, sprintf('Music variant %d', $index + 1));
+    }
+
+    /**
+     * Places a chest's reward errors under the rows they are about.
+     *
+     * A chest whose reward the Engine cannot grant fails when opened, so the
+     * error is shown on the chest itself, from the same check the project
+     * report and the save warnings read. The chest stays editable and
+     * saveable: an unfinished chest is the author's draft.
+     *
+     * @param array<string, mixed> $definition The event definition.
+     * @param array<int, array<string, mixed>> $fields The event's rows so far.
+     * @return array<int, array<string, mixed>> The rows, with any reward errors after the last loot row.
+     */
+    private function describeChestRewardFields(ProjectMap $map, string $marker, array $definition, array $fields): array
+    {
+        if (! ChestLoot::isChest($definition)) {
+            return $fields;
+        }
+
+        try {
+            $messages = array_map(
+                static fn(Issue $issue): string => trim($issue->message . ' ' . $issue->hint),
+                new ChestRewardValidator($this->references->getInventoryCatalog())
+                    ->validate($map->mapId, $marker, (array) ($definition['data'] ?? [])),
+            );
+        } catch (Throwable $throwable) {
+            $messages = [sprintf('The inventory could not be read, so the reward cannot be checked: %s', $throwable->getMessage())];
+        }
+
+        if ($messages === []) {
+            return $fields;
+        }
+
+        $rows = array_map(static fn(string $message): array => [
+            'label' => 'Reward Error',
+            'value' => $message,
+            'editable' => false,
+            'tone' => 'error',
+            'name' => 'Reward Error',
+        ], $messages);
+        $lootRows = array_keys(array_filter($fields, static fn(array $field): bool => in_array(
+            array_values((array) ($field['path'] ?? [])),
+            [['data', 'lootType'], ['data', 'loot'], ['data', 'quantity']],
+            true,
+        ) && ($field['target'] ?? null) === 'event'));
+        $after = $lootRows === [] ? count($fields) : max($lootRows) + 1;
+        array_splice($fields, $after, 0, $rows);
+
+        return $fields;
+    }
+
+    /**
+     * The picker an event data row is chosen from, when its value names
+     * another resource.
+     *
+     * @param array<string, mixed> $field
+     * @param LootType|null $lootType The event's loot type, for a chest's loot row; without it that row has no picker
+     *     (the terminal editor chooses loot in its own dialog).
+     * @return array{category: string, title: string}|null
+     */
+    public static function findEventReference(array $field, ?LootType $lootType = null): ?array
+    {
+        if (($field['target'] ?? null) !== 'event') {
+            return null;
+        }
+
+        $path = array_values((array) ($field['path'] ?? []));
+
+        if (($path[0] ?? null) !== 'data' || count($path) < 2) {
+            return null;
+        }
+
+        $leaf = (string) $path[array_key_last($path)];
+
+        return match (true) {
+            $path === ['data', 'scriptId'] => ['category' => 'common_events', 'title' => 'Event Script'],
+            $path === ['data', 'cinematicId'] => ['category' => 'cinematics', 'title' => 'Cinematic'],
+            // An inn's rest stage, as InnOffer reads it.
+            $path === ['data', 'presentation'] => ['category' => 'stage_timelines', 'title' => 'Rest Presentation'],
+            $leaf === 'bgm' => ['category' => 'bgm', 'title' => 'Music'],
+            $leaf === 'sfx' => ['category' => 'sfx', 'title' => 'Sound Effect'],
+            // A shop's stock is data.items.N.item. The leaf alone would also
+            // match an unrelated event that happened to call a field "item".
+            $leaf === 'item' && ($path[1] ?? null) === 'items' => ['category' => 'inventory', 'title' => 'Item'],
+            // A chest's loot: the runtime gives every loot but gold from the item store, by stable definition id.
+            $path === ['data', 'loot'] => match ($lootType) {
+                LootType::ITEM => ['category' => 'items', 'title' => 'Item'],
+                LootType::WEAPON => ['category' => 'weapons', 'title' => 'Weapon'],
+                LootType::ARMOR => ['category' => 'armors', 'title' => 'Armor'],
+                LootType::ACCESSORY => ['category' => 'inventory', 'title' => 'Accessory'],
+                default => null,
+            },
+            default => null,
+        };
+    }
+
+    /**
+     * The input a row is typed into, or null when it is read-only or chosen
+     * some other way.
+     *
+     * @param array<string, mixed> $field
+     */
+    public static function findControl(array $field): ?InputControl
+    {
+        if (($field['editable'] ?? null) === false) {
+            return null;
+        }
+
+        $control = $field['control'] ?? null;
+
+        return $control instanceof InputControl ? $control : null;
+    }
+
+    /**
+     * The map's kind row: the tileset it draws from, chosen from the
+     * project's tilesets.
+     *
+     * @return array<string, mixed>
+     */
+    /** The Role row's target: a map's role in the project's Map Roles, chosen, never typed. */
+    public const string ROLE_TARGET = 'map-role';
+    /** The map's Disable Dashing row: true writes the Engine's `disableDashing`, false removes it. */
+    public const string DASHING_TARGET = 'map-dashing';
+
+    /**
+     * The map's Role row: what it is to the world (an overworld, an outside place, an interior), one of the
+     * project's map roles, whose destinations validation holds every way off the map to. Not set leaves the map
+     * unchecked; a role the project no longer has stays visible and says so.
+     *
+     * @return array<string, mixed>
+     */
+    public function buildMapRoleField(ProjectMap $map): array
+    {
+        $role = $map->getMapDataField([MapRoleCatalog::MAP_KEY]);
+        $labels = $this->references->labelsFor('map_roles');
+
+        return [
+            'label' => 'Role',
+            'value' => match (true) {
+                $role === null => self::MAP_ROLE_NONE,
+                ! is_string($role) => sprintf('%s · not a map role id', get_debug_type($role)),
+                ! isset($labels[$role]) => sprintf('%s · not in Map Roles', $role),
+                default => $labels[$role],
+            },
+            'selectedValue' => is_string($role) ? $role : '',
+            'reference' => 'map_roles',
+            'optional' => true,
+            'target' => self::ROLE_TARGET,
+            'field' => MapRoleCatalog::MAP_KEY,
+        ];
+    }
+
+    /**
+     * Makes the map one of the project's roles, or no role for an empty value, as one undo step.
+     *
+     * @throws InspectorRefusal When the role is not one the project has, or the roles cannot be read.
+     */
+    private function applyMapRole(ProjectMap $map, string $role): ?Command
+    {
+        if ($role !== '') {
+            try {
+                $known = $this->references->getMapRoleCatalog()->hasRole($role);
+            } catch (InvalidArgumentException $error) {
+                throw new InspectorRefusal('The map roles cannot be read: ' . $error->getMessage(), previous: $error);
+            }
+            if (! $known) {
+                throw new InspectorRefusal(sprintf('%s is not a map role. Choose one from the Map Roles page, or make it there first.', $role));
+            }
+        }
+        if ($map->getMapDataField([MapRoleCatalog::MAP_KEY]) === ($role === '' ? null : $role)) {
+            return null;
+        }
+
+        return $this->writeMapData($map, [MapRoleCatalog::MAP_KEY], $role === '' ? null : $role, 'Role');
+    }
+
+    /** The Place Type row's target: the type of the place a map belongs to, in the project's Place Types, chosen, never typed. */
+    public const string PLACE_TYPE_TARGET = 'map-place-type';
+
+    /**
+     * The map's Place Type row: what kind of place it belongs to (a town, an outpost, a shrine), one of the
+     * project's place types, which decides the icon every entrance into it shows on a map whose tileset gives
+     * place icons. Not set leaves those entrances unchecked; a type the project no longer has stays visible and
+     * says so.
+     *
+     * @return array<string, mixed>
+     */
+    public function buildPlaceTypeField(ProjectMap $map): array
+    {
+        $type = $map->getMapDataField([PlaceTypeCatalog::MAP_KEY]);
+        $labels = $this->references->labelsFor('place_types');
+
+        return [
+            'label' => 'Place Type',
+            'value' => match (true) {
+                $type === null => self::PLACE_TYPE_NONE,
+                ! is_string($type) => sprintf('%s · not a place type id', get_debug_type($type)),
+                ! isset($labels[$type]) => sprintf('%s · not in Place Types', $type),
+                default => $labels[$type],
+            },
+            'selectedValue' => is_string($type) ? $type : '',
+            'reference' => 'place_types',
+            'optional' => true,
+            'target' => self::PLACE_TYPE_TARGET,
+            'field' => PlaceTypeCatalog::MAP_KEY,
+        ];
+    }
+
+    /**
+     * Makes the map's place one of the project's place types, or none for an empty value, as one undo step.
+     *
+     * @throws InspectorRefusal When the type is not one the project has, or the types cannot be read.
+     */
+    private function applyPlaceType(ProjectMap $map, string $type): ?Command
+    {
+        if ($type !== '') {
+            try {
+                $known = $this->references->getPlaceTypeCatalog()->hasType($type);
+            } catch (InvalidArgumentException $error) {
+                throw new InspectorRefusal('The place types cannot be read: ' . $error->getMessage(), previous: $error);
+            }
+            if (! $known) {
+                throw new InspectorRefusal(sprintf('%s is not a place type. Choose one from the Place Types page, or make it there first.', $type));
+            }
+        }
+        if ($map->getMapDataField([PlaceTypeCatalog::MAP_KEY]) === ($type === '' ? null : $type)) {
+            return null;
+        }
+
+        return $this->writeMapData($map, [PlaceTypeCatalog::MAP_KEY], $type === '' ? null : $type, 'Place Type');
+    }
+
+    /** The Skit Backdrop row's target: the scene skits show on this map, a project PNG chosen, never typed. */
+    public const string SKIT_BACKDROP_TARGET = 'map-skit-backdrop';
+    /** How the Skit Backdrop row's choice of none reads. */
+    public const string SKIT_BACKDROP_NONE = 'None: the region\'s backdrop, or none';
+
+    /**
+     * The map's Skit Backdrop row: the scene a skit's stage shows while it plays on this map, unless the skit's
+     * content names its own. Chosen with the project's image picker and stored as an asset-root-relative path in the
+     * map's `skitBackdrop`. With none, the row says what skits here show instead: the region's backdrop, or none,
+     * which the game reports. A path the project no longer has stays visible and says so.
+     *
+     * @return array<string, mixed>
+     */
+    public function buildSkitBackdropField(ProjectMap $map): array
+    {
+        $backdrop = $map->getMapDataField([SkitBackdrop::MAP_KEY]);
+        try {
+            $regions = $this->references->getRegionCatalog();
+        } catch (InvalidArgumentException) {
+            // Unreadable regions name no backdrop here; validation says why.
+            $regions = new RegionCatalog();
+        }
+        // What a skit that names none shows here, by the Engine's own choice.
+        $shown = SkitBackdrop::resolve([], SkitBackdrop::readMapBinding($map->getEditableData()), $regions);
+
+        return [
+            'label' => 'Skit Backdrop',
+            'value' => match (true) {
+                $shown->source === SkitBackdropSource::REGION => sprintf('None: region %s\'s, %s', $map->getMapDataField(['region']), $shown->asset),
+                $shown->source === SkitBackdropSource::NONE => 'None: skits here show no backdrop',
+                $shown->asset === null => sprintf('%s · %s', is_scalar($backdrop) ? (string) $backdrop : get_debug_type($backdrop), $shown->issue),
+                ! $this->isProjectPng($shown->asset) => $shown->asset . ' · not a PNG in assets',
+                default => $shown->asset,
+            },
+            'selectedValue' => is_string($backdrop) ? $backdrop : '',
+            'reference' => 'png_assets',
+            'noneLabel' => self::SKIT_BACKDROP_NONE,
+            'optional' => true,
+            'target' => self::SKIT_BACKDROP_TARGET,
+            'field' => SkitBackdrop::MAP_KEY,
+        ];
+    }
+
+    /**
+     * Makes a project PNG the scene skits show on the map, or none for an empty value, as one undo step.
+     *
+     * @throws InspectorRefusal When the value is not one of the project's PNGs.
+     */
+    private function applySkitBackdrop(ProjectMap $map, string $asset): ?Command
+    {
+        if ($asset !== '' && ! $this->isProjectPng($asset)) {
+            throw new InspectorRefusal(sprintf('%s is not a PNG in the project\'s assets. Choose one with the image picker.', $asset));
+        }
+
+        return $this->writeMapData($map, [SkitBackdrop::MAP_KEY], $asset === '' ? null : $asset, 'Skit Backdrop');
+    }
+
+    /** Whether an asset-root-relative path is a PNG inside the project's assets, read from the file, never listed. */
+    private function isProjectPng(string $asset): bool
+    {
+        try {
+            PngAssetPreflight::inspect($this->references->getAssetRoot(), $asset);
+        } catch (Throwable) {
+            return false;
+        }
+
+        return true;
+    }
+
+    public function buildMapKindField(ProjectMap $map): array
+    {
+        $id = $map->getMapDataField(['tileset']);
+        $labels = $this->references->labelsFor('tilesets');
+
+        return [
+            'label' => 'Kind',
+            'value' => match (true) {
+                $id === null => self::MAP_KIND_NONE,
+                ! is_string($id) => sprintf('%s · not a tileset id', get_debug_type($id)),
+                ! isset($labels[$id]) => sprintf('%s · not in assets/%s', $id, Tileset::DIRECTORY),
+                default => $labels[$id],
+            },
+            'selectedValue' => is_string($id) ? $id : '',
+            'reference' => 'tilesets',
+            'target' => 'map-kind',
+            'field' => 'tileset',
+        ];
+    }
+
+    private function applyMapField(ProjectMap $map, string $fieldName, mixed $value, string $label): ?Command
+    {
+        $oldValue = $map->getMapField($fieldName);
+        $map->setMapField($fieldName, $value);
+
+        return new GenericCommand(
+            sprintf('%s edit', $label),
+            static fn() => $map->setMapField($fieldName, $value),
+            static fn() => $map->setMapField($fieldName, $oldValue),
+        );
+    }
+
+    /**
+     * Resizes the map, refusing rather than clamping, deleting or truncating
+     * when an NPC would be left outside it.
+     *
+     * @throws InspectorRefusal When NPCs would be stranded; its details name them.
+     */
+    private function applyMapSize(ProjectMap $map, string $axis, int $value): ?Command
+    {
+        $newWidth = $axis === 'width' ? max(1, $value) : $map->getWidth();
+        $newHeight = $axis === 'height' ? max(1, $value) : $map->getHeight();
+        $stranded = $map->describeNpcsStrandedBy($newWidth, $newHeight);
+
+        if ($stranded !== []) {
+            // Refuse rather than clamp, delete, or truncate: the author
+            // moves, resizes or removes the NPC, then shrinks.
+            throw new InspectorRefusal(
+                sprintf('Cannot shrink to %dx%d: %d NPC%s would be stranded.', $newWidth, $newHeight, count($stranded), count($stranded) === 1 ? '' : 's'),
+                array_map(static fn(string $line): string => '- ' . $line, $stranded),
+            );
+        }
+
+        $snapshotBefore = $map->captureGridSnapshot();
+        $map->resize($newWidth, $newHeight);
+        $snapshotAfter = $map->captureGridSnapshot();
+
+        return new GenericCommand(
+            'Map resize',
+            static fn() => $map->restoreGridSnapshot($snapshotAfter),
+            static fn() => $map->restoreGridSnapshot($snapshotBefore),
+        );
+    }
+
+    /** @param array<string, mixed> $field */
+    private function applyEventField(ProjectMap $map, array $field, mixed $value): ?Command
+    {
+        $marker = (string) $field['marker'];
+        $path = (array) ($field['path'] ?? []);
+        if ($path === ['cue', 'kind']) {
+            return $this->applyEventCueKind($map, $marker, $value);
+        }
+        if ($path === ['engagement']) {
+            return $this->applyEventEngagement($map, $marker, $value);
+        }
+        if (is_string($field['facingHeading'] ?? null)) {
+            return $this->applyEventFacing($map, $marker, $field['facingHeading'], $value === true);
+        }
+        if (($field['spawnHeading'] ?? false) === true) {
+            return $this->applySpawnHeading($map, $marker, $value);
+        }
+        $held = $map->hasEventField($marker, $path);
+        $oldValue = $map->getEventField($marker, $path);
+        // Optional data cleared is removed, as it was before it was set.
+        $removed = ($field['optional'] ?? false) === true && ($value === null || $value === '');
+        if ($removed && ! $held) {
+            return null;
+        }
+        $apply = $removed
+            ? static fn() => $map->removeEventField($marker, $path)
+            : static fn() => $map->setEventField($marker, $path, $value);
+        $restore = $held
+            ? static fn() => $map->setEventField($marker, $path, $oldValue)
+            : static fn() => $map->removeEventField($marker, $path);
+        $apply();
+
+        return new GenericCommand(sprintf('%s edit', $field['label'] ?? 'Event field'), $apply, $restore);
+    }
+
+    /**
+     * Sets where the player stands to start the event. Standing on it is what an event without the key does, so
+     * choosing it drops the key, and undo restores the event as it was.
+     */
+    private function applyEventEngagement(ProjectMap $map, string $marker, mixed $value): ?Command
+    {
+        $engagement = is_string($value) ? EventEngagement::tryFrom($value) : null;
+        if ($engagement === null) {
+            throw new InspectorRefusal('Choose to stand on the event or to face it from next to it.');
+        }
+        $held = $map->hasEventField($marker, ['engagement']);
+        $old = $map->getEventField($marker, ['engagement']);
+        $next = $engagement === EventEngagement::INSIDE ? null : $engagement->value;
+        if ($old === $next || ($next === null && ! $held)) {
+            return null;
+        }
+        $apply = $next === null ? static fn() => $map->removeEventField($marker, ['engagement'])
+            : static fn() => $map->setEventField($marker, ['engagement'], $next);
+        $restore = $held ? static fn() => $map->setEventField($marker, ['engagement'], $old)
+            : static fn() => $map->removeEventField($marker, ['engagement']);
+        $apply();
+
+        return new GenericCommand('Engagement edit', $apply, $restore);
+    }
+
+    /**
+     * Adds or removes one heading the player may face to start the event. The headings keep compass order, and an
+     * event left with none drops the key, so it starts whichever way the player faces, as before it was set.
+     */
+    private function applyEventFacing(ProjectMap $map, string $marker, string $name, bool $chosen): ?Command
+    {
+        $held = $map->hasEventField($marker, ['facing']);
+        $old = $map->getEventField($marker, ['facing']);
+        $names = array_map(static fn(MovementHeading $heading): string => $heading->value, self::listFacingHeadings());
+        if ($old !== null && (! is_array($old) || ! array_is_list($old) || array_diff($old, $names) !== [])) {
+            throw new InspectorRefusal('The event facing must list North, East, South or West before a heading can be changed.');
+        }
+        $current = $old ?? [];
+        $next = array_values(array_filter($names, static fn(string $heading): bool => $heading === $name ? $chosen : in_array($heading, $current, true)));
+        if ($next === $current || ($next === [] && ! $held)) {
+            return null;
+        }
+        $apply = $next === [] ? static fn() => $map->removeEventField($marker, ['facing'])
+            : static fn() => $map->setEventField($marker, ['facing'], $next);
+        $restore = $held ? static fn() => $map->setEventField($marker, ['facing'], $old)
+            : static fn() => $map->removeEventField($marker, ['facing']);
+        $apply();
+
+        return new GenericCommand('Facing edit', $apply, $restore);
+    }
+
+    /**
+     * Sets the heading the player faces on arrival. The Engine reads a
+     * spawn sprite that names one heading as that heading, so it is written
+     * as the one name; sprite art authored there is replaced.
+     */
+    private function applySpawnHeading(ProjectMap $map, string $marker, mixed $value): ?Command
+    {
+        $heading = is_string($value) ? self::findSpawnHeading($value) : null;
+        if ($heading === null) {
+            throw new InspectorRefusal(sprintf('Choose %s for the spawn facing.', implode(', ', self::listSpawnHeadingNames())));
+        }
+        $path = ['data', 'spawnSprite'];
+        $old = $map->getEventField($marker, $path);
+        $next = [$heading->value];
+        if ($old === $next) {
+            return null;
+        }
+        $held = $map->hasEventField($marker, $path);
+        $apply = static fn() => $map->setEventField($marker, $path, $next);
+        $restore = $held ? static fn() => $map->setEventField($marker, $path, $old) : static fn() => $map->removeEventField($marker, $path);
+        $apply();
+
+        return new GenericCommand('Spawn facing edit', $apply, $restore);
+    }
+
+    /** The heading a spawn facing names, or null for none of North, East, South or West. */
+    public static function findSpawnHeading(string $name): ?MovementHeading
+    {
+        return array_find(self::listFacingHeadings(), static fn(MovementHeading $heading): bool => $heading->value === $name);
+    }
+
+    /** @return list<string> The headings a spawn faces, in compass order. */
+    public static function listSpawnHeadingNames(): array
+    {
+        return array_map(static fn(MovementHeading $heading): string => $heading->value, self::listFacingHeadings());
+    }
+
+    /**
+     * An event's data rows with the spawn facing after its spawn point: a
+     * heading picked from the Engine's headings. Sprite art authored in its
+     * place is named and kept until a heading is chosen.
+     *
+     * @param list<array<string, mixed>> $fields
+     * @return list<array<string, mixed>>
+     */
+    private static function insertSpawnHeadingField(array $fields, string $marker, mixed $spawnSprite): array
+    {
+        $heading = is_array($spawnSprite) || is_string($spawnSprite) ? PlayerSpriteSet::headingFromName($spawnSprite) : null;
+        $art = is_array($spawnSprite) ? implode(' ', array_map(static fn(mixed $row): string => is_scalar($row) ? (string) $row : '?', $spawnSprite)) : (is_scalar($spawnSprite) ? (string) $spawnSprite : '');
+        $row = [
+            'label' => 'Spawn Facing',
+            'value' => $heading?->value ?? sprintf('(sprite art: %s)', $art),
+            'selectedValue' => $heading?->value ?? '',
+            'choices' => array_map(static fn(string $name): array => ['label' => $name, 'value' => $name,
+                'description' => sprintf('The player arrives facing %s.', strtolower($name))], self::listSpawnHeadingNames()),
+            'options' => self::listSpawnHeadingNames(),
+            'path' => ['data', 'spawnSprite'],
+            'spawnHeading' => true,
+            'target' => 'event',
+            'marker' => $marker,
+        ];
+        $spawnRows = array_keys(array_filter($fields, static fn(array $field): bool => array_slice(array_values((array) ($field['path'] ?? [])), 0, 2) === ['data', 'spawnPoint']));
+        $at = $spawnRows === [] ? count($fields) : max($spawnRows) + 1;
+        array_splice($fields, $at, 0, [$row]);
+
+        return $fields;
+    }
+
+    /** Kind edits own the cue's optional parent so undo also restores its omission. */
+    private function applyEventCueKind(ProjectMap $map, string $marker, mixed $value): ?Command
+    {
+        if (! is_string($value) || ($value !== '' && EventCueKind::tryFrom($value) === null)) {
+            throw new InspectorRefusal('Choose story or route, or clear the cue kind.');
+        }
+        $held = $map->hasEventField($marker, ['cue']);
+        $old = $map->getEventField($marker, ['cue']);
+        if ($old !== null && ! is_array($old)) {
+            throw new InspectorRefusal('The event cue must be an array before its kind can be edited.');
+        }
+        $next = $old ?? [];
+        if ($value === '') {
+            if (! array_key_exists('kind', $next)) { return null; }
+            unset($next['kind']);
+        } else {
+            $next['kind'] = $value;
+        }
+        if ($old === $next) { return null; }
+        $apply = static fn() => $map->setEventField($marker, ['cue'], $next);
+        $restore = $held ? static fn() => $map->setEventField($marker, ['cue'], $old)
+            : static fn() => $map->removeEventField($marker, ['cue']);
+        $apply();
+
+        return new GenericCommand('Cue kind edit', $apply, $restore);
+    }
+
+    /**
+     * Moves or resizes an event through {@see EventAuthoring}, as the canvas
+     * does. Its position moves every cell, keeping its shape; a marker
+     * painted in another shape than a rectangle is reshaped by painting it.
+     *
+     * @throws InspectorRefusal When the event cannot move or resize as asked.
+     */
+    private function applyEventBounds(ProjectMap $map, string $marker, string $axis, int $value): ?Command
+    {
+        $area = $map->getEventArea($marker);
+
+        if ($area === null) {
+            return null;
+        }
+
+        $bounds = $map->getEventBounds($marker);
+
+        try {
+            if (in_array($axis, ['x', 'y'], true)) {
+                $delta = $value - $bounds[$axis];
+
+                return EventAuthoring::moveEvent($map, $marker, $axis === 'x' ? $delta : 0, $axis === 'y' ? $delta : 0, 'Event bounds edit');
+            }
+
+            if (! $area->isRectangle) {
+                throw new InspectorRefusal(sprintf('Marker %s is painted in its own shape; paint or erase its cells to reshape it.', $marker));
+            }
+
+            $bounds[$axis] = $value;
+
+            return EventAuthoring::setEventBounds($map, $marker, $bounds['x'], $bounds['y'], $bounds['width'], $bounds['height']);
+        } catch (EventRefusal $refusal) {
+            throw new InspectorRefusal($refusal->getMessage(), previous: $refusal);
+        }
+    }
+
+    /**
+     * Makes an event the type an author names by its label.
+     *
+     * @throws InspectorRefusal When no type has the label or the event cannot take it.
+     */
+    private function applyEventType(ProjectMap $map, string $marker, string $label): ?Command
+    {
+        $type = EventTypeCatalog::findByLabel($label) ?? throw new InspectorRefusal(sprintf('There is no event type %s.', $label));
+
+        try {
+            return EventAuthoring::setEventType($map, $marker, $type);
+        } catch (EventRefusal $refusal) {
+            throw new InspectorRefusal($refusal->getMessage(), previous: $refusal);
+        }
+    }
+
+    /**
+     * Writes an event's list back as one undo step; null when it already
+     * held exactly these entries.
+     *
+     * @param list<string> $path The list's path.
+     * @param list<mixed> $entries The list as it should be.
+     */
+    private function writeEventList(ProjectMap $map, string $marker, array $path, array $entries, string $label): ?Command
+    {
+        $previous = $map->getEventField($marker, $path);
+        $previous = is_array($previous) ? array_values($previous) : [];
+
+        if ($previous === $entries) {
+            return null;
+        }
+
+        $map->setEventField($marker, $path, $entries);
+
+        return new GenericCommand(
+            $label,
+            static fn() => $map->setEventField($marker, $path, $entries),
+            static fn() => $map->setEventField($marker, $path, $previous),
+        );
+    }
+
+    /**
+     * The event list a row belongs to, when it is one an author edits.
+     *
+     * @param array<string, mixed> $field
+     * @return array{path: list<string>, index: int, blank?: mixed}|null
+     */
+    public static function findEventList(array $field): ?array
+    {
+        $list = $field['list'] ?? null;
+
+        if (($field['target'] ?? null) !== 'event' || ! is_string($field['marker'] ?? null) || $field['marker'] === '' || ! is_array($list)) {
+            return null;
+        }
+
+        return [...$list, 'path' => array_values(array_map('strval', (array) $list['path'])), 'index' => (int) $list['index']];
+    }
+
+    /**
+     * An entry shaped like the given one with nothing filled in.
+     *
+     * @param mixed $template The entry to copy the shape of.
+     * @return mixed The blank entry.
+     */
+    private static function createBlankLike(mixed $template): mixed
+    {
+        if (is_array($template)) {
+            return array_map(self::createBlankLike(...), $template);
+        }
+
+        return match (true) {
+            is_int($template) => 0,
+            is_float($template) => 0.0,
+            is_bool($template) => false,
+            default => '',
+        };
+    }
+
+    /**
+     * Names a list in the singular, for what an author reads about it.
+     *
+     * @param array<int, string> $path The list's path.
+     */
+    private static function describeListPath(array $path): string
+    {
+        $leaf = (string) ($path[array_key_last($path)] ?? 'entry');
+        $leaf = str_replace(['_', '-'], ' ', $leaf);
+
+        return mb_strtolower(rtrim($leaf, 's'));
+    }
+
+    /**
+     * Reads a picked arena: one the battle presentation declares, or none.
+     *
+     * @throws InspectorRefusal When it names an arena the presentation does not declare.
+     */
+    private function requireArena(string $value, string $none): ?string
+    {
+        $value = trim($value);
+
+        if ($value === '' || $value === $none) {
+            return null;
+        }
+
+        if (! in_array($value, $this->references->valuesFor('battle_arenas'), true)) {
+            throw new InspectorRefusal(sprintf('"%s" is not an arena the battle presentation declares.', $value));
+        }
+
+        return $value;
+    }
+
+    /**
+     * The encounter terrains the map's terrain kinds meet, or null when the
+     * map is not painted in kinds or they cannot be read.
+     *
+     * @return list<string>|null
+     */
+    private function readEncounterTerrains(ProjectMap $map): ?array
+    {
+        try {
+            return $map->loadTerrainKinds()?->getEncounterTerrains();
+        } catch (\InvalidArgumentException) {
+            return null;
+        }
+    }
+
+    /**
+     * Reads typed encounter terrain ids for an encounter row: terrains the
+     * map's terrain kinds meet, separated by commas or spaces, or none for any.
+     *
+     * @return list<string>
+     * @throws InspectorRefusal When the map is not painted in kinds, or a terrain is none of its kinds'.
+     */
+    private function requireEncounterTerrains(ProjectMap $map, string $value): array
+    {
+        $value = trim($value);
+
+        if ($value === '' || $value === self::ENCOUNTER_TERRAINS_NONE) {
+            return [];
+        }
+
+        $known = $this->readEncounterTerrains($map)
+            ?? throw new InspectorRefusal('This map is not painted in terrain kinds, so its troops cannot be limited to terrains.');
+        $terrains = array_values(array_unique(preg_split('/[\s,]+/', $value, flags: PREG_SPLIT_NO_EMPTY) ?: []));
+        $unknown = array_diff($terrains, $known);
+
+        if ($unknown !== []) {
+            throw new InspectorRefusal(sprintf('%s %s no encounter terrain of this map\'s kinds; they are %s.', implode(', ', $unknown),
+                count($unknown) === 1 ? 'names' : 'name', $known === [] ? 'none' : implode(', ', $known)));
+        }
+
+        return $terrains;
+    }
+
+    /**
+     * Reads typed area ids for an encounter row: the map's named areas,
+     * separated by commas or spaces, or none for the whole map.
+     *
+     * @return list<string>
+     * @throws InspectorRefusal When the map's areas cannot be read, or one is not declared.
+     */
+    private function requireEncounterAreas(ProjectMap $map, string $value): array
+    {
+        $value = trim($value);
+
+        if ($value === '' || $value === self::ENCOUNTER_AREAS_NONE) {
+            return [];
+        }
+
+        try {
+            $declared = array_keys(MapAreaAuthoring::readCatalog($map)->areas);
+        } catch (MapAreaRefusal $error) {
+            throw new InspectorRefusal($error->getMessage());
+        }
+
+        $areas = array_values(array_unique(preg_split('/[\s,]+/', $value, flags: PREG_SPLIT_NO_EMPTY) ?: []));
+        $unknown = array_diff($areas, $declared);
+
+        if ($unknown !== []) {
+            throw new InspectorRefusal(sprintf('%s %s no area of this map; its areas are %s.', implode(', ', $unknown),
+                count($unknown) === 1 ? 'names' : 'name', $declared === [] ? 'none yet (select cells on the map to make one)' : implode(', ', $declared)));
+        }
+
+        return $areas;
+    }
+
+    /**
+     * @param Closure(): array{entries: list<array<string, mixed>>, summary: string} $edit
+     * @throws InspectorRefusal When the list cannot take the edit or the map would not load the result.
+     */
+    private function editLandmarkList(ProjectMap $map, Closure $edit, string $action): InspectorListEdit
+    {
+        try {
+            $result = $edit();
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+
+        return new InspectorListEdit($this->writeLandmarks($map, $result['entries'], $action), $result['summary']);
+    }
+
+    /** @throws InspectorRefusal When the map's encounters cannot be edited here. */
+    private function requireEditableEncounters(ProjectMap $map): MapEncounters
+    {
+        $encounters = MapEncounters::fromMap($map);
+
+        if (! $encounters->isSupported()) {
+            throw new InspectorRefusal(sprintf('Encounters are read-only here: %s.', $encounters->unsupportedReason()));
+        }
+
+        return $encounters;
+    }
+
+    /** @throws InspectorRefusal When the map's music variants cannot be edited here. */
+    private function requireEditableBgmVariants(ProjectMap $map): MapBgmVariants
+    {
+        $variants = MapBgmVariants::fromMap($map);
+
+        if (! $variants->isSupported()) {
+            throw new InspectorRefusal(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()));
+        }
+
+        return $variants;
+    }
+
+    /**
+     * Applies one encounter row's edit through the encounters model.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the map's encounters cannot be edited here.
+     */
+    private function applyMapEncounterValue(ProjectMap $map, array $field, mixed $value): ?Command
+    {
+        $encounters = $this->requireEditableEncounters($map);
+        $index = (int) ($field['index'] ?? 0);
+        $block = match ((string) ($field['field'] ?? '')) {
+            'rate' => $encounters->withRate((int) $value),
+            'tiles' => $encounters->withTiles((string) $value),
+            'weight' => $encounters->withWeightAt($index, (int) $value),
+            'troop' => $encounters->withTroopAt($index, (string) $value),
+            'arena' => $encounters->withArenaAt($index, $this->requireArena((string) $value, self::ENCOUNTER_ARENA_NONE)),
+            'areas' => $encounters->withAreasAt($index, $this->requireEncounterAreas($map, (string) $value)),
+            'terrains' => $encounters->withTerrainsAt($index, $this->requireEncounterTerrains($map, (string) $value)),
+            'mapArena' => $encounters->withMapArena($this->requireArena((string) $value, self::MAP_ARENA_NONE)),
+            'ruleArea', 'ruleTerrain', 'ruleArena' => $this->applyArenaRuleValue($map, $encounters, $index, (string) $field['field'], (string) $value),
+            default => null,
+        };
+
+        if ($block === null && ! $encounters->isDeclared()) {
+            return null;
+        }
+
+        return $this->writeMapData($map, [MapEncounters::KEY], $block, 'Encounters');
+    }
+    /**
+     * Builds the map's runtime metadata rows: the music it plays and the
+     * random encounters it offers.
+     *
+     * Both are read from what the map actually holds. An absent rate or tile
+     * mode is shown as the engine's default in parentheses and is not
+     * written until an author sets one, so opening a map never puts a
+     * default into a file.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    /**
+     * The map's movement rows: whether it turns the project's dash off, as RPG Maker's Disable Dashing. The Engine
+     * reads the same key ({@see DashSettings::readMapDisablesDashing()}); a value it would refuse stays visible.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function mapMovementFields(ProjectMap $map): array
+    {
+        $path = [DashSettings::MAP_DISABLE_DASHING];
+        $value = $map->getMapDataField($path);
+        $disabled = $value === true;
+
+        return [
+            ['label' => 'Movement', 'value' => '', 'editable' => false],
+            [
+                'label' => '  Disable Dashing',
+                'value' => $value === null || is_bool($value) ? ($disabled ? 'true' : 'false')
+                    : sprintf('%s · must be true or false', var_export($value, true)),
+                'control' => new InputControl(InputControlType::BOOLEAN, $disabled ? 'true' : 'false'),
+                'target' => self::DASHING_TARGET,
+                'field' => DashSettings::MAP_DISABLE_DASHING,
+            ],
+        ];
+    }
+
+    private function mapRuntimeFields(ProjectMap $map): array
+    {
+        $bgm = $map->getMapDataField(['bgm']);
+        $bgm = is_string($bgm) ? $bgm : '';
+        $known = $this->references->valuesFor('bgm');
+        $missing = $bgm !== '' && ! in_array($bgm, $known, true);
+        $fields = [
+            [
+                'label' => 'Audio',
+                'value' => '',
+                'editable' => false,
+            ],
+            [
+                // A track is chosen from what the project has, never spelled.
+                // A track the project no longer has stays visible and says
+                // so, rather than being quietly swapped for a valid one.
+                'label' => '  Background Music',
+                'value' => match (true) {
+                    $bgm === '' => self::MAP_BGM_NONE,
+                    $missing => $bgm . ' · not in assets/Audio/BGM',
+                    default => $bgm,
+                },
+                'reference' => 'bgm',
+                'target' => 'map-data',
+                'path' => ['bgm'],
+                'field' => 'bgm',
+            ],
+        ];
+
+        $fields = [...$fields, ...$this->mapBgmVariantFields($map, $known), ...$this->mapMovementFields($map)];
+
+        $encounters = MapEncounters::fromMap($map);
+        $fields[] = [
+            'label' => 'Encounters',
+            'value' => $encounters->summary(),
+            'editable' => false,
+        ];
+
+        if (! $encounters->isSupported()) {
+            $fields[] = [
+                'label' => '  ! Read-only',
+                'value' => (string) $encounters->unsupportedReason(),
+                'editable' => false,
+            ];
+
+            return $fields;
+        }
+
+        $rows = $encounters->rows();
+        $fields[] = [
+            // The Inspector's own list heading, so Shift+O and Del mean here
+            // what they mean on every other list in the pane.
+            'label' => sprintf('  Troops · %d', count($rows)),
+            'value' => '',
+            'editable' => false,
+            'target' => 'map-encounters',
+            'encounterList' => ['index' => max(0, count($rows) - 1)],
+        ];
+
+        foreach ($rows as $index => $row) {
+            $weight = $row['weight'];
+            $fields[] = [
+                'label' => '    Troop',
+                'value' => $row['name'],
+                'reference' => 'troops',
+                'target' => 'map-encounters',
+                'field' => 'troop',
+                'index' => $index,
+                'encounterList' => ['index' => $index],
+            ];
+            $usable = is_numeric($weight) && (int) $weight >= 1;
+            $fields[] = [
+                'label' => '    Weight',
+                'value' => (is_scalar($weight) ? (string) $weight : '') . ($usable ? '' : ' · the engine drops a troop it cannot weigh'),
+                'control' => new InputControl(InputControlType::INTEGER, $usable ? (string) (int) $weight : '1'),
+                'target' => 'map-encounters',
+                'field' => 'weight',
+                'index' => $index,
+                'encounterList' => ['index' => $index],
+            ];
+
+            // Typed as area ids, the way the Terminal names an area elsewhere.
+            $fields[] = [
+                'label' => '    Areas',
+                'value' => $row['areas'] === [] ? self::ENCOUNTER_AREAS_NONE : implode(', ', $row['areas']),
+                'control' => new InputControl(InputControlType::TEXT, implode(', ', $row['areas'])),
+                'target' => 'map-encounters',
+                'field' => 'areas',
+                'index' => $index,
+                'encounterList' => ['index' => $index],
+            ];
+
+            // Typed as encounter terrain ids, offered on a map painted in terrain kinds or a row that names some.
+            $terrains = $this->readEncounterTerrains($map);
+            if ($terrains !== null || $row['terrains'] !== []) {
+                $fields[] = [
+                    'label' => '    Terrains',
+                    'value' => $row['terrains'] === [] ? self::ENCOUNTER_TERRAINS_NONE : implode(', ', $row['terrains']),
+                    'control' => new InputControl(InputControlType::TEXT, implode(', ', $row['terrains'])),
+                    'target' => 'map-encounters',
+                    'field' => 'terrains',
+                    'index' => $index,
+                    'encounterList' => ['index' => $index],
+                ];
+            }
+
+            if ($this->graphical) {
+                $fields[] = [
+                    'label' => '    Arena',
+                    'value' => $this->describeArena($row['arena'], self::ENCOUNTER_ARENA_NONE),
+                    'reference' => 'battle_arenas',
+                    'noneLabel' => self::ENCOUNTER_ARENA_NONE,
+                    'target' => 'map-encounters',
+                    'field' => 'arena',
+                    'index' => $index,
+                    'encounterList' => ['index' => $index],
+                ];
+            }
+        }
+
+        if ($rows === []) {
+            return $fields;
+        }
+
+        $rate = $encounters->authoredRate();
+        $fields[] = [
+            'label' => '  Rate',
+            'value' => $rate === null ? sprintf('(engine default: %d)', MapEncounters::DEFAULT_RATE) : (string) $rate,
+            'control' => new InputControl(InputControlType::INTEGER, (string) ($rate ?? MapEncounters::DEFAULT_RATE)),
+            'target' => 'map-encounters',
+            'field' => 'rate',
+        ];
+        $tiles = $encounters->authoredTiles();
+        $fields[] = [
+            'label' => '  Tiles',
+            'value' => $tiles === null ? sprintf('(engine default: %s)', MapEncounters::DEFAULT_TILES) : $tiles,
+            'options' => MapEncounters::TILE_MODES,
+            'target' => 'map-encounters',
+            'field' => 'tiles',
+        ];
+
+        if ($this->graphical) {
+            $fields[] = [
+                'label' => '  Arena',
+                'value' => $this->describeArena($encounters->mapArena(), self::MAP_ARENA_NONE),
+                'reference' => 'battle_arenas',
+                'noneLabel' => self::MAP_ARENA_NONE,
+                'target' => 'map-encounters',
+                'field' => 'mapArena',
+            ];
+            $fields = [...$fields, ...$this->mapArenaRuleFields($map, $encounters)];
+        }
+
+        return $fields;
+    }
+
+    /**
+     * The map's battle arena rules, a graphical editor's: for each, the area
+     * and encounter terrain it holds for, chosen from the map's own, and the
+     * arena it picks ({@see \Ichiloto\Engine\Field\EncounterArenaRule}).
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function mapArenaRuleFields(ProjectMap $map, MapEncounters $encounters): array
+    {
+        $rules = $encounters->arenaRules();
+        $areas = $this->readMapAreaIds($map);
+        $terrains = $this->readEncounterTerrains($map) ?? [];
+        $fields = [[
+            'label' => sprintf('  Arena Rules · %d', count($rules)),
+            'value' => '',
+            'editable' => false,
+            'target' => 'map-encounters',
+            // Named apart from the troop list's heading, which shares the target.
+            'field' => 'arenaRules',
+            self::ARENA_RULE_LIST => ['index' => max(0, count($rules) - 1)],
+        ]];
+
+        foreach ($rules as $index => $rule) {
+            $list = [self::ARENA_RULE_LIST => ['index' => $index]];
+            $fields[] = [
+                'label' => '    Area',
+                'value' => $rule['area'] ?? self::ENCOUNTER_AREAS_NONE,
+                'options' => [self::ENCOUNTER_AREAS_NONE, ...array_values(array_unique([...$areas, ...($rule['area'] === null ? [] : [$rule['area']])]))],
+                'target' => 'map-encounters',
+                'field' => 'ruleArea',
+                'index' => $index,
+                ...$list,
+            ];
+            $fields[] = [
+                'label' => '    Terrain',
+                'value' => $rule['terrain'] ?? self::ENCOUNTER_TERRAINS_NONE,
+                'options' => [self::ENCOUNTER_TERRAINS_NONE, ...array_values(array_unique([...$terrains, ...($rule['terrain'] === null ? [] : [$rule['terrain']])]))],
+                'target' => 'map-encounters',
+                'field' => 'ruleTerrain',
+                'index' => $index,
+                ...$list,
+            ];
+            $fields[] = [
+                'label' => '    Arena',
+                'value' => $this->describeArena($rule['arena'], self::RULE_ARENA_NONE),
+                'reference' => 'battle_arenas',
+                'target' => 'map-encounters',
+                'field' => 'ruleArena',
+                'index' => $index,
+                ...$list,
+            ];
+        }
+
+        return $fields;
+    }
+
+    /**
+     * The map's named areas, or none when they cannot be read.
+     *
+     * @return list<string>
+     */
+    private function readMapAreaIds(ProjectMap $map): array
+    {
+        try {
+            return array_map(strval(...), array_keys(MapAreaAuthoring::readCatalog($map)->areas));
+        } catch (MapAreaRefusal) {
+            return [];
+        }
+    }
+
+    /**
+     * Applies an edit to one arena rule: an area of the map or the whole map, an
+     * encounter terrain of its kinds or any, or a declared arena. A rule keeps an
+     * area or a terrain, since the map's own Arena covers the whole map.
+     *
+     * @throws InspectorRefusal When the value is not the map's, or the rule would name neither.
+     */
+    private function applyArenaRuleValue(ProjectMap $map, MapEncounters $encounters, int $index, string $field, string $value): ?array
+    {
+        $rule = $encounters->arenaRules()[$index] ?? throw new InspectorRefusal('There is no such arena rule.');
+        $value = trim($value);
+        [$key, $chosen] = match ($field) {
+            'ruleArea' => ['area', $value === '' || $value === self::ENCOUNTER_AREAS_NONE ? null
+                : ($this->requireEncounterAreas($map, $value)[0] ?? null)],
+            'ruleTerrain' => ['terrain', $value === '' || $value === self::ENCOUNTER_TERRAINS_NONE ? null
+                : ($this->requireEncounterTerrains($map, $value)[0] ?? null)],
+            default => ['arena', $this->requireArena($value, self::RULE_ARENA_NONE)
+                ?? throw new InspectorRefusal('An arena rule picks an arena; remove the rule to leave battles to the map\'s.')],
+        };
+        $next = [$key => $chosen] + $rule;
+
+        if ($next['area'] === null && $next['terrain'] === null) {
+            throw new InspectorRefusal('An arena rule holds for an area, a terrain or both; the map\'s own Arena covers the whole map.');
+        }
+
+        return $encounters->withArenaRuleAt($index, $key, $chosen);
+    }
+
+    /**
+     * How an arena reads on a row: its name, what applies when none is set,
+     * or a key the battle presentation does not declare, kept and said so.
+     */
+    private function describeArena(?string $arena, string $none): string
+    {
+        if ($arena === null) {
+            return $none;
+        }
+
+        $name = $this->references->labelsFor('battle_arenas')[$arena] ?? null;
+
+        return $name === null ? $arena . ' · not an arena the battle presentation declares' : sprintf('%s (%s)', $name, $arena);
+    }
+
+    /**
+     * Builds the ordered Music Variants rows: the map's conditional music,
+     * evaluated by the engine in declaration order, first match wins.
+     *
+     * @param string[] $known The project's BGM tracks.
+     * @return array<int, array<string, mixed>>
+     */
+    private function mapBgmVariantFields(ProjectMap $map, array $known): array
+    {
+        $variants = MapBgmVariants::fromMap($map);
+        $fields = [
+            [
+                'label' => '  Music Variants',
+                'value' => $variants->summary(),
+                'editable' => false,
+                'target' => 'map-bgm-variants',
+                'bgmVariantList' => ['index' => max(0, $variants->count() - 1)],
+            ],
+        ];
+
+        if (! $variants->isSupported()) {
+            $fields[] = [
+                'label' => '  ! Read-only',
+                'value' => (string) $variants->unsupportedReason(),
+                'editable' => false,
+            ];
+
+            return $fields;
+        }
+
+        foreach ($variants->rows() as $index => $row) {
+            $track = $variants->trackAt($index);
+            $raw = $variants->rawTrackAt($index);
+            $fields[] = [
+                'label' => sprintf('    Variant %d Track', $index + 1),
+                'value' => match (true) {
+                    $track === null && $raw !== null => var_export($raw, true) . ' · not a track name',
+                    $track === null || $track === '' => '(no track yet)',
+                    ! in_array($track, $known, true) => $track . ' · not in assets/Audio/BGM',
+                    default => $track,
+                },
+                'reference' => 'bgm',
+                'target' => 'map-bgm-variants',
+                'field' => 'track',
+                'index' => $index,
+                'bgmVariantList' => ['index' => $index],
+            ];
+
+            $issue = $variants->conditionsIssueAt($index);
+            $conditions = $variants->conditionsAt($index);
+            $fields[] = [
+                'label' => sprintf('    Variant %d When', $index + 1),
+                'value' => $issue !== null
+                    ? '! ' . $issue
+                    : ($conditions === [] ? '(always · shadows later variants)' : ConditionCodec::encodeAll($conditions)),
+                'target' => 'map-bgm-variants',
+                'field' => 'conditions',
+                'index' => $index,
+                'bgmVariantList' => ['index' => $index],
+                'editable' => $issue === null,
+                'mapConditions' => $issue === null,
+                'encoded' => $issue === null ? ConditionCodec::encodeAll($conditions) : null,
+                'conditionsTitle' => sprintf('Variant %d Conditions', $index + 1),
+                'conditionsHint' => 'Building conditions. An empty list always matches.',
+            ];
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Builds editable inspector fields for event data.
+     *
+     * The fields every trigger reads beside its class and data, and the lists
+     * a type keeps that edit as an NPC's do, are the event's record rows
+     * ({@see EventRecordPane}); the rest of its data and its cue are rows of
+     * their own.
+     *
+     * @param string $marker The event marker.
+     * @param array<string, mixed> $definition The event definition.
+     * @return array<int, array<string, mixed>>
+     */
+    public function buildEventDataFields(string $marker, array $definition): array
+    {
+        $pane = $this->createEventRecordPane($marker, $definition);
+        $shown = $definition;
+        foreach ($pane->listOwnedPaths() as $path) {
+            // Only this display copy changes: the record rows describe these.
+            $shown = self::withoutPath($shown, $path);
+        }
+        $recordRows = $pane->getFields() ?? [];
+        $cueRecordRows = array_values(array_filter($recordRows, static fn(array $row): bool => ($row['field'] ?? null) === 'cue.conditions'));
+        $recordRows = array_values(array_filter($recordRows, static fn(array $row): bool => ($row['field'] ?? null) !== 'cue.conditions'));
+        $fields = [];
+        $eventData = $shown['data'] ?? [];
+
+        if (is_array($eventData)) {
+            // The type's optional data is offered as it reads when absent,
+            // and stays out of the stored event until an author sets it.
+            $className = is_string($definition['class'] ?? null) ? ltrim($definition['class'], '\\') : null;
+            $optional = EventTypeCatalog::findByClass($className)?->optionalData ?? [];
+            $modes = self::listEventModes($className);
+            $hasPresentation = array_key_exists('presentation', $optional) || array_key_exists('presentation', $eventData);
+            $presentation = $eventData['presentation'] ?? null;
+            if ($hasPresentation) { unset($eventData['presentation'], $optional['presentation']); }
+            $hasSpawnSprite = array_key_exists('spawnSprite', $eventData);
+            $spawnSprite = $eventData['spawnSprite'] ?? null;
+            unset($eventData['spawnSprite']);
+            $pages = self::readDialoguePages($shown);
+            $fields = array_map(static function (array $field) use ($optional, $modes): array {
+                $path = array_values((array) ($field['path'] ?? []));
+                if (count($path) === 2 && array_key_exists((string) $path[1], $optional)) {
+                    $field['optional'] = true;
+                }
+                if ($path === ['data', 'mode'] && $modes !== null) {
+                    $field['options'] = $modes;
+                    unset($field['control']);
+                }
+
+                return $field;
+            }, $this->decorateEventInspectorFields(
+                $marker,
+                $this->flattenInspectorFields([...self::withPageEmotions($eventData, $pages), ...array_diff_key($optional, $eventData)], ['data']),
+            ));
+            $fields = $this->describePageEmotions($fields, $pages);
+            if ($hasSpawnSprite) { $fields = self::insertSpawnHeadingField($fields, $marker, $spawnSprite); }
+            if ($hasPresentation) { $fields = [...$fields, ...$this->buildInnPresentationFields($marker, $presentation)]; }
+        }
+
+        // The subject an event is bound to and its area are set by their own operations, never as rows.
+        $rootFields = array_diff_key($shown, ['class' => true, 'data' => true, 'facing' => true, 'engagement' => true, 'subject' => true, 'area' => true]);
+        // Cue is a generic trigger capability, including for definitions
+        // created before the field existed. Supplying an empty editor-only
+        // default exposes the opt-in without changing the stored event until
+        // the author actually edits it.
+        if (! isset($rootFields['cue']) || $rootFields['cue'] === []) {
+            // A cue holding only its conditions is still offered its symbol and colour.
+            $rootFields['cue'] = ['symbol' => '', 'color' => 'bright-yellow'];
+        }
+        $cueKindFields = [];
+        if (is_array($rootFields['cue'])) {
+            $hasKind = array_key_exists('kind', $rootFields['cue']);
+            $kind = $hasKind ? $rootFields['cue']['kind'] : '';
+            $validKind = ! $hasKind || (is_string($kind) && EventCueKind::tryFrom($kind) !== null);
+            // A malformed kind remains a single repairable property, not a
+            // nested array of freely editable fields. Only this display copy changes.
+            unset($rootFields['cue']['kind']);
+            $cueKindFields[] = [
+                'label' => 'Cue Kind',
+                'value' => $validKind ? $kind : '(invalid kind)',
+                'selectedValue' => $validKind ? $kind : '(invalid kind)',
+                'optionLabels' => array_column(self::EVENT_CUE_KIND_CHOICES, 'label', 'value'),
+                'path' => ['cue', 'kind'],
+                'optional' => true,
+            ];
+        }
+
+        return [
+            ...$fields,
+            ...$recordRows,
+            ...$this->decorateEventInspectorFields(
+                $marker,
+                [...$this->flattenInspectorFields($rootFields, []), ...$cueKindFields],
+            ),
+            ...$cueRecordRows,
+            ...$this->decorateEventInspectorFields($marker, [self::buildEventEngagementField($definition), ...self::buildEventFacingFields($definition)]),
+        ];
+    }
+
+    /**
+     * The rows of one frame of an event's inline commands, or null when the
+     * event or the frame is gone. The frame [] is the event's record rows.
+     *
+     * @param list<int|string> $frame
+     * @return list<array<string, mixed>>|null
+     */
+    public function getEventFrameFields(ProjectMap $map, string $marker, array $frame): ?array
+    {
+        $definition = $map->getEventDefinition($marker);
+
+        return $definition === null ? null : $this->createEventRecordPane($marker, $definition)->getFields($frame);
+    }
+
+    /** What an author reads for a frame of an event's inline commands. */
+    public function describeEventFrame(ProjectMap $map, string $marker, array $frame): string
+    {
+        return $this->createEventRecordPane($marker, $map->getEventDefinition($marker) ?? [])->describeFrame($frame);
+    }
+
+    /** The record rows of one event, over the project's references as this inspector reads them. */
+    public function createEventRecordPane(string $marker, array $definition): EventRecordPane
+    {
+        return new EventRecordPane($marker, $definition, $this->references, $this->graphical);
+    }
+
+    /**
+     * Applies one event record row's edit: the definition the pane leaves is
+     * written as one undo step.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the event is gone or the pane refuses the edit.
+     */
+    private function applyEventRecordField(ProjectMap $map, array $field, string $rawValue): ?Command
+    {
+        $marker = (string) ($field['marker'] ?? '');
+        $current = $map->getEventDefinition($marker) ?? throw new InspectorRefusal(sprintf('%s has no event %s.', $map->mapId, $marker));
+        $next = $this->createEventRecordPane($marker, $current)->applyField(array_values((array) ($field['eventFrame'] ?? [])), (string) ($field['field'] ?? ''), $rawValue);
+
+        return $next === null ? null : $this->writeEventDefinition($map, $marker, $current, $next, sprintf('%s edit', trim((string) ($field['label'] ?? 'Event field'))));
+    }
+
+    /**
+     * Adds or removes the item an event record row belongs to (a command, a
+     * dialogue variant, a line, an option), as one undo step.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the event or frame is gone, or the row's item cannot change so.
+     */
+    private function editEventRecordItems(ProjectMap $map, array $field, bool $remove): InspectorListEdit
+    {
+        $marker = (string) ($field['marker'] ?? '');
+        $current = $map->getEventDefinition($marker) ?? throw new InspectorRefusal(sprintf('%s has no event %s.', $map->mapId, $marker));
+        $pane = $this->createEventRecordPane($marker, $current);
+        $frame = array_values((array) ($field['eventFrame'] ?? []));
+        $fieldId = is_string($field['field'] ?? null) && $field['field'] !== '' ? $field['field'] : null;
+        $edit = $remove ? $pane->removeItem($frame, (string) $fieldId) : $pane->addItem($frame, $fieldId);
+
+        return new InspectorListEdit($edit['definition'] === null ? null
+            : $this->writeEventDefinition($map, $marker, $current, $edit['definition'], $remove ? 'Remove list entry' : 'Add list entry'), $edit['summary']);
+    }
+
+    /**
+     * Writes an event's whole definition and returns the command that puts
+     * either one back.
+     *
+     * @param array<string, mixed> $current
+     * @param array<string, mixed> $next
+     */
+    private function writeEventDefinition(ProjectMap $map, string $marker, array $current, array $next, string $label): Command
+    {
+        $map->setEventDefinition($marker, $next);
+
+        return new GenericCommand(
+            $label,
+            static fn() => $map->setEventDefinition($marker, $next),
+            static fn() => $map->setEventDefinition($marker, $current),
+        );
+    }
+
+    /**
+     * An array without the value at a path; parents it leaves empty stay.
+     *
+     * @param array<array-key, mixed> $array
+     * @param list<string> $path
+     * @return array<array-key, mixed>
+     */
+    private static function withoutPath(array $array, array $path): array
+    {
+        $key = array_shift($path);
+        if ($key === null || ! array_key_exists($key, $array)) {
+            return $array;
+        }
+        if ($path === []) {
+            unset($array[$key]);
+        } elseif (is_array($array[$key])) {
+            $array[$key] = self::withoutPath($array[$key], $path);
+        }
+
+        return $array;
+    }
+
+    /**
+     * Which way the player faces to start the event: one row per heading, none chosen for any. A facing the Engine
+     * would refuse stays as one row that names it, for the author to repair in the source, never flattened.
+     *
+     * @param array<array-key, mixed> $definition
+     * @return list<array<string, mixed>>
+     */
+    private static function buildEventFacingFields(array $definition): array
+    {
+        $facing = $definition['facing'] ?? [];
+        $names = array_map(static fn(MovementHeading $heading): string => $heading->value, self::listFacingHeadings());
+        if (! is_array($facing) || ! array_is_list($facing) || array_diff($facing, $names) !== []) {
+            return [['label' => 'Facing', 'value' => '(not North, East, South or West)', 'editable' => false, 'path' => ['facing']]];
+        }
+
+        return array_map(static fn(string $name): array => [
+            'label' => "Facing {$name}",
+            'value' => in_array($name, $facing, true) ? 'true' : 'false',
+            'control' => new InputControl(InputControlType::BOOLEAN, in_array($name, $facing, true) ? 'true' : 'false'),
+            'path' => ['facing', $name],
+            'facingHeading' => $name,
+        ], $names);
+    }
+
+    /**
+     * Where the player stands to start the event: on its cells, or next to them facing one, for an event placed on an
+     * object. An engagement the Engine would refuse is named rather than offered, never rewritten.
+     *
+     * @param array<array-key, mixed> $definition
+     * @return array<string, mixed>
+     */
+    private static function buildEventEngagementField(array $definition): array
+    {
+        $engagement = $definition['engagement'] ?? EventEngagement::INSIDE->value;
+        if (! is_string($engagement) || EventEngagement::tryFrom($engagement) === null) {
+            return ['label' => 'Engagement', 'value' => '(not inside or facing)', 'editable' => false, 'path' => ['engagement']];
+        }
+
+        return [
+            'label' => 'Engagement',
+            'value' => $engagement,
+            'selectedValue' => $engagement,
+            'optionLabels' => array_column(self::EVENT_ENGAGEMENT_CHOICES, 'label', 'value'),
+            'path' => ['engagement'],
+        ];
+    }
+
+    /** @return list<MovementHeading> The headings an event may require, in compass order. */
+    private static function listFacingHeadings(): array
+    {
+        return array_values(array_filter(MovementHeading::cases(), static fn(MovementHeading $heading): bool => $heading !== MovementHeading::NONE));
+    }
+
+    /** Inline routes use the same schema/coercion as command records; the map remains their owner. */
+    private function projectMovementRoute(array $route, ?array $ownerCommands = null): ProjectRecordDatabase
+    {
+        $schema = RecordSchemaCatalog::forKey('common_events')
+            ?? throw new \LogicException('The event command schema is unavailable.');
+        $records = ProjectRecordDatabase::overOwnedList($schema, '', [['commands' => [$route]]], static function (array $entries): void {}, $this->graphical);
+        $records->useAuthoringReferences($ownerCommands === null ? $this->references
+            : $this->references->createMovementContext($ownerCommands));
+        return $records;
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function buildMovementRouteFields(array $route, array $path, ?array $parentList): array
+    {
+        $fields = [];
+        $points = MovementRouteFields::getPointList($route, graphical: $this->graphical);
+        foreach ($this->projectMovementRoute($route)->getSettingsFields(0) as $row) {
+            if (! isset($row['dataPath']) || ($row['sourceKey'] ?? '') === 'type') { continue; }
+            $relative = array_slice($row['dataPath'], 2);
+            $row['path'] = [...$path, ...array_map('strval', $relative)];
+            $row['movementRouteField'] = $row['field'];
+            $row['movementRoutePath'] = $path;
+            unset($row['mapPlacement']);
+            if (count($relative) > 1 && $points !== null) {
+                $row['movementRoutePoints'] = true;
+                $row['list'] = ['path' => [...$path, $points->key], 'index' => (int) $relative[1], 'blank' => $points->blank];
+            } elseif ($parentList !== null) { $row['list'] = $parentList; }
+            $fields[] = $row;
+        }
+        if ($points !== null) {
+            $entries = $points->readEntries($route[$points->key] ?? []);
+            $fields[] = ['label' => ucfirst($points->key), 'value' => strval(count($entries)), 'editable' => false,
+                'path' => [...$path, $points->key], 'movementRoutePath' => $path, 'movementRoutePoints' => true,
+                'list' => ['path' => [...$path, $points->key], 'index' => count($entries) - 1, 'blank' => $points->blank]];
+        }
+        return $fields;
+    }
+
+    private function applyMovementRouteField(ProjectMap $map, array $field, string $raw): ?Command
+    {
+        $marker = (string) $field['marker'];
+        $path = (array) $field['movementRoutePath'];
+        $old = $map->getEventField($marker, $path);
+        if (! is_array($old) || ($old['type'] ?? '') !== 'move_route') {
+            throw new InspectorRefusal('That movement route is no longer present.');
+        }
+        try {
+            $commands = MovementRouteFields::getOwnerCommands($map->getEventDefinition($marker) ?? [], $path);
+            $records = $this->projectMovementRoute($old, $commands);
+            $records->setField(0, (string) $field['movementRouteField'], $raw);
+            $next = $records->getRecordByIndex(0)?->getSubList('commands')[0] ?? $old;
+        } catch (\Ichiloto\Editor\Database\RecordRefusal|InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+        if ($old === $next) { return null; }
+        $apply = static fn() => $map->setEventField($marker, $path, $next);
+        $apply();
+        return new GenericCommand('Movement route edit', $apply, static fn() => $map->setEventField($marker, $path, $old));
+    }
+
+    /** The same actor/stage pickers and binding lists that Configuration and commands use. */
+    private function buildInnPresentationFields(string $marker, mixed $value, array $presentationPath = ['data', 'presentation']): array
+    {
+        $fields = [];
+        foreach (InnPresentationFields::getFields($value, 'presentation', 'Rest Presentation', $this->graphical) as $field) {
+            $selected = $field->key === 'presentation' ? $value : (is_array($value) ? ($value['treatment'] ?? '') : '');
+            $path = $field->key === 'presentation' ? $presentationPath : [...$presentationPath, 'treatment'];
+            $fields[] = [...$this->describeInnField($marker, $field, $selected, $path), 'innPresentationPath' => $presentationPath];
+        }
+        $list = $this->graphical ? InnPresentationFields::getBindingList($value, 'presentation') : null;
+        if ($list === null) { return $fields; }
+        $entries = $list->readEntries($value[substr($list->key, strlen('presentation.'))] ?? []);
+        $context = ['key' => $list->key, 'index' => -1];
+        $listPath = [...$presentationPath, substr($list->key, strlen('presentation.'))];
+        $fields[] = ['label' => $list->heading, 'value' => (string) count($entries), 'editable' => false,
+            'target' => 'event', 'marker' => $marker, 'path' => $listPath, 'innPresentationPath' => $presentationPath,
+            'innPresentationList' => $context, 'list' => ['path' => $listPath, 'index' => -1]];
+        foreach ($entries as $index => $entry) {
+            if (! is_array($entry)) { continue; }
+            foreach ($list->fieldsFor($entry) as $field) {
+                $row = $this->describeInnField($marker, $field, $entry[$field->key] ?? '',
+                    [...$listPath, (string) $index, $field->key]);
+                $row['innPresentationPath'] = $presentationPath;
+                $row['innPresentationList'] = [...$context, 'index' => $index];
+                $row['innEntryField'] = $field->key;
+                $row['list'] = ['path' => $listPath, 'index' => $index];
+                $fields[] = $row;
+            }
+        }
+        return $fields;
+    }
+
+    private function describeInnField(string $marker, RecordField $field, mixed $value, array $path): array
+    {
+        $display = $field->codec === RecordFieldCodec::CSV_LIST && is_array($value) ? implode(', ', $value) : ProjectRecord::stringify($value);
+        $row = ['label' => $field->label, 'value' => $display, 'selectedValue' => $display, 'path' => $path,
+            'marker' => $marker, 'target' => 'event', 'innPresentation' => true, 'optional' => $field->allowsNone];
+        if ($field->isReadOnly) { $row['editable'] = false; }
+        elseif ($field->reference !== null) {
+            $row['reference'] = $field->reference;
+            $row['multi'] = $field->codec === RecordFieldCodec::CSV_LIST;
+        } else { $row['options'] = $field->options; }
+        return $row;
+    }
+
+    private function applyInnPresentationField(ProjectMap $map, array $field, string $raw): ?Command
+    {
+        if (($field['editable'] ?? true) === false) { throw new InspectorRefusal('Graphical rest bindings are preserved read-only in Terminal.'); }
+        $marker = (string) $field['marker'];
+        $presentationPath = $field['innPresentationPath'];
+        $old = $map->getEventField($marker, $presentationPath);
+        $record = new ProjectRecord(['presentation' => $old]);
+        if (isset($field['innEntryField'])) {
+            if (! $this->graphical) { throw new InspectorRefusal('Graphical rest bindings are not authored in Terminal.'); }
+            $list = InnPresentationFields::getBindingList($old, 'presentation');
+            $index = (int) ($field['innPresentationList']['index'] ?? -1);
+            $entries = $list?->readEntries(is_array($old) ? ($old[substr($list->key, strlen('presentation.'))] ?? []) : []) ?? [];
+            if ($list === null || ! is_array($entries[$index] ?? null)) { throw new InspectorRefusal('That binding is no longer present.'); }
+            $key = (string) $field['innEntryField'];
+            $selected = ($field['multi'] ?? false) === true ? array_values(array_filter(array_map(trim(...), explode(',', $raw)), static fn(string $id): bool => $id !== '')) : trim($raw);
+            if ($key === $list->keyField && array_any($entries, static fn(array $entry, int $at): bool => $at !== $index && ($entry[$key] ?? null) === $selected)) {
+                throw new InspectorRefusal('That actor already has a leader binding.');
+            }
+            $entries[$index][$key] = $selected;
+            $record->setEntries($list, $entries);
+        } else {
+            $path = array_slice((array) $field['path'], count($presentationPath));
+            if ($path !== [] && ! $this->graphical) { throw new InspectorRefusal('Graphical rest bindings are not authored in Terminal.'); }
+            $record->set(implode('.', ['presentation', ...$path]), $raw === '' ? null : $raw);
+        }
+        return $this->writeInnPresentation($map, $marker, $record->get('presentation'), 'Rest presentation edit', $presentationPath);
+    }
+
+    private function editInnPresentationList(ProjectMap $map, array $field, bool $remove): ?InspectorListEdit
+    {
+        if (! $this->graphical) { throw new InspectorRefusal('Graphical rest bindings are not authored in Terminal.'); }
+        $marker = (string) $field['marker'];
+        $presentationPath = $field['innPresentationPath'];
+        $value = $map->getEventField($marker, $presentationPath);
+        $list = InnPresentationFields::getBindingList($value, 'presentation');
+        if ($list === null || $list->key !== ($field['innPresentationList']['key'] ?? null)) { throw new InspectorRefusal('That binding list is no longer present.'); }
+        $record = new ProjectRecord(['presentation' => $value]);
+        $entries = $record->getEntries($list);
+        $at = (int) $field['innPresentationList']['index'];
+        if ($remove) {
+            if (! array_key_exists($at, $entries)) { return null; }
+            array_splice($entries, $at, 1);
+        } else {
+            if ($list->keyField !== null && array_any($entries, static fn(array $entry): bool => ($entry[$list->keyField] ?? '') === '')) {
+                throw new InspectorRefusal('Finish choosing the unbound leader before adding another binding.');
+            }
+            array_splice($entries, min(count($entries), $at + 1), 0, [$list->blank]);
+        }
+        $record->setEntries($list, $entries);
+        return new InspectorListEdit($this->writeInnPresentation($map, $marker, $record->get('presentation'), $remove ? 'Rest binding remove' : 'Rest binding add', $presentationPath),
+            $remove ? 'Removed rest binding.' : 'Added rest binding; choose its guests and stage before saving.');
+    }
+
+    private function writeInnPresentation(ProjectMap $map, string $marker, mixed $value, string $label, array $presentationPath): ?Command
+    {
+        try { InnPresentationFields::assertValid($value, $this->references, complete: false); }
+        catch (InvalidArgumentException $error) { throw new InspectorRefusal($error->getMessage(), previous: $error); }
+        $old = $map->getEventField($marker, $presentationPath);
+        if ($old === $value) { return null; }
+        $held = $map->hasEventField($marker, $presentationPath);
+        $apply = $value === null ? static fn() => $map->removeEventField($marker, $presentationPath)
+            : static fn() => $map->setEventField($marker, $presentationPath, $value);
+        $undo = $held ? static fn() => $map->setEventField($marker, $presentationPath, $old)
+            : static fn() => $map->removeEventField($marker, $presentationPath);
+        $apply();
+        return new GenericCommand($label, $apply, $undo);
+    }
+
+    /**
+     * The dialogue pages an event shows as the Engine reads them (a Dialogue event's, a shop's merchant lines), by
+     * their path under the event: each a line whose `name` speaks it and whose `emotion` picks the speaker's artwork.
+     * A list of conditional variants holds its pages under each variant's `lines`.
+     *
+     * @return array<string, array{path: list<string>, page: array<string, mixed>}> By the emotion row's path.
+     */
+    private static function readDialoguePages(array $definition): array
+    {
+        $class = ltrim((string) ($definition['class'] ?? ''), '\\');
+        $dialogue = $definition['data']['dialogue'] ?? null;
+        if (! in_array($class, [DialogueEventTrigger::class, ShopEventTrigger::class], true) || ! is_array($dialogue)) {
+            return [];
+        }
+        $pages = [];
+        $variants = ConditionalDialogue::isVariantList($dialogue);
+        foreach ($dialogue as $index => $entry) {
+            $lines = $variants ? ($entry['lines'] ?? null) : [$entry];
+            foreach (is_array($lines) ? $lines : [] as $line => $page) {
+                if (! is_array($page)) { continue; }
+                $path = $variants ? ['data', 'dialogue', (string) $index, 'lines', (string) $line] : ['data', 'dialogue', (string) $index];
+                $pages[implode('/', [...$path, 'emotion'])] = ['path' => $path, 'page' => $page];
+            }
+        }
+
+        return $pages;
+    }
+
+    /**
+     * The event data as its rows show it: each dialogue page offers its emotion, Neutral where it names none, which
+     * stays out of the stored event until an author chooses one.
+     */
+    private static function withPageEmotions(array $eventData, array $pages): array
+    {
+        $data = ['data' => $eventData];
+        foreach ($pages as $page) {
+            $entry = &$data;
+            foreach ($page['path'] as $segment) { $entry = &$entry[$segment]; }
+            if (! array_key_exists('emotion', $entry)) {
+                // Shown after the speaker it is chosen for.
+                $position = array_search('name', array_keys($entry), true);
+                $at = $position === false ? 0 : $position + 1;
+                $entry = [...array_slice($entry, 0, $at, true), 'emotion' => DialogueContext::DEFAULT_EMOTION, ...array_slice($entry, $at, null, true)];
+            }
+            unset($entry);
+        }
+
+        return $data['data'];
+    }
+
+    /**
+     * A dialogue page's emotion row offers the emotions its speaker's identity has, and says so when the page holds
+     * one that identity lacks; one the page leaves out is optional, removed again when chosen away.
+     *
+     * @param list<array<string, mixed>> $fields
+     * @param array<string, array{path: list<string>, page: array<string, mixed>}> $pages
+     * @return list<array<string, mixed>>
+     */
+    private function describePageEmotions(array $fields, array $pages): array
+    {
+        if ($pages === []) {
+            return $fields;
+        }
+        $described = [];
+        foreach ($fields as $field) {
+            $page = $pages[implode('/', array_map(strval(...), (array) ($field['path'] ?? [])))] ?? null;
+            if ($page === null) {
+                $described[] = $field;
+                continue;
+            }
+            $emotion = $page['page']['emotion'] ?? null;
+            $field['optional'] = ! array_key_exists('emotion', $page['page']);
+            array_push($described, ...DialogueEmotionFields::describeRows($field, $emotion,
+                $this->references->describeDialogueEmotions(DialogueLineSpeaker::forText(), $page['page'])));
+        }
+
+        return $described;
+    }
+
+    /**
+     * Returns the modes a trigger class runs in, as the Engine exports them,
+     * or null for a class that reads no mode.
+     *
+     * @return list<string>|null
+     */
+    private static function listEventModes(?string $className): ?array
+    {
+        return match ($className) {
+            ScriptEventTrigger::class => ScriptEventTrigger::MODES,
+            CinematicCommandSchema::CINEMATIC_TRIGGER_CLASS => CinematicCommandSchema::CINEMATIC_TRIGGER_MODES,
+            default => null,
+        };
+    }
+
+    /**
+     * Adds event context, pickers, and enum controls to flattened fields.
+     *
+     * @param array<int, array<string, mixed>> $fields The raw fields.
+     * @return array<int, array<string, mixed>>
+     */
+    private function decorateEventInspectorFields(string $marker, array $fields): array
+    {
+        $decorated = [];
+        // A chest's loot is chosen from the database its loot type names, as the runtime reads an unset type: an item.
+        $lootType = ChestLoot::readLootType(array_find($fields,
+            static fn(array $field): bool => array_values((array) ($field['path'] ?? [])) === ['data', 'lootType'])['value'] ?? null) ?? LootType::ITEM;
+
+        foreach ($fields as $field) {
+            $field['marker'] = $marker;
+            $field['target'] = 'event';
+
+            $path = array_values((array) ($field['path'] ?? []));
+
+            $choices = match ($path) {
+                ['cue', 'kind'] => self::EVENT_CUE_KIND_CHOICES,
+                ['engagement'] => self::EVENT_ENGAGEMENT_CHOICES,
+                ['data', 'chestType'] => self::CHEST_TYPE_CHOICES,
+                ['data', 'lootType'] => self::listLootTypeChoices(),
+                default => null,
+            };
+
+            if ($choices !== null) {
+                // Picked or stepped through, never spelled.
+                $field['choices'] = $choices;
+                $field['options'] = array_column($choices, 'value');
+                unset($field['control']);
+            }
+
+            if ($path === ['data', 'destinationMap']) {
+                // Set with its spawn point, never alone ({@see setTransferDestination()}).
+                $field['destination'] = true;
+            }
+
+            $reference = self::findEventReference($field, $lootType);
+
+            if (is_array($reference)) {
+                // A reference is chosen, never spelled: dropping the control
+                // is what stops the field being typed into, leaving the
+                // picker as the only way to set it.
+                $field['reference'] = $reference['category'];
+                unset($field['control']);
+            }
+
+            $decorated[] = $field;
+        }
+
+        return $decorated;
+    }
+
+    /**
+     * A data key as an author reads it: words split at underscores, hyphens
+     * and camel case, each capitalised (`spawnPoint` reads Spawn Point).
+     */
+    private static function formatFieldLabel(string $part): string
+    {
+        return ucwords(str_replace(['_', '-'], ' ', (string) preg_replace('/(?<=[a-z0-9])(?=[A-Z])/', ' ', $part)));
+    }
+
+    /**
+     * Flattens nested scalar data into editable inspector fields.
+     *
+     * @param array<string|int, mixed> $data The data to flatten.
+     * @param array<int, string> $path The current path.
+     * @return array<int, array<string, mixed>>
+     */
+    private function flattenInspectorFields(array $data, array $path, ?array $list = null): array
+    {
+        $fields = [];
+        $definition = is_string($data['type'] ?? null) ? (ScriptCommandRegistry::getCatalog()->definitions[$data['type']] ?? null) : null;
+        foreach ($definition?->fields ?? [] as $field) {
+            if ($field->reference !== ScriptCommandReference::STAGE_TIMELINE) { continue; }
+            $segments = explode('.', $field->key);
+            $value = new ProjectRecord($data)->get($field->key);
+            $fields = [...$fields, ...$this->buildInnPresentationFields('', $value, [...$path, ...$segments])];
+            // This is only the display copy; the map owner retains every authored key.
+            $parent = &$data;
+            $present = true;
+            foreach (array_slice($segments, 0, -1) as $segment) {
+                if (! is_array($parent[$segment] ?? null)) { $present = false; break; }
+                $parent = &$parent[$segment];
+            }
+            if ($present) { unset($parent[end($segments)]); }
+            unset($parent);
+        }
+
+        if (($data['type'] ?? '') === 'move_route') {
+            $fields = [...$fields, ...$this->buildMovementRouteFields($data, $path, $list)];
+            // Only the display projection is removed; unrecognised authored keys stay visible and intact.
+            foreach (MovementRouteFields::getFields($data) as $field) { unset($data[$field->key]); }
+            unset($data['steps'], $data['waypoints'], $data['retrace']);
+        }
+
+        foreach ($data as $key => $value) {
+            $segment = (string) $key;
+            $nextPath = [...$path, $segment];
+
+            if (is_array($value)) {
+                // A list of entries -- a shop's stock, an event's dialogue --
+                // is something an author adds to and removes from, so every
+                // field inside one remembers which list it belongs to.
+                if ($this->isInspectorListValue($nextPath, $value)) {
+                    $label = implode(' ', array_map(
+                        self::formatFieldLabel(...),
+                        ($nextPath[0] ?? null) === 'data' ? array_slice($nextPath, 1) : $nextPath
+                    ));
+                    $fields[] = [
+                        'label' => sprintf('%s · %d', $label, count($value)),
+                        'value' => '',
+                        'editable' => false,
+                        'list' => [
+                            'path' => $nextPath,
+                            'index' => max(0, count($value) - 1),
+                            'blank' => $this->blankInspectorListEntry($nextPath),
+                        ],
+                    ];
+
+                    foreach ($value as $index => $entry) {
+                        $entryPath = [...$nextPath, (string) $index];
+                        $entryList = ['path' => $nextPath, 'index' => (int) $index];
+
+                        $fields = [
+                            ...$fields,
+                            ...(is_array($entry)
+                                ? $this->flattenInspectorFields($entry, $entryPath, $entryList)
+                                : $this->flattenInspectorFields([(string) $index => $entry], $nextPath, $entryList)),
+                        ];
+                    }
+
+                    continue;
+                }
+
+                if (array_key_exists('x', $value) && array_key_exists('y', $value) && is_scalar($value['x']) && is_scalar($value['y'])) {
+                    $label = implode(' ', array_map(
+                        self::formatFieldLabel(...),
+                        ($nextPath[0] ?? null) === 'data' ? array_slice($nextPath, 1) : $nextPath
+                    ));
+                    $fields[] = [
+                        'label' => $label,
+                        'value' => '',
+                        'editable' => false,
+                    ];
+                    $fields[] = [
+                        'label' => '  X',
+                        'value' => (string) $value['x'],
+                        'control' => new InputControl(
+                            is_int($value['x']) ? InputControlType::INTEGER : InputControlType::TEXT,
+                            (string) $value['x'],
+                        ),
+                        'path' => [...$nextPath, 'x'],
+                        'axis' => 'x',
+                    ];
+                    $fields[] = [
+                        'label' => '  Y',
+                        'value' => (string) $value['y'],
+                        'control' => new InputControl(
+                            is_int($value['y']) ? InputControlType::INTEGER : InputControlType::TEXT,
+                            (string) $value['y'],
+                        ),
+                        'path' => [...$nextPath, 'y'],
+                        'axis' => 'y',
+                    ];
+                    continue;
+                }
+
+                $fields = [...$fields, ...$this->flattenInspectorFields($value, $nextPath, $list)];
+                continue;
+            }
+
+            if (! is_scalar($value) && $value !== null) {
+                continue;
+            }
+
+            $displayPath = ($nextPath[0] ?? null) === 'data'
+                ? array_slice($nextPath, 1)
+                : $nextPath;
+            $label = implode(' ', array_map(
+                static fn(string $part): string => ctype_digit($part)
+                    ? '#' . ((int) $part + 1)
+                    : self::formatFieldLabel($part),
+                $displayPath
+            ));
+            $stringValue = match (true) {
+                is_bool($value) => $value ? 'true' : 'false',
+                is_float($value) => InputControl::formatFloat($value),
+                default => (string) $value,
+            };
+            $controlType = match (true) {
+                is_bool($value) => InputControlType::BOOLEAN,
+                is_int($value) => InputControlType::INTEGER,
+                is_float($value) => InputControlType::FLOAT,
+                default => InputControlType::TEXT,
+            };
+            $leaf = [
+                'label' => $label,
+                'value' => $stringValue,
+                'control' => new InputControl($controlType, $stringValue),
+                'path' => $nextPath,
+            ];
+
+            if (is_array($list)) {
+                $leaf['list'] = $list;
+            }
+
+            $fields[] = $leaf;
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Distinguishes authored lists from associative configuration blocks.
+     *
+     * Empty arrays need an explicit known-list name because PHP cannot tell
+     * an empty list from an empty map.
+     *
+     * @param array<int, string> $path The candidate path.
+     * @param array<mixed> $value The candidate value.
+     */
+    private function isInspectorListValue(array $path, array $value): bool
+    {
+        if (! array_is_list($value) || array_key_exists('x', $value)) {
+            return false;
+        }
+
+        if ($value !== []) {
+            return true;
+        }
+
+        return in_array(
+            (string) ($path[array_key_last($path)] ?? ''),
+            ['conditions', 'sets', 'dialogue', 'items', 'script', 'steps', 'options'],
+            true,
+        );
+    }
+
+    /**
+     * Returns the structured first row for an empty inspector list.
+     *
+     * @param array<int, string> $path The list path.
+     * @return array<string, mixed>
+     */
+    private function blankInspectorListEntry(array $path): array
+    {
+        return match ((string) ($path[array_key_last($path)] ?? '')) {
+            'conditions' => ['type' => 'switch', 'name' => '', 'value' => true],
+            'sets' => ['type' => 'switch', 'name' => '', 'value' => true],
+            'script' => ['type' => 'text', 'name' => '', 'text' => ''],
+            'steps' => ['direction' => 'down', 'count' => 1, 'faceOnly' => false],
+            'options' => ['text' => '', 'then' => []],
+            'items' => ['item' => '', 'price' => 0],
+            default => ['name' => '', 'text' => ''],
+        };
+    }
+
+}

@@ -4,24 +4,30 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Engine\Field\NpcPages;
 use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Exceptions\InvalidSaveCompatibilityManifestException;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
-use RecursiveDirectoryIterator;
-use RecursiveIteratorIterator;
+use Ichiloto\Engine\IO\SaveCompatibility\MapRetirement;
+use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
 use Throwable;
 
 /** Validates the project-owned save compatibility manifest. */
 final class SaveCompatibilityValidator
 {
     private const string WHERE = 'assets/Data/save-compatibility.php';
+    private const string DECLARED_EDITS_HINT = 'Use a class for a project migration, or declared position edits: mapShifts (map, axis x or y, the 0-based line inserted at, a count of at least 1) for inserted rows and columns, mapRemovals (map, axis, the 0-based first removed line at, a count of at least 1, the cell to that saves on removed lines land on) for removed rows and columns, relocations (map, cells, to) for cells authored content now occupies, mapRetirements (map, into, to, and optional landings of x, y, width, height and to) for a retired map whose saves move onto another map.';
 
     /**
      * @var InventoryCatalog|null The project's inventory identity, read once.
      */
     private ?InventoryCatalog $inventoryCatalog = null;
+    private ?SkillCatalog $skillCatalog = null;
 
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
@@ -78,7 +84,8 @@ final class SaveCompatibilityValidator
             $manifest['tombstones'] ?? null,
             $aliasResult['sources']
         )];
-        $issues = [...$issues, ...$this->checkMigrations($manifest['migrations'] ?? null, $version)];
+        $issues = [...$issues, ...$this->checkMigrations($workspace, $manifest['migrations'] ?? null, $version,
+            is_array($manifest['aliases']['maps'] ?? null) ? $manifest['aliases']['maps'] : [])];
 
         return $issues;
     }
@@ -171,7 +178,7 @@ final class SaveCompatibilityValidator
                 }
 
                 if (! isset($graph[$current])) {
-                    $knownTargets = $this->knownTargets($workspace, $category);
+                    $knownTargets = $this->listKnownTargets($workspace, $category);
 
                     if ($knownTargets !== null && ! in_array($current, $knownTargets, true)) {
                         $issues[] = Issue::error($where, sprintf(
@@ -237,8 +244,11 @@ final class SaveCompatibilityValidator
         return $issues;
     }
 
-    /** @return Issue[] */
-    private function checkMigrations(mixed $rawMigrations, mixed $version): array
+    /**
+     * @param array<mixed> $mapAliases The manifest's map aliases, as written.
+     * @return Issue[]
+     */
+    private function checkMigrations(ProjectWorkspace $workspace, mixed $rawMigrations, mixed $version, array $mapAliases): array
     {
         if (! is_array($rawMigrations)) {
             return [Issue::error(self::WHERE, 'migrations must be an ordered list.')];
@@ -246,6 +256,7 @@ final class SaveCompatibilityValidator
 
         $issues = [];
         $steps = [];
+        $retirements = [];
         $previousFrom = -1;
 
         foreach ($rawMigrations as $index => $entry) {
@@ -272,13 +283,27 @@ final class SaveCompatibilityValidator
                 $issues[] = Issue::error($where, sprintf('Migration step %d to %d is in an impossible order.', $from, $to));
             }
 
-            if ($class === '') {
+            try {
+                $edits = SaveCompatibilityManifest::readDeclaredPositionEdits($entry, 'This migration');
+            } catch (InvalidSaveCompatibilityManifestException $exception) {
+                $issues[] = Issue::error($where, $exception->getMessage(), self::DECLARED_EDITS_HINT);
+                $edits = [];
+            }
+            foreach ($edits ?? [] as $edit) {
+                if ($edit instanceof MapRetirement) {
+                    $retirements[] = ['where' => $where, 'retirement' => $edit];
+                }
+            }
+
+            if ($edits === null && $class === '') {
                 $issues[] = Issue::error($where, 'Migration class must be a non-empty class name.');
             }
 
             $steps[$from] = true;
             $previousFrom = $from;
         }
+
+        $issues = [...$issues, ...$this->checkRetirementDestinations($workspace, $retirements, $mapAliases)];
 
         if (is_int($version) && $version >= 0) {
             for ($from = 0; $from < $version; $from++) {
@@ -304,15 +329,67 @@ final class SaveCompatibilityValidator
         return $issues;
     }
 
-    /** @return string[]|null Null means this category has no closed catalog. */
-    private function knownTargets(ProjectWorkspace $workspace, ContentReferenceCategory $category): ?array
+    /**
+     * Reports a retirement whose saves end on no map of the project: a map it
+     * lands saves on (`into`, or a successor a landing names), followed
+     * through later retirements and map aliases as a save landing there
+     * moves, is not a current map.
+     *
+     * @param list<array{where: string, retirement: MapRetirement}> $retirements In manifest order.
+     * @param array<mixed> $mapAliases
+     * @return Issue[]
+     */
+    private function checkRetirementDestinations(ProjectWorkspace $workspace, array $retirements, array $mapAliases): array
+    {
+        $aliases = [];
+        foreach ($mapAliases as $alias) {
+            if (is_array($alias) && is_string($alias['from'] ?? null) && is_string($alias['to'] ?? null)) {
+                $aliases[trim($alias['from'])] = trim($alias['to']);
+            }
+        }
+        $resolve = static function (string $mapId) use ($aliases): string {
+            for ($seen = []; isset($aliases[$mapId]) && ! isset($seen[$mapId]); $mapId = $aliases[$mapId]) {
+                $seen[$mapId] = true;
+            }
+
+            return $mapId;
+        };
+        $issues = [];
+        foreach ($retirements as $index => ['where' => $where, 'retirement' => $retirement]) {
+            // Every map a save may end on: each map the retirement lands on, and, where a later retirement moves
+            // saves off one, every map that one lands on in turn.
+            $ends = array_fill_keys(array_map($resolve, array_column($retirement->getLandingPlaces(), 'map')), true);
+            foreach (array_slice($retirements, $index + 1) as ['retirement' => $later]) {
+                if (isset($ends[$resolve($later->map)])) {
+                    unset($ends[$resolve($later->map)]);
+                    $ends += array_fill_keys(array_map($resolve, array_column($later->getLandingPlaces(), 'map')), true);
+                }
+            }
+            foreach (array_keys($ends) as $current) {
+                if (! in_array($current, $workspace->mapIds, true)) {
+                    $issues[] = Issue::error($where, sprintf('Saves on %s move into %s, which is not a map in the project.', $retirement->map, $current),
+                        'Retire the map into one that exists, or alias the destination to the map that took its place.');
+                }
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Lists the current identities an alias of a category may end at, as the
+     * workspace holds them, unsaved edits included.
+     *
+     * @return string[]|null Null means this category has no closed catalog.
+     */
+    public function listKnownTargets(ProjectWorkspace $workspace, ContentReferenceCategory $category): ?array
     {
         return match ($category) {
             ContentReferenceCategory::MAP => $workspace->mapIds,
             ContentReferenceCategory::ONE_SHOT_EVENT => $this->oneShotEventIds($workspace),
             ContentReferenceCategory::QUEST => array_map(
                 static fn(object $quest): string => $quest->getId(),
-                $workspace->questDatabase->getQuests()
+                $workspace->getQuests()
             ),
             // The durable identity a save reconstructs an actor by, which
             // is the definition id where one is declared and the display
@@ -326,10 +403,11 @@ final class SaveCompatibilityValidator
             // label, so the catalogue of ids is what it has to be in.
             ContentReferenceCategory::ITEM => $this->inventoryCatalog($workspace)->idsIn('items'),
             ContentReferenceCategory::EQUIPMENT => $this->inventoryCatalog($workspace)->idsIn('weapons', 'armors'),
-            ContentReferenceCategory::ABILITY, ContentReferenceCategory::SPELL => array_map(
-                static fn(object $skill): string => $skill->getName(),
-                $workspace->skillDatabase->getSkills()
-            ),
+            // A save keeps abilities and spells in separate books, and the
+            // runtime restores each book from its own kind of skill,
+            // wherever the catalogue authors it.
+            ContentReferenceCategory::ABILITY => array_keys($this->skillCatalog($workspace)->getAbilities()),
+            ContentReferenceCategory::SPELL => array_keys($this->skillCatalog($workspace)->getSpells()),
             ContentReferenceCategory::STATE => $this->recordIdentities($workspace, 'states'),
             ContentReferenceCategory::ENEMY => $this->recordLabels($workspace, ['enemies']),
             ContentReferenceCategory::ACHIEVEMENT => $this->phpListIdentities(
@@ -337,7 +415,24 @@ final class SaveCompatibilityValidator
             ),
             ContentReferenceCategory::SUMMON => $this->summonIds($workspace),
             ContentReferenceCategory::STORY_EVENT => null,
+            // A retired subject folds into one the knowledge catalogue still declares.
+            ContentReferenceCategory::KNOWLEDGE_SUBJECT => $this->knowledgeSubjectIds($workspace),
         };
+    }
+
+    /**
+     * The knowledge subjects the project declares; null when the catalogue
+     * cannot be read, which its own validation reports.
+     *
+     * @return string[]|null
+     */
+    private function knowledgeSubjectIds(ProjectWorkspace $workspace): ?array
+    {
+        try {
+            return array_map(static fn(object $subject): string => $subject->id, $workspace->catalogs->loadKnowledgeCatalog()->subjects());
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /**
@@ -349,6 +444,17 @@ final class SaveCompatibilityValidator
     private function inventoryCatalog(ProjectWorkspace $workspace): InventoryCatalog
     {
         return $this->inventoryCatalog ??= InventoryCatalog::fromWorkspace($workspace);
+    }
+
+    /**
+     * Returns the project's skill catalogue, read once per validation.
+     *
+     * @param ProjectWorkspace $workspace The project.
+     * @return SkillCatalog The catalogue.
+     */
+    private function skillCatalog(ProjectWorkspace $workspace): SkillCatalog
+    {
+        return $this->skillCatalog ??= $workspace->loadSkillCatalog();
     }
 
     /** @param string[] $categories @return string[] */
@@ -392,9 +498,23 @@ final class SaveCompatibilityValidator
                 continue;
             }
 
-            foreach (array_keys(is_array($map->data['events'] ?? null) ? $map->data['events'] : []) as $marker) {
+            foreach (array_keys(is_array($map->getEditableData()['events'] ?? null) ? $map->getEditableData()['events'] : []) as $marker) {
                 if (is_string($marker)) {
                     $ids[] = $map->mapId . ':' . $marker;
+                }
+            }
+
+            // An NPC page with an id is a saved identity beside the map's events, as each event marker is.
+            foreach (is_array($map->getEditableData()['npcs'] ?? null) ? $map->getEditableData()['npcs'] : [] as $entry) {
+                try {
+                    $pages = is_array($entry) ? NpcPages::fromEntry($entry) : null;
+                } catch (\InvalidArgumentException) {
+                    continue; // npc.page reports it.
+                }
+                foreach ($pages?->pages ?? [] as $page) {
+                    if ($page->id !== null && $pages->npcId !== null) {
+                        $ids[] = $map->mapId . ':' . NpcPages::getCompletionMarker($pages->npcId, $page->id);
+                    }
                 }
             }
         }
@@ -426,27 +546,18 @@ final class SaveCompatibilityValidator
         return $ids;
     }
 
-    /** @return string[] */
+    /**
+     * The summons the game defines, as the Engine's summon library loads them:
+     * one definition per directory, each a single record.
+     *
+     * @return string[]
+     */
     private function summonIds(ProjectWorkspace $workspace): array
     {
-        $root = $workspace->projectRoot . '/assets/Cutscenes/Summons';
-
-        if (! is_dir($root)) {
-            return [];
-        }
-
-        $ids = [];
-        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root));
-
-        foreach ($iterator as $file) {
-            if (! $file->isFile() || ! str_ends_with($file->getFilename(), '.data.php')) {
-                continue;
-            }
-
-            $ids = [...$ids, ...$this->phpListIdentities($file->getPathname())];
-        }
-
-        return array_values(array_unique($ids));
+        return array_values(array_unique(array_map(
+            static fn(SummonCutsceneDefinition $definition): string => $definition->id,
+            $workspace->catalogs->loadSummons(),
+        )));
     }
 
     private function isOneShotEventIdentity(string $identity): bool

@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Playtest;
 
+use Ichiloto\Editor\Console\ConsoleBinary;
 use RuntimeException;
 
 /**
- * Runs `ichiloto play` against a playtest overlay.
+ * Runs `ichiloto play` from the author's real project root for a
+ * {@see PlaytestLaunch}, which carries where the game starts and where its
+ * data lives in the Engine's launch context.
  *
  * `--no-tmux` is always passed: the editor already owns this terminal, and
  * letting the play command open or reuse a tmux session would detach the game
@@ -23,11 +26,7 @@ final class PlaytestLauncher
     }
 
     /**
-     * Locates the console entry point.
-     *
-     * A project may install the console in its own vendor directory, a global
-     * install puts it on PATH, and this package may itself be installed under
-     * another Composer vendor tree.
+     * Locates the console entry point ({@see ConsoleBinary::discover()}).
      *
      * @param string|null $override An explicit path (`ICHILOTO_CONSOLE_BIN`).
      * @param string|null $projectRoot The project being edited, if known.
@@ -35,125 +34,113 @@ final class PlaytestLauncher
      */
     public static function discover(?string $override = null, ?string $projectRoot = null): self
     {
-        $candidates = self::candidates($override, $projectRoot);
+        return new self(ConsoleBinary::discover($override, $projectRoot)->path);
+    }
 
-        foreach ($candidates as $candidate) {
-            if (is_file($candidate)) {
-                return new self($candidate);
-            }
+    /**
+     * The play command's arguments, from its interpreter on: the game in this
+     * terminal, from the project's own root.
+     *
+     * @return list<string>
+     */
+    public function buildPlayArguments(PlaytestLaunch $launch): array
+    {
+        return [PHP_BINARY, $this->consoleBinary, 'play', '--no-tmux', $launch->buildPlayOption(), '-d', $launch->projectRoot];
+    }
+
+    /** The renderer choice that lets the console pick: GPUI when it is installed and usable, otherwise the terminal. */
+    public const string AUTOMATIC = 'auto';
+
+    /**
+     * Starts the playtest in the background with a renderer of its own, for
+     * an editor that owns no terminal to hand over: the play command runs
+     * without prompts, reading nothing and writing its output to the launch's
+     * log. A terminal session opens in a terminal window of its own, which
+     * closes when the game ends. Field playtests and battle tests start the
+     * same way; the launch context says which it is.
+     *
+     * @param string $rendererId The renderer, such as `gpui`, or {@see AUTOMATIC}.
+     * @throws RuntimeException When the process cannot start.
+     */
+    public function start(PlaytestLaunch $launch, string $rendererId): PlaytestRun
+    {
+        $log = @fopen($launch->getLogPath(), 'ab');
+        if (! is_resource($log)) {
+            throw new RuntimeException("Unable to open the playtest log at {$launch->getLogPath()}.");
         }
 
-        throw new RuntimeException(sprintf(
-            "Could not find the ichiloto console binary — set ICHILOTO_CONSOLE_BIN to its path.\nLooked in:\n  %s",
-            implode("\n  ", $candidates),
-        ));
-    }
-
-    /**
-     * Returns where the console binary might be, best guess first.
-     *
-     * @param string|null $override An explicit path.
-     * @param string|null $projectRoot The project being edited, if known.
-     * @return string[] The paths to try.
-     */
-    private static function candidates(?string $override, ?string $projectRoot): array
-    {
-        return array_values(array_unique(array_filter([
-            $override,
-            (string) getenv('ICHILOTO_CONSOLE_BIN') ?: null,
-            // A project that requires ichiloto/console.
-            is_string($projectRoot) && $projectRoot !== ''
-                ? rtrim($projectRoot, DIRECTORY_SEPARATOR) . '/vendor/bin/ichiloto'
-                : null,
-            // This package installed under a vendor tree, the project's or
-            // the console's own.
-            ...self::vendorBinariesAbove(),
-            // Installed globally.
-            self::binaryOnPath(),
-        ])));
-    }
-
-    /**
-     * Returns every `vendor/bin/ichiloto` in a directory above this package.
-     *
-     * @return string[] The paths.
-     */
-    private static function vendorBinariesAbove(): array
-    {
-        $paths = [];
-        $directory = dirname(__DIR__, 2);
-
-        // Deep enough to climb out of `vendor/ichiloto/editor` and any
-        // directory nesting a project keeps above it.
-        for ($depth = 0; $depth < 8; $depth++) {
-            $paths[] = $directory . '/vendor/bin/ichiloto';
-            $parent = dirname($directory);
-
-            if ($parent === $directory) {
-                break;
-            }
-
-            $directory = $parent;
+        try {
+            $pipes = [];
+            $process = @proc_open(
+                [PHP_BINARY, $this->consoleBinary, 'play', '--no-tmux', '--no-interaction', '--renderer=' . $rendererId,
+                    '--terminal-window', $launch->buildPlayOption(), '-d', $launch->projectRoot],
+                [0 => ['file', '/dev/null', 'r'], 1 => $log, 2 => $log],
+                $pipes,
+                $launch->projectRoot,
+                $launch->buildEnvironment(),
+            );
+        } finally {
+            fclose($log);
         }
 
-        return $paths;
-    }
-
-    /**
-     * Returns the console binary found on PATH, if it is there.
-     *
-     * @return string|null The path, or null when PATH has no ichiloto.
-     */
-    private static function binaryOnPath(): ?string
-    {
-        $path = (string) getenv('PATH');
-
-        if ($path === '') {
-            return null;
+        if (! is_resource($process)) {
+            throw new RuntimeException('The playtest could not be started.');
         }
 
-        foreach (explode(PATH_SEPARATOR, $path) as $directory) {
-            if ($directory === '') {
-                continue;
-            }
+        return new PlaytestRun($process, $launch);
+    }
 
-            $candidate = rtrim($directory, DIRECTORY_SEPARATOR) . '/ichiloto';
-
-            if (is_file($candidate)) {
-                return $candidate;
+    /**
+     * The renderers the project's Engine can launch, as the console reports
+     * them without starting any: each with its name, whether it is usable,
+     * and why not when it is not, and the one it prefers.
+     *
+     * @return array{renderers: list<array{id: string, displayName: string, available: bool, reason: ?string}>, preferredId: ?string}
+     * @throws RuntimeException When the console cannot report them.
+     */
+    public function listRenderers(string $projectRoot): array
+    {
+        $pipes = [];
+        $process = @proc_open([PHP_BINARY, $this->consoleBinary, 'renderer:list', '--directory=' . $projectRoot, '--json'],
+            [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $projectRoot);
+        if (! is_resource($process)) {
+            throw new RuntimeException('The renderers could not be listed: the console did not start.');
+        }
+        $output = (string) stream_get_contents($pipes[1]);
+        $errors = trim((string) stream_get_contents($pipes[2]));
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exit = proc_close($process);
+        $report = json_decode($output, true);
+        if ($exit !== 0 || ! is_array($report) || ($report['schema'] ?? null) !== 'ichiloto.renderers/1' || ! is_array($report['renderers'] ?? null)) {
+            throw new RuntimeException('The renderers could not be listed' . ($errors === '' ? '.' : ': ' . $errors));
+        }
+        $renderers = [];
+        foreach ($report['renderers'] as $renderer) {
+            if (! is_array($renderer) || ! is_string($renderer['id'] ?? null) || ! is_bool($renderer['available'] ?? null)) {
+                throw new RuntimeException('The console reported a renderer the editor cannot read.');
             }
+            $renderers[] = ['id' => $renderer['id'], 'displayName' => is_string($renderer['displayName'] ?? null) ? $renderer['displayName'] : $renderer['id'],
+                'available' => $renderer['available'], 'reason' => is_string($renderer['reason'] ?? null) ? $renderer['reason'] : null];
         }
 
-        return null;
+        return ['renderers' => $renderers, 'preferredId' => is_string($report['preferredId'] ?? null) ? $report['preferredId'] : null];
     }
 
     /**
-     * Returns the shell command that runs the playtest.
+     * Runs the playtest in this terminal, returning the play command's exit code.
      *
-     * @param PlaytestOverlay $overlay The overlay to play.
-     * @return string
+     * @throws RuntimeException When the process cannot start.
      */
-    public function buildCommand(PlaytestOverlay $overlay): string
+    public function run(PlaytestLaunch $launch): int
     {
-        return sprintf(
-            '%s %s play --no-tmux -d %s',
-            escapeshellcmd(PHP_BINARY),
-            escapeshellarg($this->consoleBinary),
-            escapeshellarg($overlay->root),
-        );
-    }
+        $pipes = [];
+        $process = @proc_open($this->buildPlayArguments($launch), [0 => STDIN, 1 => STDOUT, 2 => STDERR], $pipes,
+            $launch->projectRoot, $launch->buildEnvironment());
+        if (! is_resource($process)) {
+            throw new RuntimeException('The playtest could not be started.');
+        }
 
-    /**
-     * Runs the playtest, returning the child process exit code.
-     *
-     * @param PlaytestOverlay $overlay The overlay to play.
-     * @return int
-     */
-    public function run(PlaytestOverlay $overlay): int
-    {
-        $exitCode = 0;
-        passthru($this->buildCommand($overlay), $exitCode);
-
-        return $exitCode;
+        return proc_close($process);
     }
 }

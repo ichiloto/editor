@@ -1,0 +1,527 @@
+<?php
+
+declare(strict_types=1);
+
+use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Editor\Session\EditorSession;
+use Ichiloto\Editor\Session\SessionHost;
+use Ichiloto\Editor\Session\SessionRefusal;
+use Ichiloto\Editor\Database\CutsceneSchemas;
+use Ichiloto\Editor\Database\ReferenceCatalog;
+
+function createWorldObjectProject(): array
+{
+    $root = mapGraphicsProject();
+    $file = $root . '/assets/Maps/test-map/test-map.data.php';
+    $source = (string) file_get_contents($file);
+    $source = str_replace("'events' => [],", "'events' => [], /* map-owned identity */ 'worldObjects' => [
+        ['id' => 'fixture-prop', 'anchor' => ['x' => 1, 'y' => 1],
+            'pivot' => ['x' => 0.5, 'y' => 1.0], 'sprites2d' => null],
+    ], 'tileLayers' => ['floor' => ['movesWith' => 'terrain']], 'preserved' => abs(7),", $source);
+    file_put_contents($file, $source);
+    writeTilesetTestPng($root . '/assets/Graphics/Props/Replaceable.png', 12, 16);
+    writeTilesetTestPng($root . '/assets/Graphics/Props/$Walking.png', 12, 16);
+    return [$root, $file, EditorSession::open($root)];
+}
+
+function applyWorldObjectRow(EditorSession $session, string $field, string $value): array
+{
+    $view = $session->readWorldObject('test-map', 'fixture-prop');
+    $row = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === $field)
+        ?? throw new RuntimeException('Missing world-object row ' . $field);
+    return $session->applyWorldObject('test-map', $view['revision'], 'fixture-prop', $row['key'], $value);
+}
+
+it('owns objects only in map source, with source-safe history save and reopen', function () {
+    [$root, $file, $session] = createWorldObjectProject();
+    $before = file_get_contents($file);
+    $map = $session->readMap('test-map');
+    expect(array_column($map['worldObjects'], 'id'))->toBe(['fixture-prop']);
+    $session->createWorldObject('test-map', $map['revision'], 'new-prop', 2, 1);
+    expect(file_get_contents($file))->toBe($before)
+        ->and($session->undo()['maps'])->toBe(['test-map']);
+    expect(array_column($session->readMap('test-map')['worldObjects'], 'id'))->toBe(['fixture-prop']);
+    $session->redo();
+    applyWorldObjectRow($session, 'anchor.x', '2');
+    applyWorldObjectRow($session, 'sprites2d.asset', 'Graphics/Props/Replaceable.png');
+    $session->saveMap('test-map');
+    expect(file_get_contents($file))->toContain('/* map-owned identity */', "'preserved' => abs(7)")
+        ->and(EditorSession::open($root)->readMap('test-map')['worldObjects'][0]['sprites2d'])->toBe(['asset' => 'Graphics/Props/Replaceable.png']);
+    $revision = $session->readMap('test-map')['revision'];
+    $session->deleteWorldObject('test-map', $revision, 'new-prop');
+    $session->undo();
+    expect(array_column($session->readMap('test-map')['worldObjects'], 'id'))->toBe(['fixture-prop', 'new-prop']);
+});
+
+it('offers typed variants conditions coverage and known resource selections', function () {
+    [, , $session] = createWorldObjectProject();
+    $view = $session->readWorldObject('test-map', 'fixture-prop');
+    $heading = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === 'variantList');
+    $session->changeWorldObjectItem('test-map', $view['revision'], 'fixture-prop', $heading['key'], false);
+    expect(fn() => $session->saveMap('test-map'))->toThrow(SessionRefusal::class, 'conditions');
+    applyWorldObjectRow($session, 'variant0Conditions', 'switch:existing-condition');
+    applyWorldObjectRow($session, 'variant0Sprites2dasset', 'Graphics/Props/Replaceable.png');
+    $layer = array_find($session->readMap('test-map')['tileLayers']['layers'], static fn($layer): bool => $layer['name'] === 'floor')['owner'];
+    applyWorldObjectRow($session, 'covers.layer', $layer);
+    $session->placeWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop', 2, 1, true);
+    $object = $session->readMap('test-map')['worldObjects'][0];
+    expect($object['variants'][0]['conditions'])->toBe([['type' => 'switch', 'name' => 'existing-condition']])
+        ->and($object['covers']['cells'])->toBe([[1, 1], [2, 1]])
+        ->and($object['covers']['tileLayers'])->toBe([]);
+    $choices = $session->listReferences('test-map', 'world_object_tile_layers', ['id' => 'fixture-prop']);
+    expect(array_column($choices, 'value'))->toContain('floor');
+    applyWorldObjectRow($session, 'covers.tileLayers', 'floor');
+    expect(fn() => applyWorldObjectRow($session, 'covers.tileLayers', 'unknown'))->toThrow(SessionRefusal::class, 'Choose a tile layer');
+    $session->saveMap('test-map');
+});
+
+it('shares current-file walking roles and explicit absence without changing Terminal or occupancy', function () {
+    [$root, , $session] = createWorldObjectProject();
+    $before = $session->readMap('test-map');
+    $terminal = ProjectWorkspace::fromProject($root)->maps[0]->getLayerSet()->getComposedGrid();
+    applyWorldObjectRow($session, 'sprites2d.sheet', 'Graphics/Props/$Walking.png');
+    $row = array_find($session->readWorldObject('test-map', 'fixture-prop')['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === 'sprites2d.sheet');
+    expect($row['imagePreview']['issue'] ?? null)->toBeNull()
+        ->and(count($row['imagePreview']['frames']))->toBe(4);
+    applyWorldObjectRow($session, 'sprites2d.sheet', '');
+    expect($session->readMap('test-map')['worldObjects'][0]['sprites2d'])->toBeNull()
+        ->and($session->readMap('test-map')['occupancy'])->toBe($before['occupancy'])
+        ->and($session->readMap('test-map')['layers'])->toBe($before['layers']);
+    $session->saveMap('test-map');
+    expect(ProjectWorkspace::fromProject($root)->maps[0]->getLayerSet()->getComposedGrid())->toBe($terminal);
+});
+
+it('refuses stale revisions ids assets expressions and external source edits before mutation', function () {
+    [$root, $file, $session] = createWorldObjectProject();
+    $view = $session->readWorldObject('test-map', 'fixture-prop');
+    expect(fn() => $session->createWorldObject('test-map', $view['revision'], 'fixture-prop', 1, 1))->toThrow(SessionRefusal::class, 'Duplicate')
+        ->and(fn() => $session->createWorldObject('test-map', $view['revision'], 'Invalid Id', 1, 1))->toThrow(SessionRefusal::class, 'stable lowercase')
+        ->and(fn() => applyWorldObjectRow($session, 'sprites2d.asset', '../foreign.png'))->toThrow(SessionRefusal::class, 'Choose a current');
+    applyWorldObjectRow($session, 'anchor.x', '2');
+    expect(fn() => $session->deleteWorldObject('test-map', $view['revision'], 'fixture-prop'))->toThrow(SessionRefusal::class, 'changed since revision');
+    file_put_contents($file, str_replace("'preserved' => abs(7)", "'preserved' => abs(8)", (string) file_get_contents($file)));
+    expect(fn() => applyWorldObjectRow($session, 'anchor.x', '3'))->toThrow(SessionRefusal::class)
+        ->and($session->readMap('test-map')['worldObjects'][0]['anchor']['x'])->toBe(2);
+    $source = str_replace("'x' => 1", "'x' => abs(1)", (string) file_get_contents($file));
+    file_put_contents($file, $source);
+    $reloaded = EditorSession::open($root);
+    expect($reloaded->readWorldObject('test-map', 'fixture-prop')['issue'])->toContain('literal')
+        ->and(fn() => applyWorldObjectRow($reloaded, 'anchor.x', '3'))->toThrow(SessionRefusal::class)
+        ->and(file_get_contents($file))->toBe($source);
+});
+
+it('uses Engine coverage and current-frame projection, retaining glyphs for missing roles', function () {
+    [$root, , $session] = createWorldObjectProject();
+    $layer = $session->readMap('test-map')['layers'][0]['name'];
+    applyWorldObjectRow($session, 'covers.layer', $layer);
+    applyWorldObjectRow($session, 'sprites2d.asset', 'Graphics/Props/Replaceable.png');
+    $preview = drawAuthoringCanvas($session, 'test-map');
+    $sprite = array_find($preview['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite');
+    expect($sprite['value']['id'])->toBe('world-object:test-map:fixture-prop')
+        ->and($sprite['value']['pivot'])->toBe(['x' => .5, 'y' => 1.0]);
+    unlink($root . '/assets/Graphics/Props/Replaceable.png');
+    $missing = drawAuthoringCanvas($session, 'test-map');
+    expect($missing['diagnostics'])->toHaveCount(1)
+        ->and(array_filter($missing['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite'))->toBe([]);
+    writeTilesetTestPng($root . '/assets/Graphics/Props/Replaceable.png', 24, 32);
+    expect(drawAuthoringCanvas($session, 'test-map')['diagnostics'])->toBe([]);
+});
+
+it('exports canvas owner revision and layer identities with transient variants and current asset paths', function () {
+    [$root, $file, $session] = createWorldObjectProject();
+    applyWorldObjectRow($session, 'sprites2d.asset', 'Graphics/Props/Replaceable.png');
+    applyWorldObjectRow($session, 'covers.layer', 'terrain');
+    applyWorldObjectRow($session, 'covers.tileLayers', 'floor');
+    applyWorldObjectRow($session, 'sprites2d.layer', '950');
+    $view = $session->readWorldObject('test-map', 'fixture-prop');
+    $heading = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? '') === 'variantList');
+    $session->changeWorldObjectItem('test-map', $view['revision'], 'fixture-prop', $heading['key'], false);
+    applyWorldObjectRow($session, 'variant0Id', 'absent');
+    applyWorldObjectRow($session, 'variant0Conditions', 'switch:existing-condition');
+    $before = $session->readMap('test-map');
+    $source = file_get_contents($file);
+    $base = drawAuthoringCanvas($session, 'test-map');
+    $absent = drawAuthoringCanvas($session, 'test-map', ['fixture-prop' => 'absent'], .25);
+    $hasFloor = static function (array $preview): bool {
+        foreach ($preview['operations'] as $op) {
+            if (($op['op'] ?? '') !== 'worldTiles' || $op['layerId'] !== 'tiles:floor') { continue; }
+            foreach ($op['rows'] as $row) {
+                if ($row['row'] === 1 && array_any($row['cells'], static fn(array $cell): bool => $cell['column'] === 1)) { return true; }
+            }
+        }
+        return false;
+    };
+    $sprite = array_find($base['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite');
+    expect($base['revision'])->toBe($before['revision'])
+        ->and($base['layerIds'])->toBe($session->readWorld('test-map')['layerIds'])
+        ->and($base['assetPaths'])->toContain('Graphics/Props/Replaceable.png')
+        ->and($sprite['value']['id'])->toBe('world-object:test-map:fixture-prop')
+        ->and($sprite['value']['layer'])->toBe(950)
+        ->and($sprite['value']['pivot'])->toBe(['x' => .5, 'y' => 1.0])
+        ->and($hasFloor($base))->toBeFalse()
+        ->and($hasFloor($absent))->toBeFalse()
+        ->and(array_filter($absent['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite'))->toBe([])
+        ->and($session->readMap('test-map'))->toBe($before)
+        ->and(file_get_contents($file))->toBe($source);
+    unlink($root . '/assets/Graphics/Props/Replaceable.png');
+    $missing = drawAuthoringCanvas($session, 'test-map');
+    expect($missing['assetPaths'])->toContain('Graphics/Props/Replaceable.png')
+        ->and($missing['diagnostics'])->toHaveCount(1)->and($hasFloor($missing))->toBeTrue();
+    writeTilesetTestPng($root . '/assets/Graphics/Props/Replaceable.png', 24, 32);
+    $session->saveMap('test-map');
+    $reopened = EditorSession::open($root);
+    expect(drawAuthoringCanvas($reopened, 'test-map')['diagnostics'])->toBe([])
+        ->and($reopened->readMap('test-map')['worldObjects'][0]['sprites2d']['asset'])->toBe('Graphics/Props/Replaceable.png')
+        ->and($reopened->readMap('test-map')['worldObjects'][0]['anchor'])->toBe($before['worldObjects'][0]['anchor']);
+});
+
+it('keeps unavailable sheet dependencies visible to the transient canvas asset watch', function () {
+    [$root, , $session] = createWorldObjectProject();
+    $path = 'Graphics/Tilesets/Home_A2.png';
+    unlink($root . '/assets/' . $path);
+    $missing = drawAuthoringCanvas($session, 'test-map');
+    expect($missing['assetPaths'])->toContain($path)
+        ->and(array_filter($missing['operations'], static fn(array $op): bool => ($op['layerId'] ?? '') === 'tiles:floor'))->toBe([]);
+    writeTilesetTestPng($root . '/assets/' . $path, 32, 24);
+    $restored = drawAuthoringCanvas($session, 'test-map');
+    expect($restored['assetPaths'])->toContain($path)
+        ->and(array_filter($restored['operations'], static fn(array $op): bool => ($op['layerId'] ?? '') === 'tiles:floor'))->not->toBe([]);
+});
+
+it('routes real RPC ownership and cinematic object selectors without a global object database', function () {
+    [$root, , $session] = createWorldObjectProject();
+    $host = new SessionHost(fopen('php://memory', 'r+'), fopen('php://memory', 'r+'), fopen('php://memory', 'r+'));
+    $request = static fn(string $method, array $params): array => $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params]));
+    $hello = $request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+    expect(array_column($hello['result']['project']['databases'], 'key'))->not->toContain('world_objects');
+    $view = $request('worldObjects.read', ['map' => 'test-map', 'id' => 'fixture-prop'])['result'];
+    expect($request('worldObjects.place', ['map' => 'test-map', 'id' => 'fixture-prop', 'revision' => $view['revision'], 'x' => 2, 'y' => 1])['result']['changed'])->toBeTrue();
+    $opened = $request('canvas.exchange', ['map' => 'test-map', 'events' => []])['result'];
+    $drawn = $request('canvas.exchange', ['map' => 'test-map', 'events' => [canvasWindowReady()], 'sessionId' => $opened['sessionId']])['result'];
+    expect(findCanvasMessages($drawn, 'frame')[0]['payload']['reset'])->toBeTrue()
+        ->and($request('canvas.exchange', ['map' => 'test-map', 'events' => [], 'seconds' => 'wrong'])['error']['kind'])->toBe('request')
+        ->and($request('canvas.close', ['map' => 'test-map'])['result'])->toBe(['closed' => true]);
+    expect(array_column($session->listReferences('test-map', 'map_world_objects'), 'value'))->toBe(['fixture-prop']);
+    $camera = CutsceneSchemas::cinematicCommandVariants(true)['camera'](['operation' => 'focus', 'target' => ['kind' => 'world_object', 'id' => 'fixture-prop']]);
+    expect(array_find($camera, static fn($field): bool => $field->key === 'target.id')->reference)->toBe('map_world_objects');
+});
+
+it('refuses referenced and opaque cinematic deletions before source history or revision mutation', function () {
+    [$root, $file] = createWorldObjectProject();
+    $folder = $root . '/assets/Cutscenes/Cinematics/fixture-cutscene';
+    mkdir($folder, 0777, true);
+    $dataFile = $folder . '/fixture-cutscene.data.php';
+    $scriptFile = $folder . '/fixture-cutscene.script.php';
+    file_put_contents($dataFile, "<?php return ['id'=>'fixture-cutscene', 'name'=>'Fixture', 'startMap'=>'test-map', 'cast'=>[
+        ['kind'=>'staged_actor', 'id'=>'staged', 'subject'=>['kind'=>'world_object','id'=>'fixture-prop'],
+        'suppress'=>[['kind'=>'world_object','id'=>'fixture-prop']]],
+    ]];");
+    file_put_contents($scriptFile, "<?php return [['type'=>'camera', 'operation'=>'focus', 'target'=>['kind'=>'world_object','id'=>'fixture-prop']]];");
+    $session = EditorSession::open($root);
+    $before = $session->readMap('test-map');
+    $source = file_get_contents($file);
+    try {
+        $session->deleteWorldObject('test-map', $before['revision'], 'fixture-prop');
+        $this->fail('Referenced object deletion was not refused.');
+    } catch (SessionRefusal $error) {
+        expect($error->getMessage())->toContain('fixture-cutscene.cast.0.subject', 'fixture-cutscene.cast.0.suppress.0', 'fixture-cutscene.commands.0.target');
+    }
+    expect($session->readMap('test-map'))->toBe($before)
+        ->and(file_get_contents($file))->toBe($source)
+        ->and($session->undo()['maps'])->toBe([]);
+    file_put_contents($dataFile, "<?php return ['id'=>'fixture-cutscene', 'name'=>'Fixture', 'startMap'=>'test-map', 'cast'=>[]];");
+    // A helper's result is proved by the plain data it loaded as; a closure the game would run later is not.
+    file_put_contents($scriptFile, "<?php \$wait = static fn(): array => ['type'=>'wait','seconds'=>0.5];
+        return [\$wait(), ['type'=>'wait','seconds'=>0.5,'until'=>static fn(): bool => true]];");
+    $opaque = EditorSession::open($root);
+    expect(fn() => $opaque->deleteWorldObject('test-map', $opaque->readMap('test-map')['revision'], 'fixture-prop'))
+        ->toThrow(SessionRefusal::class, 'fixture-cutscene');
+    file_put_contents($scriptFile, "<?php \$wait = static fn(float \$seconds): array => ['type'=>'wait','seconds'=>\$seconds];
+        return [\$wait(0.5), \$wait(1.0)];");
+    $helper = EditorSession::open($root);
+    $helper->deleteWorldObject('test-map', $helper->readMap('test-map')['revision'], 'fixture-prop');
+    expect($helper->readMap('test-map')['worldObjects'])->toBe([]);
+    file_put_contents($scriptFile, "<?php return [['type'=>'wait','seconds'=>0.5]];");
+    $safe = EditorSession::open($root);
+    $safe->deleteWorldObject('test-map', $safe->readMap('test-map')['revision'], 'fixture-prop');
+    expect($safe->readMap('test-map')['worldObjects'])->toBe([]);
+    $safe->undo();
+    expect(array_column($safe->readMap('test-map')['worldObjects'], 'id'))->toBe(['fixture-prop']);
+    $safe->redo();
+    $safe->saveMap('test-map');
+    expect(EditorSession::open($root)->readMap('test-map')['worldObjects'])->toBe([]);
+});
+
+it('proves enum case values, included scripts and helper results by the plain data they load as before deleting an object', function () {
+    [$root, $file] = createWorldObjectProject();
+    $script = $root . '/assets/Events/scribe.php';
+    $authored = (string) file_get_contents($file);
+    $write = static function (string $heading) use ($file, $authored): void {
+        file_put_contents($file, str_replace("'events' => [],", "'events' => [], 'npcs' => [['name' => 'Scribe', 'sprite' => '@', 'x' => 0, 'y' => 0,
+            'script' => require dirname(__DIR__, 2) . '/Events/scribe.php', 'heading' => {$heading}]],", $authored));
+    };
+    $refusal = static function (string $root): string {
+        $session = EditorSession::open($root);
+        try {
+            $session->deleteWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop');
+        } catch (SessionRefusal $error) {
+            return $error->getMessage();
+        }
+        return '';
+    };
+
+    // An included script and an enum case's value load as plain data, and nothing in them names the object.
+    file_put_contents($script, "<?php return [['type' => 'text', 'name' => 'Scribe', 'text' => 'Ink dries slowly here.']];");
+    $write('\Ichiloto\Engine\Core\Enumerations\MovementHeading::NORTH->value');
+    expect($refusal($root))->toBe('');
+
+    // What the included script loads as is read for references like the map itself.
+    file_put_contents($script, "<?php return [['type' => 'camera', 'operation' => 'focus', 'target' => ['kind' => 'world_object', 'id' => 'fixture-prop']]];");
+    expect($refusal($root))->toContain('test-map NPC Scribe.script.0.target');
+
+    // An enum case itself is an object, not plain data, so its source cannot vouch for it.
+    file_put_contents($script, '<?php return [];');
+    $write('\Ichiloto\Engine\Core\Enumerations\MovementHeading::NORTH');
+    expect($refusal($root))->toContain('npcs.0.heading: opaque authored source');
+});
+
+it('reorders explicit variants durably with undo and refuses invalid preview selection', function () {
+    [$root, , $session] = createWorldObjectProject();
+    foreach (['first', 'second'] as $id) {
+        $view = $session->readWorldObject('test-map', 'fixture-prop');
+        $heading = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? '') === 'variantList');
+        $session->changeWorldObjectItem('test-map', $view['revision'], 'fixture-prop', $heading['key'], false);
+        applyWorldObjectRow($session, 'variant0Id', $id);
+        applyWorldObjectRow($session, 'variant0Conditions', 'switch:existing-condition');
+    }
+    $session->moveWorldObjectVariant('test-map', $session->readMap('test-map')['revision'], 'fixture-prop', 'first', -1);
+    expect($session->readWorldObject('test-map', 'fixture-prop')['worldObject']['variants'])->toBe(['first', 'second']);
+    $session->undo();
+    expect($session->readWorldObject('test-map', 'fixture-prop')['worldObject']['variants'])->toBe(['second', 'first']);
+    $session->redo();
+    $session->saveMap('test-map');
+    expect(EditorSession::open($root)->readWorldObject('test-map', 'fixture-prop')['worldObject']['variants'])->toBe(['first', 'second'])
+        ->and(fn() => drawAuthoringCanvas($session, 'test-map', ['fixture-prop'=>true]))->toThrow(SessionRefusal::class, 'known variant ids')
+        ->and(fn() => drawAuthoringCanvas($session, 'test-map', ['fixture-prop'=>'unknown']))->toThrow(SessionRefusal::class, 'known world-object variant');
+});
+
+it('preserves known layer references through renames and refuses dangling removal atomically', function () {
+    [$root, , $session] = createWorldObjectProject();
+    applyWorldObjectRow($session, 'covers.layer', 'terrain');
+    applyWorldObjectRow($session, 'covers.tileLayers', 'floor');
+    $layer = array_find($session->readMap('test-map')['layers'], static fn($layer): bool => $layer['name'] === 'terrain')['id'];
+    $session->renameLayer('test-map', $session->readMap('test-map')['revision'], $layer, 'ground-renamed', true);
+    $session->renameTileLayer('test-map', $session->readMap('test-map')['revision'], 'floor', 'floor-renamed');
+    $before = $session->readMap('test-map');
+    expect($before['worldObjects'][0]['covers'])->toBe(['layer'=>'ground-renamed','cells'=>[[1,1]],'tileLayers'=>['floor-renamed']])
+        ->and(fn() => $session->removeTileLayer('test-map', $before['revision'], 'floor-renamed'))->toThrow(SessionRefusal::class)
+        ->and(fn() => $session->removeLayer('test-map', $before['revision'], $layer, true))->toThrow(SessionRefusal::class)
+        ->and($session->readMap('test-map'))->toBe($before);
+    $session->undo();
+    expect($session->readMap('test-map')['worldObjects'][0]['covers']['tileLayers'])->toBe(['floor']);
+    $session->redo();
+    $session->saveMap('test-map');
+    expect(EditorSession::open($root)->readMap('test-map')['worldObjects'][0]['covers'])->toBe($before['worldObjects'][0]['covers']);
+});
+
+it('moves only owned map coordinates in the existing insertion inventory and refuses clipped anchors', function () {
+    [$root] = createWorldObjectProject();
+    $map = ProjectWorkspace::fromProject($root)->maps[0];
+    expect(fn() => $map->resize(1,1))->toThrow(Ichiloto\Editor\MapSourceRefusal::class)
+        ->and($map->getWidth())->toBe(4);
+    $data = $map->getMapDataField([]);
+    $data['worldObjects'][0]['covers'] = ['layer'=>'terrain','cells'=>[[1,1],[3,1]],'tileLayers'=>['floor']];
+    $inventory = new Ichiloto\Editor\Maps\MapLineInventory(new Ichiloto\Editor\Maps\LineInsertion('test-map','x',1,2), []);
+    $inventory->addMapData('fixture.data.php','test-map',$data);
+    $shifts = $inventory->getShifts()['fixture.data.php'];
+    expect(array_column($shifts,'path'))->toContain(['worldObjects',0,'anchor','x'], ['worldObjects',0,'covers','cells',0,0], ['worldObjects',0,'covers','cells',1,0])
+        ->and(array_column($shifts,'value'))->toBe([3,3,5]);
+});
+
+it('keeps graphical subject controls out of Terminal schemas and uses typed camera route references', function () {
+    $camera = CutsceneSchemas::cinematicCommandVariants(false)['camera'](['operation'=>'focus','target'=>['kind'=>'npc']]);
+    expect(array_find($camera, static fn($field): bool => $field->key === 'target.kind')->options)->not->toContain('world_object');
+    $points = CutsceneSchemas::cameraPointList(true)->fieldsFor(['kind'=>'world_object']);
+    expect(array_find($points, static fn($field): bool => $field->key === 'id')->reference)->toBe('map_world_objects');
+    $effect = CutsceneSchemas::cinematicCommandVariants(true)['field_animation'](['target'=>['kind'=>'world_object']]);
+    expect(array_find($effect, static fn($field): bool => $field->key === 'target.id')->reference)->toBe('map_world_objects');
+});
+
+it('rechecks reference proof on redo and preserves the redo entry when a new source appears', function () {
+    [$root, , $session] = createWorldObjectProject();
+    $session->deleteWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop');
+    $session->undo();
+    $before = $session->readMap('test-map');
+    $folder = $root . '/assets/Cutscenes/Cinematics/external-fixture';
+    mkdir($folder,0777,true);
+    $file = $folder . '/external-fixture.script.php';
+    file_put_contents($file, "<?php return [['type'=>'camera','operation'=>'focus','target'=>['kind'=>'world_object','id'=>'fixture-prop']]];");
+    expect(fn() => $session->redo())->toThrow(SessionRefusal::class, 'external-fixture.script.php')
+        ->and($session->readMap('test-map'))->toBe($before);
+    unlink($file);
+    $session->redo();
+    expect($session->readMap('test-map')['worldObjects'])->toBe([]);
+});
+
+function createTerminalChestProject(): array
+{
+    $root = mapGraphicsProject();
+    $file = $root . '/assets/Maps/test-map/test-map.data.php';
+    // A two-cell chest over the buildings layer's xx: yellow while closed, white once its event is done.
+    file_put_contents($file, str_replace("'events' => [],", "'events' => [], 'worldObjects' => [
+        ['id' => 'fixture-prop', 'anchor' => ['x' => 1, 'y' => 1], 'pivot' => ['x' => 0.5, 'y' => 1.0], 'sprites2d' => null,
+            'terminal' => ['color' => 'yellow'],
+            'covers' => ['layer' => 'buildings', 'cells' => [[1, 1], [2, 1]], 'tileLayers' => []],
+            'variants' => [
+                ['id' => 'opened', 'conditions' => [['type' => 'map_event', 'name' => 'test-map', 'marker' => 'E']], 'sprites2d' => null, 'terminal' => ['color' => 'white']],
+                ['id' => 'plain', 'conditions' => [['type' => 'switch', 'name' => 'plain']], 'sprites2d' => null, 'terminal' => null],
+                ['id' => 'inherits', 'conditions' => [['type' => 'switch', 'name' => 'inherits']], 'sprites2d' => null],
+            ]],
+    ],", (string) file_get_contents($file)));
+    return [$root, $file, EditorSession::open($root)];
+}
+
+function readWorldObjectRow(EditorSession $session, string $field): ?array
+{
+    return array_find($session->readWorldObject('test-map', 'fixture-prop')['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === $field);
+}
+
+it('preserves every terminal presentation form, inheritance and explicit null through an unrelated edit', function () {
+    [$root, , $session] = createTerminalChestProject();
+    expect(readWorldObjectRow($session, 'terminal.mode')['value'])->toBe('its covered glyphs recoloured')
+        ->and(readWorldObjectRow($session, 'terminal.color')['value'])->toBe('yellow')
+        ->and(readWorldObjectRow($session, 'variant1Terminalmode')['value'])->toBe("map's own glyph")
+        ->and(readWorldObjectRow($session, 'variant2Terminalmode')['value'])->toBe("the object's");
+    applyWorldObjectRow($session, 'pivot.x', '0.25');
+    $session->saveMap('test-map');
+    $object = EditorSession::open($root)->readMap('test-map')['worldObjects'][0];
+    expect($object['terminal'])->toBe(['color' => 'yellow'])
+        ->and($object['variants'][0]['terminal'])->toBe(['color' => 'white'])
+        ->and($object['variants'][1])->toHaveKey('terminal')
+        ->and($object['variants'][1]['terminal'])->toBeNull()
+        ->and($object['variants'][2])->not->toHaveKey('terminal');
+});
+
+it('edits each terminal presentation form through its explicit choice and refuses an invalid symbol', function () {
+    [$root, , $session] = createTerminalChestProject();
+    // An anchor symbol starts from the glyph the anchor shows.
+    applyWorldObjectRow($session, 'terminal.mode', 'a symbol at the anchor');
+    expect(readWorldObjectRow($session, 'terminal.symbol')['value'])->toBe('<fg=white>x</>');
+    applyWorldObjectRow($session, 'terminal.symbol', '<fg=yellow>m</>');
+    applyWorldObjectRow($session, 'variant0Terminalcolor', 'bright-white');
+    applyWorldObjectRow($session, 'variant1Terminalmode', "the object's");
+    applyWorldObjectRow($session, 'variant2Terminalmode', "map's own glyph");
+    expect(fn() => applyWorldObjectRow($session, 'terminal.symbol', 'mm'))->toThrow(SessionRefusal::class);
+    $session->saveMap('test-map');
+    $object = EditorSession::open($root)->readMap('test-map')['worldObjects'][0];
+    expect($object['terminal'])->toBe('<fg=yellow>m</>')
+        ->and($object['variants'][0]['terminal'])->toBe(['color' => 'bright-white'])
+        ->and($object['variants'][1])->not->toHaveKey('terminal')
+        ->and($object['variants'][2]['terminal'])->toBeNull();
+    // Back to the map's glyph: the object's key goes.
+    applyWorldObjectRow($session, 'terminal.mode', "map's own glyph");
+    expect($session->readMap('test-map')['worldObjects'][0])->not->toHaveKey('terminal');
+});
+
+it('checks an unfinished variant against its object\'s real coverage', function () {
+    [, , $session] = createTerminalChestProject();
+    $view = $session->readWorldObject('test-map', 'fixture-prop');
+    $heading = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === 'variantList');
+    $session->changeWorldObjectItem('test-map', $view['revision'], 'fixture-prop', $heading['key'], false);
+    // A footprint colour on a draft variant is admitted because its object covers glyphs.
+    applyWorldObjectRow($session, 'variant3Terminalmode', 'its covered glyphs recoloured');
+    expect($session->readMap('test-map')['worldObjects'][0]['variants'][3]['terminal'])->toBe(['color' => 'white']);
+});
+
+it('moves a world object with its covered glyphs as one undo step, leaving no glyph behind', function () {
+    [$root, $file] = createWorldObjectProject();
+    file_put_contents($file, str_replace("'sprites2d' => null],", "'sprites2d' => null,
+            'covers' => ['layer' => 'buildings', 'cells' => [[1, 1], [2, 1]], 'tileLayers' => []]],", (string) file_get_contents($file)));
+    $session = EditorSession::open($root);
+    $buildings = static fn(): string => implode("\n", array_map(static fn(int $y): string => implode('', array_map(
+        static fn(int $x): string => getSessionMap($session)->getLayerSymbol(array_find(getSessionMap($session)->getLayers(),
+            static fn(array $layer): bool => $layer['name'] === 'buildings')['id'], $x, $y), range(0, 3))), range(0, 1)));
+    $object = static fn(): array => array_find($session->readMap('test-map')['worldObjects'], static fn(array $entry): bool => $entry['id'] === 'fixture-prop');
+
+    $moved = $session->moveWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop', 1, 0);
+
+    expect($moved['changed'])->toBeTrue()
+        ->and($buildings())->toBe(" /  \n  xx")
+        ->and($object()['anchor'])->toBe(['x' => 2, 'y' => 1])
+        ->and($object()['covers']['cells'])->toBe([[2, 1], [3, 1]]);
+
+    $session->undo();
+    expect($buildings())->toBe(" /  \n xx ")
+        ->and($object()['anchor'])->toBe(['x' => 1, 'y' => 1])
+        ->and($object()['covers']['cells'])->toBe([[1, 1], [2, 1]]);
+
+    $revision = $session->readMap('test-map')['revision'];
+    expect(fn() => $session->moveWorldObject('test-map', $revision, 'fixture-prop', 0, -1))
+        ->toThrow(SessionRefusal::class, '1, 0 on the buildings layer holds /; clear it before moving fixture-prop there.')
+        ->and(fn() => $session->moveWorldObject('test-map', $revision, 'fixture-prop', 2, 0))
+        ->toThrow(SessionRefusal::class, 'outside test-map')
+        ->and(fn() => $session->moveWorldObject('test-map', $revision, 'no-such-prop', 1, 0))
+        ->toThrow(SessionRefusal::class, 'test-map has no world object no-such-prop.')
+        ->and($buildings())->toBe(" /  \n xx ");
+});
+
+it('moves each covered glyph as the piece it plays, and one the object presents without tiles', function (string $decor, string $moved) {
+    [$root, $file] = createWorldObjectProject();
+    writeTestTileset($root, pieces: [
+        'window' => ['name' => 'Window', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['5']]],
+        'crate' => ['name' => 'Crate', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['6']]],
+    ]);
+    writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', $decor);
+    file_put_contents($file, str_replace("'sprites2d' => null],", "'sprites2d' => null,
+            'covers' => ['layer' => 'buildings', 'cells' => [[1, 1], [2, 1]], 'tileLayers' => []]],", (string) file_get_contents($file)));
+    $session = EditorSession::open($root);
+
+    expect($session->moveWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop', 1, 0)['changed'])->toBeTrue();
+    $session->saveMap('test-map');
+
+    expect(Ichiloto\Engine\Field\MapGridSource::readFile($root . '/assets/Maps/test-map/graphics/02.decor.tiles.php'))->toBe($moved);
+})->with([
+    // Its tiles show each x is a window: the windows move with them.
+    'pieces' => ["0 0 0 0\n0 5 5 0", "0 0 0 0\n0 0 5 5"],
+    // No tile tells which piece: the object presents them, and no tiles follow.
+    'object art' => ["0 0 0 0\n0 0 0 0", "0 0 0 0\n0 0 0 0"],
+]);
+
+it('authors an inline object\'s placement conditions beside its variants, keeping the rest of the source', function () {
+    [$root, $file, $session] = createWorldObjectProject();
+    applyWorldObjectRow($session, 'conditions', 'switch:existing-condition');
+    applyWorldObjectRow($session, 'anchor.x', '2');
+    $object = $session->readMap('test-map')['worldObjects'][0];
+    expect($object['conditions'])->toBe([['type' => 'switch', 'name' => 'existing-condition']])
+        ->and($object['anchor'])->toBe(['x' => 2, 'y' => 1]);
+    $session->saveMap('test-map');
+    expect(file_get_contents($file))->toContain('/* map-owned identity */', "'preserved' => abs(7)")
+        ->and(EditorSession::open($root)->readMap('test-map')['worldObjects'][0]['conditions'])
+        ->toBe([['type' => 'switch', 'name' => 'existing-condition']]);
+});
+
+it('refuses a placement condition the Engine cannot evaluate before changing the map', function () {
+    [, $file, $session] = createWorldObjectProject();
+    $before = $session->readMap('test-map')['worldObjects'];
+    $source = file_get_contents($file);
+    expect(fn() => applyWorldObjectRow($session, 'conditions', 'no-such-predicate:anything'))->toThrow(SessionRefusal::class);
+    expect($session->readMap('test-map')['worldObjects'])->toBe($before)
+        ->and(file_get_contents($file))->toBe($source);
+});
+
+it('judges a world object where a line removal moves it, so one beyond the map\'s new width moves back with its line', function () {
+    [$root, $file, $session] = createWorldObjectProject();
+    file_put_contents($file, str_replace("'anchor' => ['x' => 1, 'y' => 1]", "'anchor' => ['x' => 3, 'y' => 1]", (string) file_get_contents($file)));
+    // No saves to land: the removal needs no reachable landing.
+    @unlink($root . '/assets/Data/save-compatibility.php');
+    $session = EditorSession::open($root);
+    $revision = $session->readMap('test-map')['revision'];
+
+    $question = $session->removeMapLines('test-map', $revision, 'x', 0, 1);
+    $removed = $session->removeMapLines('test-map', $revision, 'x', 0, 1, null, 'write', $question['confirm']);
+
+    expect($removed['status'])->toBe('removed')
+        ->and($session->readMap('test-map')['width'])->toBe(3)
+        ->and($session->readMap('test-map')['worldObjects'][0]['anchor'])->toBe(['x' => 2, 'y' => 1])
+        ->and((require $file)['worldObjects'][0]['anchor'])->toBe(['x' => 2, 'y' => 1]);
+});

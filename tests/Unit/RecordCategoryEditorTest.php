@@ -103,6 +103,8 @@ it('adds and removes a skit beat with Shift+O and Shift+X, both undoable', funct
 
         callEditorMethod($editor, 'dispatchInput', 'O');
         expect($database->countSubItems(0))->toBe(3);
+        expect(getEditorProperty($editor, 'referencePicker')->isOpen())->toBeTrue();
+        callEditorMethod($editor, 'dispatchInput', "\x1b");
 
         callEditorMethod($editor, 'dispatchInput', "\x1a");
         expect($database->countSubItems(0))->toBe(2);
@@ -119,23 +121,23 @@ it('adds and removes a skit beat with Shift+O and Shift+X, both undoable', funct
 
 it('warns instead of editing when the category is read-only', function (): void {
     $root = makeTemporaryProject();
-    $typesPath = $root . '/assets/Data/Types';
+    $category = makeUnwritableCategory($root);
+    $typesPath = $root . '/assets/Data';
     $before = md5(implode('', array_map(
         static fn(string $file): string => (string) file_get_contents($file),
-        glob($typesPath . '/*.php') ?: []
+        glob($typesPath . '/system.php') ?: []
     )));
 
     try {
         $editor = deletionEditor($root);
 
-        // Element and weapon types are PHP enum declarations, not data.
-        openDatabaseCategory($editor, 'types');
+        openDatabaseCategory($editor, $category);
 
         callEditorMethod($editor, 'saveActiveDatabase');
 
         $after = md5(implode('', array_map(
             static fn(string $file): string => (string) file_get_contents($file),
-            glob($typesPath . '/*.php') ?: []
+            glob($typesPath . '/system.php') ?: []
         )));
 
         expect(getEditorProperty($editor, 'statusMessage'))->toContain('read-only')
@@ -147,13 +149,15 @@ it('warns instead of editing when the category is read-only', function (): void 
 
 it('enrols editable record categories in Save All and leaves read-only ones out', function (): void {
     $root = makeTemporaryProject();
+    // system.php, which System and Types share, written so the editor cannot rewrite it.
+    makeUnwritableCategory($root);
 
     try {
         $editor = deletionEditor($root);
-        $saveable = callEditorMethod($editor, 'getSaveableDatabases');
+        $saveable = getEditorProperty($editor, 'workspace')->listSaveableDatabases();
 
-        expect(array_keys($saveable))->toContain('States', 'Troops', 'Skits', 'Common Events', 'Terms');
-        expect(array_keys($saveable))->not->toContain('Items', 'Weapons', 'Armors', 'Enemies', 'Types', 'Tilesets');
+        expect(array_keys($saveable))->toContain('States', 'Troops', 'Skits', 'Common Events', 'Terms', 'Tilesets');
+        expect(array_keys($saveable))->not->toContain('Items', 'Weapons', 'Armors', 'Enemies', 'System', 'Types');
 
         foreach (['States', 'Troops', 'Skits'] as $label) {
             expect($saveable[$label])->toBeInstanceOf(ProjectRecordDatabase::class);
@@ -188,7 +192,7 @@ it('saves a record category through the editor and backs the file up first', fun
         $database = getEditorProperty($editor, 'workspace')->getRecordDatabase('troops');
         $database->setField(0, 'name', 'Bat Swarm');
 
-        expect(callEditorMethod($editor, 'getDatabaseBackupPaths', $database))
+        expect($database->getBackupPaths())
             ->toBe([$root . '/assets/Data/troops.php']);
 
         callEditorMethod($editor, 'saveActiveDatabase');
@@ -200,4 +204,75 @@ it('saves a record category through the editor and backs the file up first', fun
     } finally {
         removeDirectoryRecursively($root);
     }
+});
+
+it("chooses a state's disposition from the Engine's, and writes nothing while it is the default", function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('states');
+        $field = array_values(array_filter($database->schema->fields,
+            static fn($field): bool => $field->key === 'disposition'))[0] ?? null;
+
+        expect($field?->options)->toBe(['harmful', 'beneficial', 'neutral'])
+            ->and($field?->displayDefault)->toBe('harmful');
+
+        $database->setField(1, 'disposition', 'neutral');
+        $database->save();
+        $saved = require $root . '/assets/Data/states.php';
+
+        expect($saved[1]['disposition'])->toBe('neutral')
+            ->and($saved[0])->not->toHaveKey('disposition')
+            ->and(\Ichiloto\Engine\Entities\States\State::fromArray($saved[1])->disposition)
+            ->toBe(\Ichiloto\Engine\Entities\States\StateDisposition::NEUTRAL);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
+it('creates a record through the shared record rules as one undo step', function (): void {
+    $editor = deletionEditor(makeTemporaryProject());
+    openDatabaseCategory($editor, 'states');
+    $database = getEditorProperty($editor, 'workspace')->getRecordDatabase('states');
+    $before = $database->getEntryLabels();
+
+    callEditorMethod($editor, 'createDatabaseRecord');
+    // The new record opens its first row for editing; leave it unedited.
+    setEditorProperty($editor, 'isDatabaseEditing', false);
+
+    expect($database->getEntryLabels())->toHaveCount(count($before) + 1)
+        ->and(callEditorMethod($editor, 'getSelectedRecordIndex'))->toBe(count($before));
+
+    callEditorMethod($editor, 'performUndo');
+
+    expect($database->getEntryLabels())->toBe($before)
+        ->and($database->isDirty())->toBeFalse();
+});
+
+it('reports a parameter line it cannot read and leaves the record and history as they were', function (): void {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/' . \Ichiloto\Editor\PermanentGrowthCatalog::RELATIVE_PATH, <<<'SOURCE'
+    <?php
+
+    return [
+      ['id' => 'growth.synthetic', 'stat' => 'maxHp', 'amount' => 1, 'sourceType' => 'event', 'sourceId' => 'test', 'metadata' => ['label' => 'Synthetic']],
+    ];
+    SOURCE);
+    $editor = deletionEditor($root);
+    openDatabaseCategory($editor, 'permanent_growth');
+    $database = getEditorProperty($editor, 'workspace')->getRecordDatabase('permanent_growth');
+    $before = $database->getRecordByIndex(0)?->toArray();
+    $rows = array_column(callEditorMethod($editor, 'getDatabaseSettingsFields'), 'field');
+    setEditorProperty($editor, 'databaseSelectedSettingIndex', array_search('metadata', $rows, true));
+    setEditorProperty($editor, 'isDatabaseEditing', true);
+    setEditorProperty($editor, 'databaseEditBuffer', 'tier=1, tier=2');
+    getEditorProperty($editor, 'toasts')->clear();
+
+    callEditorMethod($editor, 'commitDatabaseEdit');
+
+    // The refusal is what the author reads, not an edit reported as made.
+    expect(getEditorProperty($editor, 'statusMessage'))->toContain('named twice')
+        ->and(getEditorProperty($editor, 'statusMessage'))->not->toContain('updated')
+        ->and($database->getRecordByIndex(0)?->toArray())->toBe($before)
+        ->and(getEditorProperty($editor, 'history')->canUndo())->toBeFalse();
 });

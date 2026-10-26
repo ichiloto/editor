@@ -9,11 +9,12 @@ use Ichiloto\Editor\Database\RecordProjection;
 /**
  * The kinds of record a project's knowledge catalogue declares.
  *
- * The runtime reads them as a flat list of names, which is not a shape an
- * editor can put rows on, so each name becomes a record of its own and the
- * flat list is rebuilt on the way out. Every subject's Record Type is picked
- * from what this declares, so a project that cannot author them cannot
- * introduce a kind of record at all.
+ * The runtime reads them as an ordered list, each an id alone or an id with
+ * the label players see it called, which is not a shape an editor can put
+ * rows on, so each becomes a record of its own and the list is rebuilt on
+ * the way out: a type without a label stays its bare id. Every subject's
+ * Record Type is picked from what this declares, so a project that cannot
+ * author them cannot introduce a kind of record at all.
  *
  * @package Ichiloto\Editor\Database\Projections
  */
@@ -28,7 +29,9 @@ final readonly class KnowledgeRecordTypeProjection implements RecordProjection
 
         foreach (is_array($whole['recordTypes'] ?? null) ? $whole['recordTypes'] : [] as $type) {
             if (is_scalar($type)) {
-                $rows[] = ['type' => strval($type)];
+                $rows[] = ['type' => strval($type), 'label' => ''];
+            } elseif (is_array($type)) {
+                $rows[] = ['type' => strval($type['id'] ?? ''), 'label' => strval($type['label'] ?? '')];
             }
         }
 
@@ -42,11 +45,15 @@ final readonly class KnowledgeRecordTypeProjection implements RecordProjection
     {
         $types = [];
 
+        $ids = [];
+
         foreach ($rows as $row) {
             $type = trim(strval($row['type'] ?? ''));
+            $label = trim(strval($row['label'] ?? ''));
 
-            if ($type !== '' && ! in_array($type, $types, true)) {
-                $types[] = $type;
+            if ($type !== '' && ! in_array($type, $ids, true)) {
+                $ids[] = $type;
+                $types[] = $label === '' ? $type : ['id' => $type, 'label' => $label];
             }
         }
 
@@ -82,7 +89,11 @@ final readonly class KnowledgeRecordTypeProjection implements RecordProjection
         }
 
         foreach ($types as $index => $type) {
-            if (! is_scalar($type)) {
+            // An id with a label is written back as it was given.
+            $labelled = is_array($type) && array_diff(array_keys($type), ['id', 'label']) === []
+                && is_scalar($type['id'] ?? null) && is_scalar($type['label'] ?? '');
+
+            if (! is_scalar($type) && ! $labelled) {
                 return sprintf(
                     'field "recordTypes" entry %d is %s, which the editor cannot preserve',
                     $index + 1,

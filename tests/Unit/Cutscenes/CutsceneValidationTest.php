@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\Issue;
 use Ichiloto\Editor\Validation\ProjectValidator;
+use Ichiloto\Editor\Validation\ScriptMapState;
 
 /**
  * Project validation over cutscenes: paired folders, the Engine's own
@@ -94,6 +95,32 @@ it('resolves the references the Engine only sees at play time', function () {
         ->and($messages)->toContain('checkpoint "undeclared"')
         ->and($messages)->toContain('"no-such-track"')
         ->and($messages)->toContain('"nowhere"');
+});
+
+it('flags a staged actor without a graphical look only on a map drawn from a tileset', function () {
+    $root = cutsceneProject();
+    $codes = static fn(): array => array_values(array_map(static fn(Issue $issue): string => $issue->message,
+        array_filter(cutsceneIssues($root), static fn(Issue $issue): bool => $issue->code === 'cinematic.actor-look')));
+    insertHarbourCommands($root, [['type' => 'stage_actor', 'id' => 'gull', 'sprite' => ['v'], 'x' => 3, 'y' => 3]]);
+    // A Terminal map shows every actor by its glyph, as authored.
+    expect($codes())->toBe([]);
+
+    $map = $root . '/assets/Maps/harbour/harbour.data.php';
+    file_put_contents($map, str_replace("'region' => 'Coast',", "'region' => 'Coast',\n  'tileset' => 'harbour',", (string) file_get_contents($map)));
+    expect($codes())->toBe([
+        'Staged actor "gull" has no graphical look, so the graphical field draws its terminal glyph on harbour.',
+        'Staged actor "boat-east" has no graphical look, so the graphical field draws its terminal glyph on harbour.',
+        'Staged actor "boat-west" has no graphical look, so the graphical field draws its terminal glyph on harbour.',
+    ]);
+
+    // Its own art, the subject it stands for or a map NPC's look each give it one.
+    $data = $root . '/assets/Cutscenes/Cinematics/harbour-lanterns/harbour-lanterns.data.php';
+    file_put_contents($data, str_replace(
+        ["'sprite' => ['~^~'], 'x' => 1, 'y' => 2]", "'sprite' => ['~^~'], 'x' => 1, 'y' => 4]"],
+        ["'sprite' => ['~^~'], 'sprites2d' => ['sheet' => 'Graphics/Characters/Boat.png'], 'x' => 1, 'y' => 2]",
+            "'appearance' => ['kind' => 'npc', 'id' => 'keeper'], 'x' => 1, 'y' => 4]"],
+        (string) file_get_contents($data)));
+    expect($codes())->toBe(['Staged actor "gull" has no graphical look, so the graphical field draws its terminal glyph on harbour.']);
 });
 
 it('validates nested Common Events in their owning cinematic context', function () {
@@ -358,6 +385,160 @@ it('validates a reused Common Event independently in every calling map context',
     expect($npcFailures)->toHaveCount(1)
         ->and($npcFailures[0])->toStartWith('empty-quay event E:')
         ->and($npcFailures[0])->toContain('not on map "empty-quay"');
+});
+
+it('keeps knowledge battle continuation and movement checks for every common-event owner', function (string $owner) {
+    $root = cutsceneProject();
+    writeValidationCommonEvent($root, 'owned-invalid', [
+        ['type' => 'knowledge', 'operation' => 'teleport'],
+        ['type' => 'knowledge', 'operation' => 'observe', 'subject' => 'unknown-subject', 'confidence' => 1.4],
+        ['type' => 'start_battle', 'troop' => 'missing-troop', 'resultVariable' => '', 'escapePolicy' => 'sometimes'],
+        ['type' => 'move_route', 'subject' => 'player', 'steps' => [['direction' => 'right', 'count' => -1]]],
+    ]);
+    writeValidationCommonEvent($root, 'owned-wrapper', [
+        ['type' => 'sequence', 'commands' => [['type' => 'common_event', 'id' => 'owned-invalid']]],
+    ]);
+    if ($owner !== 'legacy') {
+        forbidHarbourCinematicSkip($root);
+        insertHarbourCommands($root, [['type' => 'common_event', 'id' => 'owned-wrapper']]);
+    }
+    if ($owner !== 'cinematic') {
+        $path = $root . '/assets/Maps/harbour/harbour.data.php';
+        $data = require $path;
+        $data['events']['L'] = [
+            'class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
+            'data' => ['scriptId' => 'owned-wrapper', 'mode' => 'action', 'reusable' => false],
+        ];
+        file_put_contents($path, "<?php\nreturn " . var_export($data, true) . ";\n");
+    }
+    $messages = issueMessages(validateProject($root));
+    foreach ($owner === 'mixed' ? ['cinematic harbour-lanterns', 'harbour event L'] : [
+        $owner === 'cinematic' ? 'cinematic harbour-lanterns' : 'harbour event L',
+    ] as $prefix) {
+        $owned = implode("\n", array_filter($messages, static fn(string $message): bool => str_starts_with($message, $prefix)));
+        expect($owned)->toContain('knowledge operation "teleport"')
+            ->toContain('knowledge observe command names no observation')
+            ->toContain('knowledge confidence "1.4" is not between 0 and 1')
+            ->toContain('resultVariable is empty or malformed')
+            ->toContain('invalid escapePolicy')
+            ->toContain('invalid count');
+    }
+})->with(['cinematic', 'legacy', 'mixed']);
+
+it('returns nested legacy transfer context to the caller without leaking across entry points', function () {
+    $validator = new ProjectValidator();
+    $transfer = ['type' => 'transfer', 'map' => 'destination', 'x' => 0, 'y' => 0];
+    new ReflectionProperty($validator, 'commonEventScripts')->setValue($validator, [
+        'inner' => [$transfer],
+        'outer' => [['type' => 'sequence', 'commands' => [['type' => 'common_event', 'id' => 'inner']]]],
+    ]);
+    $route = static fn(string $npc): array => [
+        'type' => 'move_route', 'subject' => 'npc', 'npcId' => $npc, 'steps' => [['direction' => 'right']],
+    ];
+    $known = ['maps' => ['origin', 'destination'], 'common_events' => ['inner', 'outer']];
+    $maps = ['origin' => ['origin-npc'], 'destination' => ['destination-npc']];
+    $check = new ReflectionMethod($validator, 'checkCommands');
+    $messages = issueMessages($check->invoke($validator, [
+        ['type' => 'sequence', 'commands' => [['type' => 'common_event', 'id' => 'outer']]],
+        $route('destination-npc'), $route('origin-npc'),
+    ], 'nested legacy', $known, $maps['origin'], 'origin', $maps));
+    expect($messages)->toHaveCount(1)
+        ->and($messages[0])->toContain('NPC id "origin-npc", which is not on map "destination"');
+    expect($check->invoke($validator, [$route('origin-npc')], 'independent caller', $known, $maps['origin'], 'origin', $maps))->toBe([]);
+});
+
+it('validates legacy alternative arms from their incoming map and joins their possible destinations', function () {
+    $validator = new ProjectValidator();
+    $route = static fn(string $npc): array => [
+        'type' => 'move_route', 'subject' => 'npc', 'npcId' => $npc, 'steps' => [['direction' => 'right']],
+    ];
+    $maps = ['origin' => ['origin-npc', 'shared'], 'destination' => ['destination-npc', 'shared']];
+    $issues = new ReflectionMethod($validator, 'checkCommands')->invoke($validator, [
+        ['type' => 'branch', 'then' => [
+            ['type' => 'transfer', 'map' => 'destination'], $route('destination-npc'),
+        ], 'else' => [$route('origin-npc')]],
+        $route('shared'),
+        $route('destination-npc'),
+    ], 'branch context', ['maps' => array_keys($maps)], $maps['origin'], 'origin', $maps);
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->message)->toContain('NPC id "destination-npc"');
+});
+
+/**
+ * The Engine ticks parallel lanes together on the game's one current map,
+ * and a transfer in any lane moves every lane, so a lane can run on the map
+ * it started on or on any map a sibling lane transfers to. Lane order in the
+ * file does not decide which.
+ */
+function parallelLaneIssues(array $commands): array
+{
+    $validator = new ProjectValidator();
+    $maps = [
+        'origin' => ['origin-npc', 'shared'],
+        'destination' => ['destination-npc', 'shared'],
+        'third' => ['third-npc', 'shared'],
+    ];
+
+    return issueMessages(new ReflectionMethod($validator, 'checkCommands')->invoke(
+        $validator, $commands, 'parallel context', ['maps' => array_keys($maps)], $maps['origin'], 'origin', $maps,
+    ));
+}
+
+function parallelLaneRoute(string $npc): array
+{
+    return ['type' => 'move_route', 'subject' => 'npc', 'npcId' => $npc, 'steps' => [['direction' => 'right']]];
+}
+
+it('checks every legacy parallel lane against each map a sibling lane can move it to, in either lane order', function (bool $transferFirst) {
+    $transfer = [['type' => 'transfer', 'map' => 'destination', 'x' => 0, 'y' => 0]];
+    $routes = [parallelLaneRoute('origin-npc'), parallelLaneRoute('shared')];
+    $lanes = $transferFirst ? [$transfer, $routes] : [$routes, $transfer];
+
+    $messages = parallelLaneIssues([['type' => 'parallel', 'lanes' => $lanes]]);
+
+    expect($messages)->toHaveCount(1)
+        ->and($messages[0])->toContain('NPC id "origin-npc", which is not on map "origin or destination"');
+})->with(['transfer lane first' => true, 'transfer lane last' => false]);
+
+it('checks every cinematic parallel lane against each map a sibling lane can move it to', function (bool $transferFirst) {
+    $validator = new ProjectValidator();
+    $maps = ['origin' => ['origin-npc', 'shared'], 'destination' => ['destination-npc', 'shared']];
+    $context = [
+        'castIds' => [], 'checkpoints' => [], 'map' => ScriptMapState::startOn('origin', $maps['origin']),
+        'npcIdsByMap' => $maps, 'seenCheckpoints' => [],
+    ];
+    $transfer = [['type' => 'transfer', 'map' => 'destination', 'x' => 0, 'y' => 0]];
+    $routes = [parallelLaneRoute('origin-npc'), parallelLaneRoute('shared')];
+    $walk = new ReflectionMethod($validator, 'walkCinematicCommands');
+    $issues = $walk->invokeArgs($validator, [
+        [['type' => 'parallel', 'lanes' => $transferFirst ? [$transfer, $routes] : [$routes, $transfer]], parallelLaneRoute('destination-npc')],
+        'cinematic lanes', ['maps' => array_keys($maps)], &$context,
+    ]);
+
+    expect(issueMessages($issues))->toBe(['cinematic lanes: It addresses NPC "origin-npc", which is not on origin or destination.'])
+        ->and($context['map']->mapIds)->toBe(['destination']);
+})->with(['transfer lane first' => true, 'transfer lane last' => false]);
+
+it('leaves a legacy parallel block on any map its transferring lanes can finish on', function () {
+    $transfer = static fn(string $map): array => ['type' => 'transfer', 'map' => $map, 'x' => 0, 'y' => 0];
+
+    expect(parallelLaneIssues([
+        ['type' => 'parallel', 'lanes' => [[parallelLaneRoute('shared')], ['commands' => [$transfer('destination')]]]],
+        parallelLaneRoute('destination-npc'),
+    ]))->toBe([]);
+
+    $messages = parallelLaneIssues([
+        ['type' => 'parallel', 'lanes' => [[$transfer('destination')], [$transfer('third')]]],
+        parallelLaneRoute('shared'),
+        parallelLaneRoute('third-npc'),
+    ]);
+    expect($messages)->toHaveCount(1)
+        ->and($messages[0])->toContain('NPC id "third-npc", which is not on map "destination or third"');
+
+    expect(parallelLaneIssues([
+        ['type' => 'parallel', 'lanes' => [[parallelLaneRoute('shared')], [parallelLaneRoute('origin-npc')]]],
+        parallelLaneRoute('origin-npc'),
+    ]))->toBe([]);
 });
 
 it('checks the map triggers that launch cinematics', function () {

@@ -131,9 +131,11 @@ final class PaintStrokeCommand implements Command
      */
     public function execute(): void
     {
-        foreach ($this->cells as $cell) {
-            $this->applyCell($cell['x'], $cell['y'], $cell['new'], $cell['newPrefix'], $cell['newSuffix']);
+        if ($this->cells === []) {
+            return;
         }
+        $this->map->setLayerCells($this->layer, array_map(static fn(array $cell): array => ['x' => $cell['x'], 'y' => $cell['y'],
+            'symbol' => $cell['new'], 'prefix' => $cell['newPrefix'], 'suffix' => $cell['newSuffix']], $this->cells));
     }
 
     /**
@@ -141,28 +143,10 @@ final class PaintStrokeCommand implements Command
      */
     public function undo(): void
     {
-        foreach ($this->cells as $cell) {
-            $this->applyCell($cell['x'], $cell['y'], $cell['old'], $cell['oldPrefix'], $cell['oldSuffix']);
-        }
-    }
-
-    /**
-     * Writes one cell back onto the stroke's layer.
-     *
-     * @param int $x The cell x coordinate.
-     * @param int $y The cell y coordinate.
-     * @param string $symbol The symbol to apply.
-     * @param string $prefix The styling prefix bytes (tile layer only).
-     * @param string $suffix The styling suffix bytes (tile layer only).
-     * @return void
-     */
-    private function applyCell(int $x, int $y, string $symbol, string $prefix, string $suffix): void
-    {
-        if ($this->layer === self::LAYER_EVENT) {
-            $this->map->setEventSymbol($x, $y, $symbol);
+        if ($this->cells === []) {
             return;
         }
-
-        $this->map->setTileCell($x, $y, $symbol, $prefix, $suffix);
+        $this->map->setLayerCells($this->layer, array_map(static fn(array $cell): array => ['x' => $cell['x'], 'y' => $cell['y'],
+            'symbol' => $cell['old'], 'prefix' => $cell['oldPrefix'], 'suffix' => $cell['oldSuffix']], $this->cells));
     }
 }
