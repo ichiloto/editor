@@ -490,6 +490,18 @@ final class ProjectMap
             ?? \Ichiloto\Engine\Field\MapRoleCatalog::load($this->getAssetRoot());
     }
 
+    /**
+     * The place types this map's type and its entrances' destinations name: its workspace's, as the Place Types
+     * page holds them, or the project's file for a map read on its own.
+     *
+     * @throws InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function loadPlaceTypes(): \Ichiloto\Engine\Field\PlaceTypeCatalog
+    {
+        return $this->catalogs?->loadPlaceTypes()
+            ?? \Ichiloto\Engine\Field\PlaceTypeCatalog::load($this->getAssetRoot());
+    }
+
     public function getLayers(): array
     {
         return array_map(static function (array $layer): array {

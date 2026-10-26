@@ -45,6 +45,7 @@ use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
 use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Field\MapRoleCatalog;
+use Ichiloto\Engine\Field\PlaceTypeCatalog;
 use Ichiloto\Engine\Field\PlayerSpriteSet;
 use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
@@ -81,6 +82,8 @@ final readonly class MapInspector
     public const string MAP_KIND_NONE = 'Not set';
     /** What a map without a role shows on its Role row. */
     public const string MAP_ROLE_NONE = 'Not set';
+    /** What a map without a place type shows on its Place Type row. */
+    public const string PLACE_TYPE_NONE = 'Not set';
     public const string MAP_ARENA_NONE = '(default arena)';
     public const string ENCOUNTER_ARENA_NONE = '(map arena)';
 
@@ -171,6 +174,7 @@ final readonly class MapInspector
                 'field' => 'region',
             ],
             $this->buildMapRoleField($map),
+            $this->buildPlaceTypeField($map),
             $this->buildMapKindField($map),
             [
                 'label' => 'Description',
@@ -371,6 +375,7 @@ final readonly class MapInspector
             MapTerrainFields::TARGET => $this->applyTerrainValue($map, $field, $value),
             MapStationField::TARGET => $this->applyStationValue($map, (string) $value),
             self::ROLE_TARGET => $this->applyMapRole($map, trim((string) $value)),
+            self::PLACE_TYPE_TARGET => $this->applyPlaceType($map, trim((string) $value)),
             self::DASHING_TARGET => $this->writeMapData($map, [DashSettings::MAP_DISABLE_DASHING], $value === true ? true : null,
                 'Disable Dashing'),
             default => null,
@@ -1023,6 +1028,62 @@ final readonly class MapInspector
         }
 
         return $this->writeMapData($map, [MapRoleCatalog::MAP_KEY], $role === '' ? null : $role, 'Role');
+    }
+
+    /** The Place Type row's target: the type of the place a map belongs to, in the project's Place Types, chosen, never typed. */
+    public const string PLACE_TYPE_TARGET = 'map-place-type';
+
+    /**
+     * The map's Place Type row: what kind of place it belongs to (a town, an outpost, a shrine), one of the
+     * project's place types, which decides the icon every entrance into it shows on a map whose tileset gives
+     * place icons. Not set leaves those entrances unchecked; a type the project no longer has stays visible and
+     * says so.
+     *
+     * @return array<string, mixed>
+     */
+    public function buildPlaceTypeField(ProjectMap $map): array
+    {
+        $type = $map->getMapDataField([PlaceTypeCatalog::MAP_KEY]);
+        $labels = $this->references->labelsFor('place_types');
+
+        return [
+            'label' => 'Place Type',
+            'value' => match (true) {
+                $type === null => self::PLACE_TYPE_NONE,
+                ! is_string($type) => sprintf('%s · not a place type id', get_debug_type($type)),
+                ! isset($labels[$type]) => sprintf('%s · not in Place Types', $type),
+                default => $labels[$type],
+            },
+            'selectedValue' => is_string($type) ? $type : '',
+            'reference' => 'place_types',
+            'optional' => true,
+            'target' => self::PLACE_TYPE_TARGET,
+            'field' => PlaceTypeCatalog::MAP_KEY,
+        ];
+    }
+
+    /**
+     * Makes the map's place one of the project's place types, or none for an empty value, as one undo step.
+     *
+     * @throws InspectorRefusal When the type is not one the project has, or the types cannot be read.
+     */
+    private function applyPlaceType(ProjectMap $map, string $type): ?Command
+    {
+        if ($type !== '') {
+            try {
+                $known = $this->references->getPlaceTypeCatalog()->hasType($type);
+            } catch (InvalidArgumentException $error) {
+                throw new InspectorRefusal('The place types cannot be read: ' . $error->getMessage(), previous: $error);
+            }
+            if (! $known) {
+                throw new InspectorRefusal(sprintf('%s is not a place type. Choose one from the Place Types page, or make it there first.', $type));
+            }
+        }
+        if ($map->getMapDataField([PlaceTypeCatalog::MAP_KEY]) === ($type === '' ? null : $type)) {
+            return null;
+        }
+
+        return $this->writeMapData($map, [PlaceTypeCatalog::MAP_KEY], $type === '' ? null : $type, 'Place Type');
     }
 
     public function buildMapKindField(ProjectMap $map): array

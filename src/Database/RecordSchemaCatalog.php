@@ -162,6 +162,7 @@ final class RecordSchemaCatalog
             WordFormFields::getSchema(),
             \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
             \Ichiloto\Editor\Field\MapRoleFields::getSchema(),
+            \Ichiloto\Editor\Field\PlaceTypeFields::getSchema(),
             DialoguePortraitFields::getSchema(),
             DialogueSpeakerFields::getSchema(),
             FieldCueFields::getSchema(),
@@ -1968,7 +1969,32 @@ final class RecordSchemaCatalog
                 ],
                 keyField: 'id',
             ),
-            subLists: [self::terrainKindList(), self::tilesetStackList()],
+            subLists: [self::terrainKindList(), self::tilesetStackList(), self::placeIconList()],
+        );
+    }
+
+    /**
+     * A tileset's place icons, the Engine's Tileset::$placeIcons, keyed by
+     * place type: the piece a map drawn with the tileset shows over an
+     * entrance into a place of that type, chosen among its pieces stamped
+     * whole, so the type a map's Place Type row names decides the icon every
+     * entrance into it should show ({@see \Ichiloto\Editor\Validation\PlaceIconCheck}).
+     */
+    private static function placeIconList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: Tileset::PLACE_ICONS,
+            prefix: 'placeIcon',
+            singular: 'place icon',
+            fields: [
+                new RecordField('type', 'Place Type', reference: \Ichiloto\Editor\Field\PlaceTypeFields::CATEGORY),
+                RecordField::entryChoice('piece', 'Icon Piece', 'tileset_whole_pieces', '(a piece)'),
+            ],
+            blank: ['type' => 'new-type', 'piece' => ''],
+            heading: 'Place Icons',
+            removeWhenEmpty: true,
+            keyField: 'type',
+            valueField: 'piece',
         );
     }
 

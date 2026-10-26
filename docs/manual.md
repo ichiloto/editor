@@ -1132,6 +1132,22 @@ may lead, so an overworld whose role leads only to outside maps and dungeons
 cannot lead into an interior. A role the project no longer has stays visible
 as `id · not in Map Roles`, and validation names it.
 
+### Place type
+
+`Place Type`, under `Role`, is the kind of place the map belongs to, one of
+the project's [Place Types](#database-screen), shown by name, such as Town,
+Outpost or Shrine. Enter opens the picker; `None` removes it. It is stored as
+the map data's `placeType`. A map drawn with a tileset that gives place icons,
+such as a world map, shows every entrance into this map by the icon its
+tileset gives the type (Database > Tilesets, Place Icons), so a larger
+settlement and a single building read differently at a glance. Changing the
+type changes the icon every such entrance should show; validation warns at
+each entrance whose icon, in its tiles or its terminal glyphs, is not its
+destination's type's, and at a place icon over a way into a map with no place
+type. Restamp the icon over the entrance with the piece it names, keeping the
+entrance cell. A type the project no longer has stays visible as
+`id · not in Place Types`, and validation names it.
+
 ### Map kind
 
 `Kind`, under `Region`, is the setting the map draws: one of the project's
@@ -1495,7 +1511,7 @@ skill's effects, a quest's rewards) listed under them.
 | Battle Entry | `assets/Data/battle-entry-rules.php` | Editable | Same |
 | States | `assets/Data/states.php` | Editable | Same |
 | Animations | `assets/Data/animations.php` | Editable | Same |
-| Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, and pieces by id with their glyphs and tiles | Same |
+| Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, pieces by id with their glyphs and tiles, and place icons (the piece shown for each place type) | Same |
 | Common Events | `assets/Events/*.php` | Editable | Same |
 | Income | `assets/Data/income.php` (`schedules`) | Editable - cadence, interval, idle timeout, pay, delivery, run conditions and an ordered pay-rate table; the id follows the name until a script names it | Same |
 | Quests | `assets/Data/quests.php` | Editable - objectives (the target picked by type) with their waymarks, reward items with quantities, prerequisites, optional; the id follows the name until something refers to it | Same |
@@ -1517,6 +1533,7 @@ skill's effects, a quest's rewards) listed under them.
 | Speaker Names | `assets/Data/Presentation/dialogue.php` (`speakers`) | Editable - one record per label lines are spoken under, and the dialogue portrait it shows | Same |
 | Place Categories | `assets/Data/map-categories.php` (`categories`) | Editable - one record per category: stable id, name and translation key, and the generic category it specializes | Same |
 | Map Roles | `assets/Data/map-roles.php` (`roles`) | Editable - one record per role: stable id, name and translation key, and the roles its maps may lead to | Same |
+| Place Types | `assets/Data/place-types.php` (`types`) | Editable - one record per type: stable id, name and translation key | Same |
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
 | Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, an image or a sign board, and an optional occupancy stamp |
 | Battle Arenas | `assets/Data/Presentation/arenas.php` (`arenas`) | Not shown: graphical battle presentation | One record per arena, keyed by its stable id (set when it is created): name, background image and optional crop, and the ground its picture shows: far edge (`Ground Far Edge`, just below the horizon or walkable edge), near edge and far-edge scale, each defaulting to the battle theme's. Every troop's formation stands on the chosen arena's ground |
@@ -1576,6 +1593,17 @@ and NPC pages alike. A way to a map of another role is an error; a way to a map
 with no role is a warning, since it cannot be checked. A new role leads
 anywhere until the author chooses. Its id may change until a map is of it;
 while one is, the id stays and the role cannot be deleted.
+
+Place Types name the kinds of place a game's maps lead into: a city, a town,
+a village, a castle, an outpost, an inn, a shrine, a cave, a wild area. Each
+record has a stable id and a name with its translation key. A map chooses the
+type of its place on its [Place Type](#place-type) row, and each tileset gives
+a type its icon under **Place Icons** on its Database > Tilesets record: a
+place type and the piece shown for it, chosen among the tileset's pieces
+stamped whole. Validation then holds every entrance on a map drawn with that
+tileset to its destination's type. Its id may change until a map is of it or a
+tileset gives it an icon; while one does, the id stays and the type cannot be
+deleted.
 
 Field Resources are reusable whole images, such as a tree, that a map places by
 reference. A resource owns its art and its ground contact (the pivot, such as a

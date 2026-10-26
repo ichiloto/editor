@@ -129,6 +129,8 @@ final class ReferenceCatalog
         'map_regions',
         // A map's role, by stable id, from the Map Roles page.
         'map_roles',
+        // A map's place type, by stable id, from the Place Types page.
+        'place_types',
         'animation_roles',
         'battle_arenas',
         // The dialogue catalogue's identities, actor and non-actor, whose artwork lines show.
@@ -611,7 +613,8 @@ final class ReferenceCatalog
      * what the field lives in. `world_object_attachments`: the attachments declared by the resource of the world
      * object a subject reference (`at`) names, on the subject map; none until it names an object that has some.
      * `terrain_grounds`: the ground kinds of the tileset a terrain kind belongs to, those that stand on nothing,
-     * other than the kind itself.
+     * other than the kind itself. `tileset_whole_pieces`: the pieces of the tileset a place icon belongs to that are
+     * stamped whole, any of which can show a place type.
      *
      * @param array<string, mixed> $holder What the field lives in.
      * @param array<string, mixed> $owner The record holding the entry.
@@ -627,6 +630,11 @@ final class ReferenceCatalog
             return array_values(array_map(strval(...), array_keys(array_filter($kinds, static fn(mixed $kind, int|string $id): bool =>
                 is_array($kind) && ($kind['ground'] ?? null) === null && (string) $id !== ($holder['id'] ?? null)
                 && array_diff_key($kind, ['id' => true]) !== $self, ARRAY_FILTER_USE_BOTH))));
+        }
+        if ($source === 'tileset_whole_pieces') {
+            $pieces = is_array($owner['pieces'] ?? null) ? $owner['pieces'] : [];
+            return array_values(array_map(strval(...), array_keys(array_filter($pieces, static fn(mixed $piece): bool
+                => is_array($piece) && ($piece['connects'] ?? null) === null))));
         }
         if ($source !== 'world_object_attachments') {
             throw new InvalidArgumentException(sprintf('There is no entry choice source %s.', $source));
@@ -926,6 +934,19 @@ final class ReferenceCatalog
                 foreach ($roles->getIds() as $id) { $labels[$id] = sprintf('%s (%s)', $roles->getName($id), $id); }
             } catch (\InvalidArgumentException) {
                 // An unreadable catalogue offers its ids as they are; validation names why.
+            }
+
+            return $labels;
+        }
+
+        if ($category === 'place_types') {
+            // Each type read by its name, from the catalogue as its page holds it.
+            $labels = [];
+            try {
+                $types = $this->getPlaceTypeCatalog();
+                foreach ($types->getIds() as $id) { $labels[$id] = sprintf('%s (%s)', $types->getName($id), $id); }
+            } catch (\InvalidArgumentException) {
+                // An unreadable catalogue offers no types; validation names why.
             }
 
             return $labels;
@@ -1342,6 +1363,21 @@ final class ReferenceCatalog
         }
 
         return $this->workspace->catalogs->loadMapRoles();
+    }
+
+    /**
+     * The project's place types as the Place Types page holds them, unsaved edits included.
+     *
+     * @throws \InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function getPlaceTypeCatalog(): \Ichiloto\Engine\Field\PlaceTypeCatalog
+    {
+        $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\PlaceTypeFields::CATEGORY);
+        if (($reason = $database?->getReadOnlyReason()) !== null) {
+            throw new \InvalidArgumentException($reason);
+        }
+
+        return $this->workspace->catalogs->loadPlaceTypes();
     }
 
     public function getMapCategoryCatalog(): \Ichiloto\Engine\Field\MapCategoryCatalog
