@@ -12,6 +12,13 @@ use Ichiloto\Engine\Cutscenes\Cinematics\CinematicStageManager;
 /** Graphical authoring controls; Engine remains the authority for accepted data. */
 final class StagedActorFields
 {
+    /** A stage command, or a cast member: one naming no kind is a staged actor, as the Engine reads it. */
+    public static function isStagedActorEntry(array $entry): bool
+    {
+        return ($entry['type'] ?? null) === 'stage_actor'
+            || (! array_key_exists('type', $entry) && ($entry['kind'] ?? 'staged_actor') === 'staged_actor');
+    }
+
     /**
      * Adds preview data using the actual entry owning these descriptors, never a selected/reconstructed actor.
      *
@@ -22,7 +29,7 @@ final class StagedActorFields
     {
         $wrapped = ($entry['type'] ?? null) === 'stage_actor' && is_array($entry['actor'] ?? null);
         $actor = $wrapped ? $entry['actor'] : $entry;
-        if (($entry['type'] ?? null) !== 'stage_actor' && ($entry['kind'] ?? null) !== 'staged_actor') {
+        if (! self::isStagedActorEntry($entry)) {
             return $fields;
         }
         $sprites = $actor['sprites2d'] ?? null;
@@ -55,6 +62,10 @@ final class StagedActorFields
     /** @return RecordField[] */
     public static function getFields(array $entry): array
     {
+        if (isset($entry['appearance'])) {
+            // The worn NPC look owns the sheet; such an actor never binds a real subject.
+            return [RecordField::boolean('replace', 'Replace Existing Visual')];
+        }
         $contract = CinematicCommandSchema::export();
         $fields = [
             new RecordField('subject.kind', 'Bind Visual To', options: ['', ...explode('|', $contract['stagedActorBinding']['subject']['kind'])],
@@ -104,13 +115,37 @@ final class StagedActorFields
 
             return $entry;
         }
-        if (($entry['type'] ?? null) !== 'stage_actor' && ($entry['kind'] ?? null) !== 'staged_actor') {
+        if (! self::isStagedActorEntry($entry)) {
             return $entry;
         }
         return RelativePositionFields::prepareEdit(EndFacingFields::prepareEdit($entry, $field), $field,
             static function (array $actor): void {
                 CinematicStageManager::validateBinding($actor);
             });
+    }
+
+    /** Wearing a map NPC's look clears the actor's own look, which the Engine refuses beside it; both editors share this. */
+    public static function prepareAppearanceEdit(array $entry, string $field): array
+    {
+        if (($entry['type'] ?? null) === 'stage_actor' && is_array($entry['actor'] ?? null) && str_starts_with($field, 'actor.')) {
+            $actor = self::prepareAppearanceEdit(['type' => 'stage_actor', ...$entry['actor']], substr($field, strlen('actor.')));
+            if (! array_key_exists('type', $entry['actor'])) {
+                unset($actor['type']);
+            }
+            $entry['actor'] = $actor;
+
+            return $entry;
+        }
+        if ($field !== 'appearance.kind' || ! self::isStagedActorEntry($entry)) {
+            return $entry;
+        }
+        if (! isset($entry['appearance']['kind'])) {
+            unset($entry['appearance']);
+        } else {
+            unset($entry['sprite'], $entry['sprites'], $entry['sprites2d'], $entry['asset'], $entry['subject'], $entry['suppress']);
+        }
+
+        return $entry;
     }
 
     /** Changing a representation clears only the fields owned by the old representation. */
@@ -125,7 +160,7 @@ final class StagedActorFields
 
             return $entry;
         }
-        if (($entry['type'] ?? null) !== 'stage_actor' && ($entry['kind'] ?? null) !== 'staged_actor') {
+        if (! self::isStagedActorEntry($entry)) {
             return $entry;
         }
         if ($field === 'subject.kind') {

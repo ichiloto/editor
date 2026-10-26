@@ -246,3 +246,21 @@ it('binds cast artwork to a selected NPC and preserves visibility and transforms
     expect($actor)->toMatchArray(['subject' => ['kind' => 'npc', 'id' => 'keeper'], 'visible' => false])
         ->not->toHaveKeys(['x', 'y', 'facing', 'collision', 'suppress']);
 });
+
+it('offers a map NPC look in both editors and clears the look it replaces', function (bool $graphical) {
+    $keys = static fn(array $entry): array => array_map(static fn($field): string => $field->key,
+        CutsceneSchemas::stagedActorFields($graphical, $entry));
+    expect($keys(['sprite' => ['x']]))->toContain('appearance.kind', 'sprite')->not->toContain('appearance.id');
+    $wearing = ['kind' => 'staged_actor', 'id' => 'gate', 'appearance' => ['kind' => 'npc', 'id' => 'route-gate'],
+        'at' => ['kind' => 'npc', 'id' => 'route-gate']];
+    expect($keys($wearing))->toContain('appearance.kind', 'appearance.id')
+        ->not->toContain('sprite', 'asset', 'sprites.north', 'sprites2d.sheet', 'subject.kind');
+    // Choosing the look drops the actor's own glyphs and sheet, which the Engine refuses beside it.
+    $chosen = \Ichiloto\Editor\Database\StagedActorFields::prepareAppearanceEdit([...$wearing, 'sprite' => ['x'],
+        'sprites2d' => ['sheet' => 'Graphics/Characters/!$Gate.png']], 'appearance.kind');
+    expect($chosen)->not->toHaveKeys(['sprite', 'sprites2d']);
+    CinematicStageManager::validateBinding($chosen);
+    $cleared = \Ichiloto\Editor\Database\StagedActorFields::prepareAppearanceEdit(
+        array_replace($wearing, ['appearance' => ['id' => 'route-gate']]), 'appearance.kind');
+    expect($cleared)->not->toHaveKey('appearance');
+})->with(['terminal' => false, 'graphical' => true]);

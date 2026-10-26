@@ -78,7 +78,15 @@ final readonly class RecordSubList
         public ?Closure $getFields = null,
         public ?RecordSubList $armCommandList = null,
         public ?Closure $remapIndexReferences = null,
+        /** The variant an entry that names none has, as its runtime reads it. */
+        public ?string $variantDefault = null,
     ) {
+    }
+
+    /** The variant an entry is: the one it names, or the list's default when it names none. */
+    public function getVariant(array $entry): string
+    {
+        return $this->variantKey === null ? '' : strval($entry[$this->variantKey] ?? $this->variantDefault ?? '');
     }
 
     /** Where a keyed list's entry keeps a value the editor does not read, to write it back as it was. */
@@ -188,7 +196,7 @@ final readonly class RecordSubList
         $arms = $this->commandArms;
 
         if ($this->variantKey !== null) {
-            $variant = strval($entry[$this->variantKey] ?? '');
+            $variant = $this->getVariant($entry);
 
             foreach ($this->variantArms[$variant] ?? [] as $key => $label) {
                 $arms[$key] = $label;
@@ -214,7 +222,7 @@ final readonly class RecordSubList
             return $this->fields;
         }
 
-        $variant = strval($entry[$this->variantKey] ?? '');
+        $variant = $this->getVariant($entry);
         $fields = $this->variants[$variant] ?? [];
 
         if ($fields instanceof Closure) {
@@ -244,7 +252,7 @@ final readonly class RecordSubList
             return null;
         }
 
-        $nested = $this->nestedLists[strval($entry[$this->variantKey] ?? '')] ?? null;
+        $nested = $this->nestedLists[$this->getVariant($entry)] ?? null;
 
         // A list some shapes of a variant carry and others do not -- a
         // camera route's points, but not a camera detach's -- is a closure
