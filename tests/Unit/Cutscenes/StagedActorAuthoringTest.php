@@ -264,3 +264,13 @@ it('offers a map NPC look in both editors and clears the look it replaces', func
         array_replace($wearing, ['appearance' => ['id' => 'route-gate']]), 'appearance.kind');
     expect($cleared)->not->toHaveKey('appearance');
 })->with(['terminal' => false, 'graphical' => true]);
+
+it('edits a cast member that names no kind as the staged actor the Engine stages', function () {
+    $cast = CutsceneSchemas::castList();
+    $entry = ['id' => 'threshold', 'sprite' => ['='], 'x' => 1, 'y' => 2];
+    $keys = array_map(static fn($field): string => $field->key, $cast->fieldsFor($entry));
+    expect($cast->getVariant($entry))->toBe('staged_actor')
+        ->and($keys)->toContain('kind', 'id', 'sprite', 'appearance.kind', 'x', 'y')
+        ->and(\Ichiloto\Editor\Database\StagedActorFields::isStagedActorEntry($entry))->toBeTrue()
+        ->and(\Ichiloto\Editor\Database\StagedActorFields::isStagedActorEntry(['type' => 'wait']))->toBeFalse();
+});
