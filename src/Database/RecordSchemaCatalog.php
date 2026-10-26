@@ -67,6 +67,7 @@ use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetThicket;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
 use Ichiloto\Engine\Income\IncomeCadence;
 use Ichiloto\Engine\Income\IncomeCatalog;
@@ -1882,7 +1883,8 @@ final class RecordSchemaCatalog
      * terrain kinds world maps are painted in ({@see terrainKindList()}) and
      * the tile layers whose tiles stack ({@see tilesetStackList()}). The
      * graphical editor also edits what tiles show at ground level, which
-     * validation alone reads.
+     * validation alone reads, and the thickets characters walk through hidden
+     * in the graphical field ({@see tilesetThicketList()}).
      *
      * @return RecordSchema
      */
@@ -1976,7 +1978,8 @@ final class RecordSchemaCatalog
                 ],
                 keyField: 'id',
             ),
-            subLists: [self::terrainKindList(), self::tilesetStackList(), self::placeIconList()],
+            subLists: [self::terrainKindList($graphical), self::tilesetStackList(), self::placeIconList(),
+                ...($graphical ? [self::tilesetThicketList()] : [])],
         );
     }
 
@@ -2002,6 +2005,38 @@ final class RecordSchemaCatalog
             removeWhenEmpty: true,
             keyField: 'type',
             valueField: 'piece',
+        );
+    }
+
+    /**
+     * A tileset's thickets, the Engine's TilesetThicket, keyed by thicket id:
+     * foliage a character walks through hidden in the graphical field, like
+     * RPG Maker's bush flag per foliage type. Its depth is the field pixels
+     * hidden up from a character's feet, its opacity how the hidden part is
+     * drawn (0 masks it), whether it rustles around a walker, and the tiles,
+     * other than terrain kinds' own autotiles, that are it; a kind names its
+     * own ({@see terrainKindList()}). Graphical authoring, so the GUI
+     * editor's; the terminal never draws it.
+     */
+    private static function tilesetThicketList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: TilesetThicket::DATA_KEY,
+            prefix: 'thicket',
+            singular: 'thicket',
+            fields: [
+                new RecordField('id', 'Id'),
+                new RecordField('name', 'Name'),
+                new RecordField('depth', 'Depth (field pixels up from the feet)', InputControlType::INTEGER),
+                new RecordField('opacity', 'Hidden Part Opacity (0 masks it)', InputControlType::FLOAT),
+                new RecordField('rustle', 'Rustles Around a Walker', InputControlType::BOOLEAN, displayDefault: 'true'),
+                new RecordField('tiles', 'Tiles', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true,
+                    displayDefault: '(only the kinds naming it)'),
+            ],
+            blank: ['id' => 'new-thicket', 'name' => 'New thicket', 'depth' => 20, 'opacity' => 0.0, 'rustle' => true],
+            heading: 'Thickets',
+            removeWhenEmpty: true,
+            keyField: 'id',
         );
     }
 
@@ -2038,7 +2073,7 @@ final class RecordSchemaCatalog
      * PNG assets, draws the kind's edges on the corners between cells, and
      * corner-edged kinds naming one join group share one edge where they meet.
      */
-    private static function terrainKindList(): RecordSubList
+    private static function terrainKindList(bool $graphical = false): RecordSubList
     {
         return new RecordSubList(
             key: 'kinds',
@@ -2063,6 +2098,8 @@ final class RecordSchemaCatalog
                 // Corner-edged kinds naming one group, such as a river and a lake, meet with no bank between them.
                 new RecordField('art.' . TerrainKind::JOINS, 'Joins', removeWhenEmpty: true, displayDefault: '(edges against every kind)'),
                 new RecordField('keeps', 'Keeps Tile Layers', codec: RecordFieldCodec::CSV_TOKENS, removeWhenEmpty: true),
+                // The thicket its autotile is, chosen among the tileset's thickets: graphical authoring, so the GUI editor's.
+                ...($graphical ? [RecordField::entryChoice('thicket', 'Thicket', 'tileset_thickets', '(hides nobody)')] : []),
             ],
             blank: ['id' => 'new-kind', 'name' => 'New kind', 'layer' => 'terrain', 'glyph' => '<fg=green>.</>',
                 'art' => [TerrainKind::AWAITING_ART => true], 'passage' => TerrainPassage::WALK->value, 'atlas' => 'ground'],

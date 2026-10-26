@@ -284,6 +284,72 @@ describe('authoring kinds', function () {
             ->and($thicket->piece->tiles)->toBe([]);
     });
 
+    it('adds a thicket in Database > Tilesets and names it on a kind, choosing among the tileset\'s thickets, saved source-preserving', function () {
+        $root = terrainKindProject();
+        $path = $root . '/assets/Data/Tilesets/home.php';
+        file_put_contents($path, str_replace("<?php\n", "<?php\n// Kept by the editor.\n", (string) file_get_contents($path)));
+        $session = EditorSession::open($root);
+        $rows = terrainKindRecordRows($session);
+        // Until the tileset has a thicket, a kind can name none.
+        expect($rows['kind2Thicket']['options'])->toBe([''])
+            ->and($rows['kind2Thicket']['value'])->toBe('(hides nobody)');
+
+        $session->addDatabaseItem('tilesets', 0, $rows['thicketList']['key']);
+        $set = static fn(string $field, string $value) => $session->applyDatabaseRecord('tilesets', 0, terrainKindRecordRows($session)[$field]['key'], $value);
+        $set('thicket0Id', 'woods');
+        $set('thicket0Name', 'Woods');
+        $set('thicket0Depth', '24');
+        $set('thicket0Opacity', '0.5');
+        $set('thicket0Rustle', 'false');
+        $set('thicket0Tiles', '4, 5');
+        expect(terrainKindRecordRows($session)['kind2Thicket']['options'])->toBe(['', 'woods']);
+        $set('kind2Thicket', 'woods');
+        $session->saveDatabase('tilesets');
+
+        $tileset = Ichiloto\Engine\Rendering\Tilesets\Tileset::load($root . '/assets', 'home');
+        expect((string) file_get_contents($path))->toContain('// Kept by the editor.')
+            ->and($tileset->thickets['woods'])->toMatchArray(['name' => 'Woods', 'depth' => 24, 'opacity' => 0.5, 'rustle' => false, 'tiles' => [4, 5]])
+            ->and($tileset->kinds['grove']->thicket)->toBe('woods')
+            // The grove's own autotile, in any shape, and the listed tiles hide a character in the woods.
+            ->and($tileset->getThicket(2912 + 7)?->id)->toBe('woods')
+            ->and($tileset->getThicket(5)?->id)->toBe('woods')
+            ->and($tileset->getThicket(2816))->toBeNull();
+
+        // Choosing none again hides nobody in the grove.
+        $set('kind2Thicket', '');
+        $session->saveDatabase('tilesets');
+        expect(Ichiloto\Engine\Rendering\Tilesets\Tileset::load($root . '/assets', 'home')->kinds['grove']->thicket)->toBeNull();
+    });
+
+    it('refuses a thicket the Engine would refuse, and keeps thickets the terminal Database does not show', function () {
+        $root = terrainKindProject();
+        $path = $root . '/assets/Data/Tilesets/home.php';
+        $data = require $path;
+        $data['thickets'] = ['woods' => ['name' => 'Woods', 'depth' => 24, 'opacity' => 0.0]];
+        $data['kinds']['grove']['thicket'] = 'woods';
+        file_put_contents($path, "<?php\n\nreturn " . var_export($data, true) . ";\n");
+
+        // The terminal Database never shows graphical thickets, and saving it keeps them.
+        $terminal = loadRecordDatabase($root, 'tilesets');
+        $fields = array_column(array_filter($terminal->getFrameSettingsFields(0, []), static fn(array $field): bool => isset($field['field'])),
+            'field');
+        expect(array_filter($fields, static fn(string $field): bool => str_contains(strtolower($field), 'thicket')))->toBe([]);
+        $terminal->setField(0, 'name', 'Home tiles');
+        $terminal->save();
+        $tileset = Ichiloto\Engine\Rendering\Tilesets\Tileset::load($root . '/assets', 'home');
+        expect($tileset->name)->toBe('Home tiles')
+            ->and($tileset->kinds['grove']->thicket)->toBe('woods')
+            ->and($tileset->thickets['woods']->depth)->toBe(24);
+
+        // A depth deeper than a cell is reported by its file, as the Engine would refuse it.
+        $session = EditorSession::open($root);
+        $session->applyDatabaseRecord('tilesets', 0, terrainKindRecordRows($session)['thicket0Depth']['key'], '60');
+        $session->saveDatabase('tilesets');
+        $issues = array_values(array_filter($session->validateProject()['issues'],
+            static fn(array $issue): bool => str_contains($issue['message'], 'depth must be 1 to 48')));
+        expect(array_column($issues, 'where'))->toContain('assets/Data/Tilesets/home.php');
+    });
+
     it('chooses a kind\'s corner sheet among the project\'s PNG assets, so its edges are drawn on the corners between cells', function () {
         $root = terrainKindProject();
         writeTilesetTestPng($root . '/assets/Graphics/Tilesets/Meadow.corners.png', 8, 8);
