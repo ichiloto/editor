@@ -104,6 +104,26 @@ it('authors the cue treatment and pointer images as rows with the Engine default
     ->and(count($catalog->cues['bright-yellow']['pointer']))->toBe(8);
 });
 
+it('authors how see-through a mark turns under the player, with the Engine default and refusals', function () {
+  $root = makeCueProject(edges: false);
+  $session = EditorSession::open($root);
+  $opacity = cueRow($session, 'cueStyle.overlap.opacity');
+  $seconds = cueRow($session, 'cueStyle.overlap.seconds');
+
+  expect($opacity['row']['value'])->toBe('0.4')->and($seconds['row']['value'])->toBe('0.2')
+    ->and(fn() => $session->applyDatabaseRecord('field_cues', $opacity['index'], $opacity['row']['key'], '1.5'))
+    ->toThrow('A cue overlap opacity must be 0..1.')
+    ->and(fn() => $session->applyDatabaseRecord('field_cues', $seconds['index'], $seconds['row']['key'], '3'))
+    ->toThrow('A cue overlap fade must last 0..2 seconds.');
+  $session->applyDatabaseRecord('field_cues', $opacity['index'], $opacity['row']['key'], '0.25');
+  $seconds = cueRow($session, 'cueStyle.overlap.seconds');
+  $session->applyDatabaseRecord('field_cues', $seconds['index'], $seconds['row']['key'], '0.5');
+  $session->saveDatabase('field_cues');
+  $catalog = FieldPresentationCatalog::load($root . '/assets');
+
+  expect($catalog->cueStyle->overlapOpacity)->toBe(0.25)->and($catalog->cueStyle->overlapSeconds)->toBe(0.5);
+});
+
 it('authors an NPC cue on the page talking runs, stored on the NPC while its lines are its only page', function () {
   $root = makeTemporaryProject();
   $session = EditorSession::open($root);

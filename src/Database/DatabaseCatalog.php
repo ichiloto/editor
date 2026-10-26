@@ -40,7 +40,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('common_events', 'Common Events', 'Author cutscene and event command lists.', true),
             new DatabaseCategoryDefinition('quests', 'Quests', 'Author quests, objectives, and rewards.', true),
             new DatabaseCategoryDefinition('income_schedules', 'Income', 'Pay the party on a schedule: salaries, stipends, rents.', true),
-            new DatabaseCategoryDefinition(FieldCueFields::CATEGORY, 'Field Cues', 'Choose how cue marks and objective waymarks read on any ground: plate, bob, pointers and Terminal cell.', true),
+            new DatabaseCategoryDefinition(FieldCueFields::CATEGORY, 'Field Cues', 'Choose how cue marks and objective waymarks read on any ground: plate, bob, pointers, fade under the player and Terminal cell.', true),
             new DatabaseCategoryDefinition('skits', 'Skits', 'Write optional party banter scenes.', true),
             new DatabaseCategoryDefinition(\Ichiloto\Editor\Dialogue\DialoguePortraitFields::CATEGORY, 'Dialogue Portraits', 'Choose the portraits, skit busts and emotions dialogue shows for each speaker.', true),
             new DatabaseCategoryDefinition(\Ichiloto\Editor\Dialogue\DialogueSpeakerFields::CATEGORY, 'Speaker Names', 'Bind the names lines are spoken under to the portraits they show.', true),
