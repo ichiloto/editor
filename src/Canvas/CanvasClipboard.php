@@ -12,7 +12,9 @@ use Ichiloto\Engine\Rendering\Tilesets\TileId;
 /**
  * Copies, cuts and pastes a rectangle of a map layer the one way every
  * interface does: the layer's glyphs with their styles, and the tiles that
- * move with that layer, cell for cell ({@see Clipboard}). A cut and a paste
+ * move with that layer, cell for cell ({@see Clipboard}), with the layer's
+ * own objects on its tileset's stacks, laid in depth order where they land
+ * ({@see StackedObjects}). A cut and a paste
  * are each one undo step, and a pasted glyph that could be several pieces is
  * reported unresolved, as painting does. Like {@see CanvasEditor}, nothing
  * here knows a cursor, a status line or a dialog; refusals are thrown.
@@ -38,7 +40,10 @@ final class CanvasClipboard
         }
         $tiles = $withTiles ? $map->readTileEntries($map->getTileLayersMovingWith($layerId), $x, $y, $width, $height) : [];
         $source = array_find($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId);
-        $clipboard->store($rows, $layerId, $styles, $tiles, (string) ($source['name'] ?? ''));
+        $name = (string) ($source['name'] ?? '');
+        // A stack's objects travel by the layer each belongs to, never as whole tile layers.
+        $stacked = $withTiles ? StackedObjects::read($map, $name, $x, $y, $width, $height) : null;
+        $clipboard->store($rows, $layerId, $styles, $tiles, $name, $stacked);
     }
 
     /**
@@ -57,6 +62,8 @@ final class CanvasClipboard
         $clears = array_map(static fn(array $tiles): array => array_map(
             static fn(array $cell): array => ['entry' => (string) TileId::EMPTY] + $cell, $tiles),
             $clipboard->projectTiles($x, $y, $map->getWidth(), $map->getHeight()));
+        $clears += StackedObjects::replace($map, $clipboard->layerName,
+            $clipboard->projectStacked($x, $y, $map->getWidth(), $map->getHeight())['cells']);
         $applied = self::applyWithTiles($map, $layerId, $writes, 'Cut selection', $clears);
 
         return ['command' => $applied['command'], 'changed' => $applied['changed']];
@@ -88,6 +95,8 @@ final class CanvasClipboard
         }
         $tiles = array_intersect_key($clipboard->projectTiles($x, $y, $map->getWidth(), $map->getHeight()),
             array_flip($map->getTileLayersMovingWith($layerId)));
+        ['cells' => $cells, 'laid' => $laid] = $clipboard->projectStacked($x, $y, $map->getWidth(), $map->getHeight());
+        $tiles += StackedObjects::replace($map, (string) ($target['name'] ?? ''), $cells, $laid);
 
         return self::applyWithTiles($map, $layerId, $clipboard->project($x, $y, $map->getWidth(), $map->getHeight()),
             'Paste selection', $tiles, $choices);

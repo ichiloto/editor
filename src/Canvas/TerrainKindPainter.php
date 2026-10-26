@@ -163,11 +163,14 @@ final class TerrainKindPainter
      * the kind's alone, whatever stood there before, such as a tree an old
      * glyph drew or a kind's own tiles. Its tiles are painted next.
      *
-     * A stack holds whole objects ({@see TilesetStack}), so it is cleared by
+     * A stack holds whole objects ({@see TilesetStack}) that stand over the
+     * terrain, whichever gameplay layer each belongs to, so it is cleared by
      * object, never by cell: an object goes, every tile of it, when the paint
      * covers every cell it shows on, and stays whole when it also shows on a
      * cell the paint leaves, such as a peak overhanging the road beside its
-     * range. Painting beside an object never crops it.
+     * range. Painting beside an object never crops it. An object that goes
+     * takes its footprint's glyphs with it where they are still its own, so a
+     * hill crest painted over leaves no solid cell behind.
      *
      * @param list<array{x: int, y: int}> $cells
      * @return ?Command The applied, unrecorded edit, or null when nothing was there.
@@ -176,7 +179,7 @@ final class TerrainKindPainter
     {
         try {
             $owners = $map->loadGraphics()?->owners ?? [];
-            $stacks = $map->loadTileset()?->stacks ?? [];
+            $tileset = $map->loadTileset();
         } catch (InvalidArgumentException | RuntimeException $error) {
             throw new MapSourceRefusal('The map\'s tile layers cannot be read, so the cells\' old tiles cannot be cleared: ' . $error->getMessage()
                 . ' Nothing was changed.', previous: $error);
@@ -186,19 +189,32 @@ final class TerrainKindPainter
         foreach ($cells as ['x' => $x, 'y' => $y]) {
             $painted["{$x},{$y}"] = true;
         }
-        $writes = [];
+        $writes = $objects = [];
         foreach ($owners as $tileLayer => $owner) {
-            if ($owner !== $kind->layer || in_array($tileLayer, $kind->piece->keeps, true)) {
+            if (in_array($tileLayer, $kind->piece->keeps, true)) {
                 continue;
             }
-            $stack = array_find($stacks, static fn(TilesetStack $stack): bool => in_array((string) $tileLayer, $stack->layers, true));
+            $stack = $tileset?->findStackHolding((string) $tileLayer);
+            if ($owner !== $kind->layer && $stack === null) {
+                continue;
+            }
             foreach ($cells as ['x' => $x, 'y' => $y]) {
                 $entry = $tiles((string) $tileLayer, $x, $y);
                 if ($entry === (string) TileId::EMPTY) {
                     continue;
                 }
-                if ($stack !== null && self::showsBeyond($stack, $map, $tiles, (int) $entry, $x, $y, $painted)) {
+                $object = $stack?->locate((int) $entry);
+                // A tile no stacked piece draws is the cell's alone, and goes only from a layer the kind's layer owns.
+                if ($object === null && $owner !== $kind->layer) {
                     continue;
+                }
+                if ($object !== null) {
+                    if (self::showsBeyond($stack, $map, $tiles, (int) $entry, $x, $y, $painted)) {
+                        continue;
+                    }
+                    $left = $x - $object['column'];
+                    $top = $y - $object['row'];
+                    $objects["{$object['piece']->id}@{$left},{$top}"] = [$object['piece'], $left, $top];
                 }
                 $writes[$tileLayer][] = ['x' => $x, 'y' => $y, 'entry' => (string) TileId::EMPTY];
             }
@@ -209,11 +225,47 @@ final class TerrainKindPainter
         $before = $map->getTileLayerSources();
         $map->writeTileCells($writes);
         $after = $map->getTileLayerSources();
-
-        return new GenericCommand($label,
+        $commands = [new GenericCommand($label,
             static fn() => $map->restoreTileLayerSources($after),
             static fn() => $map->restoreTileLayerSources($before),
-        );
+        )];
+        foreach (self::findFootprintGlyphs($map, $objects) as $layerId => $erased) {
+            [$stroke] = CanvasEditor::writeCells($map, $layerId, $erased, $label);
+            if ($stroke->hasChanges()) {
+                $commands[] = $stroke;
+            }
+        }
+
+        return count($commands) === 1 ? $commands[0] : new CommandGroup($label, $commands);
+    }
+
+    /**
+     * The footprint glyphs of cleared stacked objects that still stand where
+     * each put them, as erasing writes, by gameplay layer id. A glyph since
+     * replaced by another stays.
+     *
+     * @param array<string, array{0: \Ichiloto\Engine\Rendering\Tilesets\TilesetPiece, 1: int, 2: int}> $objects
+     * @return array<string, list<array{x: int, y: int, symbol: string, color: null}>>
+     */
+    private static function findFootprintGlyphs(ProjectMap $map, array $objects): array
+    {
+        $erased = [];
+        foreach ($objects as [$piece, $left, $top]) {
+            if (! array_any($piece->glyphs, static fn(array $row): bool => array_any($row, static fn(string $glyph): bool => $glyph !== ' '))) {
+                continue;
+            }
+            $layerId = PiecePlacer::findLayer($map, $piece);
+            foreach ($piece->glyphs as $row => $symbols) {
+                foreach ($symbols as $column => $symbol) {
+                    [$x, $y] = [$left + $column, $top + $row];
+                    if ($symbol !== ' ' && $map->hasLayerCell($layerId, $x, $y) && $map->getLayerSymbol($layerId, $x, $y) === $symbol) {
+                        $erased[$layerId]["{$x},{$y}"] = ['x' => $x, 'y' => $y, 'symbol' => ' ', 'color' => null];
+                    }
+                }
+            }
+        }
+
+        return array_map(array_values(...), $erased);
     }
 
     /**

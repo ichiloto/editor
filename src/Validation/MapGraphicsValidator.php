@@ -185,8 +185,10 @@ final class MapGraphicsValidator
     {
         $drawn = [];
         $placements = $tileset->getPlacements($map->isPaintedInKinds());
+        // A stack lays its pieces' tiles itself, so no glyph carries them and none is left behind by one.
+        $stackLayers = $tileset->getStackLayers();
         foreach ($placements as $piece) {
-            foreach (PieceRole::readPiece($piece) as $roles) {
+            foreach (PieceRole::readPiece($piece, $stackLayers) as $roles) {
                 foreach ($roles as $role) {
                     foreach ($role->tiles as $tileLayer => $cells) {
                         foreach ($cells as $cell) {
@@ -197,7 +199,7 @@ final class MapGraphicsValidator
             }
         }
         // A tile a glyph-less piece also draws, such as a stone wall cap, may stand on any cell.
-        foreach (TileGlyphBinding::findFreeEntries($placements) as $tileLayer => $entries) {
+        foreach (TileGlyphBinding::findFreeEntries($placements, $stackLayers) as $tileLayer => $entries) {
             foreach ($entries as $entry => $_) {
                 unset($drawn[$tileLayer][(int) $entry]);
             }
@@ -215,7 +217,7 @@ final class MapGraphicsValidator
             if ($layer['id'] === MapLayers::EVENT || $layer['decoration']) {
                 continue;
             }
-            $planner = GlyphTilePlanner::fromPieces($placements, $layer['name']);
+            $planner = GlyphTilePlanner::fromPieces($placements, $layer['name'], $stackLayers);
             for ($y = 0; $y < $map->getHeight(); $y++) {
                 for ($x = 0; $x < $map->getWidth(); $x++) {
                     if (! $map->hasLayerCell($layer['id'], $x, $y) || ($glyph = $map->getLayerSymbol($layer['id'], $x, $y)) === ' ') {
