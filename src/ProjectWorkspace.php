@@ -83,10 +83,9 @@ final readonly class ProjectWorkspace
         $this->getRecordDatabase(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY)?->useDeletionReferences(
             fn(string $category): array => \Ichiloto\Editor\Field\MapLandmarks::describeCategoryReferences($this->maps, $category),
         );
-        // A map role stays while a map is of it or a tileset is drawn for it.
+        // A map role stays while a map is of it.
         $this->getRecordDatabase(\Ichiloto\Editor\Field\MapRoleFields::CATEGORY)?->useDeletionReferences(
-            fn(string $role): array => \Ichiloto\Editor\Field\MapRoleFields::describeRoleReferences($this->maps, $role,
-                $this->getRecordDatabase('tilesets')?->getRecords() ?? []),
+            fn(string $role): array => \Ichiloto\Editor\Field\MapRoleFields::describeRoleReferences($this->maps, $role),
         );
         // A place type stays while a map is of it or a tileset gives it an icon.
         $this->getRecordDatabase(\Ichiloto\Editor\Field\PlaceTypeFields::CATEGORY)?->useDeletionReferences(
