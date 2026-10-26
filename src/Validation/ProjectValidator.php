@@ -378,7 +378,8 @@ class ProjectValidator
    * Checks every tileset as the Engine reads it, unsaved edits included:
    * one the Engine refuses leaves every map that names it without its
    * pieces and graphics, used by a map yet or not. Terrain kinds still
-   * awaiting their art are listed.
+   * awaiting their art are listed, and so are map roles a tileset is drawn
+   * for that the project does not have.
    *
    * @param ProjectWorkspace $workspace The project.
    * @return Issue[] The issues found.
@@ -386,10 +387,19 @@ class ProjectValidator
   protected function checkTilesets(ProjectWorkspace $workspace): array
   {
     $issues = [];
+    try {
+      $roles = $workspace->catalogs->loadMapRoles();
+    } catch (InvalidArgumentException) {
+      $roles = null; // The map roles report why on their own page.
+    }
 
     foreach ($workspace->getRecordDatabase('tilesets')?->getRecords() ?? [] as $record) {
       try {
         $tileset = Tileset::fromArray($record->recordId, (array) $record->toArray());
+        if ($roles !== null) {
+          array_push($issues, ...MapTilesetRoleCheck::validateTileset($tileset, $roles,
+            sprintf('assets/%s/%s.php', Tileset::DIRECTORY, $record->recordId)));
+        }
         // A kind whose art is still to be drawn paints its glyph alone, by an authored state, until its autotile is bound.
         $awaiting = array_filter($tileset->kinds, static fn(\Ichiloto\Engine\Rendering\Tilesets\TerrainKind $kind): bool => $kind->awaitingArt);
         if ($awaiting !== []) {
@@ -1735,6 +1745,7 @@ class ProjectValidator
           ...$this->checkDoors($map, $workspace->mapIds),
           ...MapRoleCheck::validate($map, $mapsById),
           ...PlaceIconCheck::validate($map, $mapsById),
+          ...MapTilesetRoleCheck::validate($map),
           ...$this->checkEncounters($map, $troops),
           ...$this->checkNpcs($map, $workspace),
           ...$this->checkDuplicateKeys($map),
