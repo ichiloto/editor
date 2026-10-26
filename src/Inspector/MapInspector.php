@@ -44,6 +44,7 @@ use Ichiloto\Engine\Events\Triggers\EventCueKind;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
 use Ichiloto\Engine\Field\DashSettings;
+use Ichiloto\Engine\Field\MapTerrainKinds;
 use Ichiloto\Engine\Field\MapRoleCatalog;
 use Ichiloto\Engine\Field\PlaceTypeCatalog;
 use Ichiloto\Engine\Field\RegionCatalog;
@@ -763,8 +764,29 @@ final readonly class MapInspector
     }
 
     /**
+     * Whether changing the map to this kind leaves its terrain kinds behind: it is painted in its tileset's terrain
+     * kinds ({@see MapTerrainKinds}) and the new tileset declares none, so its glyphs block or let pass as the
+     * collision dictionary says, as on any map not painted in kinds.
+     *
+     * @throws InspectorRefusal When the project has no tileset with the id.
+     */
+    public function isKindChangeLeavingTerrainKinds(ProjectMap $map, string $tilesetId): bool
+    {
+        $this->assertTilesetExists($tilesetId);
+        try {
+            return MapTerrainKinds::isDeclared($map->getEditableData()) && $map->loadTilesetById($tilesetId)->kinds === [];
+        } catch (InvalidArgumentException) {
+            return false; // A malformed declaration or an unreadable tileset is reported where each is checked.
+        }
+    }
+
+    /**
      * Sets the map's kind, clearing its tile layers and their settings when
-     * asked, as one undo step. Null when it already was that kind.
+     * asked, as one undo step. Null when it already was that kind. A map
+     * painted in terrain kinds stops being painted in them when the new
+     * tileset declares none ({@see isKindChangeLeavingTerrainKinds()}): kinds
+     * belong to the tileset that declares them, and a map naming a tileset
+     * without kinds cannot read its passage from them.
      *
      * @throws InspectorRefusal When the project has no tileset with the id.
      * @throws Throwable When the map refuses the change; it is then exactly as it was.
@@ -782,15 +804,22 @@ final readonly class MapInspector
         $oldSources = $map->getTileLayerSources();
         $hadSettings = $map->hasMapDataField([MapGraphics::SETTINGS_KEY]);
         $oldSettings = $map->getMapDataField([MapGraphics::SETTINGS_KEY]);
-        $apply = static function () use ($map, $tilesetId, $clearTiles): void {
+        $leavesKinds = $this->isKindChangeLeavingTerrainKinds($map, $tilesetId);
+        $apply = static function () use ($map, $tilesetId, $clearTiles, $leavesKinds): void {
             $map->setMapDataField(['tileset'], $tilesetId);
+            if ($leavesKinds) {
+                $map->setMapDataField([MapTerrainKinds::DATA_KEY], null);
+            }
             if ($clearTiles) {
                 $map->restoreTileLayerSources([]);
                 $map->setMapDataField([MapGraphics::SETTINGS_KEY], null);
             }
         };
-        $revert = static function () use ($map, $hadKind, $oldKind, $oldSources, $hadSettings, $oldSettings): void {
+        $revert = static function () use ($map, $hadKind, $oldKind, $oldSources, $hadSettings, $oldSettings, $leavesKinds): void {
             $map->setMapDataField(['tileset'], $hadKind ? $oldKind : null);
+            if ($leavesKinds) {
+                $map->setMapDataField([MapTerrainKinds::DATA_KEY], true);
+            }
             $map->restoreTileLayerSources($oldSources);
             $map->setMapDataField([MapGraphics::SETTINGS_KEY], $hadSettings ? $oldSettings : null);
         };

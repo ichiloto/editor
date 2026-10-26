@@ -6,6 +6,7 @@ use Ichiloto\Editor\Field\MapRoleFields;
 use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
+use Ichiloto\Editor\Validation\MapTilesetRoleCheck;
 use Ichiloto\Engine\Field\MapRoleCatalog;
 
 /** Makes a map role on the Map Roles page and sets its rows; returns its index. */
@@ -126,4 +127,57 @@ it('holds edge triggers to the same destinations as doors', function () {
     $issues = findRoleIssues(EditorSession::open($root), 'map.role-destination');
     expect($issues)->toHaveCount(1)
         ->and($issues[0]['message'])->toContain('Edge trigger east-edge', 'test-map', 'Room', 'lead only to Region maps');
+});
+
+it('holds each map to a tileset drawn for its role, as the tileset authors its roles', function () {
+    // world and test-map both name the tileset home.
+    [$root, , $session] = createAtlasProject();
+    createMapRole($session, 'Overworld');
+    createMapRole($session, 'Outside');
+    setMapRole($session, 'world', 'overworld');
+    setMapRole($session, 'test-map', 'outside');
+    $drawnFor = static function (string $value) use ($session): void {
+        $row = array_find($session->readDatabaseRecord('tilesets', 0)['rows'], static fn(array $row): bool => $row['label'] === 'Drawn For');
+        expect($row)->not->toBeNull();
+        $session->applyDatabaseRecord('tilesets', 0, $row['key'], $value);
+    };
+    // A tileset that names no roles suits any map.
+    expect(findRoleIssues($session, MapTilesetRoleCheck::CODE))->toBe([]);
+
+    $drawnFor('overworld');
+    $refused = findRoleIssues($session, MapTilesetRoleCheck::CODE);
+    expect($refused)->toHaveCount(1)
+        ->and($refused[0]['severity'])->toBe('error')
+        ->and($refused[0]['map'])->toBe('test-map')
+        ->and($refused[0]['message'])->toContain('Home', 'drawn for Overworld maps', 'it is Outside');
+
+    // Drawn for both, it suits both; a map without a role cannot be checked, and says so without refusing.
+    $drawnFor('overworld, outside');
+    expect(findRoleIssues($session, MapTilesetRoleCheck::CODE))->toBe([]);
+    $drawnFor('overworld');
+    setMapRole($session, 'test-map', '');
+    expect(findRoleIssues($session, MapTilesetRoleCheck::CODE))->toBe([]);
+    $unchecked = array_values(array_filter($session->validateProject()['issues'],
+        static fn(array $issue): bool => $issue['map'] === 'test-map' && str_contains($issue['message'], 'drawn for Overworld maps, but it has no role')));
+    expect($unchecked)->toHaveCount(1)->and($unchecked[0]['severity'])->toBe('warning');
+
+    // A role a tileset is drawn for stays while it is; the saved tileset is the Engine's to read.
+    $session->saveDatabase(MapRoleFields::CATEGORY);
+    $session->saveDatabase('tilesets');
+    expect(Ichiloto\Engine\Rendering\Tilesets\Tileset::load($root . '/assets', 'home')->roles)->toBe(['overworld']);
+    expect(fn() => $session->deleteDatabaseRecord(MapRoleFields::CATEGORY, 0))->toThrow(SessionRefusal::class, 'tileset home');
+});
+
+it('reports a tileset drawn for a role the project does not have', function () {
+    [$root] = createAtlasProject();
+    writeTestTileset($root);
+    $file = $root . '/assets/Data/Tilesets/home.php';
+    file_put_contents($file, str_replace("'name' => 'Home',", "'name' => 'Home', 'roles' => ['castle'],", (string) file_get_contents($file)));
+    $session = EditorSession::open($root);
+    createMapRole($session, 'Outside');
+
+    $issues = findRoleIssues($session, 'tileset.roles');
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]['severity'])->toBe('error')
+        ->and($issues[0]['message'])->toContain('Tileset Home is drawn for castle, which is not a map role');
 });

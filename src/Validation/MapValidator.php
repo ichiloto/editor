@@ -48,6 +48,7 @@ final class MapValidator
             ...self::findDanglingDestinations($map, $mapsById),
             ...MapRoleCheck::validate($map, $mapsById),
             ...PlaceIconCheck::validate($map, $mapsById),
+            ...MapTilesetRoleCheck::validate($map),
             ...self::findOutOfRangeSpawnPoints($map, $mapsById),
             ...self::findRetiredData($map),
             ...self::findLandmarkProblems($map),

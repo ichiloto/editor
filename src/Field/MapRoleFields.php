@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Field;
 
+use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\Projections\KeyedDictionaryProjection;
 use Ichiloto\Editor\Database\RecordField;
 use Ichiloto\Editor\Database\RecordFieldCodec;
@@ -13,6 +14,7 @@ use Ichiloto\Editor\Database\RecordStorage;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\MapLandmarkCatalog;
 use Ichiloto\Engine\Field\MapRoleCatalog;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use InvalidArgumentException;
 use Throwable;
 
@@ -20,7 +22,8 @@ use Throwable;
  * Map Roles: what a game's maps are to its world (an overworld, an outside place, an interior, a dungeon), one
  * record per role in the project's map role catalogue (Engine MapRoleCatalog), and the roles each one's maps may
  * lead to. A role that names none leads anywhere. A map names its role by its stable id, so while a map uses one
- * its id stays and it cannot be deleted. The Engine's catalogue validates every save; validation applies the
+ * its id stays and it cannot be deleted; so does
+ * one a tileset is drawn for. The Engine's catalogue validates every save; validation applies the
  * destinations to every way off each map ({@see \Ichiloto\Editor\Validation\MapRoleCheck}).
  */
 final class MapRoleFields
@@ -107,15 +110,22 @@ final class MapRoleFields
     }
 
     /**
-     * What names a role, in words: the maps that are of it. Another role leading to it is refused by the
-     * Engine's catalogue check when it saves.
+     * What names a role, in words: the maps that are of it and the tilesets drawn for it. Another role leading to
+     * it is refused by the Engine's catalogue check when it saves.
      *
      * @param iterable<ProjectMap> $maps
+     * @param iterable<ProjectRecord> $tilesets The tileset records, unsaved edits included.
      * @return list<string>
      */
-    public static function describeRoleReferences(iterable $maps, string $role): array
+    public static function describeRoleReferences(iterable $maps, string $role, iterable $tilesets = []): array
     {
         $found = [];
+        foreach ($tilesets as $tileset) {
+            $roles = $tileset->get(Tileset::ROLES_KEY);
+            if (is_array($roles) && in_array($role, $roles, true)) {
+                $found[] = sprintf('tileset %s', $tileset->recordId);
+            }
+        }
         foreach ($maps as $map) {
             try {
                 if (MapRoleCatalog::readMapRole($map->getEditableData()) === $role) {

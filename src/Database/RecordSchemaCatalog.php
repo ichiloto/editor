@@ -1875,7 +1875,8 @@ final class RecordSchemaCatalog
      * Tilesets: one file per tileset under `assets/Data/Tilesets`, in the
      * form the Engine's Tileset reads. A map names its tileset by the file's
      * name, so the file keeps its name when the tileset is renamed. A
-     * tileset names its RPG Maker sheets, the tiles drawn above characters
+     * tileset names its RPG Maker sheets, the map roles its art is drawn
+     * for, the tiles drawn above characters
      * or as tables, the shadow its raised tiles cast, the tile that marks
      * missing art, the pieces maps are built from, keyed by piece id:
      * a stamped piece's glyph rows with its tile rows on each tile layer, or
@@ -1919,6 +1920,9 @@ final class RecordSchemaCatalog
                     ),
                     TilesetSheet::cases(),
                 ),
+                // The map roles its art is drawn for, by scale; validation holds each map to its tileset's roles.
+                new RecordField(Tileset::ROLES_KEY, 'Drawn For', codec: RecordFieldCodec::CSV_LIST,
+                    reference: \Ichiloto\Editor\Field\MapRoleFields::CATEGORY, removeWhenEmpty: true, displayDefault: '(any map)'),
                 new RecordField('missingArt', 'Missing Art Tile', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(none)'),
                 new RecordField('above', 'Above Characters', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
                 new RecordField('tables', 'Tables', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
