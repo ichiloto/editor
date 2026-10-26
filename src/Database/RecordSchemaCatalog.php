@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
+use Ichiloto\Engine\Animations\EffectScale;
 use Ichiloto\Engine\Battle\Presentation\BattlerContact;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Editor\Dialogue\DialoguePortraitFields;
@@ -512,6 +513,13 @@ final class RecordSchemaCatalog
         );
     }
 
+    /** A skill's or item's Effect Scale, bounded and defaulted by the Engine's animation binding. */
+    private static function animationScaleField(): RecordField
+    {
+        return new RecordField('animationScale', 'Effect Scale', InputControlType::FLOAT, removeWhenEmpty: true,
+            displayDefault: (string) EffectScale::DEFAULT);
+    }
+
     /**
      * Consumables and key items: one record per numbered file under
      * `assets/Data/Items`, in the form the Engine's ItemRecord reads, with
@@ -544,6 +552,8 @@ final class RecordSchemaCatalog
                     allowsNone: true,
                     displayDefault: '(None)',
                 ),
+                // How large the bound animation's target effect plays: one timeline serves every grade of a spell.
+                self::animationScaleField(),
             ],
             labelKey: 'name',
             identityKey: 'id',
@@ -1573,6 +1583,8 @@ final class RecordSchemaCatalog
                 allowsNone: true,
                 displayDefault: '(Legacy fallback)',
             ),
+            // How large the bound animation's target effect plays: one timeline serves every grade of a spell.
+            self::animationScaleField(),
             // The values still awaiting the author (cost, occasion, scope, effects, effects.0.formula, effects.0.variance), left out of the record
             // until assigned: the Engine keeps such a record as a draft nobody can learn or cast, and never guesses them.
             new RecordField(SkillDraft::KEY, 'Awaiting Author', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true, displayDefault: '(none)'),

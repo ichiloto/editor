@@ -105,7 +105,9 @@ final class EffectBattlePreview
         $target = $animation->targetEffect === null ? null : $compile($animation->targetEffect, $presentation);
         $terminalTarget = $presentation === EffectPresentation::GRAPHICAL && $target !== null && ! $target->hasTerminalContent
             ? $compile($animation->targetEffect, EffectPresentation::TERMINAL) : null;
-        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget);
+        // The action's own binding sizes the target effect, so each grade previews at its authored scale.
+        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
+            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action));
         $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $battle->partyRoster->battlers, $battle->troop->members->toArray());
         if ($targets === []) {
             throw new InvalidArgumentException(sprintf('%s has no one to act on in the battle test.', $action->name));
