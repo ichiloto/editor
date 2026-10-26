@@ -26,6 +26,10 @@ use Throwable;
  * road's dirt, not its verge or rocks) and water as polygons of canvas
  * points; the party stands on land and each enemy where its habitat lives.
  * An arena marking neither is land throughout.
+ * An arena standing for a region names its terrain variants: for each
+ * encounter terrain a random battle there can start on, the arena drawn for
+ * it, which may be the arena itself when its picture already shows that
+ * terrain. Validation lists the terrains battles meet without one.
  * Formations belong to troops and the theme, so every troop stands on
  * whichever arena a battle chooses. Graphical
  * presentation only: the category is the graphical editor's, and the
@@ -69,7 +73,7 @@ final class BattleArenaFields
             labelKey: 'name',
             identityKey: 'id',
             makeBlank: self::makeBlank(...),
-            subLists: array_map(self::getFootingList(...), self::FOOTED_HABITATS),
+            subLists: [...array_map(self::getFootingList(...), self::FOOTED_HABITATS), self::getVariantList()],
             projection: new KeyedDictionaryProjection('arenas'),
             saveCheck: self::checkArenas(...),
         );
@@ -89,6 +93,23 @@ final class BattleArenaFields
             key: 'footing.' . $habitat->value, prefix: $habitat->value . 'Footing', singular: $habitat->value . ' footing point',
             fields: [new RecordField('x', 'x', InputControlType::FLOAT), new RecordField('y', 'y', InputControlType::FLOAT)],
             blank: ['x' => 0, 'y' => 0], heading: $name . ' Footing', removeWhenEmpty: true,
+        );
+    }
+
+    /**
+     * The arena drawn for each encounter terrain a random battle on this
+     * arena starts on, stored as the Engine reads it: terrain => arena.
+     */
+    public static function getVariantList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'variants', prefix: 'terrainVariant', singular: 'terrain variant',
+            fields: [
+                RecordField::reference('terrain', 'Encounter Terrain', ReferenceCatalog::ENCOUNTER_TERRAINS),
+                RecordField::reference('arena', 'Drawn On', self::CATEGORY),
+            ],
+            blank: ['terrain' => '', 'arena' => ''], heading: 'Terrain Variants', removeWhenEmpty: true,
+            keyField: 'terrain', valueField: 'arena',
         );
     }
 

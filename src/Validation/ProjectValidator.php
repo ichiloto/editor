@@ -36,7 +36,9 @@ use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Field\EncounterArenaCoverage;
 use Ichiloto\Engine\Field\EncounterEntry;
+use Ichiloto\Engine\Field\EncounterTable;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
@@ -122,6 +124,8 @@ class ProjectValidator
    */
   protected array $arenaFootings = [];
   protected ?string $defaultArena = null;
+  /** The battle presentation itself, read with the arena keys, for the terrain variants it draws. */
+  protected ?BattlePresentationCatalog $arenaCatalog = null;
 
   /**
    * Each troop's members with where they live, read once per validation.
@@ -1946,7 +1950,75 @@ class ProjectValidator
       $issues = [...$issues, ...$this->checkEncounterHabitats($map, $row['name'], $row['arena'] ?? $encounters->mapArena())];
     }
 
+    $issues = [...$issues, ...$this->checkEncounterArenaCoverage($map, $encounters)];
+
     return [...$issues, ...$this->checkEncounterRate($map, $encounters), ...$this->checkEncounterTiles($map, $encounters), ...$this->checkEncounterTroopDuplicates($map)];
+  }
+
+  /**
+   * Checks the map's battle arena rules and which arena art covers every
+   * random battle the map can start. The Engine reads the rules and draws
+   * the battles ({@see EncounterTable}, {@see EncounterArenaCoverage}); this
+   * reports what it leaves out and every arena and encounter terrain pair a
+   * battle is drawn on without a variant for, which falls back to the arena's
+   * own background. Every encounter cell counts, reached or not.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterArenaCoverage(ProjectMap $map, MapEncounters $encounters): array
+  {
+    $issues = [];
+
+    foreach ($encounters->arenaRules() as $index => $rule) {
+      $issues = [...$issues, ...$this->checkBattleArena($rule['arena'], $map->mapId, sprintf('Battle arena rule %d', $index + 1))];
+    }
+
+    try {
+      $block = $map->getEditableData()[MapEncounters::KEY] ?? null;
+      $table = EncounterTable::readBlock(is_array($block) ? $block : null, MapAreaAuthoring::readCatalog($map), $map->resolveEncounterTerrain());
+      $collisions = $map->getResolvedCollisionMap();
+    } catch (Throwable) {
+      // A map the Engine cannot read is reported by the checks that read it.
+      return $issues;
+    }
+
+    foreach ($table->ignored as $ignored) {
+      if (str_starts_with($ignored, 'Battle arena rule') || str_contains($ignored, MapEncounters::ARENA_RULES_KEY)) {
+        $issues[] = Issue::error($map->mapId, $ignored,
+          'A rule names one of the map\'s areas, an encounter terrain its kinds meet, or both, and the arena it picks.');
+      }
+    }
+
+    if ($this->arenaCatalog === null) {
+      return $issues;
+    }
+
+    $coverage = EncounterArenaCoverage::measure($table, $collisions, $this->arenaCatalog);
+    foreach ($coverage->findMissingVariants() as $missing) {
+      $issues[] = Issue::warning($map->mapId,
+        sprintf('Battles on the arena "%s" start on %s (%s, %d %s), which it has no variant for, so they are drawn on its own background.',
+          $missing['arena'], $missing['terrain'], implode('; ', $missing['scopes']), $missing['cells'], $missing['cells'] === 1 ? 'cell' : 'cells'),
+        sprintf('Add a %s variant to "%s" on its Battle Arenas page, naming the arena itself if its picture already shows %s, or give this map an arena rule for it.',
+          $missing['terrain'], $missing['arena'], $missing['terrain']));
+    }
+
+    // A troop drawn on a variant or a rule's arena still needs somewhere there for its members to stand;
+    // the arena it is named on is checked with its row.
+    $named = array_column(array_map(fn(array $row): array => [$row['name'], $row['arena'] ?? $encounters->mapArena() ?? $this->defaultArena],
+      $encounters->rows()), 1, 0);
+    $habitats = [];
+    foreach ($coverage->rows as $row) {
+      foreach ($row['drawn'] === null ? [] : $row['troops'] as $troop) {
+        if (($named[$troop] ?? null) === $row['drawn']) {
+          continue;
+        }
+        foreach ($this->checkEncounterHabitats($map, $troop, $row['drawn']) as $issue) {
+          $habitats[$issue->message] = $issue;
+        }
+      }
+    }
+
+    return [...$issues, ...array_values($habitats)];
   }
 
   /**
@@ -2047,9 +2119,11 @@ class ProjectValidator
     $this->arenaCatalogProblem = null;
     $this->arenaFootings = [];
     $this->defaultArena = null;
+    $this->arenaCatalog = null;
 
     try {
       $catalog = $workspace->catalogs->loadBattlePresentation();
+      $this->arenaCatalog = $catalog;
       $this->arenaKeys = $catalog === null ? null : array_map(strval(...), array_keys($catalog->getArenaChoices()));
       $this->arenaFootings = array_map(static fn($arena): BattleFooting => $arena->footing, $catalog?->arenas ?? []);
       $this->defaultArena = $catalog?->defaultArena;

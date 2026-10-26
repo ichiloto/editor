@@ -7166,7 +7166,7 @@ final class EditorSession
             },
             default => 'info',
         };
-        $list = $field['list'] ?? $field['encounterList'] ?? $field['bgmVariantList'] ?? $field['landmarkList'] ?? $field['areaList'] ?? $field['speakerList'] ?? null;
+        $list = $field['list'] ?? $field['encounterList'] ?? $field[MapInspector::ARENA_RULE_LIST] ?? $field['bgmVariantList'] ?? $field['landmarkList'] ?? $field['areaList'] ?? $field['speakerList'] ?? null;
 
         // The terminal nests a row by indenting its label; an interface is given the depth instead.
         $label = (string) ($field['label'] ?? '');

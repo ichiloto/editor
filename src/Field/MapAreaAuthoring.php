@@ -159,7 +159,7 @@ final readonly class MapAreaAuthoring
                 $this->map->setMapDataField([MapLandmarks::KEY], $landmarks);
             }
             $encounters = MapEncounters::fromMap($this->map);
-            if ($encounters->isSupported() && $encounters->troopsInArea($id) !== []) {
+            if ($encounters->isSupported() && ($encounters->troopsInArea($id) !== [] || $encounters->arenaRulesInArea($id) !== [])) {
                 $this->map->setMapDataField([MapEncounters::KEY], $encounters->withAreaRenamed($id, $to));
             }
         });
@@ -168,7 +168,7 @@ final readonly class MapAreaAuthoring
     /**
      * Removes an area nothing names.
      *
-     * @throws MapAreaRefusal When there is no such area, or an event, landmark or encounter troop names it.
+     * @throws MapAreaRefusal When there is no such area, or an event, landmark, encounter troop or battle arena rule names it.
      */
     public function deleteArea(string $id): Command
     {
@@ -186,7 +186,7 @@ final readonly class MapAreaAuthoring
 
     /**
      * What names an area: events bound to it as their subject, landmarks
-     * anchored to it, and encounter troops met in it.
+     * anchored to it, encounter troops met in it, and battle arena rules for it.
      *
      * @return list<string>
      */
@@ -201,9 +201,11 @@ final readonly class MapAreaAuthoring
 
         $encounters = MapEncounters::fromMap($map);
         $troops = $encounters->isSupported() ? $encounters->troopsInArea($id) : [];
+        $rules = $encounters->isSupported() ? $encounters->arenaRulesInArea($id) : [];
 
         return [...$found, ...MapLandmarks::describeAnchorReferences($map, [self::ANCHOR_KIND => $id]),
-            ...array_map(static fn(string $troop): string => sprintf('%s encounter %s', $map->mapId, $troop), $troops)];
+            ...array_map(static fn(string $troop): string => sprintf('%s encounter %s', $map->mapId, $troop), $troops),
+            ...array_map(static fn(int $rule): string => sprintf('%s battle arena rule %d', $map->mapId, $rule + 1), $rules)];
     }
 
     /** Whether an event definition is bound to the area as its subject. */

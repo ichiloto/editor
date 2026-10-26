@@ -90,6 +90,10 @@ final readonly class MapInspector
     /** What a map without a place type shows on its Place Type row. */
     public const string PLACE_TYPE_NONE = 'Not set';
     public const string MAP_ARENA_NONE = '(default arena)';
+    /** What an arena rule without an arena shows; the Engine leaves such a rule out. */
+    public const string RULE_ARENA_NONE = '(no arena)';
+    /** The row key marking a map arena rule's rows, for adding and removing rules. */
+    public const string ARENA_RULE_LIST = 'arenaRuleList';
     public const string ENCOUNTER_ARENA_NONE = '(map arena)';
 
     /** An encounter row met anywhere the map counts steps. */
@@ -623,6 +627,9 @@ final readonly class MapInspector
     public function addListEntry(ProjectMap $map, array $field): ?InspectorListEdit
     {
         if (isset($field['innPresentationList'])) { return $this->editInnPresentationList($map, $field, false); }
+        if (($field['target'] ?? null) === 'map-encounters' && is_array($field[self::ARENA_RULE_LIST] ?? null)) {
+            return $this->addArenaRule($map, (int) $field[self::ARENA_RULE_LIST]['index']);
+        }
         if (($field['target'] ?? null) === 'map-encounters' && is_array($field['encounterList'] ?? null)) {
             $encounters = $this->requireEditableEncounters($map);
             $troops = $this->references->valuesFor('troops');
@@ -681,6 +688,35 @@ final readonly class MapInspector
     }
 
     /**
+     * Adds an arena rule after another: for the first of the map's encounter
+     * terrains no rule names yet, else its first area, on the map's arena
+     * (or the first declared), for the author to change.
+     *
+     * @throws InspectorRefusal When the map has no terrain or area to hold a rule for, or no arena to pick.
+     */
+    private function addArenaRule(ProjectMap $map, int $after): InspectorListEdit
+    {
+        $encounters = $this->requireEditableEncounters($map);
+
+        if ($encounters->rows() === []) {
+            throw new InspectorRefusal('Add an encounter troop first; arena rules choose where its battles are drawn.');
+        }
+
+        $arena = $encounters->mapArena() ?? ($this->references->valuesFor('battle_arenas')[0]
+            ?? throw new InspectorRefusal('The battle presentation declares no arena for a rule to pick.'));
+        $named = array_filter(array_column($encounters->arenaRules(), 'terrain'));
+        $terrain = array_values(array_diff($this->readEncounterTerrains($map) ?? [], $named))[0] ?? null;
+        $area = $terrain === null ? ($this->readMapAreaIds($map)[0] ?? null) : null;
+
+        if ($terrain === null && $area === null) {
+            throw new InspectorRefusal('An arena rule holds for an area or an encounter terrain; this map has none left to rule.');
+        }
+
+        return new InspectorListEdit($this->writeMapData($map, [MapEncounters::KEY], $encounters->withArenaRuleAdded($area, $terrain, $arena, $after),
+            'Arena rule add'), sprintf('Added an arena rule for %s.', $terrain ?? "area {$area}"));
+    }
+
+    /**
      * Removes the entry a row belongs to. Removing the last troop disables
      * encounters and the last music variant takes the variants key with it.
      * Null when the row names no entry to remove.
@@ -691,6 +727,17 @@ final readonly class MapInspector
     public function removeListEntry(ProjectMap $map, array $field): ?InspectorListEdit
     {
         if (isset($field['innPresentationList'])) { return $this->editInnPresentationList($map, $field, true); }
+        if (($field['target'] ?? null) === 'map-encounters' && is_array($field[self::ARENA_RULE_LIST] ?? null)) {
+            $encounters = $this->requireEditableEncounters($map);
+            $index = (int) $field[self::ARENA_RULE_LIST]['index'];
+
+            if (! array_key_exists($index, $encounters->arenaRules())) {
+                throw new InspectorRefusal('No arena rule to remove.');
+            }
+
+            return new InspectorListEdit($this->writeMapData($map, [MapEncounters::KEY], $encounters->withArenaRuleRemovedAt($index),
+                'Arena rule remove'), sprintf('Removed arena rule %d.', $index + 1));
+        }
         if (($field['target'] ?? null) === 'map-encounters' && is_array($field['encounterList'] ?? null)) {
             $encounters = $this->requireEditableEncounters($map);
             $index = (int) $field['encounterList']['index'];
@@ -1715,6 +1762,7 @@ final readonly class MapInspector
             'areas' => $encounters->withAreasAt($index, $this->requireEncounterAreas($map, (string) $value)),
             'terrains' => $encounters->withTerrainsAt($index, $this->requireEncounterTerrains($map, (string) $value)),
             'mapArena' => $encounters->withMapArena($this->requireArena((string) $value, self::MAP_ARENA_NONE)),
+            'ruleArea', 'ruleTerrain', 'ruleArena' => $this->applyArenaRuleValue($map, $encounters, $index, (string) $field['field'], (string) $value),
             default => null,
         };
 
@@ -1910,9 +1958,108 @@ final readonly class MapInspector
                 'target' => 'map-encounters',
                 'field' => 'mapArena',
             ];
+            $fields = [...$fields, ...$this->mapArenaRuleFields($map, $encounters)];
         }
 
         return $fields;
+    }
+
+    /**
+     * The map's battle arena rules, a graphical editor's: for each, the area
+     * and encounter terrain it holds for, chosen from the map's own, and the
+     * arena it picks ({@see \Ichiloto\Engine\Field\EncounterArenaRule}).
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function mapArenaRuleFields(ProjectMap $map, MapEncounters $encounters): array
+    {
+        $rules = $encounters->arenaRules();
+        $areas = $this->readMapAreaIds($map);
+        $terrains = $this->readEncounterTerrains($map) ?? [];
+        $fields = [[
+            'label' => sprintf('  Arena Rules · %d', count($rules)),
+            'value' => '',
+            'editable' => false,
+            'target' => 'map-encounters',
+            // Named apart from the troop list's heading, which shares the target.
+            'field' => 'arenaRules',
+            self::ARENA_RULE_LIST => ['index' => max(0, count($rules) - 1)],
+        ]];
+
+        foreach ($rules as $index => $rule) {
+            $list = [self::ARENA_RULE_LIST => ['index' => $index]];
+            $fields[] = [
+                'label' => '    Area',
+                'value' => $rule['area'] ?? self::ENCOUNTER_AREAS_NONE,
+                'options' => [self::ENCOUNTER_AREAS_NONE, ...array_values(array_unique([...$areas, ...($rule['area'] === null ? [] : [$rule['area']])]))],
+                'target' => 'map-encounters',
+                'field' => 'ruleArea',
+                'index' => $index,
+                ...$list,
+            ];
+            $fields[] = [
+                'label' => '    Terrain',
+                'value' => $rule['terrain'] ?? self::ENCOUNTER_TERRAINS_NONE,
+                'options' => [self::ENCOUNTER_TERRAINS_NONE, ...array_values(array_unique([...$terrains, ...($rule['terrain'] === null ? [] : [$rule['terrain']])]))],
+                'target' => 'map-encounters',
+                'field' => 'ruleTerrain',
+                'index' => $index,
+                ...$list,
+            ];
+            $fields[] = [
+                'label' => '    Arena',
+                'value' => $this->describeArena($rule['arena'], self::RULE_ARENA_NONE),
+                'reference' => 'battle_arenas',
+                'target' => 'map-encounters',
+                'field' => 'ruleArena',
+                'index' => $index,
+                ...$list,
+            ];
+        }
+
+        return $fields;
+    }
+
+    /**
+     * The map's named areas, or none when they cannot be read.
+     *
+     * @return list<string>
+     */
+    private function readMapAreaIds(ProjectMap $map): array
+    {
+        try {
+            return array_map(strval(...), array_keys(MapAreaAuthoring::readCatalog($map)->areas));
+        } catch (MapAreaRefusal) {
+            return [];
+        }
+    }
+
+    /**
+     * Applies an edit to one arena rule: an area of the map or the whole map, an
+     * encounter terrain of its kinds or any, or a declared arena. A rule keeps an
+     * area or a terrain, since the map's own Arena covers the whole map.
+     *
+     * @throws InspectorRefusal When the value is not the map's, or the rule would name neither.
+     */
+    private function applyArenaRuleValue(ProjectMap $map, MapEncounters $encounters, int $index, string $field, string $value): ?array
+    {
+        $rule = $encounters->arenaRules()[$index] ?? throw new InspectorRefusal('There is no such arena rule.');
+        $value = trim($value);
+        [$key, $chosen] = match ($field) {
+            'ruleArea' => ['area', $value === '' || $value === self::ENCOUNTER_AREAS_NONE ? null
+                : ($this->requireEncounterAreas($map, $value)[0] ?? null)],
+            'ruleTerrain' => ['terrain', $value === '' || $value === self::ENCOUNTER_TERRAINS_NONE ? null
+                : ($this->requireEncounterTerrains($map, $value)[0] ?? null)],
+            default => ['arena', $this->requireArena($value, self::RULE_ARENA_NONE)
+                ?? throw new InspectorRefusal('An arena rule picks an arena; remove the rule to leave battles to the map\'s.')],
+        };
+        $next = [$key => $chosen] + $rule;
+
+        if ($next['area'] === null && $next['terrain'] === null) {
+            throw new InspectorRefusal('An arena rule holds for an area, a terrain or both; the map\'s own Arena covers the whole map.');
+        }
+
+        return $encounters->withArenaRuleAt($index, $key, $chosen);
     }
 
     /**
