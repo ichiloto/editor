@@ -2888,7 +2888,9 @@ final class EditorSession
             'answers' => [
                 ['key' => 'cancel', 'label' => 'Cancel', 'description' => sprintf('Keep its kind, %s, and its tiles.', $currentLabel)],
                 ['key' => 'clear', 'label' => sprintf('Clear %d tile %s and change', $layers, $layers === 1 ? 'layer' : 'layers'),
-                    'description' => sprintf('Its tiles come from %s and would show the wrong art as %s. Glyphs stay. Undo restores them.', $currentLabel, $label)],
+                    'description' => sprintf('Its tiles come from %s and would show the wrong art as %s. Glyphs stay%s. Undo restores them.', $currentLabel, $label,
+                        $this->createMapInspector($map)->isKindChangeLeavingTerrainKinds($map, $tilesetId)
+                            ? sprintf(', and with no terrain kinds in %s they block or let pass as the collision dictionary says', $label) : '')],
             ],
         ];
     }

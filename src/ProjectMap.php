@@ -1006,6 +1006,17 @@ final class ProjectMap
             throw new InvalidArgumentException(sprintf('Its tileset is %s, not a tileset id.', get_debug_type($id)));
         }
 
+        return $this->loadTilesetById($id);
+    }
+
+    /**
+     * Loads a tileset of this map's project by id, as the workspace holds it, unsaved edits included: the one a
+     * change of the map's kind would make it name.
+     *
+     * @throws InvalidArgumentException When the tileset cannot be loaded.
+     */
+    public function loadTilesetById(string $id): Tileset
+    {
         return $this->catalogs?->loadTileset($id) ?? Tileset::load($this->getAssetRoot(), $id);
     }
 

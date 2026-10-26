@@ -123,6 +123,29 @@ describe('conversion', function () {
             ->and(terrainKindTiles($session)['floor'][0][2])->toBe(2816);
     });
 
+    it('leaves the kinds behind when the map changes to a kind whose tileset declares none, as one undo step', function () {
+        $root = terrainKindProject("..x.\n....");
+        // A plain tileset, its passage the collision dictionary's.
+        writeTestTileset($root, 'plain');
+        $session = EditorSession::open($root);
+        convertTerrainKindMap($session, ['.' => 'meadow', 'x' => 'peaks']);
+        $map = terrainKindMap($session);
+        $kindRow = ['target' => 'map-kind', 'field' => 'tileset'];
+
+        $question = $session->applyInspector('test-map', $session->readMap('test-map')['revision'], $kindRow, 'plain');
+        expect($question['status'])->toBe('question')
+            ->and($question['answers'][1]['description'])->toContain('with no terrain kinds in Plain they block or let pass as the collision dictionary says');
+        $session->applyInspector('test-map', $session->readMap('test-map')['revision'], $kindRow, 'plain', 'clear');
+        expect($map->getMapDataField(['tileset']))->toBe('plain')
+            ->and($map->hasMapDataField(['terrainKinds']))->toBeFalse()
+            ->and(array_filter($session->validateMap('test-map')['issues'],
+                static fn(array $issue): bool => str_contains($issue['message'], 'has no terrain kinds')))->toBe([]);
+
+        $session->undo();
+        expect($map->getMapDataField(['tileset']))->toBe('home')
+            ->and($map->getMapDataField(['terrainKinds']))->toBeTrue();
+    });
+
     it('lets the kinds take over the map\'s atlas classifications of the glyphs they convert or name, keeping the rest', function () {
         $root = terrainKindProject("..x.\n..##");
         $data = $root . '/assets/Maps/test-map/test-map.data.php';

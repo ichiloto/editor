@@ -82,8 +82,9 @@ trait MapKindField
         $this->eventOptionDialogEntries = [
             ['label' => 'Cancel', 'value' => 'cancel', 'description' => sprintf('Keep its kind, %s, and its tiles.', $currentLabel)],
             ['label' => sprintf('Clear %d tile %s and change', $layers, $layers === 1 ? 'layer' : 'layers'), 'value' => 'clear',
-                'description' => sprintf('Its tiles come from %s and would show the wrong art as %s. Glyphs stay. Ctrl+Z restores them.',
-                    $currentLabel, $label)],
+                'description' => sprintf('Its tiles come from %s and would show the wrong art as %s. Glyphs stay%s. Ctrl+Z restores them.',
+                    $currentLabel, $label, $this->createMapInspector()->isKindChangeLeavingTerrainKinds($map, $id)
+                        ? sprintf(', and with no terrain kinds in %s they block or let pass as the collision dictionary says', $label) : '')],
         ];
         $this->selectedEventOptionIndex = 0;
         $this->dialogFilter->clear();
