@@ -97,6 +97,32 @@ it('resolves the references the Engine only sees at play time', function () {
         ->and($messages)->toContain('"nowhere"');
 });
 
+it('flags a staged actor without a graphical look only on a map drawn from a tileset', function () {
+    $root = cutsceneProject();
+    $codes = static fn(): array => array_values(array_map(static fn(Issue $issue): string => $issue->message,
+        array_filter(cutsceneIssues($root), static fn(Issue $issue): bool => $issue->code === 'cinematic.actor-look')));
+    insertHarbourCommands($root, [['type' => 'stage_actor', 'id' => 'gull', 'sprite' => ['v'], 'x' => 3, 'y' => 3]]);
+    // A Terminal map shows every actor by its glyph, as authored.
+    expect($codes())->toBe([]);
+
+    $map = $root . '/assets/Maps/harbour/harbour.data.php';
+    file_put_contents($map, str_replace("'region' => 'Coast',", "'region' => 'Coast',\n  'tileset' => 'harbour',", (string) file_get_contents($map)));
+    expect($codes())->toBe([
+        'Staged actor "gull" has no graphical look, so the graphical field draws its terminal glyph on harbour.',
+        'Staged actor "boat-east" has no graphical look, so the graphical field draws its terminal glyph on harbour.',
+        'Staged actor "boat-west" has no graphical look, so the graphical field draws its terminal glyph on harbour.',
+    ]);
+
+    // Its own art, the subject it stands for or a map NPC's look each give it one.
+    $data = $root . '/assets/Cutscenes/Cinematics/harbour-lanterns/harbour-lanterns.data.php';
+    file_put_contents($data, str_replace(
+        ["'sprite' => ['~^~'], 'x' => 1, 'y' => 2]", "'sprite' => ['~^~'], 'x' => 1, 'y' => 4]"],
+        ["'sprite' => ['~^~'], 'sprites2d' => ['sheet' => 'Graphics/Characters/Boat.png'], 'x' => 1, 'y' => 2]",
+            "'appearance' => ['kind' => 'npc', 'id' => 'keeper'], 'x' => 1, 'y' => 4]"],
+        (string) file_get_contents($data)));
+    expect($codes())->toBe(['Staged actor "gull" has no graphical look, so the graphical field draws its terminal glyph on harbour.']);
+});
+
 it('validates nested Common Events in their owning cinematic context', function () {
     $root = cutsceneProject();
     forbidHarbourCinematicSkip($root);

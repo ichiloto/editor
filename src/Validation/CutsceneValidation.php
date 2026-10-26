@@ -189,10 +189,13 @@ trait CutsceneValidation
         }
 
         $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'map' => ScriptMapState::startOn($startMap !== '' ? $startMap : null, $npcIds), 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => [],
-            'attachmentsByMap' => $this->readAttachmentsByMap($workspace)];
+            'attachmentsByMap' => $this->readAttachmentsByMap($workspace), 'graphicalMaps' => $this->listGraphicalMaps($workspace)];
         foreach ((array) ($data['cast'] ?? []) as $entry) {
             if (is_array($entry) && is_array($entry['at'] ?? null)) {
                 $issues = [...$issues, ...$this->checkCinematicSubject(['subject' => $entry['at']], $where . ' cast', $context)];
+            }
+            if (is_array($entry) && strtolower(trim(strval($entry['kind'] ?? 'staged_actor'))) === 'staged_actor') {
+                $issues = [...$issues, ...$this->checkStagedActorLook($entry, $where . ' cast', $context)];
             }
         }
         $issues = [...$issues, ...$this->walkCinematicCommands($commands, $where, $known, $context)];
@@ -309,6 +312,7 @@ trait CutsceneValidation
                 if ($id !== '') {
                     $context['castIds'][] = $id;
                 }
+                $issues = [...$issues, ...$this->checkStagedActorLook($command, $where, $context)];
             }
 
             if (in_array($type, ['remove_actor', 'show_actor', 'hide_actor'], true)) {
@@ -483,6 +487,44 @@ trait CutsceneValidation
         }
 
         return [];
+    }
+
+    /**
+     * A staged actor on a map drawn from a tileset needs a graphical look
+     * ({@see CinematicCommandSchema::STAGED_ACTOR_GRAPHICAL_FIELDS}); without
+     * one the graphical field can only draw its terminal glyph there.
+     *
+     * @param array<string, mixed> $entry A cast entry or stage_actor command.
+     * @param array{map: ScriptMapState, graphicalMaps?: list<string>} $context
+     * @return Issue[]
+     */
+    protected function checkStagedActorLook(array $entry, string $where, array $context): array
+    {
+        $looks = array_filter(array_intersect_key($entry, array_flip(CinematicCommandSchema::STAGED_ACTOR_GRAPHICAL_FIELDS)),
+            static fn(mixed $look): bool => $look !== null);
+        $maps = array_values(array_intersect($context['map']->mapIds ?? [], $context['graphicalMaps'] ?? []));
+        if ($looks !== [] || $maps === []) {
+            return [];
+        }
+
+        return [Issue::error($where, sprintf('Staged actor "%s" has no graphical look, so the graphical field draws its terminal glyph on %s.',
+            trim(strval($entry['id'] ?? $entry['actorId'] ?? '')), implode(', ', $maps)),
+            'Give it sprites2d art, the subject it stands for, or the appearance of the map NPC it stands in for.', 'cinematic.actor-look')];
+    }
+
+    /**
+     * The maps drawn from a tileset: the graphical field shows them in art,
+     * so nothing on them may fall back to a terminal glyph.
+     *
+     * @return list<string>
+     */
+    protected function listGraphicalMaps(ProjectWorkspace $workspace): array
+    {
+        $maps = [];
+        foreach ($workspace->maps as $map) {
+            if ($map->getMapDataField(['tileset']) !== null) { $maps[] = $map->mapId; }
+        }
+        return $maps;
     }
 
     /**
