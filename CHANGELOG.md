@@ -82,6 +82,8 @@
 
 ### Fixed
 
+- Save relocation planning and workspace reachability read the current tileset catalogue, including a newly staged tileset in the same atomic transaction. Saved baseline reachability remains separate; missing or invalid current dependencies still refuse.
+
 - Directory records identified by filename, including tilesets and event scripts, now honor explicit identities when creating and duplicating records. Unsafe or occupied names are refused, and generated names remain unique across unsaved records.
 
 - Batch piece placement (`pieces.place` with `origins`) now honors an explicit `footprint: true` for every copy, with artwork and physical occupancy in one undo/redo step. Unrequested collision remains unchanged.

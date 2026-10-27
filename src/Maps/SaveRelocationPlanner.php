@@ -35,7 +35,7 @@ use Throwable;
  * compatibility manifest, for the author to review before the save writes
  * both. A project without a manifest, or a map not yet on disk, needs none.
  *
- * Planning reads the project from disk and writes nothing.
+ * Planning compares saved sources with current map and catalogue state and writes nothing.
  *
  * @package Ichiloto\Editor\Maps
  */
@@ -80,7 +80,8 @@ final class SaveRelocationPlanner
         foreach ($maps as $map) {
             $unsaved[$map->mapId] = ['data' => $map->getEditableData(), 'layers' => $map->getLayerSet(), 'eventLayer' => $map->getEventLayerCells()];
         }
-        $changed = ProjectReachability::analyze($root . '/assets', $unsaved);
+        // Every map in this transaction shares its workspace catalogue, including staged tilesets.
+        $changed = ProjectReachability::analyze($root . '/assets', $unsaved, $maps[0]->loadTilesetById(...));
         $relocations = [];
         $moving = [];
         foreach ($maps as $map) {

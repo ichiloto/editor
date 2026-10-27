@@ -165,7 +165,10 @@ it generates a unique identity, including against unsaved records.
 Edits are made in order and held in memory, and every later change reads
 them: a field resource, tileset piece, place category, skill, effect timeline,
 database record or world object made earlier in the batch is usable by the
-changes after it, before anything is written. Painting, piece lists, pickers,
+changes after it, before anything is written. Reachability and safe-save
+relocation planning also read the current tileset catalogue for every map; a
+new tileset and its map can be checked and saved in one transaction. An invalid
+current dependency still refuses the transaction. Painting, piece lists, pickers,
 the map world the GUI draws and the validation `changes.commit` runs all read
 these current records. Battle previews and the cinematic preview field still
 read the saved items, enemies, summons and maps until the Engine can take them

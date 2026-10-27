@@ -452,7 +452,7 @@ final readonly class ProjectWorkspace
             }
         }
 
-        return ProjectReachability::analyze($this->projectRoot . DIRECTORY_SEPARATOR . 'assets', $unsaved);
+        return ProjectReachability::analyze($this->projectRoot . DIRECTORY_SEPARATOR . 'assets', $unsaved, $this->catalogs->loadTileset(...));
     }
 
     /**
