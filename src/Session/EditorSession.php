@@ -1454,18 +1454,25 @@ final class EditorSession
      * drawn, not stamped, and is refused.
      *
      * @param list<array{0: int, 1: int}> $origins
-     * @return array{status: 'applied', changed: bool, copies: int, cells: int, revision: int}
+     * @return array{status: 'applied', changed: bool, copies: int, cells: int, footprint: int, revision: int}
      * @throws SessionRefusal When the map is unknown, stale or read-only, the piece is unknown or connected, or a copy falls off the map.
      */
-    public function placePieceCopies(string $mapId, int $revision, string $pieceId, array $origins, ?string $color = null): array
+    public function placePieceCopies(string $mapId, int $revision, string $pieceId, array $origins, ?string $color = null,
+        bool $footprint = false): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
         }
         $piece = $this->requirePiece($map, $pieceId);
+        $origins = array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1]], $origins);
+        $stamped = 0;
         try {
-            $command = PiecePlacer::stampOrigins($map, $piece, array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1]], $origins), $color);
+            $command = PiecePlacer::stampOrigins($map, $piece, $origins, $color);
+            if ($footprint) {
+                ['command' => $command, 'cells' => $stamped] = PlacedPieces::addFootprint($map, $piece, $command, $origins,
+                    sprintf('Place %s', $piece->name));
+            }
         } catch (MapSourceRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
@@ -1473,7 +1480,8 @@ final class EditorSession
             $this->history->record($command);
         }
 
-        return ['status' => 'applied', 'changed' => $command !== null, 'copies' => count($origins), 'cells' => 0, 'revision' => $this->getMapRevision($map)];
+        return ['status' => 'applied', 'changed' => $command !== null, 'copies' => count($origins), 'cells' => 0, 'footprint' => $stamped,
+            'revision' => $this->getMapRevision($map)];
     }
 
     /** @throws SessionRefusal When the map's tileset has no piece with the id. */

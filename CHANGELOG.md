@@ -81,6 +81,8 @@
   and name `ichiloto upgrade` (format 4), which moves each skit background to its skit's `Backdrop`.
 
 ### Fixed
+
+- Batch piece placement (`pieces.place` with `origins`) now honors an explicit `footprint: true` for every copy, with artwork and physical occupancy in one undo/redo step. Unrequested collision remains unchanged.
 - `map:render` review pages carry their graphical stills inside the page, so they show when the page is opened or sent on its own; they used to reference the PNG files beside them and showed no pictures elsewhere.
 
 - A preview field's Terminal picture draws its world objects' Terminal cells,

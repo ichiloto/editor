@@ -293,7 +293,8 @@ final class SessionHost
             ),
             'pieces.place' => array_key_exists('origins', $params)
                 ? $session->placePieceCopies(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
-                    self::requireString($params, 'piece'), self::requireCells(['cells' => $params['origins']]), self::readOptionalString($params, 'color'))
+                    self::requireString($params, 'piece'), self::requireCells(['cells' => $params['origins']]), self::readOptionalString($params, 'color'),
+                    self::readOptionalBool($params, 'footprint'))
                 : $session->placePiece(
                     self::requireString($params, 'map'),
                     self::requireInt($params, 'revision'),

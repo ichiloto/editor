@@ -300,6 +300,46 @@ it('places the building with its footprint, gives its painted door an entrance, 
     expect(expectAnswer($reopened('pieces.findPlaced', ['map' => 'town', 'x' => 6, 'y' => 3]))['pieces'][0])->toMatchArray(['x' => 4, 'y' => 2]);
 });
 
+it('places scattered copies with their requested physical footprints in one undo step', function () {
+    $root = createBuildingProject();
+    $request = createBuildingRpc($root);
+    defineHutPiece($root, $request);
+    $before = readTown($request);
+
+    $placed = expectAnswer($request('pieces.place', ['map' => 'town', 'revision' => $before['revision'], 'piece' => 'hut',
+        'origins' => [[0, 0], [4, 2]], 'footprint' => true]));
+    $after = readTown($request);
+    expect($after['occupancy'][1][0])->toBe(CollisionType::SOLID->value);
+    expect($placed)->toMatchArray(['changed' => true, 'copies' => 2, 'footprint' => 6]);
+    expect($after['occupancy'][0])->toBe(array_fill(0, 8, 0))
+        ->and($after['occupancy'][1])->toBe([1, 1, 1, 0, 0, 0, 0, 0])
+        ->and($after['occupancy'][2])->toBe(array_fill(0, 8, 0))
+        ->and($after['occupancy'][3])->toBe([0, 0, 0, 0, 1, 1, 1, 0]);
+    expectAnswer($request('history.undo'));
+    $undone = readTown($request);
+    expect($undone['occupancy'])->toBe($before['occupancy'])->and($undone['glyphs'])->toBe($before['glyphs']);
+    expectAnswer($request('history.redo'));
+    expect(readTown($request)['occupancy'])->toBe($after['occupancy'])->and(readTown($request)['glyphs'])->toBe($after['glyphs']);
+
+    $revision = readTown($request)['revision'];
+    expect(expectRefusal($request('pieces.place', ['map' => 'town', 'revision' => $revision, 'piece' => 'hut',
+        'origins' => [[1, 3], [7, 0]], 'footprint' => true])))->toContain('does not fit');
+    expect(readTown($request)['occupancy'])->toBe($after['occupancy'])->and(readTown($request)['glyphs'])->toBe($after['glyphs']);
+    expectAnswer($request('map.save', ['map' => 'town']));
+    expect(readTown(createBuildingRpc($root))['occupancy'])->toBe($after['occupancy']);
+});
+
+it('leaves scattered-copy collision unchanged unless physical stamping is requested', function (?bool $footprint) {
+    $root = createBuildingProject();
+    $request = createBuildingRpc($root);
+    defineHutPiece($root, $request);
+    $before = readTown($request);
+    $params = ['map' => 'town', 'revision' => $before['revision'], 'piece' => 'hut', 'origins' => [[0, 0], [4, 2]]];
+    if ($footprint !== null) { $params['footprint'] = $footprint; }
+    expect(expectAnswer($request('pieces.place', $params)))->toMatchArray(['changed' => true, 'copies' => 2, 'footprint' => 0]);
+    expect(readTown($request)['occupancy'])->toBe($before['occupancy'])->and(readTown($request)['glyphs'])->not->toBe($before['glyphs']);
+})->with([null, false]);
+
 it('refuses moves that cannot be whole and placement without a footprint leaves collision alone', function () {
     $root = createBuildingProject();
     $request = createBuildingRpc($root);
