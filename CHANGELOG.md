@@ -82,6 +82,8 @@
 
 ### Fixed
 
+- Directory records identified by filename, including tilesets and event scripts, now honor explicit identities when creating and duplicating records. Unsafe or occupied names are refused, and generated names remain unique across unsaved records.
+
 - Batch piece placement (`pieces.place` with `origins`) now honors an explicit `footprint: true` for every copy, with artwork and physical occupancy in one undo/redo step. Unrequested collision remains unchanged.
 - `map:render` review pages carry their graphical stills inside the page, so they show when the page is opened or sent on its own; they used to reference the PNG files beside them and showed no pictures elsewhere.
 

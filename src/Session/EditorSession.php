@@ -4995,8 +4995,8 @@ final class EditorSession
 
     /**
      * Duplicates a record below itself under a fresh identity, as one undo
-     * step: the one given (made unique) when the copy is to be something of
-     * its own, so its file is named for it.
+     * step. A file-identified record requires an unused filename identity; a
+     * payload identity is made unique. Without one, the copy gets a unique identity.
      *
      * @return array{index: int, records: list<string>} The copy's index, and the labels afterwards.
      * @throws SessionRefusal When the category or record is unknown or read-only, or the record cannot be duplicated.

@@ -156,6 +156,12 @@ for you:
   refused with their role keys. Answer as the editors do, in the change's
   params: `"choices": {"x": "crate:0:0"}`, or `null` for no tiles.
 
+For records identified by filename, such as tilesets and event scripts,
+`database.create` and `database.duplicate` accept an explicit `identity` in
+lowercase hyphenated form. It becomes the stable filename, independently of
+the display name. An unsafe or occupied identity refuses the change; omitting
+it generates a unique identity, including against unsaved records.
+
 Edits are made in order and held in memory, and every later change reads
 them: a field resource, tileset piece, place category, skill, effect timeline,
 database record or world object made earlier in the batch is usable by the

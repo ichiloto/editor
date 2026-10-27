@@ -1328,7 +1328,7 @@ final class ProjectRecordDatabase
         }
 
         if ($identity !== null && $this->isNamedByFile()) {
-            // An event script's name is its file's: scripts and triggers name it by that.
+            // A file-identified record keeps its identity in its filename, independently of its display name.
             $recordId = $this->requireNewFileName($identity);
         } elseif ($identity !== null) {
             if ($identityKey === null || ! is_array($payload)) {
@@ -1340,7 +1340,7 @@ final class ProjectRecordDatabase
             $payload[$identityKey] = $identity;
             $recordId = $identity;
         } elseif (is_array($payload) && $identityKey !== null && array_key_exists($identityKey, $payload)) {
-            $payload[$identityKey] = $this->makeUniqueIdentity($identity ?? $payload[$identityKey]);
+            $payload[$identityKey] = $this->makeUniqueIdentity($payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }
         if (is_array($payload)) {
@@ -1531,7 +1531,8 @@ final class ProjectRecordDatabase
 
     /**
      * Duplicates a record below itself, with a fresh unique identity: the
-     * one given, made unique, else one made from the original's. A per-file
+     * one given, else one made from the original's. An explicit filename
+     * identity must be unused; other identities are made unique. A per-file
      * copy's file is named after that identity.
      *
      * List-file and per-file categories duplicate; a per-file copy gets a
@@ -1558,7 +1559,9 @@ final class ProjectRecordDatabase
         $identityKey = $this->schema->identityKey;
         $recordId = '';
 
-        if ($identityKey !== null && array_key_exists($identityKey, $payload)) {
+        if ($identity !== null && $this->isNamedByFile()) {
+            $recordId = $this->requireNewFileName($identity);
+        } elseif ($identityKey !== null && array_key_exists($identityKey, $payload)) {
             $payload[$identityKey] = $this->makeUniqueIdentity($identity ?? $payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }
@@ -5136,8 +5139,7 @@ final class ProjectRecordDatabase
     /** Whether a record's name is the stem of its own file, as an event script's is. */
     private function isNamedByFile(): bool
     {
-        return $this->schema->storage === RecordStorage::DIRECTORY && $this->schema->identityKey === null
-            && $this->schema->listPayloadKey !== null;
+        return $this->schema->storage === RecordStorage::DIRECTORY && $this->schema->identityKey === null;
     }
 
     /**
@@ -5218,7 +5220,8 @@ final class ProjectRecordDatabase
         $candidate = $preferred;
         $suffix = 2;
 
-        while (is_file($this->path . DIRECTORY_SEPARATOR . $candidate . '.php')) {
+        while (is_file($this->path . DIRECTORY_SEPARATOR . $candidate . '.php')
+            || array_any($this->getRecords(), static fn(ProjectRecord $record): bool => $record->recordId === $candidate)) {
             $candidate = $preferred . '-' . $suffix;
             $suffix++;
         }
