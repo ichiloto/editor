@@ -77,12 +77,12 @@ it('maps every Engine command reference to an Editor resource category', functio
 it('reads a project\'s declared commands without loading their handlers', function (): void {
     $root = makeTemporaryProject();
 
-    expect(ProjectScriptCommands::fromProject($root)->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'end_battle', 'concede']);
+    expect(ProjectScriptCommands::fromProject($root)->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'recruit_actor', 'end_battle', 'concede']);
 
     writeCarriageDeclarations($root);
     $commands = ProjectScriptCommands::fromProject($root);
 
-    expect($commands->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'end_battle', 'concede', 'hire_carriage'])
+    expect($commands->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'recruit_actor', 'end_battle', 'concede', 'hire_carriage'])
         ->and($commands->catalog->findDefinition('hire_carriage')?->handlerClass)->toBe('Project\\Commands\\HireCarriage')
         ->and(class_exists('Project\\Commands\\HireCarriage', false))->toBeFalse()
         ->and($commands->declarationProblem)->toBeNull();
@@ -97,7 +97,7 @@ it('offers the open project\'s registered commands with their declared fields', 
     $inn = registeredVariantFields('inn');
     $carriage = registeredVariantFields('hire_carriage');
 
-    expect($list->fields[0]->options)->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, 'shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'hire_carriage'])
+    expect($list->fields[0]->options)->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, 'shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'recruit_actor', 'hire_carriage'])
         ->and(array_keys($shop))->toBe(['buyRate', 'sellRate'])
         ->and($shop['sellRate']->type)->toBe(InputControlType::FLOAT)
         ->and(array_keys($inn))->toBe(['confirmDialogue.text', 'confirmDialogue.name', 'cost', 'spawnPoint.x', 'spawnPoint.y', 'bgm', 'presentation', 'resultVariable'])
@@ -206,4 +206,22 @@ it('edits a shop command\'s merchandise and keeps what it does not edit', functi
         'technicalMetadata' => ['preserve' => true],
         'sellRate' => 0.25,
     ]);
+});
+
+
+it('authors recruitment through the actor picker and preserves unrelated command metadata on save', function (): void {
+    $root = makeTemporaryProject();
+    ProjectWorkspace::fromProject($root);
+    $actor = registeredVariantFields('recruit_actor')['actor'];
+    expect($actor->reference)->toBe('actors')->and($actor->allowsNone)->toBeFalse();
+    $database = loadRecordDatabase($root, 'common_events');
+    $index = $database->addSubItem(0, ['type' => 'recruit_actor', 'actor' => 'old.identity', 'note' => ['keep' => true]]);
+    $fields = $database->getSettingsFields(0);
+    $field = array_find($fields, static fn($entry) => str_starts_with($entry['field'], "command{$index}")
+        && str_ends_with($entry['field'], 'Actor'));
+    expect($field)->not->toBeNull();
+    $database->setField(0, $field['field'], 'chosen.identity');
+    $database->save();
+    $saved = require $root . '/assets/Events/dresser-note.php';
+    expect($saved[$index])->toBe(['type' => 'recruit_actor', 'actor' => 'chosen.identity', 'note' => ['keep' => true]]);
 });

@@ -2481,7 +2481,7 @@ Supported command types, matching the engine's interpreter:
 | `branch` | Conditions, Then (fixed), Else (fixed) |
 
 Registered commands follow the built-in ones in the `Type` options: the
-Engine's `shop`, `inn`, `payday`, `collect_income` and `adjust_income`, then any the project declares in
+Engine's `shop`, `inn`, `payday`, `collect_income`, `adjust_income` and `recruit_actor`, then any the project declares in
 `assets/Data/script-commands.php` (see the Engine's story events guide). Their
 rows come from their declarations:
 
@@ -2492,6 +2492,7 @@ rows come from their declarations:
 | `payday` | Schedule (picked from Income), Result Variable |
 | `collect_income` | Schedule (picked from Income), Result Variable |
 | `adjust_income` | Schedule (picked from Income), Amount (negative for a deduction) |
+| `recruit_actor` | Actor (picked from Actors; required) |
 
 A command's first list, such as a shop's merchandise, is edited like a
 route's steps: with the settings cursor on one of its entry rows, `Shift+O`
