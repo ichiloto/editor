@@ -1641,6 +1641,10 @@ final class RecordSchemaCatalog
             new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
             new RecordField('guaranteed', 'Guaranteed', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
         ];
+        $variants['prepare_counter'] = [
+            RecordField::reference('skill', 'Response Skill', 'counter_skills'),
+            RecordField::reference('stateId', 'Stance State', 'states'),
+        ];
         $variants['remove_state'] = [
             new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST),
             // Rolled for each listed state the target has (a 75% treatment cures three times in four).

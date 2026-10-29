@@ -6,6 +6,9 @@ namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Battle\CounterAttackRule;
+use Ichiloto\Engine\Battle\BattleReactions;
+use Ichiloto\Engine\Entities\Effects\SkillEffects\PrepareCounterSkillEffect;
+use Ichiloto\Engine\Entities\States\State;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use InvalidArgumentException;
 
@@ -35,6 +38,24 @@ final class CounterAttackValidator
             }
         }
 
+        $states = [];
+        foreach ($workspace->getRecordDatabase('states')?->getRecords() ?? [] as $record) {
+            $states[(string) $record->get('id')] = (array) $record->toArray();
+        }
+        $reactions = new BattleReactions($catalog);
+        foreach ($catalog->getSkills() as $skill) {
+            foreach ($skill->effects as $effect) {
+                if (!$effect instanceof PrepareCounterSkillEffect) { continue; }
+                try {
+                    $state = $states[$effect->stateId] ?? throw new InvalidArgumentException(
+                        'Unknown prepared counter stance: ' . $effect->stateId);
+                    $reactions->validatePreparation(new CounterAttackRule($effect->skill), State::fromArray($state));
+                } catch (InvalidArgumentException $refused) {
+                    $issues[] = Issue::error('assets/Data/Skills: ' . $skill->name, $refused->getMessage(),
+                        'Select an available Response Skill and a battle-only Stance State.');
+                }
+            }
+        }
         return $issues;
     }
 

@@ -45,6 +45,25 @@ it('authors a guaranteed state application through the shared effect fields', fu
         static fn(array $row): bool => ($row['field'] ?? '') === $field('guaranteed'))['value'])->toBe('true');
 });
 
+it('round trips a prepared response through skill and state pickers', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $skills->setField(1, 'occasion', \Ichiloto\Engine\Entities\Enumerations\Occasion::BATTLE_SCREEN->value);
+    $field = static fn(string $name): string => ProjectRecordDatabase::subFieldId('effect', 0, $name);
+    $skills->setField(1, $field('type'), 'prepare_counter');
+    $skills->setField(1, $field('skill'), 'Lunge');
+    $skills->setField(1, $field('stateId'), 'stance');
+    $skills->save();
+    $effect = SkillCatalog::load($root . '/assets')->findSkill('Lunge')->effects[0];
+    expect($effect)->toBeInstanceOf(\Ichiloto\Engine\Entities\Effects\SkillEffects\PrepareCounterSkillEffect::class)
+        ->and($effect->skill)->toBe('Lunge')->and($effect->stateId)->toBe('stance');
+    $fields = loadRecordDatabase($root, 'skills')->getSettingsFields(1);
+    expect(array_find($fields, static fn(array $row): bool => ($row['field'] ?? '') === $field('skill'))['reference'])
+        ->toBe('counter_skills')
+        ->and(array_find($fields, static fn(array $row): bool => ($row['field'] ?? '') === $field('stateId'))['reference'])
+        ->toBe('states');
+});
+
 it('lists every skill record in file order, numbered, with its kind and effects as data', function () {
     $skills = loadRecordDatabase(skillRecordsProject(), 'skills');
 

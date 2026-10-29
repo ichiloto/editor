@@ -32,6 +32,11 @@ source-preserving save/load checks. System's Dash Unlock Conditions field reuses
 the shared conditions authoring path; guarded dash settings survive a saved
 project reload and evaluate against live story state.
 
+Prepared-counter skill effects select their response from the existing constrained
+counter-skill picker and their stance from the state picker. Source-preserving
+round trips retain both references. Project validation checks those references
+and rejects a stance that persists outside its battle-owned reaction context.
+
 ## The one-paragraph diagnosis
 
 The editor is not slow because PHP is slow — **a full frame of real rendering
