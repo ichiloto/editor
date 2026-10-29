@@ -215,3 +215,19 @@ it('authors battle geometry atomically and refuses conflicting field scope befor
     expect(array_find($fields, static fn(array $row): bool => ($row['field'] ?? '') === 'battleTargeting.shape')['options'])
         ->toBe(['scope', 'line', 'front_row', 'back_row']);
 });
+
+
+it('authors one command-level formation change through a constrained operation field', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $skills->setField(1, 'occasion', \Ichiloto\Engine\Entities\Enumerations\Occasion::BATTLE_SCREEN->value);
+    $type = ProjectRecordDatabase::subFieldId('effect', 0, 'type');
+    $operation = ProjectRecordDatabase::subFieldId('effect', 0, 'operation');
+    $skills->setField(1, $type, 'change_formation');
+    $skills->setField(1, $operation, 'move_to_front');
+    $skills->save();
+    $effect = SkillCatalog::load($root . '/assets')->findSkill('Lunge')->effects[0];
+    expect($effect->operation)->toBe(\Ichiloto\Engine\Battle\Formation\BattleFormationChange::MOVE_TO_FRONT);
+    expect(array_find(loadRecordDatabase($root, 'skills')->getSettingsFields(1),
+        static fn(array $row): bool => ($row['field'] ?? '') === $operation)['options'])->toBe(['shuffle', 'move_to_front']);
+});

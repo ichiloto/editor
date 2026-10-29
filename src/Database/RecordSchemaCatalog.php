@@ -1654,6 +1654,9 @@ final class RecordSchemaCatalog
             RecordField::reference('stateId', 'Stance State', 'states'),
         ];
         $variants['reset_atb'] = [];
+        $variants['change_formation'] = [new RecordField('operation', 'Formation Change', options: array_map(
+            static fn(\Ichiloto\Engine\Battle\Formation\BattleFormationChange $operation): string => $operation->value,
+            \Ichiloto\Engine\Battle\Formation\BattleFormationChange::cases()))];
         $variants['remove_state'] = [
             new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST),
             // Rolled for each listed state the target has (a 75% treatment cures three times in four).

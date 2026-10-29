@@ -2003,7 +2003,9 @@ combat formation declarations. Skills offer Battle Targets (`scope`, `line`,
 sets All scope. Geometry and cover piercing require Battle Screen occasion.
 Invalid skill records refuse saving before writing; unfinished drafts remain
 supported. Shared runtime selection and execution use the logical positions.
-Group movement effects and their visible row changes are still being integrated.
+The `change_formation` skill effect offers constrained `shuffle` and
+`move_to_front` operations, applied once after individual effects. Visible row
+changes are still being integrated.
 
 Encounter groups. Each troop has a `Name`, an optional `Escape Policy`, and a
 list of members flattened into the settings pane as `Member 1 Enemy`,
