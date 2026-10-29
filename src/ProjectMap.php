@@ -1901,7 +1901,7 @@ final class ProjectMap
      */
     public function getNpcs(): NpcCollection
     {
-        return NpcCollection::fromMapData($this->editableData['npcs'] ?? null);
+        return NpcCollection::fromMapData($this->editableData['npcs'] ?? null, array_key_exists('npcs', $this->editableData));
     }
 
     /**
@@ -1918,6 +1918,14 @@ final class ProjectMap
     {
         $this->assertEditable();
         $entries = $npcs->toMapData();
+
+        if (!$npcs->hasDeclaration()) {
+            if (!array_key_exists('npcs', $this->editableData)) { return; }
+            $next = $this->editableData;
+            unset($next['npcs']);
+            $this->writeData($next);
+            return;
+        }
 
         if (($this->editableData['npcs'] ?? null) === $entries) {
             return;
