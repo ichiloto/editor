@@ -103,3 +103,28 @@ it('shows a resource placement only while its authored conditions hold, and alwa
     $session->undo();
     expect($session->readMap('test-map')['worldObjects'][0]['conditions'])->toBe([['type' => 'switch', 'name' => 'grove-grown']]);
 });
+
+
+it('keeps inline appearance undoable and transfers presentation ownership when choosing a resource', function () {
+    [, $file, $session] = createResourcePlacementProject();
+    $source = (string) file_get_contents($file);
+    expect(findPlacementRow($session, 'appearance'))->toBeNull();
+    $row = findPlacementRow($session, 'resource');
+    $session->applyWorldObject('test-map', $session->readWorldObject('test-map', 'grove-001')['revision'], 'grove-001', $row['key'], '');
+    $row = findPlacementRow($session, 'appearance');
+    expect($row)->not->toBeNull();
+    $session->applyWorldObject('test-map', $session->readWorldObject('test-map', 'grove-001')['revision'], 'grove-001', $row['key'], 'overhead');
+    $inline = $session->readMap('test-map')['worldObjects'][0];
+    expect($inline['appearance'])->toBe('overhead');
+    $session->undo();
+    expect($session->readMap('test-map')['worldObjects'][0])->not->toHaveKey('appearance');
+    $session->redo();
+    expect($session->readMap('test-map')['worldObjects'][0])->toBe($inline);
+    $row = findPlacementRow($session, 'resource');
+    $session->applyWorldObject('test-map', $session->readWorldObject('test-map', 'grove-001')['revision'], 'grove-001', $row['key'], 'conifer');
+    expect($session->readMap('test-map')['worldObjects'][0])->not->toHaveKeys(['appearance', 'pivot', 'sprites2d'])
+        ->and(findPlacementRow($session, 'appearance'))->toBeNull();
+    $session->undo();
+    expect($session->readMap('test-map')['worldObjects'][0])->toBe($inline)
+        ->and((string) file_get_contents($file))->toBe($source);
+});

@@ -199,6 +199,7 @@ final readonly class WorldObjectAuthoring
                         ...(isset($signs[$entry['resource']]) ? [new RecordField('label.default', 'Sign Text'),
                             new RecordField('label.message', 'Sign Text Translation Key')] : [])]
                     : [$resource,
+                        FieldResourceFields::getAppearanceField(),
                         new RecordField('pivot.x', 'Image Pivot X (0..1)', InputControlType::FLOAT),
                         new RecordField('pivot.y', 'Image Pivot Y (0..1)', InputControlType::FLOAT),
                         ...FieldSpriteFields::getFields($entry, true)];
@@ -230,7 +231,7 @@ final readonly class WorldObjectAuthoring
                     else { $entry['label'] ??= self::makeLabel((string) $entry['id'], $sign); }
                     // A placement's art and pivot are its resource's; without one, the object holds its own, as a new one does.
                     if (array_key_exists('resource', $entry)) {
-                        unset($entry['pivot'], $entry['sprites2d'], $entry['variants']);
+                        unset($entry['pivot'], $entry['sprites2d'], $entry['variants'], $entry['appearance']);
                     } else {
                         $entry['pivot'] ??= ['x' => .5, 'y' => 1.0];
                         $entry['sprites2d'] ??= null;

@@ -1692,6 +1692,16 @@ signal pulses on, lists it under **Attachments**: a **Stable Id**, the
 and the **Art Point X/Y (0..1)** where it is on the image, measured like the
 ground contact. When the art is replaced or re-cropped, update the art point
 here once; every visual staged on the feature follows it.
+**Appearance** classifies the image as `ground`, `water`, `barrier` or
+`overhead` for passage diagnostics. Leave it unclassified to retain image-based
+inspection. Ground images such as floors and overhead images such as curtains
+do not create walk-through warnings merely because they are opaque. A ground
+image covering a solid physical cell still produces an invisible-wall warning.
+This field never changes collision, occupancy stamps, drawing or saved positions.
+A resource owns its appearance for every placement; inline objects offer their
+own Appearance field. Choosing a resource removes the inline appearance together
+with its art and pivot, and Undo restores them together.
+
 Only the `resources` dictionary is edited; the
 catalogue's cues and action prompt are kept exactly as written. A new resource
 starts on the project's first image for the author to replace, an id is refused
