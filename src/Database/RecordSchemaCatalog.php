@@ -145,6 +145,7 @@ final class RecordSchemaCatalog
             self::troops(),
             self::animations(),
             self::battleEntryRules(),
+            self::crisisAbilities(),
             self::items(),
             self::weapons(),
             self::armors(),
@@ -510,6 +511,33 @@ final class RecordSchemaCatalog
                 ],
                 blank: ['type' => 'stat_stage', 'actor' => '', 'stat' => 'attack', 'delta' => 1],
             ),
+        );
+    }
+
+    /** Crisis activation and form-dependent technique references, shared by both editors. */
+    private static function crisisAbilities(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'crisis_abilities', entryNoun: 'crisis ability', storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/' . \Ichiloto\Engine\Battle\CrisisAbilityCatalog::FILE,
+            fields: [new RecordField('id', 'Id'), new RecordField('name', 'Name'),
+                new RecordField('label', 'Badge Label', removeWhenEmpty: true),
+                new RecordField('description', 'Description', removeWhenEmpty: true),
+                new RecordField('hpBelowPercent', 'HP Below %', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('states', 'Activation States', reference: 'states', codec: RecordFieldCodec::CSV_LIST,
+                    removeWhenEmpty: true)],
+            labelKey: 'id', identityKey: 'id',
+            blank: ['id' => 'new-crisis', 'name' => 'New crisis ability', 'variants' => []],
+            subList: new RecordSubList(key: 'variants', prefix: 'variant', singular: 'variant', fields: [
+                RecordField::reference('skill', 'Skill', 'skills'),
+                new RecordField('conditions', 'World Conditions', codec: RecordFieldCodec::CONDITIONS, removeWhenEmpty: true),
+            ], blank: ['skill' => '']),
+            saveCheck: static function (array $whole, string $root): ?string {
+                try {
+                    new \Ichiloto\Engine\Battle\CrisisAbilityCatalog($whole);
+                } catch (\InvalidArgumentException $error) { return $error->getMessage(); }
+                return null;
+            },
         );
     }
 

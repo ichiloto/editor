@@ -61,6 +61,7 @@ final class ReferenceCatalog
         'classes',
         'attack_skills',
         'counter_skills',
+        'crisis_abilities',
         'resolution_kinds',
         'piece_connections',
         'resolution_scopes',
@@ -238,6 +239,10 @@ final class ReferenceCatalog
             'attack_skills' => $this->attackSkillNames(),
             // What a counter attack may respond with, by the Engine's own rule.
             'counter_skills' => $this->counterSkillNames(),
+            'crisis_abilities', 'states' => array_values(array_filter(array_map(
+                static fn(ProjectRecord $record): mixed => $record->get('id'),
+                $this->workspace->getRecordDatabase($category)?->getRecords() ?? []),
+                static fn(mixed $id): bool => is_string($id) && $id !== '')),
             // A class restricts what its members equip by the engine's type names.
             // How a skill effect resolves, how often a skill rolls, and what
             // kind of spell it is: the Engine's own vocabularies.
@@ -831,6 +836,17 @@ final class ReferenceCatalog
      */
     public function labelsFor(string $category): array
     {
+        if (in_array($category, ['states', 'crisis_abilities'], true)) {
+            $labels = [];
+            foreach ($this->workspace->getRecordDatabase($category)?->getRecords() ?? [] as $record) {
+                $id = $record->get('id');
+                $name = $record->get('name');
+                if (is_string($id) && $id !== '') {
+                    $labels[$id] = is_string($name) && $name !== '' ? sprintf('%s (%s)', $name, $id) : $id;
+                }
+            }
+            return $labels;
+        }
         if ($category === 'event_markers') {
             // Each event read as what it is ("H · Script tracks"), from the map the picker reads.
             $map = $this->getSubjectMap();

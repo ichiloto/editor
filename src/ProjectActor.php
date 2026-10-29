@@ -649,6 +649,17 @@ final class ProjectActor
             return;
         }
 
+        if ($field === 'crisisAbility') {
+            $reference = trim((string) $value);
+            if ($reference === '') {
+                unset($this->payload['data']['crisisAbility']);
+            } else {
+                $this->payload['data']['crisisAbility'] = $reference;
+            }
+            $this->touchState();
+            return;
+        }
+
         if ($field === 'counterAttack') {
             // No counter is the absence of the grant, so it removes the key,
             // as the Engine reads an omitted counterAttack; any other value

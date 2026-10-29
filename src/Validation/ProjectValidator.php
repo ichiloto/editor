@@ -179,6 +179,7 @@ class ProjectValidator
       ...$this->checkTroops($workspace),
       ...$this->checkBattleEntryRules($workspace),
       ...$this->checkSkillCatalog($workspace),
+      ...$this->checkCrisisAbilities($workspace),
       ...$this->checkItemCatalog($workspace),
       ...$this->checkSummons($workspace),
       ...$this->checkCutscenes($workspace),
@@ -302,6 +303,7 @@ class ProjectValidator
 
     // What an actor's Attack command may use, by the rule its picker offers.
     $attackSkills = new ReferenceCatalog($workspace)->valuesFor('attack_skills');
+    $crisisAbilities = new ReferenceCatalog($workspace)->valuesFor('crisis_abilities');
 
     foreach ($workspace->actorDatabase->getActors() as $actor) {
       $where = sprintf('actor %s', $actor->getName());
@@ -340,6 +342,11 @@ class ProjectValidator
       }
 
       $variants = $actor->getNaturalVariants();
+      $crisis = $actor->getData()['crisisAbility'] ?? null;
+      if ($crisis !== null && (!is_string($crisis) || !in_array($crisis, $crisisAbilities, true))) {
+        $issues[] = Issue::error($where, 'Its crisis ability reference does not resolve.',
+          'Choose a current crisis ability on the actor page.');
+      }
       $default = $actor->getDefaultNaturalVariantId();
 
       if ($variants !== [] && ($default === null || ! isset($variants[$default]))) {
@@ -1450,6 +1457,29 @@ class ProjectValidator
       ),
       $workspace->loadSkillCatalog()->getProblems(),
     );
+  }
+
+  /** Validates current crisis resources against the same skill and state identities runtime consumes. */
+  private function checkCrisisAbilities(ProjectWorkspace $workspace): array
+  {
+    try {
+      $entries = array_map(static fn($record): array => (array) $record->toArray(),
+        $workspace->getRecordDatabase('crisis_abilities')?->getRecords() ?? []);
+      $catalog = new \Ichiloto\Engine\Battle\CrisisAbilityCatalog($entries);
+      $states = new ReferenceCatalog($workspace)->valuesFor('states');
+      foreach ($catalog->getAbilities() as $id => $ability) {
+        $ability->validateSkills($workspace->loadSkillCatalog());
+        foreach ($ability->states as $state) {
+          if (!in_array($state, $states, true)) {
+            throw new InvalidArgumentException(sprintf('Crisis "%s" references unknown activation state "%s".', $id, $state));
+          }
+        }
+      }
+      return [];
+    } catch (InvalidArgumentException $error) {
+      return [Issue::error('assets/Data/crisis-abilities.php', $error->getMessage(),
+        'Correct the crisis activation and resource references in the database.')];
+    }
   }
 
   /**

@@ -614,6 +614,12 @@ final class ActorAuthoring
                 'noneLabel' => self::NO_COUNTER,
                 'field' => 'counterAttack',
             ],
+            [
+                'label' => 'Crisis Ability',
+                'value' => strval($actor->getData()['crisisAbility'] ?? ''),
+                'reference' => 'crisis_abilities', 'allowsNone' => true,
+                'noneLabel' => '(None)', 'field' => 'crisisAbility',
+            ],
             ...$this->actorSummonFields($workspace, $actor),
             ...($this->graphical ? $this->getFieldAppearanceFields($workspace, $actor) : []),
             [
@@ -758,7 +764,7 @@ final class ActorAuthoring
      */
     private static function coerceActorFieldValue(string $field, string $rawValue): string|int
     {
-        if (in_array($field, ['name', 'description', 'class', 'attackStyle', 'attackSkill', 'counterAttack', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
+        if (in_array($field, ['name', 'description', 'class', 'attackStyle', 'attackSkill', 'counterAttack', 'crisisAbility', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
             return trim($rawValue);
         }
 

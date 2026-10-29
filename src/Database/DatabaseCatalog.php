@@ -31,6 +31,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('enemies', 'Enemies', 'Define enemy stats, traits, and drops.', true),
             new DatabaseCategoryDefinition('troops', 'Troops', 'Compose encounter groups and formations.', true),
             new DatabaseCategoryDefinition('battle_entry_rules', 'Battle Entry', 'Author rules that shape how battles begin.', true),
+            new DatabaseCategoryDefinition('crisis_abilities', 'Crisis Abilities', 'Author conditional finishing techniques and their form variants.', true),
             new DatabaseCategoryDefinition('states', 'States', 'Define status effects and conditions.', true),
             new DatabaseCategoryDefinition('animations', 'Animations', 'Create reusable keyframed effects.', true),
             new DatabaseCategoryDefinition('tilesets', 'Tilesets', 'Assign tiles and terrain behavior.', true),

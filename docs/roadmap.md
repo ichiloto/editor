@@ -17,6 +17,16 @@ Runtime membership and persistence are owned by Engine Party, rather than a
 second Editor state. Native editor consumers have not been launched for this
 change; headless authoring and source round trips are the validation surface.
 
+## Crisis technique authoring — in progress, 29 October 2026
+
+The shared Crisis Abilities database category authors activation thresholds,
+state references and guarded skill variants. Actor pages select a crisis resource
+through the existing reference picker. Save validation uses Engine's definition
+contract; incomplete activation is refused before writing. State pickers now
+store stable state IDs and show display names beside them, removing the previous
+display-name storage behavior. Headless round trips cover these surfaces. Full
+battle-feature authoring and graphical interaction verification remain pending.
+
 ## The one-paragraph diagnosis
 
 The editor is not slow because PHP is slow — **a full frame of real rendering
