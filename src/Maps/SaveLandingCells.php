@@ -28,7 +28,7 @@ final class SaveLandingCells
      * @param array<int, array<int, int>> $grid Resolved collision by row then column.
      * @param array<string, true> $npcs NPC start cells by `x,y`.
      * @param array<string, true> $events Event marker cells by `x,y`.
-     * @param list<CellArea> $areas Every event's cells as the Engine resolves them.
+     * @param list<array{area: CellArea, previous: list<CellArea>}> $areas Current event areas and the matching saved event's areas.
      */
     private function __construct(
         public readonly string $mapId,
@@ -45,7 +45,7 @@ final class SaveLandingCells
      *
      * @param MapReachabilityReport $report Where the player can reach on this map.
      */
-    public static function readMap(ProjectMap $map, MapReachabilityReport $report): self
+    public static function readMap(ProjectMap $map, MapReachabilityReport $report, array $savedEvents = []): self
     {
         $events = [];
         for ($y = 0, $height = $map->getHeight(); $y < $height; $y++) {
@@ -56,11 +56,42 @@ final class SaveLandingCells
             }
         }
         $resolved = MapEventResolver::inspect($map->getEditableData(), $map->getEventLayerCells(), $map->mapId)->events;
-        $areas = array_values(array_map(static fn(array $event): CellArea => CellArea::fromArray($event['area'], 'Event area'),
-            array_filter($resolved, static fn(array $event): bool => is_array($event['area'] ?? null))));
+        $areas = [];
+        foreach ($resolved as $event) {
+            if (!is_array($event['area'] ?? null)) { continue; }
+            $previous = [];
+            foreach ($savedEvents as $saved) {
+                if (!is_array($saved) || !is_array($saved['area'] ?? null) || !self::isSameEvent($event, $saved)) { continue; }
+                $previous[] = CellArea::fromArray($saved['area'], 'Saved event area');
+            }
+            $areas[] = ['area' => CellArea::fromArray($event['area'], 'Event area'), 'previous' => $previous];
+        }
 
         return new self($map->mapId, $map->getResolvedCollisionMap(), self::readNpcCells((array) ($map->getEditableData()['npcs'] ?? [])),
             $events, $areas, $report);
+    }
+
+    /** A marker identifies its event; its behavior and subject must also remain the same.
+     * Legacy markerless entries qualify only when their exact territory remains unchanged. */
+    private static function isSameEvent(array $current, array $saved): bool
+    {
+        if (!isset($current['marker']) && ($current['area'] ?? null) != ($saved['area'] ?? null)) { return false; }
+        unset($current['area'], $saved['area']);
+        return $current == $saved;
+    }
+
+    /** Cells newly covered by each event, preserving event ownership when areas overlap. @return array<string, true> */
+    public function getNewEventCells(): array
+    {
+        $cells = [];
+        foreach ($this->areas as $entry) {
+            foreach ($entry['area']->cells as [$x, $y]) {
+                if (!array_any($entry['previous'], static fn(CellArea $area): bool => $area->containsCell($x, $y))) {
+                    $cells["{$x},{$y}"] = true;
+                }
+            }
+        }
+        return $cells;
     }
 
     /**
@@ -94,8 +125,8 @@ final class SaveLandingCells
     /**
      * Whether a save may land on the cell.
      *
-     * @param array{int, int}|null $from The cell on this map the save moves off, whose own events it may stay
-     *     inside; null for a save arriving from another map.
+     * @param array{int, int}|null $from The cell in the saved map, whose matching historical events it may stay
+     *     inside; null for a save arriving from another map. Without saved evidence all event areas refuse landing.
      */
     public function canLand(int $x, int $y, ?array $from = null): bool
     {
@@ -123,8 +154,8 @@ final class SaveLandingCells
         if ($collision !== CollisionType::NONE) {
             return sprintf('it is not plain floor (%s)', strtolower(str_replace('_', ' ', $collision->name)));
         }
-        if (isset($this->events["{$x},{$y}"]) || array_any($this->areas, static fn(CellArea $area): bool => $area->containsCell($x, $y)
-            && ($from === null || ! $area->containsCell(...$from)))) {
+        if (isset($this->events["{$x},{$y}"]) || array_any($this->areas, static fn(array $entry): bool => $entry['area']->containsCell($x, $y)
+            && ($from === null || !array_any($entry['previous'], static fn(CellArea $area): bool => $area->containsCell(...$from))))) {
             return 'an event is there';
         }
         if (! $this->report->isReachable($x, $y)) {

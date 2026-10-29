@@ -3241,7 +3241,12 @@ grass, exits and save points take nothing, and an NPC that stays put moves no
 save. With a save compatibility
 manifest (`assets/Data/save-compatibility.php`), `Ctrl+S` first shows each such
 cell and where saves on it will land: the nearest plain floor the player can
-reach today, found by walking from the cell, never an event or NPC cell.
+reach after the edit, found by walking from the cell. NPC cells and painted
+event cells refuse landing. A bound event area permits a move within that same
+event only when the saved source proves the origin already belonged to it.
+New or replaced event behavior, newly covered territory and overlapping new
+events each require landing outside the new event. Map retirement has no
+same-map historical origin and continues to require event-free floor.
 **Save and move saves** writes the map and a `relocations` step that raises
 the manifest's content version by one; **Cancel** saves nothing. The step is
 its own undo: `Ctrl+Z` after the save removes it from the manifest, and undoing

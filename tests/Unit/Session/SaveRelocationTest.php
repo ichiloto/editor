@@ -272,3 +272,77 @@ it('moves no save off a map a change set made, though something already led to i
         ->and((string) ($outcome['reason'] ?? ''))->not->toContain('Saves')
         ->and((string) file_get_contents($root . '/assets/Data/save-compatibility.php'))->toBe($manifest);
 });
+
+
+/** Current and saved ownership deliberately share territory while individual event identities remain distinct. */
+function addSyntheticBoundStoryArea(\Ichiloto\Editor\ProjectMap $map, string $marker = 'Z'): void
+{
+    $map->setMapDataField(['areas'], [['id' => 'story-floor', 'area' => ['cells' => [[1, 1], [2, 1], [1, 2]]]]]);
+    $map->setEventDefinition($marker, [
+        'class' => \Ichiloto\Engine\Events\Triggers\ScriptEventTrigger::class,
+        'subject' => ['kind' => 'area', 'id' => 'story-floor'],
+        'data' => ['mode' => 'auto', 'reusable' => true, 'scriptId' => 'home-only'],
+    ]);
+}
+
+function savedSyntheticBoundStoryAreaProject(): string
+{
+    $root = mapLineRemovalProject();
+    $path = $root . '/assets/Maps/home/home.data.php';
+    $data = require $path;
+    $data['areas'] = [['id' => 'story-floor', 'area' => ['cells' => [[1, 1], [2, 1], [1, 2]]]]];
+    $data['events']['Z'] = [
+        'class' => \Ichiloto\Engine\Events\Triggers\ScriptEventTrigger::class,
+        'subject' => ['kind' => 'area', 'id' => 'story-floor'],
+        'data' => ['mode' => 'auto', 'reusable' => true, 'scriptId' => 'home-only'],
+    ];
+    file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
+    return $root;
+}
+
+it('relocates outside newly added bound areas even when the old origin lies inside the new territory', function () {
+    $root = mapLineRemovalProject();
+    $before = sourceHashTree($root);
+    $session = EditorSession::open($root);
+    $map = getPhysicalOccupancyMap($session);
+    addSyntheticBoundStoryArea($map);
+    $plan = SaveRelocationPlanner::plan($map, $root);
+    $area = \Ichiloto\Engine\Core\CellArea::fromCells([[1, 1], [2, 1], [1, 2]]);
+    expect($plan)->not->toBeNull();
+    expect(array_merge(...array_column($plan->relocations, 'cells')))->toEqualCanonicalizing([[1, 1], [2, 1], [1, 2]]);
+    foreach ($plan->relocations as $move) { expect($area->containsCell(...$move['to']))->toBeFalse(); }
+    expect(sourceHashTree($root))->toBe($before);
+});
+
+it('permits a relocation to stay in the same unchanged historical event', function () {
+    $root = savedSyntheticBoundStoryAreaProject();
+    $session = EditorSession::open($root);
+    $map = getPhysicalOccupancyMap($session);
+    $map->setTileSymbol(1, 2, '#');
+    $plan = SaveRelocationPlanner::plan($map, $root);
+    expect($plan->relocations)->toBe([['map' => 'home', 'cells' => [[1, 2]], 'to' => [1, 1]]]);
+});
+
+it('keeps a newly overlapping event separate from an old event on the same named area', function () {
+    $root = savedSyntheticBoundStoryAreaProject();
+    $session = EditorSession::open($root);
+    $map = getPhysicalOccupancyMap($session);
+    addSyntheticBoundStoryArea($map, 'Y');
+    $plan = SaveRelocationPlanner::plan($map, $root);
+    $area = \Ichiloto\Engine\Core\CellArea::fromCells([[1, 1], [2, 1], [1, 2]]);
+    expect($plan)->not->toBeNull();
+    expect(array_merge(...array_column($plan->relocations, 'cells')))->toEqualCanonicalizing([[1, 1], [2, 1], [1, 2]]);
+    foreach ($plan->relocations as $move) { expect($area->containsCell(...$move['to']))->toBeFalse(); }
+});
+
+it('treats replaced behavior under a reused marker as new event ownership', function () {
+    $root = savedSyntheticBoundStoryAreaProject();
+    $session = EditorSession::open($root);
+    $map = getPhysicalOccupancyMap($session);
+    $map->setEventField('Z', ['data', 'reusable'], false);
+    $plan = SaveRelocationPlanner::plan($map, $root);
+    expect($plan)->not->toBeNull();
+    foreach ($plan->relocations as $move) {
+        expect(in_array($move['to'], [[1, 1], [2, 1], [1, 2]], true))->toBeFalse();
+    }
+});
