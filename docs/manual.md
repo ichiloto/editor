@@ -1468,6 +1468,13 @@ validation reports terrain the Engine would refuse.
 
 ### Actors
 
+The Actors category offers Starting Weapon, Shield, Head, Body and Accessory
+pickers. They store stable item identities under `data.initialEquipment` and
+offer equipment for the corresponding semantic slot. Choosing None clears that
+slot's starting assignment. These assignments equip a newly created actor;
+existing saved gear and empty slots remain as the player left them. Validation
+checks current item identities, slot compatibility and class equipment rules.
+
 An actor's Inspector opens with **Identity**: a `Definition Id`, which is
 what a save resolves the actor by. A project that declares none is resolved
 by display name, so the row says so, and renaming such an actor strands

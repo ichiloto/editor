@@ -621,6 +621,12 @@ final class ActorAuthoring
                 'noneLabel' => '(None)', 'field' => 'crisisAbility',
             ],
             ...$this->actorSummonFields($workspace, $actor),
+            ...array_map(static fn(\Ichiloto\Engine\Entities\Inventory\EquipmentSlotType $slot): array => [
+                'label' => 'Starting ' . ucfirst($slot->value),
+                'value' => strval($actor->getData()['initialEquipment'][$slot->value] ?? ''),
+                'reference' => 'initial_' . $slot->value, 'allowsNone' => true,
+                'noneLabel' => '(None)', 'field' => 'initialEquipment.' . $slot->value,
+            ], \Ichiloto\Engine\Entities\Inventory\EquipmentSlotType::cases()),
             ...($this->graphical ? $this->getFieldAppearanceFields($workspace, $actor) : []),
             [
                 'label' => 'Level',
@@ -764,7 +770,7 @@ final class ActorAuthoring
      */
     private static function coerceActorFieldValue(string $field, string $rawValue): string|int
     {
-        if (in_array($field, ['name', 'description', 'class', 'attackStyle', 'attackSkill', 'counterAttack', 'crisisAbility', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
+        if (str_starts_with($field, 'initialEquipment.') || in_array($field, ['name', 'description', 'class', 'attackStyle', 'attackSkill', 'counterAttack', 'crisisAbility', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
             return trim($rawValue);
         }
 

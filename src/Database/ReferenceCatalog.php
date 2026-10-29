@@ -84,6 +84,7 @@ final class ReferenceCatalog
         'items',
         'weapons',
         'armors',
+        ...\Ichiloto\Editor\Actors\InitialEquipmentAuthoring::REFERENCES,
         'enemies',
         'troops',
         'states',
@@ -275,6 +276,9 @@ final class ReferenceCatalog
             'items' => $this->getInventoryCatalog()->idsIn('items'),
             'weapons' => $this->getInventoryCatalog()->idsIn('weapons'),
             'armors' => $this->getInventoryCatalog()->idsIn('armors'),
+            'initial_weapon', 'initial_shield', 'initial_head', 'initial_body', 'initial_accessory' =>
+                \Ichiloto\Editor\Actors\InitialEquipmentAuthoring::getItemIds($this->workspace,
+                    \Ichiloto\Engine\Entities\Inventory\EquipmentSlotType::from(substr($category, 8))),
             'bgm', 'sfx' => $this->audioValues($category),
             // The engine loads an enemy's image as
             // Graphics/Enemies/<value>.txt, appending the extension itself,
@@ -990,7 +994,8 @@ final class ReferenceCatalog
             return $labels;
         }
 
-        if (! in_array($category, ['inventory', 'items', 'weapons', 'armors'], true)) {
+        if (! in_array($category, ['inventory', 'items', 'weapons', 'armors',
+            ...\Ichiloto\Editor\Actors\InitialEquipmentAuthoring::REFERENCES], true)) {
             return [];
         }
 

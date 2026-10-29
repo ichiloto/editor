@@ -601,6 +601,20 @@ final class ProjectActor
             $this->payload['data'] = [];
         }
 
+        if (str_starts_with($field, 'initialEquipment.')) {
+            $slot = substr($field, strlen('initialEquipment.'));
+            \Ichiloto\Engine\Entities\Inventory\EquipmentSlotType::from($slot);
+            $items = $this->payload['data']['initialEquipment'] ?? [];
+            \Ichiloto\Engine\Entities\Actors\InitialEquipment::fromArray($items, $this->getName());
+            $reference = trim((string) $value);
+            if ($reference === '' || $reference === '(None)') { unset($items[$slot]); }
+            else { $items[$slot] = $reference; }
+            if ($items === []) { unset($this->payload['data']['initialEquipment']); }
+            else { $this->payload['data']['initialEquipment'] = $items; }
+            $this->touchState();
+            return;
+        }
+
         if ($field === 'class') {
             $className = trim((string) $value);
 
