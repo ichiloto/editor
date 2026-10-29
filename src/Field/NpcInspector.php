@@ -48,7 +48,7 @@ final class NpcInspector
         'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
         'Movement' => ['movement', 'directionFix', 'facing', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
         'Visibility' => ['conditions'],
-        'Cue' => ['cue.symbol', 'cue.color', 'cue.conditions'],
+        'Cue' => ['cue.symbol', 'cue.color', 'cue.maxDistance', 'cue.conditions'],
         'Interaction' => ['commandListScript'],
         'Completion Writes' => ['sets'],
     ];

@@ -52,6 +52,7 @@ use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
 use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
+use Ichiloto\Engine\Events\Triggers\EventCue;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeRecordType;
 use InvalidArgumentException;
@@ -4348,7 +4349,7 @@ class ProjectValidator
         $issues = [...$issues, ...$this->checkCinematicTrigger($definition, $where, $known)];
       }
 
-      if (str_contains($class, self::SCRIPT_TRIGGER)) {
+      if (is_a($class, ScriptEventTrigger::class, true)) {
         $issues = [
           ...$issues,
           ...$this->checkScriptTrigger(
@@ -4567,7 +4568,8 @@ class ProjectValidator
     $scriptId = trim(strval($data['scriptId'] ?? ''));
     $inlineScript = $data['script'] ?? [];
 
-    if ($scriptId === '' && (! is_array($inlineScript) || $inlineScript === [])) {
+    if ($scriptId === '' && (! is_array($inlineScript) || $inlineScript === [])
+      && !is_a($definition['class'] ?? '', \Ichiloto\Engine\Events\Triggers\PassageEventTrigger::class, true)) {
       $issues[] = Issue::error(
         $where,
         'ScriptEventTrigger names no scriptId and has no inline script.',
@@ -4639,8 +4641,11 @@ class ProjectValidator
     }
 
     $issues = [];
-    foreach (array_diff(array_keys($cue), ['symbol', 'color', 'conditions', 'kind']) as $field) {
-      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol, color, conditions, or kind.');
+    foreach (array_diff(array_keys($cue), ['symbol', 'color', 'conditions', 'kind', 'maxDistance']) as $field) {
+      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol, color, conditions, kind or maxDistance.');
+    }
+    if (array_key_exists('maxDistance', $cue) && (!is_int($cue['maxDistance']) || $cue['maxDistance'] < 0 || $cue['maxDistance'] > EventCue::MAX_DISTANCE)) {
+      $issues[] = Issue::error($where, 'Its cue maxDistance must be an integer from 0 to 64 steps.', 'Choose a range or clear it for unlimited range.');
     }
 
     // Kind is a contract even for a cue whose blank symbol disables display.

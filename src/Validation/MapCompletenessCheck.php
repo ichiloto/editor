@@ -57,6 +57,11 @@ final class MapCompletenessCheck
                 self::readFieldCatalog($map),
                 requiresGraphics: $map->listTilesetIds() !== [],
             );
+            if (array_any($map->getEditableData()['events'] ?? [], static fn($event): bool => is_array($event)
+                && is_a($event['class'] ?? '', \Ichiloto\Engine\Events\Triggers\PassageEventTrigger::class, true))) {
+                $found = [...$found, ...MapCompletenessValidator::validateOpeningFloors($map->mapId,
+                    $map->getEditableData(), $map->getEventLayerCells(), $map->getPhysicalOccupancy()->collisionGrid)];
+            }
         } catch (Throwable $failure) {
             // The map's own reading checks say why it cannot be read; nothing is judged as complete.
             return [new Issue(Severity::ERROR, $map->mapId, 'Its completeness could not be checked: ' . $failure->getMessage(),

@@ -64,6 +64,9 @@ final class NpcEventAdoption
     {
         $event = $map->getEventDefinition($marker) ?? throw new NpcRefusal("{$map->mapId} has no event {$marker}.");
         $class = ltrim(strval($event['class'] ?? ''), '\\');
+        if (is_a($class, \Ichiloto\Engine\Events\Triggers\PassageEventTrigger::class, true)) {
+            throw new NpcRefusal('An opening passage owns physical access and cannot become an NPC page.');
+        }
         $data = is_array($event['data'] ?? null) ? $event['data'] : [];
         if (!array_any(MapNpcInteractionRule::PAGE_ACTION_TRIGGERS, static fn(string $type): bool => is_a($class, $type, true))) {
             throw new NpcRefusal("Event {$marker} is not a script, Cinematic or dialogue event, so no NPC page can run it.");

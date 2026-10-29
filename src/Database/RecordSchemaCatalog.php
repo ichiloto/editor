@@ -2613,7 +2613,7 @@ final class RecordSchemaCatalog
                 DialogueLineSpeaker::forText(),
                 ['name' => '', 'text' => 'Something to say.'],
             ) : null,
-            commandLists: $className === ScriptEventTrigger::class
+            commandLists: $className !== null && is_a($className, ScriptEventTrigger::class, true)
                 ? ['script' => self::eventCommandList('script', $graphical)]
                 : [],
         );
@@ -2668,6 +2668,8 @@ final class RecordSchemaCatalog
         return [
             new RecordField('cue.symbol', 'Cue Symbol', removeWhenEmpty: true),
             new RecordField('cue.color', 'Cue Colour', options: FieldCueFields::COLORS, removeWhenEmpty: true, displayDefault: 'bright-yellow'),
+            new RecordField('cue.maxDistance', 'Cue Range (0..64 steps)', InputControlType::INTEGER,
+                removeWhenEmpty: true, displayDefault: '(unlimited)'),
             new RecordField('cue.conditions', 'Cue When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
         ];
     }
