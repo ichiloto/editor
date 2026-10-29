@@ -384,6 +384,8 @@ final class RecordSchemaCatalog
                     RecordField::reference('enemy', 'Enemy', 'enemies'),
                     new RecordField('position.0', 'X', InputControlType::INTEGER),
                     new RecordField('position.1', 'Y', InputControlType::INTEGER),
+                    new RecordField('battlePosition', 'Logical Row, Lane', codec: RecordFieldCodec::BATTLE_POSITION,
+                        removeWhenEmpty: true, displayDefault: '(front row, distinct lane)'),
                     // The graphical battle's own placement: the column its feet stand on and how far back
                     // from any arena ground's near edge, and its contain limits; never the terminal position above.
                     // Without one the battle arranges the member beside the others.
@@ -400,7 +402,8 @@ final class RecordSchemaCatalog
             ),
             subLists: [self::troopEventPageList()],
             // The Engine reads event pages when a battle starts; a page it would refuse is refused here.
-            saveCheck: TroopEventPageContract::checkTroops(...),
+            saveCheck: static fn(array $troops, string $root): ?string => TroopEventPageContract::checkTroops($troops, $root)
+                ?? TroopLogicalFormationContract::checkTroops($troops, $root),
         );
     }
 

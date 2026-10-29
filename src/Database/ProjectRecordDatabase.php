@@ -3862,6 +3862,18 @@ final class ProjectRecordDatabase
             return $test === [] && $field->removeWhenEmpty ? null : $test;
         }
 
+        if ($field->codec === RecordFieldCodec::BATTLE_POSITION) {
+            if ($trimmed === '' && $field->removeWhenEmpty) { return null; }
+            $parts = array_map(trim(...), explode(',', $trimmed));
+            if (count($parts) !== 2 || preg_match('/\A[0-9]+\z/', $parts[1]) !== 1
+                || filter_var($parts[1], FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) === false) {
+                throw new \InvalidArgumentException('Logical position requires front or back, followed by a nonnegative integer lane.');
+            }
+            return \Ichiloto\Engine\Battle\Formation\BattlePosition::fromArray([
+                'row' => $parts[0], 'lane' => (int) $parts[1],
+            ], $field->label)->toArray();
+        }
+
         if ($field->codec === RecordFieldCodec::STAGE_SLOT) {
             if ($trimmed === '' && $field->removeWhenEmpty) {
                 return null;
@@ -4090,6 +4102,9 @@ final class ProjectRecordDatabase
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::SOURCE_RECT => is_array($value)
                 ? implode(', ', array_map(static fn(string $key): string => ProjectRecord::stringify($value[$key] ?? ''), ['x', 'y', 'width', 'height']))
+                : ProjectRecord::stringify($value),
+            RecordFieldCodec::BATTLE_POSITION => is_array($value)
+                ? sprintf('%s, %s', ProjectRecord::stringify($value['row'] ?? ''), ProjectRecord::stringify($value['lane'] ?? ''))
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::STAGE_SLOT => is_array($value)
                 ? implode(', ', array_map(static fn(string $key): string => ProjectRecord::stringify($value[$key] ?? ''),

@@ -31,7 +31,20 @@ final class TroopFormationValidator
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
     {
-        return [...$this->validateTerminal($workspace), ...$this->validateGraphical($workspace)];
+        return [...$this->validateLogical($workspace), ...$this->validateTerminal($workspace), ...$this->validateGraphical($workspace)];
+    }
+
+    /** @return list<Issue> */
+    private function validateLogical(ProjectWorkspace $workspace): array
+    {
+        $issues = [];
+        foreach ($workspace->getRecordDatabase('troops')?->getRecords() ?? [] as $record) {
+            $where = 'troop ' . strval($record->get('name'));
+            if (($problem = \Ichiloto\Editor\Database\TroopLogicalFormationContract::findProblem($record->toArray())) !== null) {
+                $issues[] = Issue::error($where, $problem, 'Choose distinct logical row/lane positions for troop members.');
+            }
+        }
+        return $issues;
     }
 
     /**

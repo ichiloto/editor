@@ -1994,6 +1994,13 @@ timeline.
 
 ### Troops
 
+Each troop member has a Logical Row, Lane field, written as `front, 0` or
+`back, 0`. It stores `battlePosition` independently of terminal X/Y and graphical
+Battle Placement. Clearing it restores the Engine's distinct front-lane default.
+Malformed or duplicate authored logical positions refuse saving. These are the
+combat formation declarations; targeting effects and their visible row changes
+are still being integrated.
+
 Encounter groups. Each troop has a `Name`, an optional `Escape Policy`, and a
 list of members flattened into the settings pane as `Member 1 Enemy`,
 `Member 1 X`, `Member 1 Y`, and so on. An omitted escape policy preserves the

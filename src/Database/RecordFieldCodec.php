@@ -110,6 +110,9 @@ enum RecordFieldCodec: string
      */
     case STAGE_SLOT = 'stage_slot';
 
+    /** Logical combat row/lane, independent of the graphical stage and terminal coordinates. */
+    case BATTLE_POSITION = 'battle_position';
+
     /**
      * A project's battle test, the Engine's ProjectBattleTest: the troop to
      * preselect, the party (each member's actor, level, equipment and
