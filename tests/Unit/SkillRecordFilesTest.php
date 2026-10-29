@@ -184,3 +184,34 @@ it('authors a treatment chance on a cure and the Engine reads it back', function
         ->and(SkillCatalog::load($root . '/assets')->findSkill('Lunge')?->effects[0]?->chancePercent)->toBe(75)
         ->and(SkillCatalog::load($root . '/assets')->getProblems())->toBe([]);
 });
+
+
+it('authors battle geometry atomically and refuses conflicting field scope before writing', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $before = sourceHashTree($root . '/assets/Data/Skills');
+    $skills->setField(1, 'battleTargeting.shape', 'line');
+    expect(fn() => $skills->save())->toThrow(\Ichiloto\Editor\Database\RecordRefusal::class);
+    expect(sourceHashTree($root . '/assets/Data/Skills'))->toBe($before);
+    $skills->setField(1, 'occasion', \Ichiloto\Engine\Entities\Enumerations\Occasion::BATTLE_SCREEN->value);
+    $skills->setField(1, 'battleTargeting.shape', 'line');
+    $skills->setField(1, 'battleTargeting.ignoreCover', 'true');
+    $skills->save();
+    $line = SkillCatalog::load($root . '/assets')->findSkill('Lunge');
+    expect($line->battleTargeting->toArray())->toBe(['shape' => 'line', 'ignoreCover' => true]);
+    $skills = loadRecordDatabase($root, 'skills');
+    $skills->setField(1, 'battleTargeting.shape', 'back_row');
+    $skills->save();
+    $row = SkillCatalog::load($root . '/assets')->findSkill('Lunge');
+    expect($row->scope->number)->toBe(\Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber::ALL)
+        ->and($row->battleTargeting->shape)->toBe(\Ichiloto\Engine\Battle\Formation\BattleTargetShape::BACK_ROW);
+    $skills->setField(1, 'battleTargeting.shape', 'line');
+    expect($skills->getRecordByIndex(1)->get('scope.number'))->toBe('One');
+    $before = sourceHashTree($root . '/assets/Data/Skills');
+    $skills->setField(1, 'occasion', \Ichiloto\Engine\Entities\Enumerations\Occasion::ALWAYS->value);
+    expect(fn() => $skills->save())->toThrow(\Ichiloto\Editor\Database\RecordRefusal::class);
+    expect(sourceHashTree($root . '/assets/Data/Skills'))->toBe($before);
+    $fields = $skills->getSettingsFields(1);
+    expect(array_find($fields, static fn(array $row): bool => ($row['field'] ?? '') === 'battleTargeting.shape')['options'])
+        ->toBe(['scope', 'line', 'front_row', 'back_row']);
+});

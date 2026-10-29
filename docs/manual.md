@@ -1998,8 +1998,12 @@ Each troop member has a Logical Row, Lane field, written as `front, 0` or
 `back, 0`. It stores `battlePosition` independently of terminal X/Y and graphical
 Battle Placement. Clearing it restores the Engine's distinct front-lane default.
 Malformed or duplicate authored logical positions refuse saving. These are the
-combat formation declarations; targeting effects and their visible row changes
-are still being integrated.
+combat formation declarations. Skills offer Battle Targets (`scope`, `line`,
+`front_row`, `back_row`) and Ignore Cover. Choosing a line sets One scope; a row
+sets All scope. Geometry and cover piercing require Battle Screen occasion.
+Invalid skill records refuse saving before writing; unfinished drafts remain
+supported. Shared runtime selection and execution use the logical positions.
+Group movement effects and their visible row changes are still being integrated.
 
 Encounter groups. Each troop has a `Name`, an optional `Escape Policy`, and a
 list of members flattened into the settings pane as `Member 1 Enemy`,

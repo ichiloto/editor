@@ -1602,6 +1602,10 @@ final class RecordSchemaCatalog
             new RecordField('scope.number', 'Scope Number', options: array_map(static fn(ItemScopeNumber $number): string => $number->value, ItemScopeNumber::cases())),
             new RecordField('scope.status', 'Scope Status', options: array_map(static fn(ItemScopeStatus $status): string => $status->value, ItemScopeStatus::cases())),
             new RecordField('scope.targetCount', 'Target Count', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: 'Auto'),
+            new RecordField('battleTargeting.shape', 'Battle Targets', options: array_map(
+                static fn(\Ichiloto\Engine\Battle\Formation\BattleTargetShape $shape): string => $shape->value,
+                \Ichiloto\Engine\Battle\Formation\BattleTargetShape::cases()), removeWhenEmpty: true, displayDefault: 'scope'),
+            new RecordField('battleTargeting.ignoreCover', 'Ignore Cover', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
             new RecordField('invocation.message', 'Battle Message', displayDefault: self::SKILL_MESSAGE_DEFAULT),
             new RecordField('invocation.speed', 'Invoke Speed', InputControlType::INTEGER),
             new RecordField('invocation.accuracy', 'Accuracy', InputControlType::INTEGER),
@@ -1669,6 +1673,17 @@ final class RecordSchemaCatalog
         return new RecordSchema(
             key: 'skills',
             entryNoun: 'skill',
+            prepareEdit: static function (array $entry, string $field): array {
+                if ($field === 'battleTargeting.shape') {
+                    $shape = \Ichiloto\Engine\Battle\Formation\BattleTargetShape::tryFrom($entry['battleTargeting']['shape'] ?? 'scope');
+                    if ($shape === \Ichiloto\Engine\Battle\Formation\BattleTargetShape::LINE) {
+                        $entry['scope']['number'] = ItemScopeNumber::ONE->value;
+                    } elseif (in_array($shape, [\Ichiloto\Engine\Battle\Formation\BattleTargetShape::FRONT_ROW, \Ichiloto\Engine\Battle\Formation\BattleTargetShape::BACK_ROW], true)) {
+                        $entry['scope']['number'] = ItemScopeNumber::ALL->value;
+                    }
+                }
+                return $entry;
+            },
             storage: RecordStorage::DIRECTORY,
             relativePath: 'assets/Data/' . SkillCatalog::DIRECTORY,
             fields: $fields,
@@ -1701,6 +1716,15 @@ final class RecordSchemaCatalog
             fieldsFor: static fn(array $row): array => strval($row['kind'] ?? '') === 'magic' ? [...$fields, $effectType] : [...$fields, self::counterAttackField()],
             recordClass: Skill::class,
             numberedFiles: true,
+            saveCheck: static function (array $payload, string $root): ?string {
+                try {
+                    $data = $payload['data'] ?? [];
+                    SkillDraft::isDraft($data) ? SkillDraft::fromArray($data) : SkillRecord::readSkill($data);
+                    return null;
+                } catch (\Throwable $failure) {
+                    return $failure->getMessage();
+                }
+            },
         );
     }
 
