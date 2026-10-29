@@ -1086,6 +1086,7 @@ final class RecordSchemaCatalog
                     'Battle Engine',
                     options: array_map(static fn(BattleEngineType $engine): string => $engine->value, BattleEngineType::cases()),
                 ),
+                new RecordField('battle.partySize', 'Battle Party Size (1–8)', InputControlType::INTEGER, displayDefault: '3'),
                 new RecordField('battle.opening.preemptiveChancePercent', 'Preemptive Chance %', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('battle.opening.ambushChancePercent', 'Ambush Chance %', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('battle.activeTime.mode', 'Time Gauge Mode', options: ['wait']),

@@ -77,12 +77,12 @@ it('maps every Engine command reference to an Editor resource category', functio
 it('reads a project\'s declared commands without loading their handlers', function (): void {
     $root = makeTemporaryProject();
 
-    expect(ProjectScriptCommands::fromProject($root)->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'recruit_actor', 'end_battle', 'concede']);
+    expect(ProjectScriptCommands::fromProject($root)->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'set_party_size', 'select_party', 'regroup_party', 'recruit_actor', 'end_battle', 'concede']);
 
     writeCarriageDeclarations($root);
     $commands = ProjectScriptCommands::fromProject($root);
 
-    expect($commands->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'recruit_actor', 'end_battle', 'concede', 'hire_carriage'])
+    expect($commands->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'set_party_size', 'select_party', 'regroup_party', 'recruit_actor', 'end_battle', 'concede', 'hire_carriage'])
         ->and($commands->catalog->findDefinition('hire_carriage')?->handlerClass)->toBe('Project\\Commands\\HireCarriage')
         ->and(class_exists('Project\\Commands\\HireCarriage', false))->toBeFalse()
         ->and($commands->declarationProblem)->toBeNull();
@@ -97,7 +97,7 @@ it('offers the open project\'s registered commands with their declared fields', 
     $inn = registeredVariantFields('inn');
     $carriage = registeredVariantFields('hire_carriage');
 
-    expect($list->fields[0]->options)->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, 'shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'recruit_actor', 'hire_carriage'])
+    expect($list->fields[0]->options)->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, 'shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'set_party_size', 'select_party', 'regroup_party', 'recruit_actor', 'hire_carriage'])
         ->and(array_keys($shop))->toBe(['buyRate', 'sellRate'])
         ->and($shop['sellRate']->type)->toBe(InputControlType::FLOAT)
         ->and(array_keys($inn))->toBe(['confirmDialogue.text', 'confirmDialogue.name', 'cost', 'spawnPoint.x', 'spawnPoint.y', 'bgm', 'presentation', 'resultVariable'])
@@ -224,4 +224,20 @@ it('authors recruitment through the actor picker and preserves unrelated command
     $database->save();
     $saved = require $root . '/assets/Events/dresser-note.php';
     expect($saved[$index])->toBe(['type' => 'recruit_actor', 'actor' => 'chosen.identity', 'note' => ['keep' => true]]);
+});
+
+
+it('authors present party members with actor pickers and retains source metadata', function (): void {
+    $root = makeTemporaryProject();
+    ProjectWorkspace::fromProject($root);
+    $database = loadRecordDatabase($root, 'common_events');
+    $index = $database->addSubItem(0, ['type' => 'select_party', 'members' => [['actor' => 'old.identity']], 'note' => ['keep' => true]]);
+    $database->save();
+    $saved = require $root . '/assets/Events/dresser-note.php';
+    expect($saved[$index])->toBe(['type' => 'select_party', 'members' => [['actor' => 'old.identity']], 'note' => ['keep' => true]]);
+    $schema = RecordSchemaCatalog::forKey('common_events');
+    $entry = $schema->subList;
+    expect(RecordSchemaCatalog::getEventCommandTypes())->toContain('select_party', 'regroup_party', 'set_party_size');
+    $definition = ScriptCommandRegistry::getCatalog()->findDefinition('select_party');
+    expect(ProjectScriptCommands::getReferenceCategory($definition->fields[0]->fields[0]->reference))->toBe('actors');
 });

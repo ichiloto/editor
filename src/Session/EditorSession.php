@@ -3726,7 +3726,7 @@ final class EditorSession
     {
         $actors = $this->workspace->actorDatabase->createActorStore();
         $skills = $this->workspace->loadSkillCatalog();
-        $setup = ProjectBattleTest::fromArray($entry)->createSetup($actors, $this->readStartingPartyReferences());
+        $setup = ProjectBattleTest::fromArray($entry)->createSetup($actors, $this->readStartingPartyReferences(), $this->workspace->getSystemField('battle.partySize') ?? \Ichiloto\Engine\Entities\Party::BATTLE_SIZE);
         $party = $setup->createParty($actors, $this->loadItemStore(), $skills);
         $previousEnemies = ConfigStore::has(EnemyStore::class) ? ConfigStore::get(EnemyStore::class) : null;
         try {
@@ -6268,7 +6268,7 @@ final class EditorSession
             $summons = new SummonCutsceneLibrary($this->workspace->projectRoot . '/assets/Cutscenes/Summons');
             $view = [...$view, 'troop' => $test->troop, 'source' => $test->setup === null ? 'starting party' : 'battle test'];
             try {
-                $setup = $test->createSetup($actors, $this->readStartingPartyReferences());
+                $setup = $test->createSetup($actors, $this->readStartingPartyReferences(), $this->workspace->getSystemField('battle.partySize') ?? \Ichiloto\Engine\Entities\Party::BATTLE_SIZE);
             } catch (InvalidArgumentException $invalid) {
                 return [...$view, 'arena' => $test->arena, 'issue' => $invalid->getMessage()];
             }
@@ -6289,7 +6289,7 @@ final class EditorSession
                 $members[] = $described;
             }
 
-            return [...$view, 'arena' => $setup->arena, 'members' => $members,
+            return [...$view, 'arena' => $setup->arena, 'battleSize' => $setup->battleSize, 'members' => $members,
                 'problems' => $setup->getProblems($actors, $items, $skills, $summons)];
         });
     }

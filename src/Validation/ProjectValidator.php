@@ -74,6 +74,15 @@ class ProjectValidator
 {
   use CutsceneValidation;
 
+  /** @return Issue[] */
+  private function checkPartySize(ProjectWorkspace $workspace): array
+  {
+    $size = $workspace->getSystemField('battle.partySize');
+    if ($size === null) { return []; }
+    return is_int($size) && $size >= 1 && $size <= \Ichiloto\Engine\Entities\Party::MAX_BATTLE_SIZE
+      ? [] : [Issue::error('assets/Data/system.php', 'Battle party size must be an integer between 1 and 8.', 'Choose a supported battle party size.')];
+  }
+
   /**
    * The trigger classes whose data this knows how to check.
    */
@@ -178,6 +187,7 @@ class ProjectValidator
       ...new CounterAttackValidator()->validate($workspace),
       ...new TroopFormationValidator()->validate($workspace),
       ...new BattleTestValidator()->validate($workspace),
+      ...$this->checkPartySize($workspace),
       ...new ProgressionValidator()->validate($workspace),
       ...new DashValidator()->validate($workspace),
       ...new MasteryValidator()->validate($workspace),

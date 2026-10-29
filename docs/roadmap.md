@@ -5,6 +5,18 @@ performance/architecture trace of the Ichiloto editor, a comparative study of
 the hand-built Sendama console editor (the responsiveness benchmark), and an
 authoring-UX review. All measurements taken on this machine.*
 
+## Variable party authoring — 29 October 2026
+
+System data exposes Engine `battle.partySize` (1–8), with project validation.
+Registered field commands expose capacity changes, current-group selection with
+Actor pickers and idempotent regrouping through the existing command list and
+source-preserving saves. Battle Test reads the unsaved System capacity and now
+supports eight members through Engine's shared setup contract. This removes the
+previous four-member test ceiling; the project's legacy default remains three.
+Runtime membership and persistence are owned by Engine Party, rather than a
+second Editor state. Native editor consumers have not been launched for this
+change; headless authoring and source round trips are the validation surface.
+
 ## The one-paragraph diagnosis
 
 The editor is not slow because PHP is slow — **a full frame of real rendering

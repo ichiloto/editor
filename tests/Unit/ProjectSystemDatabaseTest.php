@@ -346,3 +346,18 @@ it('reports a dash or a map Disable Dashing the Engine would not read as an erro
     expect($issues)->toHaveCount(1)->and($issues[0]->map)->toBe($map->mapId)
         ->and($issues[0]->message)->toContain('disableDashing must be true or false');
 });
+
+
+it('authors battle capacities from one through eight without rewriting unrelated system data', function (int $size): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    $original = productionSystem();
+    file_put_contents($path, "<?php\nreturn " . var_export($original, true) . ";\n");
+    $database = systemRecords($root);
+    $database->setField(0, 'battle.partySize', (string) $size);
+    $database->save();
+    $saved = require $path;
+    expect($saved['battle']['partySize'])->toBe($size)
+      ->and($saved['battle']['unknownBattleSetting'])->toBe($original['battle']['unknownBattleSetting'])
+      ->and($saved['unknownSystemSetting'])->toBe($original['unknownSystemSetting']);
+})->with(range(1, 8));
