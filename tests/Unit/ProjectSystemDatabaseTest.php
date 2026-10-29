@@ -19,6 +19,21 @@ function systemRecords(string $root): ProjectRecordDatabase
     return ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('system'));
 }
 
+it('round trips story-gated dash conditions through shared System authoring', function () {
+    $root = scratchSystemProject();
+    file_put_contents($root . '/assets/Data/system.php', "<?php return ['title' => 'Synthetic'];");
+    $records = systemRecords($root);
+    $records->setField(0, 'dash.enabled', 'true');
+    $records->setField(0, 'dash.conditions', 'event:movement-unlocked');
+    $records->save();
+    $settings = \Ichiloto\Engine\Field\DashSettings::fromSystemData(require $root . '/assets/Data/system.php');
+    expect($settings->conditions)->toBe([['type' => 'event', 'name' => 'movement-unlocked']])
+        ->and($settings->isUnlocked(new \Ichiloto\Engine\Core\GameState()))->toBeFalse();
+    $state = new \Ichiloto\Engine\Core\GameState();
+    $state->recordStoryEvent('movement-unlocked');
+    expect($settings->isUnlocked($state))->toBeTrue();
+});
+
 /** What the System page shows for a field, as both editors read it. */
 function systemSettingsValue(string $root, string $field): ?string
 {

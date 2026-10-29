@@ -31,6 +31,20 @@ function skillRecordsProject(): string
     return $root;
 }
 
+it('authors a guaranteed state application through the shared effect fields', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $field = static fn(string $name): string => ProjectRecordDatabase::subFieldId('effect', 0, $name);
+    $skills->setField(1, $field('type'), 'add_state');
+    $skills->setField(1, $field('stateId'), 'stun');
+    $skills->setField(1, $field('guaranteed'), 'true');
+    $skills->save();
+    $effect = SkillCatalog::load($root . '/assets')->findSkill('Lunge')->effects[0];
+    expect($effect->guaranteed)->toBeTrue()->and($effect->stateId)->toBe('stun');
+    expect(array_find(loadRecordDatabase($root, 'skills')->getSettingsFields(1),
+        static fn(array $row): bool => ($row['field'] ?? '') === $field('guaranteed'))['value'])->toBe('true');
+});
+
 it('lists every skill record in file order, numbered, with its kind and effects as data', function () {
     $skills = loadRecordDatabase(skillRecordsProject(), 'skills');
 

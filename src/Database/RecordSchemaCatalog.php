@@ -1134,6 +1134,8 @@ final class RecordSchemaCatalog
                 RecordField::boolean('dash.' . DashSettings::ENABLED, 'Dash', displayDefault: 'false'),
                 new RecordField('dash.' . DashSettings::SPEED_MULTIPLIER, 'Dash Speed Multiplier', InputControlType::FLOAT,
                     removeWhenEmpty: true, displayDefault: InputControl::formatFloat(DashSettings::DEFAULT_SPEED_MULTIPLIER)),
+                new RecordField('dash.' . DashSettings::CONDITIONS, 'Dash Unlock Conditions',
+                    codec: RecordFieldCodec::CONDITIONS, removeWhenEmpty: true),
                 // Test settings, as RPG Maker keeps its Battle Test: normal play never reads them.
                 new RecordField(ProjectBattleTest::SYSTEM_KEY, 'Battle Test', removeWhenEmpty: true, codec: RecordFieldCodec::BATTLE_TEST),
             ],
@@ -1637,6 +1639,7 @@ final class RecordSchemaCatalog
         $variants['add_state'] = [
             RecordField::reference('stateId', 'State', 'states'),
             new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
+            new RecordField('guaranteed', 'Guaranteed', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
         ];
         $variants['remove_state'] = [
             new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST),

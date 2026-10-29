@@ -27,6 +27,11 @@ store stable state IDs and show display names beside them, removing the previous
 display-name storage behavior. Headless round trips cover these surfaces. Full
 battle-feature authoring and graphical interaction verification remain pending.
 
+Skill effects now expose the Engine's explicit guaranteed-state setting, with
+source-preserving save/load checks. System's Dash Unlock Conditions field reuses
+the shared conditions authoring path; guarded dash settings survive a saved
+project reload and evaluate against live story state.
+
 ## The one-paragraph diagnosis
 
 The editor is not slow because PHP is slow — **a full frame of real rendering
