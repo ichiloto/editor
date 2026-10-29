@@ -1868,7 +1868,13 @@ stable id, and only the values the record sets: the Engine's defaults fill
 the rest. An item has its scope, occasion, battle animation and effects: a
 list under the Effects heading, each a type (HP or MP recovery, resurrection,
 HP damage, or a max HP or MP increase) with a value, a success rate and
-whether the value is an amount or a percentage. Equipment has its type,
+whether the value is an amount or a percentage. A `remove_state` effect selects
+the states it cures. An `add_state` effect selects one State, its Chance %, and
+whether application is Guaranteed (100% required). The item scope and occasion
+remain authored independently; the selected state owns duration, resistance and
+persistence. State references use the shared picker. Undo/Redo preserves the
+record source, and switching effect types removes fields owned by the old type.
+Equipment has its type,
 parameter changes, element and affinities, and its metadata (form, size,
 material, slot, availability, acquisition policy, special property). An
 armor that becomes an accessory drops its equipment type. Files are numbered

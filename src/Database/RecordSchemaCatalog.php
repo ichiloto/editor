@@ -599,14 +599,17 @@ final class RecordSchemaCatalog
                     new RecordField('description', 'Description'),
                 ],
                 blank: ['type' => 'hp_recovery', 'name' => 'Recover HP', 'description' => 'Recovers HP', 'value' => 50, 'successRate' => 1.0],
-                // A cure names the states it removes; every other effect carries a value.
-                variants: array_map(static fn(string $type): array => $type === 'remove_state'
-                    ? [new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST)]
-                    : [
+                variants: array_map(static fn(string $type): array => match ($type) {
+                    'remove_state' => [new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST)],
+                    'add_state' => [RecordField::reference('stateId', 'State', 'states'),
+                        new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
+                        new RecordField('guaranteed', 'Guaranteed', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false')],
+                    default => [
                         new RecordField('value', 'Value', InputControlType::INTEGER),
                         new RecordField('successRate', 'Success Rate', InputControlType::FLOAT),
                         new RecordField('valueBasis', 'Value Basis', options: $enumValues(ValueBasis::cases()), removeWhenEmpty: true, displayDefault: ValueBasis::ACTUAL->value),
-                    ], array_combine(array_keys(ItemRecord::EFFECTS), array_keys(ItemRecord::EFFECTS))),
+                    ],
+                }, array_combine(array_keys(ItemRecord::EFFECTS), array_keys(ItemRecord::EFFECTS))),
                 variantKey: 'type',
                 removeWhenEmpty: true,
             ),
