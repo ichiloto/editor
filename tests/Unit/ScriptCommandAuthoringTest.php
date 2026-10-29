@@ -227,6 +227,25 @@ it('authors recruitment through the actor picker and preserves unrelated command
 });
 
 
+it('round trips the constrained recruitment level policy with source metadata', function (): void {
+    $root = makeTemporaryProject();
+    ProjectWorkspace::fromProject($root);
+    $policy = registeredVariantFields('recruit_actor')['levelPolicy'];
+    expect($policy->options)->toBe(['authored', 'partyAverage']);
+    $database = loadRecordDatabase($root, 'common_events');
+    $index = $database->addSubItem(0, ['type' => 'recruit_actor', 'actor' => 'chosen.identity', 'note' => ['keep' => true]]);
+    $field = array_find($database->getSettingsFields(0), static fn($entry) => str_starts_with($entry['field'], "command{$index}")
+        && str_ends_with($entry['field'], 'LevelPolicy'));
+    expect($field)->not->toBeNull();
+    $database->setField(0, $field['field'], 'partyAverage');
+    $database->save();
+    $saved = require $root . '/assets/Events/dresser-note.php';
+    expect($saved[$index])->toBe(['type' => 'recruit_actor', 'actor' => 'chosen.identity', 'note' => ['keep' => true], 'levelPolicy' => 'partyAverage']);
+    $loaded = loadRecordDatabase($root, 'common_events');
+    $loaded->save();
+    expect((require $root . '/assets/Events/dresser-note.php')[$index])->toBe($saved[$index]);
+});
+
 it('authors present party members with actor pickers and retains source metadata', function (): void {
     $root = makeTemporaryProject();
     ProjectWorkspace::fromProject($root);

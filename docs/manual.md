@@ -2492,7 +2492,7 @@ rows come from their declarations:
 | `payday` | Schedule (picked from Income), Result Variable |
 | `collect_income` | Schedule (picked from Income), Result Variable |
 | `adjust_income` | Schedule (picked from Income), Amount (negative for a deduction) |
-| `recruit_actor` | Actor (picked from Actors; required) |
+| `recruit_actor` | Actor (picked from Actors; required), Starting Level (`authored` or `partyAverage`; average of the permanent roster including reserves, rounded down before joining) |
 
 A command's first list, such as a shop's merchandise, is edited like a
 route's steps: with the settings cursor on one of its entry rows, `Shift+O`
