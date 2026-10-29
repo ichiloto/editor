@@ -1636,7 +1636,8 @@ final class RecordSchemaCatalog
             new RecordField('element', 'Element', reference: 'elements', removeWhenEmpty: true, allowsNone: true, displayDefault: '(none)'),
             new RecordField('variance', 'Variance', InputControlType::FLOAT),
             new RecordField('isCriticalHit', 'Can Critical', InputControlType::BOOLEAN, removeWhenEmpty: true),
-            ...($resolves ? [new RecordField('resolutionKind', 'Resolves As', reference: 'resolution_kinds', removeWhenEmpty: true, allowsNone: true, displayDefault: '(by effect)')] : []),
+            ...($resolves ? [new RecordField('resolutionKind', 'Resolves As', reference: 'resolution_kinds', removeWhenEmpty: true, allowsNone: true, displayDefault: '(by effect)'),
+                new RecordField('ignoresProtection', 'Ignore Guard / Protection', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false')] : []),
         ];
         $variants = [];
 

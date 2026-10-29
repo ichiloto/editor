@@ -231,3 +231,16 @@ it('authors one command-level formation change through a constrained operation f
     expect(array_find(loadRecordDatabase($root, 'skills')->getSettingsFields(1),
         static fn(array $row): bool => ($row['field'] ?? '') === $operation)['options'])->toBe(['shuffle', 'move_to_front']);
 });
+
+
+it('authors optional protection piercing only for HP damage effects', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $field = ProjectRecordDatabase::subFieldId('effect', 0, 'ignoresProtection');
+    $skills->setField(1, $field, 'true');
+    $skills->save();
+    expect(SkillCatalog::load($root . '/assets')->findSkill('Lunge')->effects[0]->ignoresProtection)->toBeTrue();
+    $skills->setField(1, ProjectRecordDatabase::subFieldId('effect', 0, 'type'), 'hp_recover');
+    $skills->save();
+    expect(\Ichiloto\Engine\Entities\Skills\SkillRecord::writeSkill(SkillCatalog::load($root . '/assets')->findSkill('Lunge'))['effects'][0])->not->toHaveKey('ignoresProtection');
+});
