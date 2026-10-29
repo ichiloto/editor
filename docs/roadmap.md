@@ -37,6 +37,10 @@ counter-skill picker and their stance from the state picker. Source-preserving
 round trips retain both references. Project validation checks those references
 and rejects a stance that persists outside its battle-owned reaction context.
 
+Skill effect authoring includes an ATB reset effect. State authoring exposes a
+validated ATB fill multiplier. Both round trip through the normal record service
+and consume Engine's current runtime contract.
+
 ## The one-paragraph diagnosis
 
 The editor is not slow because PHP is slow — **a full frame of real rendering

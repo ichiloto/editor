@@ -64,6 +64,20 @@ it('round trips a prepared response through skill and state pickers', function (
         ->toBe('states');
 });
 
+it('authors ATB reset effects and state-owned pace through shared records', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $skills->setField(1, ProjectRecordDatabase::subFieldId('effect', 0, 'type'), 'reset_atb');
+    $skills->save();
+    expect(SkillCatalog::load($root . '/assets')->findSkill('Lunge')->effects[0])
+        ->toBeInstanceOf(\Ichiloto\Engine\Entities\Effects\SkillEffects\ResetAtbSkillEffect::class);
+    file_put_contents($root . '/assets/Data/states.php', "<?php return [['id'=>'slow','name'=>'Slow']];");
+    $states = loadRecordDatabase($root, 'states');
+    $states->setField(0, 'atbRate', '0.5');
+    $states->save();
+    expect(\Ichiloto\Engine\Entities\States\State::fromArray((require $root . '/assets/Data/states.php')[0])->atbRate)->toBe(.5);
+});
+
 it('lists every skill record in file order, numbered, with its kind and effects as data', function () {
     $skills = loadRecordDatabase(skillRecordsProject(), 'skills');
 

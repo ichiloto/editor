@@ -241,6 +241,7 @@ final class RecordSchemaCatalog
                 self::counterAttackField(),
                 // Protection: scales every hit a guard could block (0.5 halves it, 0 blocks it).
                 new RecordField('damageTakenRate', 'Damage Taken Rate', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
+                new RecordField('atbRate', 'ATB Fill Rate', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
                 // Cover: the bearer takes the single-target hits meant for its weakest ally.
                 RecordField::boolean('coversAllies', 'Covers Allies'),
                 // Confusion: the chance each turn that the bearer attacks a random battler of either side instead.
@@ -1645,6 +1646,7 @@ final class RecordSchemaCatalog
             RecordField::reference('skill', 'Response Skill', 'counter_skills'),
             RecordField::reference('stateId', 'Stance State', 'states'),
         ];
+        $variants['reset_atb'] = [];
         $variants['remove_state'] = [
             new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST),
             // Rolled for each listed state the target has (a 75% treatment cures three times in four).
