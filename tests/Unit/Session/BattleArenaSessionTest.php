@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Ichiloto\Editor\Database\BattleArenaFields;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Session\EditorSession;
+use Ichiloto\Editor\Session\SessionHost;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 
@@ -208,4 +209,180 @@ it('previews a footing as its corner is dragged, read as authored footing, witho
         ->and($session->listUnsavedChanges())->toBe([])
         ->and((string) file_get_contents($path))->toBe($before)
         ->and(fn() => $session->readArenaPreview(0, footing: ['land' => [['x' => 1, 'y' => 1]]]))->toThrow(SessionRefusal::class);
+});
+
+/** A synthetic measured scale: the horizon at 100, the shared body reference kept at 500, 100 pixels per unit there. */
+const ARENA_MEASURED_SCALE = ['horizonY' => 100, 'referenceY' => 500, 'pixelsPerUnit' => 100];
+
+it('sets an arena\'s measured scale as one step, writes it as authored, and undoes and redoes it exactly', function () {
+    [, $path, $session] = createBattleArenaProject();
+    $original = (string) file_get_contents($path);
+    $scale = [...ARENA_MEASURED_SCALE, 'vanishingX' => 675];
+    expect(findArenaRow($session, 0, 'ground.scaleReference.horizonY')['value'])->toBe('(no measured scale)')
+        ->and($session->setArenaDepthModel(0, scaleReference: $scale)['changed'])->toBeTrue()
+        ->and($session->setArenaDepthModel(0, scaleReference: $scale)['changed'])->toBeFalse()
+        ->and(findArenaRow($session, 0, 'ground.scaleReference.referenceY')['value'])->toBe('500')
+        ->and(findArenaRow($session, 0, 'ground.scaleReference.vanishingX')['value'])->toBe('675')
+        ->and($session->readArenaPreview(0)['ground']['scaleReference'])
+        ->toEqual(['horizonY' => 100.0, 'referenceY' => 500.0, 'pixelsPerUnit' => 100.0, 'vanishingX' => 675.0]);
+
+    // Undone before a save, the arena is exactly as read, with nothing to write.
+    expect($session->undo()['label'])->toBe('Use measured scale')
+        ->and($session->listUnsavedChanges())->toBe([]);
+    $session->redo();
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+    $measured = (string) file_get_contents($path);
+    expect((require $path)['arenas']['arena.road']['ground'])->toBe(['top' => 300, 'scaleReference' => $scale])
+        ->and($measured)->toContain('// Each background and where its ground begins.');
+
+    // Undone after a save, the arena's authored values return; redone, the measured scale is written again.
+    $session->undo();
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+    expect(require $path)->toBe(eval('?>' . $original));
+    $session->redo();
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+    expect(require $path)->toBe(eval('?>' . $measured));
+});
+
+it('switches between the far edge scale and a measured scale only explicitly, each switch one undo step', function () {
+    [, $path, $session] = createBattleArenaProject();
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'ground.perspective')['key'], '0.8');
+
+    // A measured value typed beside the far edge scale would leave both: refused, naming the switch.
+    expect(fn() => $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0,
+        findArenaRow($session, 0, 'ground.scaleReference.horizonY')['key'], '100'))
+        ->toThrow(SessionRefusal::class, 'Use Measured Scale');
+
+    $session->setArenaDepthModel(0, scaleReference: ARENA_MEASURED_SCALE);
+    expect($session->readArenaPreview(0)['ground'])->not->toHaveKey('perspective')
+        ->and(findArenaRow($session, 0, 'ground.perspective')['value'])->toBe('1 (no perspective)')
+        ->and(fn() => $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'ground.perspective')['key'], '0.9'))
+        ->toThrow(SessionRefusal::class, 'Use Far Edge Scale');
+
+    $session->undo();
+    expect($session->readArenaPreview(0)['ground'])->toMatchArray(['perspective' => 0.8])
+        ->and($session->readArenaPreview(0)['ground'])->not->toHaveKey('scaleReference');
+
+    $session->redo();
+    $session->setArenaDepthModel(0, perspective: 0.75);
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+    expect((require $path)['arenas']['arena.road']['ground'])->toBe(['top' => 300, 'perspective' => 0.75]);
+
+    // Neither model leaves the arena on the theme's.
+    $session->setArenaDepthModel(0);
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+    expect((require $path)['arenas']['arena.road']['ground'])->toBe(['top' => 300]);
+});
+
+it('refuses a measured value typed alone before a measured scale starts, and edits one value of a measured scale', function () {
+    [, , $session] = createBattleArenaProject();
+    expect(fn() => $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0,
+        findArenaRow($session, 0, 'ground.scaleReference.horizonY')['key'], '100'))
+        ->toThrow(SessionRefusal::class, 'together')
+        ->and($session->listUnsavedChanges())->toBe([]);
+
+    $session->setArenaDepthModel(0, scaleReference: ARENA_MEASURED_SCALE);
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'ground.scaleReference.pixelsPerUnit')['key'], '120');
+    expect($session->readArenaPreview(0)['ground']['scaleReference']['pixelsPerUnit'])->toBe(120.0)
+        // The Engine's own reading refuses a value it cannot project.
+        ->and(fn() => $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0,
+            findArenaRow($session, 0, 'ground.scaleReference.referenceY')['key'], '50'))
+        ->toThrow(SessionRefusal::class, 'below its horizon');
+});
+
+it('refuses a measured scale the battle could not stand battlers on, before anything is recorded', function () {
+    [, $path, $session] = createBattleArenaProject();
+    $file = (string) file_get_contents($path);
+
+    expect(fn() => $session->setArenaDepthModel(0, perspective: 0.8, scaleReference: ARENA_MEASURED_SCALE))
+        ->toThrow(SessionRefusal::class, 'either perspective or a measured scaleReference')
+        ->and(fn() => $session->setArenaDepthModel(0, scaleReference: ['horizonY' => 100, 'referenceY' => 500]))
+        ->toThrow(SessionRefusal::class, 'ground.scaleReference')
+        // The road's ground starts at 300: a horizon below it leaves no ground to stand on.
+        ->and(fn() => $session->setArenaDepthModel(0, scaleReference: [...ARENA_MEASURED_SCALE, 'horizonY' => 350, 'referenceY' => 550]))
+        ->toThrow(SessionRefusal::class, 'below the horizon')
+        ->and($session->listUnsavedChanges())->toBe([])
+        ->and($session->undo()['label'])->toBeNull()
+        ->and((string) file_get_contents($path))->toBe($file);
+});
+
+it('previews a trial measured scale in place of the arena\'s far edge scale, and a dragged horizon over its measured scale, writing nothing', function () {
+    [, $path, $session] = createBattleArenaProject();
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'ground.perspective')['key'], '1');
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+    $file = (string) file_get_contents($path);
+
+    $trial = $session->readArenaPreview(0, ground: ['scaleReference' => ARENA_MEASURED_SCALE]);
+    expect($trial['ground'])->not->toHaveKey('perspective')
+        ->and($trial['ground']['scaleReference']['referenceY'])->toBe(500.0)
+        ->and($session->readArenaPreview(0)['ground'])->toMatchArray(['perspective' => 1.0])
+        ->and($session->listUnsavedChanges())->toBe([])
+        ->and((string) file_get_contents($path))->toBe($file);
+
+    $session->setArenaDepthModel(0, scaleReference: ARENA_MEASURED_SCALE);
+    expect($session->readArenaPreview(0, ground: ['scaleReference' => ['horizonY' => 150]])['ground']['scaleReference'])
+        ->toEqual(['horizonY' => 150.0, 'referenceY' => 500.0, 'pixelsPerUnit' => 100.0]);
+});
+
+it('stands a physical-height guide at the reference row, chosen rows and every battler\'s feet by the arena\'s measured scale', function () {
+    [, , $session] = createBattleArenaProject();
+    $session->setArenaDepthModel(0, scaleReference: [...ARENA_MEASURED_SCALE, 'vanishingX' => 700]);
+    $preview = $session->readArenaPreview(0, guide: ['height' => 1.8, 'rows' => [['y' => 250, 'label' => 'Stage front'], ['y' => 80, 'x' => 40],
+        ['y' => 300, 'label' => 'On the stage', 'elevation' => 0.5]]]);
+    $guide = $preview['guide'];
+    $placements = $guide['placements'];
+
+    expect($guide)->toMatchArray(['height' => 1.8, 'source' => 'request', 'horizonY' => 100.0, 'referenceY' => 500.0,
+            'pixelsPerUnit' => 100.0, 'vanishingX' => 700.0])
+        ->and($placements[0])->toMatchArray(['role' => 'reference', 'x' => 700.0, 'y' => 500.0])
+        ->and($placements[0]['height'])->toEqualWithDelta(180.0, 1e-9)
+        ->and($placements[1])->toMatchArray(['role' => 'row', 'label' => 'Stage front', 'y' => 250.0, 'feetY' => 250.0])
+        ->and($placements[1]['height'])->toEqualWithDelta(180.0 * 150 / 400, 1e-9)
+        // A row at or above the horizon has no projection, and says why.
+        ->and($placements[2])->toMatchArray(['role' => 'row', 'label' => 'Row 2', 'x' => 40.0, 'height' => null])
+        ->and($placements[2]['issue'])->toContain('below its horizon')
+        // On a raised surface the figure keeps its floor row's scale, its feet lifted by the surface's projected height.
+        ->and($placements[3])->toMatchArray(['role' => 'row', 'label' => 'On the stage', 'y' => 300.0, 'elevation' => 0.5])
+        ->and($placements[3]['height'])->toEqualWithDelta(180.0 * 200 / 400, 1e-9)
+        ->and($placements[3]['feetY'])->toEqualWithDelta(300 - 50.0 * 200 / 400, 1e-9);
+
+    $battlers = array_values(array_filter($placements, static fn(array $placement): bool => in_array($placement['role'], ['party', 'enemy'], true)));
+    $stood = [...$preview['party'], ...array_column($preview['members'], 'battler')];
+    expect($battlers)->toHaveCount(count($stood));
+    foreach ($battlers as $position => $placement) {
+        expect($placement['y'])->toBe($stood[$position]['ground']['y'])
+            ->and($placement['height'])->toEqualWithDelta(180.0 * ($placement['y'] - 100) / 400, 1e-9);
+    }
+});
+
+it('takes the guide height from the project\'s editor preference, and has no physical guide without a measured scale', function () {
+    [$root, , $session] = createBattleArenaProject();
+    expect($session->readArenaPreview(0)['guide'])->toBeNull();
+
+    $config = json_decode((string) file_get_contents($root . '/ichiloto.json'), true);
+    file_put_contents($root . '/ichiloto.json', json_encode([...$config, 'editor' => ['battleScaleGuide' => ['height' => 1.8]]]));
+    $guide = $session->readArenaPreview(0)['guide'];
+    expect($guide)->toMatchArray(['height' => 1.8, 'source' => 'project', 'placements' => []])
+        ->and($guide['issue'])->toContain('no measured scale');
+
+    $session->setArenaDepthModel(0, scaleReference: ARENA_MEASURED_SCALE);
+    expect($session->readArenaPreview(0)['guide']['placements'][0]['height'])->toEqualWithDelta(180.0, 1e-9)
+        ->and(fn() => $session->readArenaPreview(0, guide: ['height' => -1]))->toThrow(SessionRefusal::class, 'finite and positive')
+        ->and(fn() => $session->readArenaPreview(0, guide: ['rows' => [['x' => 4]]]))->toThrow(SessionRefusal::class, 'canvas y');
+});
+
+it('scripts an arena\'s depth scale model and its guide through the session host', function () {
+    [$root, $path] = createBattleArenaProject();
+    $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
+    $request = static fn(int $id, string $method, array $params = []): array =>
+        $host->handle(json_encode(['id' => $id, 'method' => $method, 'params' => $params]));
+    $request(1, 'hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+
+    expect($request(2, 'arenas.setDepthModel', ['index' => 0, 'scaleReference' => ARENA_MEASURED_SCALE])['result']['changed'])->toBeTrue()
+        ->and($request(3, 'arenas.preview', ['index' => 0, 'guide' => ['height' => 1.8, 'rows' => [['y' => 250, 'label' => 'Stage front']]]])
+            ['result']['guide']['placements'][1]['height'])->toEqualWithDelta(67.5, 1e-9)
+        ->and($request(4, 'arenas.setDepthModel', ['index' => 0, 'perspective' => 'far'])['error']['message'])->toContain('"perspective" must be a number');
+    $request(5, 'database.save', ['category' => BattleArenaFields::CATEGORY]);
+
+    expect((require $path)['arenas']['arena.road']['ground'])->toBe(['top' => 300, 'scaleReference' => ARENA_MEASURED_SCALE]);
 });

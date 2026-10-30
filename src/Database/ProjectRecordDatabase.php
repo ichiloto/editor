@@ -140,6 +140,10 @@ final class ProjectRecordDatabase
             }
             $this->settings?->assertSourceAcceptsValue($path, $draft->get('value'));
         } elseif (is_array($draft->toArray())) {
+            if ($this->schema->editCheck !== null && is_array($record->toArray())
+                && ($reason = ($this->schema->editCheck)($record->toArray(), $draft->toArray(), (string) $this->projectRoot())) !== null) {
+                throw new \InvalidArgumentException($reason);
+            }
             InnPresentationFields::assertChangedCommandsValid((array) $record->toArray(), $draft->toArray(), $this->authoringReferences, complete: false);
             if ($this->schema->storage === RecordStorage::DIRECTORY) {
                 $record->file?->composeContents($this->composeRecordFilePayload($draft));
