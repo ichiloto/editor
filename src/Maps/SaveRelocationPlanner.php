@@ -24,7 +24,8 @@ use Throwable;
  * save standing there would load inside it. A cell is taken when its new type blocks movement (new
  * furniture, a wall, painted collision; walkable grass, exits and save points
  * do not), when an authored NPC now stands on it, added or moved, or when an
- * event now covers it that it did not cover on disk, such as a moved door. Floor
+ * event now covers it that it did not cover on disk, such as a moved door (a
+ * door whose destination changes covers the same ground). Floor
  * the player reaches today that the change walls off, such as the inside of
  * a building moved onto open ground, moves its saves too. The plan
  * moves saves on each such cell to the nearest plain floor the player can

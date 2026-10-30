@@ -3291,9 +3291,11 @@ in the saved map, a save standing on such a cell would load inside it. That
 includes walkable floor no route reaches today, since an older layout may have
 reached it. A cell is
 taken when it becomes something that blocks movement (furniture, a wall,
-painted collision, trees) or when an NPC is added or moved onto it. Walkable
+painted collision, trees), when an NPC is added or moved onto it, or when an
+event now covers it that did not cover it in the saved map. Walkable
 grass, exits and save points take nothing, and an NPC that stays put moves no
-save. With a save compatibility
+save. A transfer whose destination, spawn or conditions change covers the same
+ground, so it moves no save; only floor a transfer newly covers does. With a save compatibility
 manifest (`assets/Data/save-compatibility.php`), `Ctrl+S` first shows each such
 cell and where saves on it will land: the nearest plain floor the player can
 reach after the edit, found by walking from the cell, outside every NPC cell
