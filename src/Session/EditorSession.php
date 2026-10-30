@@ -4038,7 +4038,9 @@ final class EditorSession
      * previewed as it would replace the arena's. The answer's `guide` is the
      * physical-height guide ({@see BattleScaleGuide}) at `$guide`'s height,
      * else the project's, at its rows and each battler's feet; null when
-     * neither names a height.
+     * neither names a height. The answer's `depthModel` is the depth scale
+     * model the arena itself declares (`measured`, `farEdge`, or `theme` when
+     * it declares neither), never a dragged one.
      *
      * @param array<string, mixed> $ground
      * @param array<string, mixed> $footing
@@ -4069,7 +4071,16 @@ final class EditorSession
             throw new SessionRefusal('The scale guide cannot be shown: ' . $refused->getMessage(), previous: $refused);
         }
 
-        return [...$view, 'members' => $members, 'troop' => $troop, 'troops' => array_values($troopNames), 'guide' => $scaleGuide];
+        // The model the arena itself declares, whatever a drag previews: the one its depth scale switch stands at.
+        $declared = $record->toArray()['ground'] ?? null;
+        $depthModel = match (true) {
+            is_array($declared) && array_key_exists('scaleReference', $declared) => 'measured',
+            is_array($declared) && array_key_exists('perspective', $declared) => 'farEdge',
+            default => 'theme',
+        };
+
+        return [...$view, 'members' => $members, 'troop' => $troop, 'troops' => array_values($troopNames), 'guide' => $scaleGuide,
+            'depthModel' => $depthModel];
     }
 
     /**

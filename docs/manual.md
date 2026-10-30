@@ -1626,8 +1626,8 @@ one of two ways the Engine reads, never both:
 The session's `arenas.setDepthModel` (`scaleReference`, `perspective`, or
 neither for the theme's model) sets the model as one undo step and removes the
 other one in that same step: this is the only way to switch. The GUI editor's
-arena page does not offer it yet; refusals name it as `Use Measured Scale` and
-`Use Far Edge Scale`. A
+arena page offers it as `Use Measured Scale`, `Use Far Edge Scale` and `Use
+the Theme's Depth Scale`, the names refusals give. A
 measured scale starts with its horizon, reference row and pixels per unit
 together; afterwards each value can be typed on its own row. Typing a
 measured value on an arena with a far edge scale, a far edge scale on an arena
@@ -1652,7 +1652,9 @@ the elevation's projected height there. The guide is an authoring aid and is
 never written to the arena or read by the game. A row at or above the horizon
 says why it has no height; an arena without a measured scale says it has no
 physical guide. The preview answer's `ground.scaleReference` gives the
-horizon, reference row and vanishing point to draw. A preview's dragged
+horizon, reference row and vanishing point to draw, and its `depthModel` the
+model the arena itself declares: `measured`, `farEdge`, or `theme` when it
+declares neither, whatever a drag previews. A preview's dragged
 `ground.scaleReference` or `ground.perspective` stands in for the arena's own
 model, and dragged measured values lie over its measured scale, so a trial
 scale is previewed as it would replace the arena's without writing anything.

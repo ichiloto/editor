@@ -315,13 +315,18 @@ it('previews a trial measured scale in place of the arena\'s far edge scale, and
     $trial = $session->readArenaPreview(0, ground: ['scaleReference' => ARENA_MEASURED_SCALE]);
     expect($trial['ground'])->not->toHaveKey('perspective')
         ->and($trial['ground']['scaleReference']['referenceY'])->toBe(500.0)
+        // The arena's own model is answered beside a trial, so its switch stands where the arena does.
+        ->and($trial['depthModel'])->toBe('farEdge')
         ->and($session->readArenaPreview(0)['ground'])->toMatchArray(['perspective' => 1.0])
         ->and($session->listUnsavedChanges())->toBe([])
         ->and((string) file_get_contents($path))->toBe($file);
 
     $session->setArenaDepthModel(0, scaleReference: ARENA_MEASURED_SCALE);
     expect($session->readArenaPreview(0, ground: ['scaleReference' => ['horizonY' => 150]])['ground']['scaleReference'])
-        ->toEqual(['horizonY' => 150.0, 'referenceY' => 500.0, 'pixelsPerUnit' => 100.0]);
+        ->toEqual(['horizonY' => 150.0, 'referenceY' => 500.0, 'pixelsPerUnit' => 100.0])
+        ->and($session->readArenaPreview(0)['depthModel'])->toBe('measured');
+    $session->setArenaDepthModel(0);
+    expect($session->readArenaPreview(0)['depthModel'])->toBe('theme');
 });
 
 it('stands a physical-height guide at the reference row, chosen rows and every battler\'s feet by the arena\'s measured scale', function () {
