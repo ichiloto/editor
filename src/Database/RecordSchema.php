@@ -97,13 +97,6 @@ final readonly class RecordSchema
         public bool $requireUnchangedSource = false,
         /** Normalize dependent fields on an edited record before accepting the draft. */
         public ?Closure $prepareEdit = null,
-        /**
-         * @var Closure(array<string, mixed>, array<string, mixed>, string): ?string|null Why the runtime could
-         * not read one record as an edit leaves it, given the record before and after and the project root, or
-         * null when it can. Unlike the save check, a refused edit is never made, so a value the runtime reads
-         * only together with others is set through a command that writes them at once.
-         */
-        public ?Closure $editCheck = null,
     ) {
         if ($projection instanceof WholeFileProjection) {
             // A field outside the keys the category owns would read blank and
