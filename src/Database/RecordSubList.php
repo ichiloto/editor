@@ -55,6 +55,10 @@ final readonly class RecordSubList
      * Rewrites the record's references to this list's entries by index when an entry is removed or
      * inserted (a troop's event pages naming members), through the map from old index to new; null
      * from the map is a removed entry, which the closure refuses with a RecordRefusal while it is named.
+     * @param Closure(array<string, mixed>, string, ?string): array<string, mixed>|null $remapKeyReferences
+     * For a keyed list the record names entries of by key (a cinematic's conversation speakers, named by its
+     * groups and lines): rewrites the record's references when an entry's key changes from the old key to the
+     * new one, or refuses with a RecordRefusal a removal (new key null) while the key is still named.
      */
     public function __construct(
         public string $key,
@@ -80,6 +84,7 @@ final readonly class RecordSubList
         public ?Closure $remapIndexReferences = null,
         /** The variant an entry that names none has, as its runtime reads it. */
         public ?string $variantDefault = null,
+        public ?Closure $remapKeyReferences = null,
     ) {
     }
 

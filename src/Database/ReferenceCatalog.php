@@ -111,6 +111,7 @@ final class ReferenceCatalog
         'elements',
         'map_npcs',
         'map_world_objects',
+        \Ichiloto\Editor\Field\NpcBedFields::BED_OBJECTS,
         // A map's minimap landmarks, by stable id.
         'map_landmarks',
         'world_object_tile_layers',
@@ -132,6 +133,7 @@ final class ReferenceCatalog
         'cinematic_checkpoints',
         'cinematic_movement_routes',
         self::CINEMATIC_CONVERSATION_GROUPS,
+        ConversationFields::SPEAKERS,
         'summon_cues',
         'effect_cues',
         'stage_subjects',
@@ -317,6 +319,8 @@ final class ReferenceCatalog
             // one is gone.
             'map_npcs' => $this->listScopedChoices('map_npcs') ?? [],
             'map_world_objects' => $this->getSubjectMap() === null ? [] : array_column(\Ichiloto\Editor\Field\WorldObjectAuthoring::readEntries($this->getSubjectMap()), 'id'),
+            // A bed is a world object whose resource names where its occupant lies.
+            \Ichiloto\Editor\Field\NpcBedFields::BED_OBJECTS => $this->listBedObjects(),
             'map_landmarks' => array_values(array_filter(array_column($this->readSubjectMapLandmarks(), 'id'), is_string(...))),
             'world_object_tile_layers' => $this->currentMap === null ? [] : array_column($this->currentMap->describeTileLayers()['layers'], 'name'),
             // Only meaningful for a named map; the session lists them for the map a condition names.
@@ -341,6 +345,7 @@ final class ReferenceCatalog
             'cinematic_checkpoints' => $this->checkpointIds(),
             'cinematic_movement_routes' => $this->getMovementRouteIds(),
             self::CINEMATIC_CONVERSATION_GROUPS => $this->listScopedChoices(self::CINEMATIC_CONVERSATION_GROUPS) ?? [],
+            ConversationFields::SPEAKERS => $this->listScopedChoices(ConversationFields::SPEAKERS) ?? [],
             'summon_cues' => $this->getTimelineCueIds(CutsceneType::SUMMON),
             'effect_cues' => $this->getTimelineCueIds(CutsceneType::EFFECT),
             // A summon sequence's stage: the subjects it registers, and every
@@ -668,6 +673,7 @@ final class ReferenceCatalog
      * The values a field chooses among that its own entry decides ({@see RecordField::$entryChoices}), read from
      * what the field lives in. `world_object_attachments`: the attachments declared by the resource of the world
      * object a subject reference (`at`) names, on the subject map; none until it names an object that has some.
+     * `npc_bed_attachments`: those of the world object an NPC's bed (`object`) names, likewise.
      * `terrain_grounds`: the ground kinds of the tileset a terrain kind belongs to, those that stand on nothing,
      * other than the kind itself. `mastery_within_branches`: the tree's branches other than the branch choosing, any
      * of which it may grow within once it shares that branch's region. `tileset_whole_pieces`: the pieces of the tileset a place icon belongs to that are
@@ -708,13 +714,40 @@ final class ReferenceCatalog
             $thickets = is_array($owner['thickets'] ?? null) ? $owner['thickets'] : [];
             return array_values(array_map(strval(...), array_keys($thickets)));
         }
-        if ($source !== 'world_object_attachments') {
-            throw new InvalidArgumentException(sprintf('There is no entry choice source %s.', $source));
-        }
-        $objectId = ($holder['kind'] ?? null) === 'world_object' ? ($holder['id'] ?? null) : null;
+        $objectId = match ($source) {
+            'world_object_attachments' => ($holder['kind'] ?? null) === 'world_object' ? ($holder['id'] ?? null) : null,
+            // An NPC's bed names its object directly.
+            \Ichiloto\Editor\Field\NpcBedFields::BED_ATTACHMENTS => $holder['object'] ?? null,
+            default => throw new InvalidArgumentException(sprintf('There is no entry choice source %s.', $source)),
+        };
+
+        return is_string($objectId) ? $this->listObjectAttachments($objectId) : [];
+    }
+
+    /**
+     * The attachments the resource of a world object on the subject map
+     * declares; none for an inline object, an unknown one, or without a map.
+     *
+     * @return list<string>
+     */
+    private function listObjectAttachments(string $objectId): array
+    {
         $map = $this->getSubjectMap();
-        $found = $map === null || !is_string($objectId) ? null : \Ichiloto\Editor\Field\WorldObjectAuthoring::findAttachments($map, $objectId);
+        $found = $map === null ? null : \Ichiloto\Editor\Field\WorldObjectAuthoring::findAttachments($map, $objectId);
+
         return array_map(static fn(\Ichiloto\Engine\Field\WorldObjectAttachment $attachment): string => $attachment->id, $found['attachments'] ?? []);
+    }
+
+    /**
+     * The subject map's world objects an NPC can rest in: those whose
+     * resource declares an attachment for the occupant.
+     *
+     * @return list<string>
+     */
+    private function listBedObjects(): array
+    {
+        return array_values(array_filter($this->valuesFor('map_world_objects'),
+            fn(string $id): bool => $this->listObjectAttachments($id) !== []));
     }
 
     /**
@@ -749,8 +782,9 @@ final class ReferenceCatalog
      *
      * `map_npcs`: the selected map's NPCs, or a cinematic's on its start map
      * and every map it transfers to (validation checks each command against
-     * the map it runs on at that point). `cinematic_conversation_groups`: the
-     * groups the cinematic's `presentation.conversation` declares.
+     * the map it runs on at that point). `cinematic_conversation_groups` and
+     * `cinematic_conversation_speakers`: the groups the cinematic's
+     * `presentation.conversation` declares and the speakers it binds.
      *
      * @return list<string>|null
      */
@@ -762,24 +796,10 @@ final class ReferenceCatalog
             'map_npcs' => $this->currentMap !== null || $cinematic === null
                 ? $this->getSubjectMap()?->getNpcs()->ids()
                 : $this->listCinematicNpcIds($cinematic),
-            self::CINEMATIC_CONVERSATION_GROUPS => $cinematic === null ? null : self::listConversationGroups($cinematic->data()),
+            self::CINEMATIC_CONVERSATION_GROUPS => $cinematic === null ? null : ConversationFields::listGroups($cinematic->data()),
+            ConversationFields::SPEAKERS => $cinematic === null ? null : ConversationFields::listSpeakers($cinematic->data()),
             default => null,
         };
-    }
-
-    /**
-     * The conversation groups a cinematic definition declares, by id.
-     *
-     * @param array<string, mixed> $definition The cinematic's data.
-     * @return list<string>
-     */
-    public static function listConversationGroups(array $definition): array
-    {
-        $presentation = is_array($definition['presentation'] ?? null) ? $definition['presentation'] : [];
-        $conversation = is_array($presentation['conversation'] ?? null) ? $presentation['conversation'] : [];
-        $groups = is_array($conversation['groups'] ?? null) ? $conversation['groups'] : [];
-
-        return array_values(array_filter(array_map(strval(...), array_keys($groups)), static fn(string $id): bool => trim($id) !== ''));
     }
 
     /**

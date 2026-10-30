@@ -972,6 +972,7 @@ category uses - pickers, condition lines, world-write rows, command frames,
 | --- | --- |
 | Identity | `Id` (read-only), `Name` |
 | Placement | `X`, `Y` (the canvas moves it too) |
+| Bed | `Bed`, and once it rests in one `Occupant Attachment`, `Starting Posture`, `Occupied Bed Glyph`; the graphical editor adds its poses and clips |
 | Appearance | `Sprite`, `Facing North/South/East/West`, `Graphical Sprites` |
 | Movement | `Movement` (`fixed` / `wander`), `Direction Fix` (`false` / `true`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` - a condition line |
@@ -1005,6 +1006,27 @@ character says is read in the pane rather than in the edit buffer.
   onto that NPC's pages. The session's `npc.adoptEvent` does that move as
   one undo step, keeping a run-once event's saved completion for old saves.
 
+- **Beds.** `Bed` picks the world object on this map the NPC rests in,
+  among the objects whose field resource declares attachments; `(not in a
+  bed)` takes it out of its bed again. `Occupant Attachment` picks one of
+  that resource's attachments, the logical cell the occupant lies on, and
+  choosing another bed drops an attachment chosen on the first.
+  `Starting Posture` is the Engine's `lying` (its default), `sitting` or
+  `standing`, and `Occupied Bed Glyph` the one Terminal cell the occupied
+  bed shows (default `▣`). While it has a bed, the NPC's `X` and `Y` are
+  where it stands once it gets up. The graphical editor adds the
+  character's own `Lying Pose` and `Sitting Pose` and the `Into Lying`,
+  `Into Sitting` and `Into Standing` clips, each picked like any field
+  role; a clip plays once, so it is written with `loop => false` and one
+  that loops is refused. The Engine's `NpcBedDefinition` reads every edit,
+  and a value it refuses is refused before anything changes. Validation
+  runs the Engine's `MapBedRule` against the map's physical grid, declared
+  or resolved from its glyphs: it reports a bed object the map does not
+  have, an object whose resource lacks the attachment, an attachment cell
+  that is not a solid bed cell, a standing exit that is not clear floor,
+  and occupants sharing one bed whose presence conditions can both hold
+  (`npc.bed`). Posture changes during a scene are the `set_bed_posture`
+  command's.
 - **Map-owned appearance.** For a fixed interaction already drawn on a map
   layer (such as a mounted notice on `fixtures`), clear the `Sprite` text
   completely and press `Enter`. This stores `'sprite' => ''`, not a missing
@@ -2915,11 +2937,44 @@ The record pane groups the engine's cinematic definition: **Identity** (id,
 name, description, version), **Staging** (start map, initial presentation,
 reduced-motion policy), **Script** (the command list, opened as a frame),
 **Skip** (policy, checkpoints, the finalizer as a frame), **Metadata**
-(authoring) and **Cast**. Cast rows are `player`, `party_actor`, `npc` (a
+(authoring), **Conversation** and **Cast**. Cast rows are `player`, `party_actor`, `npc` (a
 stable map-local id on the start map) or `staged_actor` with every engine
 field: id, sprite or asset, x and y, facing, visible, collision and
 directional sprites. `Shift+O` on a cast row adds a member; `Delete` removes
 one.
+
+**Conversation** authors the field conversation the Engine turns speakers by
+(`presentation.conversation`, the `conversationFacing` contract):
+
+- `Conversation Speakers` binds each stable `Speaker Key` to a `Subject`:
+  the `player`, an `npc` picked among the NPCs of the start map and the maps
+  the cinematic transfers to, or a `staged_actor` picked from the cast and
+  the actors its commands stage. Two speakers may share a display name;
+  their keys keep them apart.
+- `Conversation Addressees` picks, per speaker, the speaker it turns to by
+  default, both among the bound speakers.
+- `Conversation Groups` declares the scene's phases: a `Group Id` and its
+  `Speakers`, a list picked among the bound speakers. An empty group
+  suspends field participation. A group's own addressees and facing
+  overrides, and the conversation's facing overrides, have no rows yet and
+  are written back as authored.
+- `Initial Conversation Group` picks the group the scene starts in;
+  `select_conversation_group` commands change it.
+- A cinematic's `text` lines add `Conversation Speaker` and `Addressee`,
+  picked among the bound speakers. A reusable Common Event cannot know which
+  cinematic runs it, so its lines do not offer them.
+
+`Shift+O` on a list's heading adds an entry at its head. Renaming a speaker
+key renames it everywhere the cinematic names it (addressees, facing
+overrides, groups and its lines), and renaming a group renames the initial
+group and the `select_conversation_group` commands that select it. Removing
+a speaker or group the cinematic still names is refused and names each
+place. The Engine's `CinematicConversation` judges the whole conversation
+when the cinematic is saved, before anything is written. Validation reports
+the Engine's refusal with a hint naming each group or addressee that names
+an unbound speaker, a speaker whose NPC is on no map the cinematic runs on
+or whose staged actor the cast does not declare, and a line selecting a
+speaker or addressee the conversation does not bind.
 
 #### The command tree
 
