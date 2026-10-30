@@ -4,6 +4,19 @@
 
 ### Added
 
+- Measured battle arena scale, as Engine 405f4c1 reads it: an arena's `ground.scaleReference` (horizon,
+  reference row, pixels per unit and optional vanishing x, in battle canvas units) is authored on the Battle Arenas
+  page beside the legacy Far Edge Scale. The session's `arenas.setDepthModel` sets the measured scale, the far edge
+  scale or neither as one undo step and is the only switch between them; a typed edit that would leave both, or
+  start a measured scale one value at a time, is refused with the Engine's reason and the switch to use. The Engine's
+  own ground reading validates each change, the battle theme's band check runs before the step is recorded, and
+  saves keep the rest of the source as written. Records gain an `editCheck` hook for such per-edit runtime reads.
+- A physical-height guide on the arena preview: `arenas.preview` takes `guide` (`height`, `rows`) and answers
+  the guide's height at the reference row, at authored rows and at each battler's feet, each projected by the
+  Engine's `BattleGroundScale`, beside each battler's body span. The project's guide height is the editor
+  preference `editor.battleScaleGuide.height` in `ichiloto.json`; nothing about the guide is written to game data.
+  A preview's dragged depth scale model stands in for the arena's own, so a trial measured scale previews without
+  being written.
 - World-object tiles, as Engine 81c5961 composes them: a world object's **Graphical Tiles** rows (`tiles2d`) choose
   one of the map's tile layers, a cell the object owns and a tile of the map's tileset (the row carries
   `tilePicker` for the palette), and the session's `worldObjects.setTiles` and `worldObjects.unsetTiles` set and
