@@ -110,6 +110,11 @@ final class ProjectRecordDatabase
                 }
             }
         }
+        $scoped = $references !== null && $field->reference !== null && is_string($value) ? $references->listScopedChoices($field->reference) : null;
+        if ($scoped !== null && ! in_array($value, $scoped, true)) {
+            // Choices that depend on where the script runs: refused only where that is known.
+            throw new \InvalidArgumentException(sprintf('%s "%s" is not one this script can name here; choose one from the picker.', $field->label, $value));
+        }
         return $value;
     }
 

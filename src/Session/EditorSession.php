@@ -3919,7 +3919,8 @@ final class EditorSession
             $cutscene = ($id === null ? null : $this->workspace->cutscenes?->find($type, $id))
                 ?? throw new SessionRefusal(sprintf('There is no %s %s.', $type->noun(), strval($record['index'] ?? '')));
         }
-        $catalog = new ReferenceCatalog($this->workspace, $mapId === null ? null : $this->requireMap($mapId), $cutscene);
+        // A cinematic names its own maps; the map selected beside it is not where its commands run.
+        $catalog = new ReferenceCatalog($this->workspace, $mapId === null || $cutscene?->type === CutsceneType::CINEMATIC ? null : $this->requireMap($mapId), $cutscene);
         if ($category === 'world_object_tile_layers') {
             if ($mapId === null || !is_string($record['id'] ?? null)) { throw new SessionRefusal('A covered tile-layer picker needs its map-local object owner.'); }
             $map = $this->requireMap($mapId);

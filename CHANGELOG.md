@@ -4,6 +4,15 @@
 
 ### Added
 
+- Bed posture and conversation group commands, as Engine bf49893 registers them: `set_bed_posture` picks its
+  `Occupant` among the NPCs of the map an event belongs to, or of a cinematic's start map and every map it
+  transfers to, and chooses its `Posture` and `Transition Seconds`; `select_conversation_group` picks its `Group`
+  among the groups the cinematic's `presentation.conversation` declares. Both are edited in their own source with
+  undo and redo byte for byte, and a value outside the known choices is refused before anything is written.
+  Validation reports an NPC not on the map the script is on at that command, a group the cinematic does not
+  declare and a group selected outside a cinematic. The session's `map_npcs` choices for a cinematic now include
+  the NPCs of the maps it transfers to, and the new `cinematic_conversation_groups` reference kind lists a
+  cinematic's groups.
 - Story-selected Skits, as Engine 5b3558b plays them through `CinematicCommandSchema::export()['skitPlayback']`: a
   `play_skit` command in event scripts and cinematics chooses its Skit in a `Skit` picker over the project's Skits,
   listed as `Title (id)` and stored by stable id, and a Skit's `Trigger` (`prompt` or `script`, the Engine's
@@ -107,6 +116,9 @@
 
 ### Removed
 
+- Typing an NPC id that is not on the map or cinematic being edited: a `move_route` `NPC Id`, like the new
+  `set_bed_posture` `Occupant`, is now refused before anything is written wherever the Editor knows the script's
+  maps, where it was previously written and reported only by validation.
 - A map's tile layer offset no longer has to be -0.5, 0 or 0.5: the Editor's refusal of other fractions is
   removed, as the Engine now accepts any offset from -0.5 to 0.5 field cells.
 - A map no longer writes a tile layer offset equal to the one its tileset gives the layer, and an explicit
@@ -122,6 +134,14 @@
 
 ### Fixed
 
+- Every project failed to open, validate or render with `Unhandled match case ... CONVERSATION_GROUP` after Engine
+  bf49893 added the `npc` and `conversation_group` reference kinds: the Editor mapped Engine reference kinds to
+  pickers in a closed `match` that the schema catalogue runs for every project. `ScriptReferenceSource` now maps
+  every current kind to its picker and where its values come from, and a kind this Editor does not know becomes
+  a plain text field reported by validation, so a later Engine kind no longer stops a project from loading.
+  `ProjectScriptCommands::getReferenceCategory()` is removed; `ScriptReferenceSource::forReference()` replaces it.
+- `references.list` for a cinematic's row reads the cinematic's own maps. The map selected beside it no longer
+  replaces them, where it offered that map's NPCs, world objects and markers for a command the cinematic runs elsewhere.
 - The `skits` reference kind lists Skits by the stable id the Engine keys them by, where it listed their titles.
 - `composer analyse` and a bare `vendor/bin/phpstan analyse` read the Engine named by `ICHILOTO_ENGINE_SRC`, as
   `vendor/bin/pest` does: `phpstan.neon` includes `tests/phpstan-engine.php`, which adds that checkout's source

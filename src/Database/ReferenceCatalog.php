@@ -11,6 +11,7 @@ use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Dialogue\DialogueCatalogFile;
 use Ichiloto\Editor\Dialogue\DialogueEmotionFields;
 use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
@@ -59,6 +60,9 @@ final class ReferenceCatalog
 
     /** The entry choice source of a tileset's tile layers ({@see listEntryChoices()}). */
     public const string TILESET_TILE_LAYERS = 'tileset_tile_layers';
+
+    /** The conversation groups the current cinematic declares, which `select_conversation_group` selects among. */
+    public const string CINEMATIC_CONVERSATION_GROUPS = 'cinematic_conversation_groups';
 
     public const array CATEGORIES = [
         'actors',
@@ -127,6 +131,7 @@ final class ReferenceCatalog
         'cinematic_subjects',
         'cinematic_checkpoints',
         'cinematic_movement_routes',
+        self::CINEMATIC_CONVERSATION_GROUPS,
         'summon_cues',
         'effect_cues',
         'stage_subjects',
@@ -306,10 +311,11 @@ final class ReferenceCatalog
             'knowledge_observations' => $this->knowledgeObservations(),
             'knowledge_subjects' => $this->knowledgeIds('subjects'),
             'knowledge_reports' => $this->knowledgeIds('reports'),
-            // NPC ids are map-local, so the choices are the current map's:
-            // read live from the collection, a just-created NPC is offered
-            // at once and a deleted one is gone.
-            'map_npcs' => $this->getSubjectMap()?->getNpcs()->ids() ?? [],
+            // NPC ids are map-local, so the choices are the current map's, or
+            // those on every map a cinematic runs on: read live from the
+            // collection, a just-created NPC is offered at once and a deleted
+            // one is gone.
+            'map_npcs' => $this->listScopedChoices('map_npcs') ?? [],
             'map_world_objects' => $this->getSubjectMap() === null ? [] : array_column(\Ichiloto\Editor\Field\WorldObjectAuthoring::readEntries($this->getSubjectMap()), 'id'),
             'map_landmarks' => array_values(array_filter(array_column($this->readSubjectMapLandmarks(), 'id'), is_string(...))),
             'world_object_tile_layers' => $this->currentMap === null ? [] : array_column($this->currentMap->describeTileLayers()['layers'], 'name'),
@@ -334,6 +340,7 @@ final class ReferenceCatalog
             'cinematic_subjects' => $this->subjectIds(),
             'cinematic_checkpoints' => $this->checkpointIds(),
             'cinematic_movement_routes' => $this->getMovementRouteIds(),
+            self::CINEMATIC_CONVERSATION_GROUPS => $this->listScopedChoices(self::CINEMATIC_CONVERSATION_GROUPS) ?? [],
             'summon_cues' => $this->getTimelineCueIds(CutsceneType::SUMMON),
             'effect_cues' => $this->getTimelineCueIds(CutsceneType::EFFECT),
             // A summon sequence's stage: the subjects it registers, and every
@@ -731,6 +738,78 @@ final class ReferenceCatalog
         }
 
         return array_values(array_unique([...$layers, ...$read->getStackLayers()]));
+    }
+
+    /**
+     * The values a reference whose choices depend on where it is authored
+     * may take there, or null where that is not known: outside any map or
+     * cinematic, an NPC could be on any map, and outside a cinematic there
+     * are no conversation groups to choose from. An edit outside known
+     * choices is refused before anything is written.
+     *
+     * `map_npcs`: the selected map's NPCs, or a cinematic's on its start map
+     * and every map it transfers to (validation checks each command against
+     * the map it runs on at that point). `cinematic_conversation_groups`: the
+     * groups the cinematic's `presentation.conversation` declares.
+     *
+     * @return list<string>|null
+     */
+    public function listScopedChoices(string $category): ?array
+    {
+        $cinematic = $this->currentCutscene?->type === CutsceneType::CINEMATIC ? $this->currentCutscene : null;
+
+        return match ($category) {
+            'map_npcs' => $this->currentMap !== null || $cinematic === null
+                ? $this->getSubjectMap()?->getNpcs()->ids()
+                : $this->listCinematicNpcIds($cinematic),
+            self::CINEMATIC_CONVERSATION_GROUPS => $cinematic === null ? null : self::listConversationGroups($cinematic->data()),
+            default => null,
+        };
+    }
+
+    /**
+     * The conversation groups a cinematic definition declares, by id.
+     *
+     * @param array<string, mixed> $definition The cinematic's data.
+     * @return list<string>
+     */
+    public static function listConversationGroups(array $definition): array
+    {
+        $presentation = is_array($definition['presentation'] ?? null) ? $definition['presentation'] : [];
+        $conversation = is_array($presentation['conversation'] ?? null) ? $presentation['conversation'] : [];
+        $groups = is_array($conversation['groups'] ?? null) ? $conversation['groups'] : [];
+
+        return array_values(array_filter(array_map(strval(...), array_keys($groups)), static fn(string $id): bool => trim($id) !== ''));
+    }
+
+    /**
+     * The NPCs on the maps a cinematic runs on: its start map and every map
+     * its commands, or the reusable event scripts they run, transfer to.
+     *
+     * @return list<string>
+     */
+    private function listCinematicNpcIds(CutsceneAsset $cinematic): array
+    {
+        $scripts = [];
+        foreach ($this->workspace->getRecordDatabase('common_events')?->getRecords() ?? [] as $record) {
+            $scripts[$record->recordId] = $record->getSubList('commands');
+        }
+        $start = $cinematic->data()['startMap'] ?? null;
+        $partner = $cinematic->partner();
+        $finalizer = array_is_list($partner) ? [] : array_values((array) ($partner['finalizer'] ?? []));
+        $mapIds = array_filter([
+            is_string($start) ? $start : '',
+            ...CommandMapContext::listTransferDestinations([...$cinematic->commands(), ...$finalizer],
+                static fn(string $id): ?array => $scripts[$id] ?? null),
+        ], static fn(string $id): bool => $id !== '');
+        $ids = [];
+        foreach ($this->workspace->maps as $map) {
+            if (in_array($map->mapId, $mapIds, true)) {
+                array_push($ids, ...$map->getNpcs()->ids());
+            }
+        }
+
+        return array_values(array_unique($ids));
     }
 
     public function getSubjectMap(): ?ProjectMap
