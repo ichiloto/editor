@@ -23,6 +23,8 @@ use Ichiloto\Engine\Progress\Knowledge\KnowledgeRecordType;
 use Ichiloto\Engine\Rendering\Presentation\Text\ProjectTextCatalog;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Battle\CounterAttackRule;
+use Ichiloto\Engine\Battle\CrisisAbility;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Entities\Enumerations\ArmorType;
@@ -62,6 +64,8 @@ final class ReferenceCatalog
         'attack_skills',
         'counter_skills',
         'crisis_abilities',
+        // What a crisis ability's variant may use, by the Engine's own rule.
+        'crisis_skills',
         'resolution_kinds',
         'piece_connections',
         'resolution_scopes',
@@ -240,6 +244,7 @@ final class ReferenceCatalog
             'attack_skills' => $this->attackSkillNames(),
             // What a counter attack may respond with, by the Engine's own rule.
             'counter_skills' => $this->counterSkillNames(),
+            'crisis_skills' => self::getCrisisSkillNames($this->workspace->loadSkillCatalog()),
             'crisis_abilities', 'states' => array_values(array_filter(array_map(
                 static fn(ProjectRecord $record): mixed => $record->get('id'),
                 $this->workspace->getRecordDatabase($category)?->getRecords() ?? []),
@@ -480,6 +485,30 @@ final class ReferenceCatalog
         foreach (array_keys($catalog->getSkills()) as $name) {
             try {
                 new CounterAttackRule((string) $name)->resolveSkill($catalog);
+                $names[] = (string) $name;
+            } catch (\InvalidArgumentException) {
+                continue;
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * The skills a crisis ability's variant may use: those the Engine's
+     * CrisisAbility accepts (a battle-usable basic or special skill that is
+     * not a summon), in catalogue order. A one-variant probe asks the Engine
+     * itself, so the rule has one owner.
+     *
+     * @return list<string>
+     */
+    public static function getCrisisSkillNames(SkillCatalog $catalog): array
+    {
+        $names = [];
+        foreach (array_keys($catalog->getSkills()) as $name) {
+            $probe = ['name' => 'probe', 'hpBelowPercent' => 10.0, 'variants' => [['skill' => (string) $name]]];
+            try {
+                CrisisAbility::fromArray($probe)?->validateSkills($catalog);
                 $names[] = (string) $name;
             } catch (\InvalidArgumentException) {
                 continue;

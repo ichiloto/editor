@@ -54,17 +54,17 @@ is what the code draws rather than a sketch of it:
  ┌─Assets [Focus]───────────────┐ ┌─Canvas─────────────────────┐ ┌─Inspector──────────────────────┐
  │ Maps                         │ │ Preview: test-map          │ │   Name: Test Map               │
  │ > test-map                   │ │ Test Map |  | 12 x 5 | vie │ │   Region:                      │
+ │                              │ │ ############               │ │   Role: Not set                │
+ │                              │ │ #  ~~~     #               │ │   Place Type: Not set          │
+ │                              │ │ #          #               │ │   Skit Backdrop: None: skits   │
+ │                              │ │ #          #               │ │     here show no backdrop      │
  │                              │ │ ############               │ │   Kind: Not set                │
- │                              │ │ #  ~~~     #               │ │   Description: A tiny fixture  │
- │                              │ │ #          #               │ │                map.            │
- │                              │ │ #          #               │ │   Size                         │
- │                              │ │ ############               │ │     X: 12                      │
+ │                              │ │                            │ │   Description: A tiny fixture  │
+ │                              │ │                            │ │                map.            │
+ │                              │ │                            │ │   Size                         │
+ │                              │ │                            │ │     X: 12                      │
  │                              │ │                            │ │     Y: 5                       │
  │                              │ │                            │ │   Events · 1                   │
- │                              │ │                            │ │   Triggers · 0                 │
- │                              │ │                            │ │   Audio                        │
- │                              │ │                            │ │     Background Music: (None)   │
- │                              │ │                            │ │     Music Variants · None      │
  └─/:Filter  Del:Delete─────────┘ └─i:Paint L:Layer ?:Help─────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
@@ -2104,7 +2104,9 @@ A crisis ability is a project resource an actor page selects as its
 **HP Below %** or who has any of its **Activation States**; a record needs
 at least one of the two. Each variant names a battle-usable basic or special
 skill and the **World Conditions** that choose it, and exactly one variant
-may match at a time. The **Badge Label** is the battle condition badge; left
+may match at a time. A variant's **Skill** picker offers only the skills the
+Engine accepts there; summons and skills used only outside battle are left
+out. The **Badge Label** is the battle condition badge; left
 empty, the game shows the name's first three letters in capitals.
 
 A new crisis ability is active below 10% HP and has one variant: the

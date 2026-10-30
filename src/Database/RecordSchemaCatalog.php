@@ -534,21 +534,16 @@ final class RecordSchemaCatalog
             // The Engine reads a crisis only with an activation and a technique, so a new one starts
             // active below 10% HP (the Engine documentation's example) on the project's first
             // battle-usable basic or special skill; without one there is no technique to offer.
+            // That skill is the first the variant picker offers, from the same source.
             makeBlank: static function (string $name, string $root): array {
-                $catalog = \Ichiloto\Engine\Entities\Skills\SkillCatalog::load($root . '/assets');
-                foreach (array_keys($catalog->getSkills()) as $skill) {
-                    $blank = ['name' => $name, 'hpBelowPercent' => 10.0, 'variants' => [['skill' => (string) $skill]]];
-                    try {
-                        \Ichiloto\Engine\Battle\CrisisAbility::fromArray($blank)?->validateSkills($catalog);
-                    } catch (\InvalidArgumentException) {
-                        continue;
-                    }
-                    return ['id' => 'new-crisis', ...$blank];
-                }
-                throw new RecordRefusal('A new crisis ability offers the project\'s first battle-usable basic or special skill. Add one under Skills first.');
+                $skill = ReferenceCatalog::getCrisisSkillNames(
+                    \Ichiloto\Engine\Entities\Skills\SkillCatalog::load($root . '/assets'))[0]
+                    ?? throw new RecordRefusal('A new crisis ability offers the project\'s first battle-usable basic or special skill. Add one under Skills first.');
+
+                return ['id' => 'new-crisis', 'name' => $name, 'hpBelowPercent' => 10.0, 'variants' => [['skill' => $skill]]];
             },
             subList: new RecordSubList(key: 'variants', prefix: 'variant', singular: 'variant', fields: [
-                RecordField::reference('skill', 'Skill', 'skills'),
+                RecordField::reference('skill', 'Skill', 'crisis_skills'),
                 new RecordField('conditions', 'World Conditions', codec: RecordFieldCodec::CONDITIONS, removeWhenEmpty: true),
             ], blank: ['skill' => '']),
             saveCheck: static function (array $whole, string $root): ?string {
