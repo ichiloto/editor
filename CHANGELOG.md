@@ -84,12 +84,23 @@
 
 ### Removed
 
+- The legacy-tag reading of map rows: an unrecognised tag such as `<blue>` is read as its glyphs, as the Engine
+  reads it, no longer as a style.
 - The dialogue catalogue's `skits` key: Dialogue Portraits and Speaker Names refuse a catalogue that still has it
   and name `ichiloto upgrade` (format 4), which moves each skit background to its skit's `Backdrop`.
 - The refusal of `<` as a stamped piece's cell glyph (`tilesets.setPieceGlyph`). A piece cell now takes `<`, `>`
   and `\` like any other glyph; formatter markup or several characters offered as one glyph are still refused.
 
 ### Fixed
+
+- Map rows are read by the Engine's `TerminalText::parseSourceCells()`, so the Editor reads every row exactly as
+  the Engine does. A row the Engine cannot split into independent cells makes its map read-only with the row and
+  reason, and a changed row is read back the same way before it is written. A cell's colour is read as the
+  Engine's formatter shows it, closed styles included.
+- A new Crisis Abilities record starts as one the Engine reads (active below 10% HP, on the project's first
+  battle-usable basic or special skill) and saves; without such a skill, creation is refused and says so.
+- A mastery branch's Within Branch offers the tree's other branches, never the branch itself.
+- Removing the last entry of plain data writes `[]`, so adding a value and undoing it restores the file's bytes.
 
 - A coloured `\` painted on a map, or set as a piece cell, no longer escapes its closing colour tag, and painted
   `<` and `>` cells no longer join their neighbours into a formatter tag. The Editor writes those cells through

@@ -1394,10 +1394,10 @@ it('heads each NPC page and shortens its rows, without touching field ids', func
         ),
         static fn(array $r): bool => preg_match('/^Page \d/', $r['label']) === 1 || str_starts_with((string) $r['field'], 'variant'),
     ));
-    $page = ['When', 'Then Set', 'Cue Symbol', 'Cue Colour', 'Cue When', 'Event Script', 'Cinematic', 'Repeats', 'Page Id',
+    $page = ['When', 'Then Set', 'Cue Symbol', 'Cue Colour', 'Cue Range (0..64 steps)', 'Cue When', 'Event Script', 'Cinematic', 'Repeats', 'Page Id',
         'Staged Speakers', 'Script Commands', 'Line 1 Speaker', 'Line 1 Emotion', 'Line 1 Text'];
     $fields = static fn(int $n): array => ["variant{$n}Conditions", "variant{$n}Sets", "variant{$n}Cuesymbol", "variant{$n}Cuecolor",
-        "variant{$n}Cueconditions", "variant{$n}ScriptId", "variant{$n}CinematicId", "variant{$n}Reusable", "variant{$n}Id",
+        "variant{$n}CuemaxDistance", "variant{$n}Cueconditions", "variant{$n}ScriptId", "variant{$n}CinematicId", "variant{$n}Reusable", "variant{$n}Id",
         "variant{$n}Speakers", "variant{$n}Script", "variant{$n}Line0Name", "variant{$n}Line0Emotion", "variant{$n}Line0Text"];
     $next = count($page) + 1;
 

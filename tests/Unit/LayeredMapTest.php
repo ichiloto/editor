@@ -201,8 +201,6 @@ it('writes a stroke as one edit in which each write sees the writes before it', 
 
 it('converts legacy only when a layer is created and undo restores the original file shape', function () {
     $root = makeTemporaryProject();
-    $path = $root . '/assets/Maps/test-map/test-map.map.php';
-    file_put_contents($path, str_replace(['<blue>', '</blue>'], ['<fg=blue>', '</>'], file_get_contents($path)));
     $map = authoredMap($root);
     $before = $map->captureLayerSnapshot();
     $source = file_get_contents($map->mapPath);
