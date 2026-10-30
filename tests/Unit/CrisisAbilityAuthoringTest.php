@@ -8,6 +8,7 @@ use Ichiloto\Engine\Battle\CrisisAbilityCatalog;
 
 it('round trips crisis activation and guarded skill variants through the database', function () {
     $root = makeTemporaryProject();
+    writeSkillRecords($root, new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Test technique', 'Strikes.', '', 2, 0));
     $database = loadRecordDatabase($root, 'crisis_abilities');
     $index = $database->addRecord();
     $database->setField($index, 'id', 'synthetic-surge');
@@ -19,7 +20,9 @@ it('round trips crisis activation and guarded skill variants through the databas
     $database->save();
     $ability = CrisisAbilityCatalog::fromProject($root . '/assets')->getAbility('synthetic-surge');
     expect($ability->hpBelowPercent)->toBe(12.5)->and($ability->states)->toBe(['focus'])
-        ->and($ability->variants[0]['conditions'][0]['value'])->toBe('second');
+        // The new record's own variant offers the project's skill; the added one is guarded.
+        ->and($ability->variants[0])->toBe(['skill' => 'Test technique', 'conditions' => []])
+        ->and($ability->variants[1]['conditions'][0]['value'])->toBe('second');
     $reopened = loadRecordDatabase($root, 'crisis_abilities');
     $variantFields = $reopened->getSettingsFields($index);
     expect(array_find($variantFields, static fn(array $field): bool => ($field['field'] ?? '') === 'variant0Skill')['reference'])
@@ -50,8 +53,27 @@ it('binds an actor using a crisis resource picker and preserves the reference th
     expect(ProjectWorkspace::fromProject($root)->actorDatabase->getActorByIndex(0)->getData())->not->toHaveKey('crisisAbility');
 });
 
+it('starts a new crisis ability on a battle-usable skill, and says what the project lacks without one', function () {
+    $root = makeTemporaryProject();
+    writeSkillRecords($root, new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Field only', 'Mends.', '', 2, 0,
+        occasion: \Ichiloto\Engine\Entities\Enumerations\Occasion::MENU_SCREEN));
+    expect(fn() => loadRecordDatabase($root, 'crisis_abilities')->requireNewRecord())
+        ->toThrow(\Ichiloto\Editor\Database\RecordRefusal::class, 'battle-usable basic or special skill');
+
+    writeSkillRecords($root, new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Field only', 'Mends.', '', 2, 0,
+        occasion: \Ichiloto\Engine\Entities\Enumerations\Occasion::MENU_SCREEN),
+        new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Last stand', 'Strikes.', '', 2, 0));
+    $database = loadRecordDatabase($root, 'crisis_abilities');
+    $database->addRecord();
+    $database->save();
+    $abilities = CrisisAbilityCatalog::fromProject($root . '/assets')->getAbilities();
+    expect(array_column(array_merge(...array_values(array_map(static fn($ability): array => $ability->variants, $abilities))), 'skill'))
+        ->toBe(['Last stand']);
+});
+
 it('refuses malformed activation before writing the crisis source', function () {
     $root = makeTemporaryProject();
+    writeSkillRecords($root, new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Test technique', 'Strikes.', '', 2, 0));
     $database = loadRecordDatabase($root, 'crisis_abilities');
     $index = $database->addRecord();
     $database->setField($index, 'hpBelowPercent', '101');
