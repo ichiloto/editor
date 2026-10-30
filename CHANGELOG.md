@@ -93,6 +93,9 @@
 
 ### Fixed
 
+- A Crisis Abilities variant's Skill picker offers only the skills the Engine's `CrisisAbility` accepts, from a
+  `crisis_skills` reference source; it previously offered every skill, summons and menu-only skills included,
+  which the Engine then refused. A new record's first variant comes from the same source.
 - Map rows are read by the Engine's `TerminalText::parseSourceCells()`, so the Editor reads every row exactly as
   the Engine does. A row the Engine cannot split into independent cells makes its map read-only with the row and
   reason, and a changed row is read back the same way before it is written. A cell's colour is read as the

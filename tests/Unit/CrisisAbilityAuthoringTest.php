@@ -26,7 +26,17 @@ it('round trips crisis activation and guarded skill variants through the databas
     $reopened = loadRecordDatabase($root, 'crisis_abilities');
     $variantFields = $reopened->getSettingsFields($index);
     expect(array_find($variantFields, static fn(array $field): bool => ($field['field'] ?? '') === 'variant0Skill')['reference'])
-        ->toBe('skills');
+        ->toBe('crisis_skills');
+});
+
+it('offers a variant only the skills the Engine accepts for a crisis technique', function () {
+    $root = makeTemporaryProject();
+    writeSkillRecords($root,
+        new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Field only', 'Mends.', '', 2, 0,
+            occasion: \Ichiloto\Engine\Entities\Enumerations\Occasion::MENU_SCREEN),
+        new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Last stand', 'Strikes.', '', 2, 0));
+    // A menu-only skill is one the Engine refuses as a crisis technique, so it is never offered.
+    expect(new ReferenceCatalog(ProjectWorkspace::fromProject($root))->valuesFor('crisis_skills'))->toBe(['Last stand']);
 });
 
 it('binds an actor using a crisis resource picker and preserves the reference through save', function () {
