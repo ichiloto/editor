@@ -1570,6 +1570,7 @@ skill's effects, a quest's rewards) listed under them.
 | Enemies | `assets/Data/Enemies/*.php` | Editable - one data record per file, which `enemies.php` loads | Same |
 | Troops | `assets/Data/troops.php` | Editable | Same |
 | Battle Entry | `assets/Data/battle-entry-rules.php` | Editable | Same |
+| Crisis Abilities | `assets/Data/crisis-abilities.php` | Editable - one record per stable id: name, badge label, description, the HP percentage and states that activate it, and its variants, each a skill with the world conditions that choose it | Same |
 | States | `assets/Data/states.php` | Editable | Same |
 | Animations | `assets/Data/animations.php` | Editable | Same |
 | Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, pieces by id with their glyphs and tiles, and place icons (the piece shown for each place type) | Same |
@@ -1589,6 +1590,7 @@ skill's effects, a quest's rewards) listed under them.
 | System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, battle engine, openings and time gauge settings, whether a level up restores HP and MP (on unless turned off), and the dash (Dash, Dash Speed Multiplier) | Same |
 | Configuration | `config.php` (`save`, `accessibility`, `ui`, `field`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
 | Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
+| Word Forms | `assets/Data/word-forms.php` (`words`) | Editable - one record per word as the game writes it, with its singular and plural forms | Same |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
 | Dialogue Portraits | `assets/Data/Presentation/dialogue.php` (`actors`, `resources`) | Editable - one record per speaker identity: what it speaks as (an actor, chosen, or a non-actor character with a stable id), its dialogue portrait and skit bust, and its emotions, each a name with its own portrait and bust, chosen as project images | Same, with each image shown beside its path |
 | Speaker Names | `assets/Data/Presentation/dialogue.php` (`speakers`) | Editable - one record per label lines are spoken under, and the dialogue portrait it shows | Same |
@@ -2095,6 +2097,22 @@ left out. A state grants it while active, and a skill once learned; spells
 do not grant one. Validation reports a grant the Engine would refuse, with
 the Engine's own reason.
 
+### Crisis Abilities
+
+A crisis ability is a project resource an actor page selects as its
+**Crisis Ability**. It is active for a conscious actor whose HP is below
+**HP Below %** or who has any of its **Activation States**; a record needs
+at least one of the two. Each variant names a battle-usable basic or special
+skill and the **World Conditions** that choose it, and exactly one variant
+may match at a time. The **Badge Label** is the battle condition badge; left
+empty, the game shows the name's first three letters in capitals.
+
+A new crisis ability is active below 10% HP and has one variant: the
+project's first battle-usable basic or special skill. Without such a skill,
+creation is refused and says so. Saves are checked by the Engine's own
+reading, and validation reports a variant skill or activation state the
+project does not have.
+
 ### Battle Art
 
 The art an actor or enemy fights with in a graphical battle is bound to it as
@@ -2211,6 +2229,17 @@ Each schedule has:
 
 Validation reads each schedule as the game will and names every one the game
 would refuse. The notices' wording lives in Terms (`messages.income.*`).
+
+### Word Forms
+
+The game inflects names by English rules: one Potion, two Potions. A word
+the rules get wrong is listed here with the **Singular** and **Plural** the
+game shows for it. The **Word** is written exactly as the game writes it,
+such as an item's whole name, and every inflected name respects it. A new
+word starts with its own spelling in both forms. Blank or space-padded
+spellings are refused as they are typed, saves are checked by the Engine's
+own reading, and validation reports a word listed twice or a file the game
+could not read.
 
 ### Terms
 
