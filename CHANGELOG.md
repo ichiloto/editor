@@ -17,7 +17,8 @@
   beside each battler's body span. The project's guide height is the editor
   preference `editor.battleScaleGuide.height` in `ichiloto.json`; nothing about the guide is written to game data.
   A preview's dragged depth scale model stands in for the arena's own, so a trial measured scale previews without
-  being written.
+  being written. The answer's `depthModel` names the model the arena itself declares (`measured`, `farEdge` or
+  `theme`), so a depth scale switch stands where the arena does during a trial.
 - World-object tiles, as Engine 81c5961 composes them: a world object's **Graphical Tiles** rows (`tiles2d`) choose
   one of the map's tile layers, a cell the object owns and a tile of the map's tileset (the row carries
   `tilePicker` for the palette), and the session's `worldObjects.setTiles` and `worldObjects.unsetTiles` set and
