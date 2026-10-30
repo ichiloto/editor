@@ -70,6 +70,7 @@ use Ichiloto\Editor\Field\NpcAuthoring;
 use Ichiloto\Editor\Field\MapAreaAuthoring;
 use Ichiloto\Editor\Field\MapAreaRefusal;
 use Ichiloto\Editor\Field\WorldObjectAuthoring;
+use Ichiloto\Editor\Field\WorldObjectTileFields;
 use Ichiloto\Editor\Field\FieldSpriteFields;
 use Ichiloto\Editor\Field\CharacterSheetPreview;
 use Ichiloto\Editor\Field\NpcChange;
@@ -5382,12 +5383,15 @@ final class EditorSession
             $owner = isset($field['entry'][0]) && str_starts_with($field['field'] ?? '', 'variant')
                 ? $object['variants'][$field['entry'][0]] : $object;
             $field = FieldSpriteFields::describeFields([$field], $owner, $map->getAssetRoot())[0];
+            // A presented tile is a tile identity of the map's tileset, picked from its palette (`tiles.palette`).
+            if (str_starts_with($field['field'] ?? '', 'objectTile') && ($field['sourceKey'] ?? null) === 'tile') { $field['tilePicker'] = true; }
             if ($issue !== null) { $field['editable'] = false; }
         }
         unset($field);
         return ['map' => $mapId, 'revision' => $this->getMapRevision($map), 'event' => null,
             'worldObject' => ['id' => $id, 'variants' => array_column($object['variants'] ?? [], 'id'),
-                'anchor' => $object['anchor'], 'covers' => $object['covers'] ?? null, 'issue' => $issue],
+                'anchor' => $object['anchor'], 'covers' => $object['covers'] ?? null,
+                WorldObjectTileFields::DATA_KEY => $object[WorldObjectTileFields::DATA_KEY] ?? null, 'issue' => $issue],
             'issue' => $issue,
             'rows' => [...array_map(static fn($field): array => self::describeRecordRow($records, $index, [], $field, 'world-object'), $fields),
                 // What the object is on the minimap: a map landmark row, applied through the map's inspector.
@@ -5422,6 +5426,32 @@ final class EditorSession
     public function placeWorldObject(string $mapId, int $revision, string $id, int $x, int $y, bool $coverage = false): array
     {
         return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->placeObject($id, $x, $y, $coverage));
+    }
+
+    /**
+     * Sets the graphical tiles a world object presents on one of the map's tile layers, as one undo step: each cell
+     * `[x, y, tile]` on a cell the object owns, `0` showing no tile. The terminal, collision and the layer's own
+     * tiles are unchanged.
+     *
+     * @param list<mixed> $cells
+     * @return array{changed: bool, revision: int}
+     * @throws SessionRefusal When the map is stale or read-only, or the Engine refuses the declaration.
+     */
+    public function setWorldObjectTiles(string $mapId, int $revision, string $id, string $layer, array $cells): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->setTiles($id, $layer, $cells));
+    }
+
+    /**
+     * Stops a world object presenting tiles on cells `[x, y]` of a tile layer, as one undo step.
+     *
+     * @param list<mixed> $cells
+     * @return array{changed: bool, revision: int}
+     * @throws SessionRefusal When the map is stale or read-only, or a cell presents no tile of the object.
+     */
+    public function unsetWorldObjectTiles(string $mapId, int $revision, string $id, string $layer, array $cells): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->unsetTiles($id, $layer, $cells));
     }
 
     /**
@@ -7272,6 +7302,8 @@ final class EditorSession
             // How the choice of nothing reads, where the row says (the Engine's own attack).
             'noneLabel' => $kind === 'reference' && is_string($field['noneLabel'] ?? null) ? $field['noneLabel'] : null,
             'action' => $kind === 'action' ? $field['action'] : null,
+            // A tile identity of the map's tileset, picked from its palette.
+            'tilePicker' => ($field['tilePicker'] ?? false) === true ? true : null,
             // A list picked a member at a time: each pick toggles one member.
             'multi' => $kind === 'reference' && ($field['multi'] ?? false) === true ? true : null,
             'list' => is_array($list) && $target !== null ? ['index' => (int) ($list['index'] ?? 0)] : null,
