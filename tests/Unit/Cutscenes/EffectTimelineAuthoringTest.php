@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewContext;
 use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage;
 use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\UI\CutscenesScreen;
@@ -236,7 +237,7 @@ it('previews an effect through the Engine playhead, anchored to caster and targe
 
     expect($preview)->not->toBeNull()
         ->and($preview->totalFrames())->toBe(4)
-        ->and(callEditorMethod($editor, 'isEffectPreviewInBattle', $asset))->toBeTrue();
+        ->and(callEditorMethod($editor, 'getEffectPreviewContext', $asset))->toBe(EffectPreviewContext::BATTLE);
 
     // The west-facing stroke is turned toward a target on the right, as the battle turns it.
     $stage = callEditorMethod($editor, 'createEffectPreviewStage', $asset);
@@ -250,7 +251,7 @@ it('previews an effect through the Engine playhead, anchored to caster and targe
     // On the field the effect has one subject; B switches and recompiles.
     pressKeys($editor, 'b');
     // Its facing is battle-only, so the field refuses it, and says why.
-    expect(callEditorMethod($editor, 'isEffectPreviewInBattle', $asset))->toBeFalse()
+    expect(callEditorMethod($editor, 'getEffectPreviewContext', $asset))->toBe(EffectPreviewContext::FIELD)
         ->and(getEditorProperty($editor, 'timelinePreview'))->toBeNull()
         ->and(getEditorProperty($editor, 'statusMessage'))->toContain('facing');
 

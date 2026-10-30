@@ -3161,15 +3161,22 @@ frames with their flips, flashes and shakes, each with its subject.
 
 | Key (Preview focused, effect) | Action |
 | --- | --- |
-| `B` | Play as battle or as the field compiles it (recompiles; a refusal is reported) |
+| `B` | Play as battle or as its other consumer compiles it: the field, or the caller owning its declared stage (recompiles; a refusal is reported) |
 | `D` | Put the battle caster on the other side |
 
 The preview starts as battle when a battle animation uses the effect or
 nothing on the field does. In battle a stroke with a facing is turned toward
 its target exactly as the battle turns it, so `D` shows both directions.
-An owned stage instead starts in its declared context; `B` does not change its
-ownership. The GUI GPUI tab paints the Engine's seekable stage canvas through
-the runtime's shared painter. A stage error is shown rather than replaced by
+An effect declaring a graphical stage is played by battle or by the caller
+that owns the stage, never by the field. Bound as an animation's caster or
+target effect, it is an ordinary action's staged cut-in or impact and the
+preview starts as battle; otherwise it starts as its owned stage. `B` moves
+between the two. The camera, covers, subjects and stage image placement are
+the same rows, selectors and undo that a Summon stage uses, edited in the GUI
+Editor; each consumer applies its own Engine admission, so a stage with battle
+cues or effect timing saves when battle admits it, and validation reports a
+refusal at the consumer that names it. The GUI GPUI tab paints the Engine's
+seekable stage canvas through the runtime's shared painter. A stage error is shown rather than replaced by
 a field frame, and late seek replies cannot overwrite a newer frame. The
 Terminal tab shows its separately authored sequence, not a graphical imitation.
 

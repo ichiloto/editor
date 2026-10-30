@@ -103,16 +103,21 @@ final readonly class EffectPreviewStage
         return array_map(static fn(array $row): string => implode('', $row), $cells);
     }
 
-    /** Seekable Engine projection, with no scene, audio or gameplay state to retain. */
+    /**
+     * The declared stage at one authored frame, as the Engine's shared stage
+     * compositor draws it for its owning caller or for a battle cut-in: a
+     * seekable projection with no scene, audio or gameplay state to retain.
+     * None for the terminal, or for a timeline that declares no stage.
+     */
     public function renderCanvas(CompiledEffectTimeline $timeline, string $assetRoot, int $frame,
         int $width, int $height, bool $reducedMotion = false): ?PresentationCanvas
     {
-        if (! $this->forStage || $this->presentation !== EffectPresentation::GRAPHICAL) {
+        if ($this->presentation !== EffectPresentation::GRAPHICAL || ! is_array($timeline->defaults['stage'] ?? null)) {
             return null;
         }
 
         $length = intval($timeline->defaults['lengthFrames'] ?? 1);
-        $stage = CinematicStage::fromArray($timeline->defaults['stage'] ?? [], $length, intval($timeline->defaults['restFrame'] ?? 0));
+        $stage = CinematicStage::fromArray($timeline->defaults['stage'], $length, intval($timeline->defaults['restFrame'] ?? 0));
         $frame = max(0, min($frame, $length - 1));
 
         return CinematicStagePresentation::compose($stage->getFrame($frame, $reducedMotion),

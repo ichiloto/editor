@@ -6,6 +6,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage;
 use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
+use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
@@ -68,29 +69,29 @@ function ownedStageEffectPath(string $root): string
     return $root . '/assets/Animations/quiet-interval/quiet-interval.timeline.php';
 }
 
-it('admits arbitrary flat and paired owned-stage effects through the Engine without battle or field substitution', function (bool $paired) {
+it('admits arbitrary flat and paired declared-stage effects through the Engine as an owned stage or battle, never the field', function (bool $paired) {
     $root = ownedStageEffectProject($paired);
     $asset = CutsceneLibrary::fromProject($root)->find(CutsceneType::EFFECT, 'quiet-interval');
     $asset->hydrate();
 
+    // Battle plays a declared stage as an ordinary action's cut-in; the field never plays one.
     expect($asset->isEditable())->toBeTrue()
-        ->and($asset->isOwnedStageEffect())->toBeTrue()
+        ->and($asset->hasStage())->toBeTrue()
         ->and($asset->compileEffect(EffectPresentation::GRAPHICAL, false, forStage: true)->defaults['stage']['subjects'][0]['id'])->toBe('visitor')
+        ->and($asset->compiledEffect(EffectPresentation::GRAPHICAL, true)->defaults['stage']['subjects'][0]['id'])->toBe('visitor')
         ->and(fn() => $asset->compiledEffect(EffectPresentation::GRAPHICAL, false))->toThrow(RuntimeException::class)
-        ->and(fn() => $asset->compiledEffect(EffectPresentation::GRAPHICAL, true))->toThrow(RuntimeException::class)
         ->and(fn() => $asset->compileEffect(EffectPresentation::GRAPHICAL, true, forStage: true))->toThrow(RuntimeException::class)
         ->and(fn() => $asset->compileEffect(EffectPresentation::TERMINAL, true, forStage: true))->toThrow(RuntimeException::class);
 })->with([false, true]);
 
-it('refuses invalid owned-stage context data before installing any source', function () {
+it('refuses stage data no consumer admits before installing any source', function () {
     $root = ownedStageEffectProject();
     $asset = CutsceneLibrary::fromProject($root)->find(CutsceneType::EFFECT, 'quiet-interval');
     $before = file_get_contents(ownedStageEffectPath($root));
     foreach ([
         static function (array &$payload): void { $payload['tracks'][0]['placement']['subject'] = 'unknown'; },
-        static function (array &$payload): void { $payload['cues'] = [['id' => 'sound', 'frame' => 1, 'type' => 'playSound', 'payload' => ['sound' => 'chime']]]; },
-        static function (array &$payload): void { $payload['playback'] = 'loop'; },
         static function (array &$payload): void { $payload['stage']['camera'][0]['frame'] = 1; },
+        static function (array &$payload): void { $payload['cadence'] = 'battle_phase'; unset($payload['fps']); },
     ] as $break) {
         $payload = $asset->payload();
         $break($payload);
@@ -99,6 +100,28 @@ it('refuses invalid owned-stage context data before installing any source', func
         expect(fn() => $asset->save())->toThrow(RuntimeException::class, 'Effect quiet-interval cannot be played')
             ->and(file_get_contents(ownedStageEffectPath($root)))->toBe($before);
         $asset->restoreEditState($state);
+    }
+});
+
+it('reports owned-stage refusals at the consumer that owns the stage, while battle may still play the timeline', function () {
+    $root = ownedStageEffectProject();
+    file_put_contents($root . '/config.php', "<?php return ['graphics' => ['inn' => ['presentation' => 'quiet-interval']]];\n");
+    $asset = CutsceneLibrary::fromProject($root)->find(CutsceneType::EFFECT, 'quiet-interval');
+    foreach ([
+        static function (array &$payload): void { $payload['cues'] = [['id' => 'sound', 'frame' => 1, 'type' => 'playSound', 'payload' => ['sound' => 'chime']]]; },
+        static function (array &$payload): void { $payload['playback'] = 'loop'; },
+    ] as $break) {
+        $payload = $asset->payload();
+        $break($payload);
+        $state = $asset->captureEditState();
+        $asset->apply($payload);
+        expect($asset->save())->toBeTrue();
+        $issues = new EffectValidator()->validate(ProjectWorkspace::fromProject($root));
+        expect($issues)->toHaveCount(1)
+            ->and($issues[0]->message)->toContain('quiet-interval cannot be played as a stage')
+            ->and($issues[0]->where)->toContain(ProjectConfig::INN_PRESENTATION);
+        $asset->restoreEditState($state);
+        expect($asset->save())->toBeTrue();
     }
 });
 
@@ -188,7 +211,7 @@ it('projects seek camera covers and reduced motion with the shared Engine stage 
     expect($preview->isCompleted())->toBeTrue();
 });
 
-it('chooses owned stage in the Terminal Editor even when no project consumer references the effect', function () {
+it('chooses owned stage in the Terminal Editor when no battle animation binds the effect, and B previews battle', function () {
     $root = ownedStageEffectProject();
     $editor = cutscenesEditor($root, 160, 50);
     callEditorMethod($editor, 'switchCutsceneType', CutsceneType::EFFECT);
@@ -200,9 +223,15 @@ it('chooses owned stage in the Terminal Editor even when no project consumer ref
     expect($preview)->toBeInstanceOf(TimelinePreviewSession::class)
         ->and(callEditorMethod($editor, 'createEffectPreviewStage', $asset)->forStage)->toBeTrue()
         ->and(cutsceneFieldIds($editor))->not->toContain('@stage', 'stage.canvas', 'commandListStage.subjects');
-    pressKeys($editor, 'b', 'd');
+    // An owned stage has no battle caster to move.
+    pressKeys($editor, 'd');
     expect(getEditorProperty($editor, 'timelinePreview'))->toBe($preview)
-        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('owns its stage');
+        ->and(getEditorProperty($editor, 'isEffectPreviewCasterOnLeft'))->toBeTrue();
+    pressKeys($editor, 'b');
+    expect(callEditorMethod($editor, 'createEffectPreviewStage', $asset)->forBattle)->toBeTrue()
+        ->and(getEditorProperty($editor, 'timelinePreview'))->not->toBe($preview);
+    pressKeys($editor, 'b');
+    expect(callEditorMethod($editor, 'createEffectPreviewStage', $asset)->forStage)->toBeTrue();
     pressKeys($editor, '.', 'r', 'x');
     expect(getEditorProperty($editor, 'timelinePreview'))->toBeNull();
 });

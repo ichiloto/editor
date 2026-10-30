@@ -15,6 +15,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneRecordCategory;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
+use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewContext;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Database\EnemySprites;
 use Ichiloto\Editor\Canvas\PieceRole;
@@ -3081,6 +3082,7 @@ final class EditorSession
         }
         unset($track);
         $payload = $asset->payload();
+        $stageContext = $this->findStageContext($asset);
 
         return [
             // An effect or summon with separate terminal and graphical sequences names the one shown; others name none.
@@ -3093,8 +3095,10 @@ final class EditorSession
                     'pivotDefaults' => self::getTimelinePivotDefaults($asset->type, $payload['tracks'][$position] ?? []),
                 ]] : [])], $payload['tracks'][$position] ?? null), $tracks, array_keys($tracks))),
             'cues' => array_values($cues),
-            // Stage ownership survives switching to an independent Terminal sequence.
-            'ownedStage' => $asset->isOwnedStageEffect(),
+            // A declared stage's consumer survives switching to an independent Terminal sequence:
+            // battle when an action animation binds the effect, else the caller that owns the stage.
+            'ownedStage' => $stageContext?->isOwnedStage() ?? false,
+            'stageContext' => $stageContext?->value,
             'canHaveStage' => $asset->getPresentationView() !== EffectPresentation::TERMINAL
                 && ($asset->type === CutsceneType::EFFECT || $asset->hasPresentations()),
             'stage' => is_array($payload['stage'] ?? null) ? $this->describeCutsceneStage($category, $index) : null,
@@ -3163,7 +3167,7 @@ final class EditorSession
     }
 
     /**
-     * A summon sequence's stage as a timeline editor lays it out: its canvas
+     * A summon or effect sequence's stage as a timeline editor lays it out: its canvas
      * and the frames it is shown between, each subject with its named points
      * (where they are in its box), and its camera and cover keys on the
      * clock, each value with the row key that edits it.
@@ -3219,8 +3223,21 @@ final class EditorSession
     }
 
     /**
+     * The consumer a declared effect stage is previewed in, by the shared
+     * Editor rule: battle when an action animation binds the effect as its
+     * source or target, else its owning caller. None without a stage.
+     */
+    private function findStageContext(CutsceneAsset $asset): ?EffectPreviewContext
+    {
+        return $asset->type === CutsceneType::EFFECT && $asset->hasStage()
+            ? EffectPreviewContext::findDefault($asset, $this->workspace) : null;
+    }
+
+    /**
      * One authored frame, with independent Terminal output and, for an
-     * owned graphical effect stage, the Engine's shared presentation canvas.
+     * effect declaring a graphical stage, the Engine's shared stage canvas
+     * compiled with its consumer's admission (its owning caller, or battle
+     * for an action's staged cut-in or impact).
      *
      * @return array{frame: int, totalFrames: int, fps: int, lines: list<string>, terminalCanvas: array<string, mixed>, cues: list<array<string, mixed>>}
      * @throws SessionRefusal When the record is not a summon or effect, or its timeline does not compile.
@@ -3228,9 +3245,10 @@ final class EditorSession
     public function readCutscenePreview(string $category, int $index, int $frame, int $width, int $height): array
     {
         $asset = $this->requireTimelineCutscene($category, $index);
+        $stageContext = $this->findStageContext($asset);
         try {
             $compiled = $asset->type === CutsceneType::EFFECT
-                ? $asset->compileEffect(EffectPresentation::TERMINAL, false, forStage: $asset->isOwnedStageEffect())
+                ? ($stageContext ?? EffectPreviewContext::FIELD)->compile($asset, EffectPresentation::TERMINAL)
                 : $asset->compiledSummon();
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
@@ -3239,18 +3257,17 @@ final class EditorSession
         $requestedFrame = $frame;
         $frame = max(0, min($frame, $preview->totalFrames() - 1));
 
-        $lines = array_values($asset->isOwnedStageEffect()
-            ? new \Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage(EffectPresentation::TERMINAL, false, forStage: true)
-                ->drawFrame($preview->activeSegments($frame), max(1, $width), max(1, $height))
+        $lines = array_values($stageContext?->isOwnedStage()
+            ? $stageContext->createStage(EffectPresentation::TERMINAL)->drawFrame($preview->activeSegments($frame), max(1, $width), max(1, $height))
             : $preview->frame(max(1, $width), max(1, $height), $frame));
         $stageCanvas = null;
         $stageCanvasError = null;
-        if ($asset->isOwnedStageEffect() && $asset->getPresentationView() !== EffectPresentation::TERMINAL) {
+        if ($stageContext !== null && $asset->getPresentationView() !== EffectPresentation::TERMINAL) {
             try {
-                $graphical = $asset->compileEffect(EffectPresentation::GRAPHICAL, false, forStage: true);
+                $graphical = $stageContext->compile($asset, EffectPresentation::GRAPHICAL);
                 $preview = new TimelinePreviewSession($graphical);
                 $frame = max(0, min($requestedFrame, $preview->totalFrames() - 1));
-                $stageCanvas = new \Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage(EffectPresentation::GRAPHICAL, false, forStage: true)
+                $stageCanvas = $stageContext->createStage(EffectPresentation::GRAPHICAL)
                     ->renderCanvas($graphical, $this->workspace->projectRoot . '/assets', $frame,
                         (int) $graphical->defaults['stage']['canvas']['width'], (int) $graphical->defaults['stage']['canvas']['height'])?->toArray();
             } catch (Throwable $failure) {
