@@ -1645,7 +1645,10 @@ battlers by. The guide height is the preview request's `guide.height`, else
 the project's editor preference `editor.battleScaleGuide.height` in
 `ichiloto.json` (for example `{"editor": {"battleScaleGuide": {"height":
 1.8}}}`); with neither there is no guide. Rows are `guide.rows`, each a canvas
-`y` with an optional `x` and `label`. The guide is an authoring aid and is
+`y` with an optional `x`, `label` and `elevation`. A row with an `elevation`
+stands the guide on a raised surface such as a stage: `y` is the floor row
+beneath it, which sets the guide's scale, and the drawn feet (`feetY`) rise by
+the elevation's projected height there. The guide is an authoring aid and is
 never written to the arena or read by the game. A row at or above the horizon
 says why it has no height; an arena without a measured scale says it has no
 physical guide. The preview answer's `ground.scaleReference` gives the

@@ -327,7 +327,8 @@ it('previews a trial measured scale in place of the arena\'s far edge scale, and
 it('stands a physical-height guide at the reference row, chosen rows and every battler\'s feet by the arena\'s measured scale', function () {
     [, , $session] = createBattleArenaProject();
     $session->setArenaDepthModel(0, scaleReference: [...ARENA_MEASURED_SCALE, 'vanishingX' => 700]);
-    $preview = $session->readArenaPreview(0, guide: ['height' => 1.8, 'rows' => [['y' => 250, 'label' => 'Stage front'], ['y' => 80, 'x' => 40]]]);
+    $preview = $session->readArenaPreview(0, guide: ['height' => 1.8, 'rows' => [['y' => 250, 'label' => 'Stage front'], ['y' => 80, 'x' => 40],
+        ['y' => 300, 'label' => 'On the stage', 'elevation' => 0.5]]]);
     $guide = $preview['guide'];
     $placements = $guide['placements'];
 
@@ -335,11 +336,15 @@ it('stands a physical-height guide at the reference row, chosen rows and every b
             'pixelsPerUnit' => 100.0, 'vanishingX' => 700.0])
         ->and($placements[0])->toMatchArray(['role' => 'reference', 'x' => 700.0, 'y' => 500.0])
         ->and($placements[0]['height'])->toEqualWithDelta(180.0, 1e-9)
-        ->and($placements[1])->toMatchArray(['role' => 'row', 'label' => 'Stage front', 'y' => 250.0])
+        ->and($placements[1])->toMatchArray(['role' => 'row', 'label' => 'Stage front', 'y' => 250.0, 'feetY' => 250.0])
         ->and($placements[1]['height'])->toEqualWithDelta(180.0 * 150 / 400, 1e-9)
         // A row at or above the horizon has no projection, and says why.
         ->and($placements[2])->toMatchArray(['role' => 'row', 'label' => 'Row 2', 'x' => 40.0, 'height' => null])
-        ->and($placements[2]['issue'])->toContain('below its horizon');
+        ->and($placements[2]['issue'])->toContain('below its horizon')
+        // On a raised surface the figure keeps its floor row's scale, its feet lifted by the surface's projected height.
+        ->and($placements[3])->toMatchArray(['role' => 'row', 'label' => 'On the stage', 'y' => 300.0, 'elevation' => 0.5])
+        ->and($placements[3]['height'])->toEqualWithDelta(180.0 * 200 / 400, 1e-9)
+        ->and($placements[3]['feetY'])->toEqualWithDelta(300 - 50.0 * 200 / 400, 1e-9);
 
     $battlers = array_values(array_filter($placements, static fn(array $placement): bool => in_array($placement['role'], ['party', 'enemy'], true)));
     $stood = [...$preview['party'], ...array_column($preview['members'], 'battler')];

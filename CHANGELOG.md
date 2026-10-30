@@ -12,8 +12,9 @@
   own ground reading validates each change, the battle theme's band check runs before the step is recorded, and
   saves keep the rest of the source as written. Records gain an `editCheck` hook for such per-edit runtime reads.
 - A physical-height guide on the arena preview: `arenas.preview` takes `guide` (`height`, `rows`) and answers
-  the guide's height at the reference row, at authored rows and at each battler's feet, each projected by the
-  Engine's `BattleGroundScale`, beside each battler's body span. The project's guide height is the editor
+  the guide's height at the reference row, at authored rows (optionally on a raised surface's `elevation`, its feet
+  lifted by that projected height) and at each battler's feet, each projected by the Engine's `BattleGroundScale`,
+  beside each battler's body span. The project's guide height is the editor
   preference `editor.battleScaleGuide.height` in `ichiloto.json`; nothing about the guide is written to game data.
   A preview's dragged depth scale model stands in for the arena's own, so a trial measured scale previews without
   being written.

@@ -12,7 +12,10 @@ use InvalidArgumentException;
  * judge its measured scale: a figure of an authored real height, in the
  * unit the arena's pixels per unit counts, drawn at the reference row, at
  * rows the author picks (the front of a stage) and at each battler's feet.
- * Every height comes from the Engine's projection of the arena's measured
+ * A row may stand the guide on a raised surface, such as a stage: the row
+ * is the floor beneath it and the surface's real elevation lifts the drawn
+ * feet by that elevation's projected height there, so the figure keeps the
+ * floor row's scale. Every height comes from the Engine's projection of the arena's measured
  * ground ({@see \Ichiloto\Engine\Battle\Presentation\BattleGroundScale::getProjectedHeight()}),
  * the one the battle stands battlers by.
  *
@@ -27,7 +30,8 @@ final readonly class BattleScaleGuide
     public const string CONFIG_KEY = 'battleScaleGuide';
 
     /**
-     * @param list<array{y: float, x: ?float, label: ?string}> $rows Rows the author stands the guide on, in canvas units.
+     * @param list<array{y: float, x: ?float, label: ?string, elevation: ?float}> $rows Rows the author stands the guide on: the
+     * supporting floor row and optional column in canvas units, and the real elevation of a raised surface on it.
      */
     public function __construct(public float $height, public string $source, public array $rows = []) {}
 
@@ -35,7 +39,7 @@ final readonly class BattleScaleGuide
      * The guide a preview asks for: its height, else the project's, and its
      * rows; null when neither names a height.
      *
-     * @param array<string, mixed> $request `height` and `rows` (each `y`, optional `x` and `label`).
+     * @param array<string, mixed> $request `height` and `rows` (each `y`, optional `x`, `label` and `elevation`).
      * @throws InvalidArgumentException When the request or the project preference is not a guide.
      */
     public static function read(array $request, string $projectRoot): ?self
@@ -45,11 +49,14 @@ final readonly class BattleScaleGuide
         }
         $rows = [];
         foreach ($request['rows'] ?? [] as $position => $row) {
-            if (! is_array($row) || array_diff(array_keys($row), ['y', 'x', 'label']) !== [] || ! self::isNumber($row['y'] ?? null)
-                || (isset($row['x']) && ! self::isNumber($row['x'])) || (isset($row['label']) && ! is_string($row['label']))) {
-                throw new InvalidArgumentException(sprintf('Scale guide row %d needs a canvas y, and may name a canvas x and a label.', $position));
+            if (! is_array($row) || array_diff(array_keys($row), ['y', 'x', 'label', 'elevation']) !== [] || ! self::isNumber($row['y'] ?? null)
+                || (isset($row['x']) && ! self::isNumber($row['x'])) || (isset($row['label']) && ! is_string($row['label']))
+                || (isset($row['elevation']) && ! self::isNumber($row['elevation']))) {
+                throw new InvalidArgumentException(sprintf(
+                    'Scale guide row %d needs a canvas y, and may name a canvas x, a label and a raised surface\'s elevation.', $position));
             }
-            $rows[] = ['y' => (float) $row['y'], 'x' => isset($row['x']) ? (float) $row['x'] : null, 'label' => $row['label'] ?? null];
+            $rows[] = ['y' => (float) $row['y'], 'x' => isset($row['x']) ? (float) $row['x'] : null, 'label' => $row['label'] ?? null,
+                'elevation' => isset($row['elevation']) ? (float) $row['elevation'] : null];
         }
         if (array_key_exists('height', $request)) {
             return self::isNumber($request['height']) ? new self((float) $request['height'], 'request', $rows)
@@ -64,7 +71,9 @@ final readonly class BattleScaleGuide
      * The guide on a composed formation: the arena's measured horizon,
      * reference row, pixels per unit and vanishing point, and the guide's
      * projected height at the reference row, at each authored row and at
-     * each battler's feet beside that battler's body span. A row the
+     * each battler's feet beside that battler's body span. Each placement's
+     * `y` is the floor row it is projected at and `feetY` where its feet are
+     * drawn: above `y` by a raised surface's projected elevation. A row the
      * projection refuses (one at or above the horizon) carries its reason.
      * An arena without a measured scale has no physical guide; that is said.
      *
@@ -84,17 +93,20 @@ final readonly class BattleScaleGuide
         // The Engine refuses a height it cannot project, once, for the whole guide.
         $scale->getProjectedHeight($scale->referenceY, $this->height);
         $centre = $scale->vanishingX ?? $formation->layout->width / 2;
-        $place = static function (array $placement, float $y) use ($scale, $guide): array {
+        $place = static function (array $placement, float $y, ?float $elevation = null) use ($scale, $guide): array {
             try {
-                return [...$placement, 'y' => $y, 'height' => $scale->getProjectedHeight($y, $guide['height'])];
+                $lift = $elevation === null ? 0.0 : $scale->getProjectedHeight($y, $elevation);
+
+                return [...$placement, 'y' => $y, 'feetY' => $y - $lift, 'height' => $scale->getProjectedHeight($y, $guide['height']),
+                    ...($elevation === null ? [] : ['elevation' => $elevation])];
             } catch (InvalidArgumentException $refused) {
-                return [...$placement, 'y' => $y, 'height' => null, 'issue' => $refused->getMessage()];
+                return [...$placement, 'y' => $y, 'feetY' => $y, 'height' => null, 'issue' => $refused->getMessage()];
             }
         };
         $placements = [$place(['role' => 'reference', 'label' => 'Reference row', 'x' => $centre], $scale->referenceY)];
         foreach ($this->rows as $position => $row) {
             $placements[] = $place(['role' => 'row', 'label' => $row['label'] ?? sprintf('Row %d', $position + 1), 'x' => $row['x'] ?? $centre],
-                $row['y']);
+                $row['y'], $row['elevation']);
         }
         foreach (['party' => [$formation->party, $partyNames], 'enemy' => [$formation->enemies, $enemyNames]] as $role => [$battlers, $names]) {
             foreach ($battlers as $position => $battler) {
