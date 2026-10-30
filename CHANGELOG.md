@@ -93,6 +93,10 @@
 
 ### Fixed
 
+- `composer analyse` and a bare `vendor/bin/phpstan analyse` read the Engine named by `ICHILOTO_ENGINE_SRC`, as
+  `vendor/bin/pest` does: `phpstan.neon` includes `tests/phpstan-engine.php`, which adds that checkout's source
+  when the variable is set. Before, only `-c tests/phpstan-engine.php` read it, and the default run analysed the
+  installed Engine and reported its missing classes and methods as Editor errors.
 - A Crisis Abilities variant's Skill picker offers only the skills the Engine's `CrisisAbility` accepts, from a
   `crisis_skills` reference source; it previously offered every skill, summons and menu-only skills included,
   which the Engine then refused. A new record's first variant comes from the same source.
