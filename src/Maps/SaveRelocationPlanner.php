@@ -24,12 +24,13 @@ use Throwable;
  * save standing there would load inside it. A cell is taken when its new type blocks movement (new
  * furniture, a wall, painted collision; walkable grass, exits and save points
  * do not), when an authored NPC now stands on it, added or moved, or when an
- * event now covers it that covered nothing there before, such as a moved door. Floor
+ * event now covers it that it did not cover on disk, such as a moved door. Floor
  * the player reaches today that the change walls off, such as the inside of
  * a building moved onto open ground, moves its saves too. The plan
  * moves saves on each such cell to the nearest plain floor the player can
- * reach once the change is saved, never a pocket the change itself walls
- * off, as one declared `relocations` step in the project's save
+ * reach once the change is saved, outside every event and never a pocket the
+ * change itself walls off ({@see SaveLandingCells}), as one declared
+ * `relocations` step in the project's save
  * compatibility manifest, for the author to review before the save writes
  * both. A project without a manifest, or a map not yet on disk, needs none.
  *
@@ -159,12 +160,11 @@ final class SaveRelocationPlanner
             return [];
         }
 
-        // A save lands where SaveLandingCells allows, inside only the events its own cell was already in.
-        $canLandFrom = static fn(int $fromX, int $fromY): \Closure => static fn(int $x, int $y): bool
-            => $changed !== null && $cells->canLand($x, $y, [$fromX, $fromY]);
+        // A save lands where SaveLandingCells allows: plain reachable floor outside every event, as the Engine requires.
+        $canLand = static fn(int $x, int $y): bool => $changed !== null && $cells->canLand($x, $y);
         $groups = [];
         foreach ($blocked as [$x, $y]) {
-            $landing = self::findLanding($x, $y, $passable, $canLandFrom($x, $y), $grid);
+            $landing = self::findLanding($x, $y, $passable, $canLand, $grid);
             if ($landing === null && ! $report->isReachable($x, $y)) {
                 // A map the player reaches nowhere today holds no save a relocation could place.
                 continue;

@@ -314,13 +314,20 @@ it('relocates outside newly added bound areas even when the old origin lies insi
     expect(sourceHashTree($root))->toBe($before);
 });
 
-it('permits a relocation to stay in the same unchanged historical event', function () {
+it('lands a save from inside an unchanged event outside every event, as the Engine requires of a landing', function () {
     $root = savedSyntheticBoundStoryAreaProject();
     $session = EditorSession::open($root);
     $map = getPhysicalOccupancyMap($session);
+    // The saved event's own floor is the nearest plain floor; the landing still leaves the event.
     $map->setTileSymbol(1, 2, '#');
     $plan = SaveRelocationPlanner::plan($map, $root);
-    expect($plan->relocations)->toBe([['map' => 'home', 'cells' => [[1, 2]], 'to' => [1, 1]]]);
+    $area = \Ichiloto\Engine\Core\CellArea::fromCells([[1, 1], [2, 1], [1, 2]]);
+    expect($plan)->not->toBeNull()
+        ->and(array_merge(...array_column($plan->relocations, 'cells')))->toBe([[1, 2]]);
+    foreach ($plan->relocations as $move) {
+        expect($area->containsCell(...$move['to']))->toBeFalse()
+            ->and(getPhysicalOccupancyMap($session)->getEventMarkerAt(...$move['to']))->toBeNull();
+    }
 });
 
 it('keeps a newly overlapping event separate from an old event on the same named area', function () {
