@@ -50,6 +50,32 @@ final class SaveMapRetirement
     }
 
     /**
+     * The retirement of `$map` the manifest's step from `$from` declares, as
+     * the Engine reads it; null when that step declares none, as after an
+     * undo, or names a project class.
+     *
+     * @param array<array-key, mixed> $manifest The manifest as evaluated.
+     * @throws RuntimeException When the step is malformed.
+     */
+    public static function findRetirement(array $manifest, int $from, string $map): ?MapRetirement
+    {
+        foreach ((array) ($manifest['migrations'] ?? []) as $index => $step) {
+            if (! is_array($step) || ($step['from'] ?? null) !== $from) {
+                continue;
+            }
+            try {
+                $edits = SaveCompatibilityManifest::readDeclaredPositionEdits($step, sprintf('%s migrations[%s]', SaveManifestStep::PATH, strval($index)));
+            } catch (InvalidSaveCompatibilityManifestException $refusal) {
+                throw new RuntimeException($refusal->getMessage(), previous: $refusal);
+            }
+
+            return array_find($edits ?? [], static fn(object $edit): bool => $edit instanceof MapRetirement && $edit->map === $map);
+        }
+
+        return null;
+    }
+
+    /**
      * @param array<string, mixed> $entry The entry as written, read first by {@see readEntry()}.
      * @return array{plan: SourceSetPlan, from: int, to: int}
      * @throws RuntimeException When the manifest cannot be read or take the step, or the game would refuse it;
@@ -97,6 +123,10 @@ final class SaveMapRetirement
      */
     public static function followLandings(array $manifest, int $from, string $map): array
     {
+        $retirement = self::findRetirement($manifest, $from, $map);
+        if ($retirement === null) {
+            return [];
+        }
         $aliases = [];
         foreach ((array) ($manifest['aliases']['maps'] ?? []) as $alias) {
             if (is_array($alias) && is_string($alias['from'] ?? null) && is_string($alias['to'] ?? null)) {
@@ -114,10 +144,6 @@ final class SaveMapRetirement
             }
         }
         ksort($steps);
-        $retirement = array_find($steps[$from] ?? [], static fn(object $edit): bool => $edit instanceof MapRetirement && $edit->map === $map);
-        if ($retirement === null) {
-            return [];
-        }
         unset($steps[$from]);
 
         $landings = [];
