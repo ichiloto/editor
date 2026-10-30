@@ -1721,6 +1721,26 @@ always shown; clearing the list removes it from the map. Hiding an object
 changes only what is drawn: its cells, collision and events stay as authored,
 and the map's own glyphs show where it stood.
 
+Every world object can also present tiles of the map's own tileset, under
+**Graphical Tiles**: each row chooses one of the map's tile layers, a cell the
+object owns (one of its covered cells, or its anchor when it covers none) and
+the tile shown there, picked from the map's tile palette; `0` shows no tile.
+While the object is shown, its tiles take the place of the layer's own before
+neighbouring tiles join up and wall shadows are cast, so a concealed wall
+given the wall tile beside it reads as one unbroken wall, top, face and
+shadows included. When the object is hidden, as an opened passage hides its
+disguise, the layer's own tiles show and join up again. An object presented by
+its tiles needs no image of its own. A new row starts on the first tile layer
+and the first owned cell no object presents a tile on yet, showing the tile
+the layer already has there, so adding one changes nothing until a tile is
+chosen. Moving an object moves its tiles with it. The Engine's rules decide
+what is accepted before anything changes: layers the map has, cells the object
+owns, whole tile identities, one object per cell of a layer and at most 256
+tiles per object. The terminal, collision and the layer's own tiles never
+change. Graphical Tiles are authored in the GUI editor and through the session
+(`worldObjects.setTiles`, `worldObjects.unsetTiles`); the Terminal editor
+shows the map's glyphs as before.
+
 A resource shows an image or a sign board (Shows). A sign board names its
 board image, cut into fixed left and right caps and a centre that repeats so
 the board widens to fit its label, the text role its label is set in, the

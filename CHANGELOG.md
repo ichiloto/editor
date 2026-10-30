@@ -4,6 +4,14 @@
 
 ### Added
 
+- World-object tiles, as Engine 81c5961 composes them: a world object's **Graphical Tiles** rows (`tiles2d`) choose
+  one of the map's tile layers, a cell the object owns and a tile of the map's tileset (the row carries
+  `tilePicker` for the palette), and the session's `worldObjects.setTiles` and `worldObjects.unsetTiles` set and
+  remove them for scripts and `map:apply`. The Engine's declaration rules validate them before anything changes,
+  save keeps the rest of the source as written, and undo and redo restore it byte for byte. Moving an object moves
+  its tiles; an object left without tiles or art keeps an explicit absence of art. The editing canvas draws them
+  before neighbour shaping, and an object presented by its tiles alone keeps its covered glyphs, as the field does.
+  The Terminal editor is unchanged.
 - Ordinary battle action cut-ins, as Engine e3bede2 plays them: an effect declaring the shared cinematic stage is
   authored with the same camera, cover, subject and stage image rows, selectors and undo as a Summon stage, and
   bound through an animation's existing Caster Effect and Target Effect pickers. Battle or the caller owning the
