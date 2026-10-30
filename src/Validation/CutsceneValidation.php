@@ -33,17 +33,6 @@ use Throwable;
 trait CutsceneValidation
 {
     /**
-     * The cinematic commands that act on a staged actor which must already
-     * exist. The Engine's `CinematicStageManager::show()` and `::hide()`
-     * require the actor and fail on an absent id, so these name a cast or
-     * earlier stage_actor id. `CinematicStageManager::remove()` releases the
-     * actor only when present and accepts an absent id, which lets a
-     * retryable cinematic clear its temporary cast before staging it, so
-     * remove_actor is deliberately absent here.
-     */
-    protected const array EXISTING_STAGED_ACTOR_COMMANDS = ['show_actor', 'hide_actor'];
-
-    /**
      * Checks every cinematic and summon folder.
      *
      * @return Issue[]
@@ -326,7 +315,7 @@ trait CutsceneValidation
                 $issues = [...$issues, ...$this->checkStagedActorLook($command, $where, $context)];
             }
 
-            if (in_array($type, self::EXISTING_STAGED_ACTOR_COMMANDS, true)) {
+            if (in_array($type, CinematicCommandSchema::EXISTING_STAGED_ACTOR_COMMANDS, true)) {
                 $issues = [...$issues, ...$this->checkStagedActorReference(trim(strval($command['actorId'] ?? $command['id'] ?? '')), $where, $context)];
             }
 
