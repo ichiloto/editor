@@ -238,13 +238,42 @@ it('sets tile layer settings exactly as the Engine reads them, removing what ret
             ->toMatchArray(['order' => 2, 'file' => 'graphics/02.decor.tiles.php', 'offset' => [0.5, -0.5], 'movesWith' => 'buildings', 'owner' => 'buildings'])
         ->and($layers['issue'])->toBeNull()
         ->and(LayerEditor::setTileLayerSettings($map, 'decor', [0.5, -0.5], 'buildings')['command'])->toBeNull()
-        ->and(fn() => LayerEditor::setTileLayerSettings($map, 'decor', [0.25, 0], null))->toThrow(MapSourceRefusal::class, 'offsets by -0.5, 0 or 0.5 field cells')
+        ->and(fn() => LayerEditor::setTileLayerSettings($map, 'decor', [0.75, 0], null))->toThrow(MapSourceRefusal::class, 'between -0.5 and 0.5 field cells')
         ->and(fn() => LayerEditor::setTileLayerSettings($map, 'decor', [0, 0], 'detail'))->toThrow(MapSourceRefusal::class, 'must name one of its gameplay layers')
         ->and(fn() => LayerEditor::setTileLayerSettings($map, 'missing', [0, 0], null))->toThrow(MapSourceRefusal::class, 'There is no tile layer missing.');
 
     LayerEditor::setTileLayerSettings($map, 'decor', [0, 0], null);
     $map->save();
     expect(loadLayeredMap($root)->getEditableData())->toBe($data);
+});
+
+it('sets fractional offsets and leaves the rest to the tileset the layer inherits from', function () {
+    $root = mapGraphicsProject();
+    $tileset = $root . '/assets/Data/Tilesets/home.php';
+    file_put_contents($tileset, str_replace("return array (", "return array (\n  'layerOffsets' => ['decor' => [0, -0.25]],", (string) file_get_contents($tileset)));
+    $map = loadLayeredMap($root);
+    $data = $map->getEditableData();
+    $decor = static fn(ProjectMap $map): array => array_find($map->describeTileLayers()['layers'], static fn(array $layer): bool => $layer['name'] === 'decor');
+
+    expect($decor($map))->toMatchArray(['offset' => [0.0, -0.25], 'inheritedOffset' => [0.0, -0.25], 'overridesTileset' => false])
+        ->and($map->describeTileLayers()['offsetLimit'])->toBe(0.5)
+        // The inherited offset, or a change of movesWith alone, writes no offset.
+        ->and(LayerEditor::setTileLayerSettings($map, 'decor', [0, -0.25], null)['command'])->toBeNull();
+
+    LayerEditor::setTileLayerSettings($map, 'decor', [0, -1 / 3], 'buildings');
+    expect($map->getEditableData()['tileLayers'])->toBe(['decor' => ['offset' => [0, -1 / 3], 'movesWith' => 'buildings']])
+        ->and($decor($map))->toMatchArray(['offset' => [0.0, -1 / 3], 'overridesTileset' => true]);
+
+    // A zero over the tileset's offset is an override the map must hold.
+    LayerEditor::setTileLayerSettings($map, 'decor', [0, 0], null);
+    expect($map->getEditableData()['tileLayers'])->toBe(['decor' => ['offset' => [0, 0]]])
+        ->and($decor($map))->toMatchArray(['offset' => [0.0, 0.0], 'overridesTileset' => true]);
+
+    $edit = LayerEditor::setTileLayerSettings($map, 'decor', null, null);
+    expect($map->getEditableData())->toBe($data)
+        ->and($decor($map))->toMatchArray(['offset' => [0.0, -0.25], 'overridesTileset' => false]);
+    $edit['command']->undo();
+    expect($map->getEditableData()['tileLayers'])->toBe(['decor' => ['offset' => [0, 0]]]);
 });
 
 it('reports tile layer settings the Engine cannot read instead of guessing them', function () {

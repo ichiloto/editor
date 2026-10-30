@@ -466,9 +466,9 @@ final class SessionHost
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
                 self::requireString($params, 'name'),
-                is_array($params['offset'] ?? null) && array_is_list($params['offset']) && count($params['offset']) === 2
-                    && array_all($params['offset'], static fn(mixed $value): bool => is_int($value) || is_float($value))
-                    ? $params['offset'] : throw new InvalidRequest('"offset" must be two numbers, across and down.'),
+                array_key_exists('offset', $params) && ($params['offset'] === null || (is_array($params['offset']) && array_is_list($params['offset'])
+                    && count($params['offset']) === 2 && array_all($params['offset'], static fn(mixed $value): bool => is_int($value) || is_float($value))))
+                    ? $params['offset'] : throw new InvalidRequest('"offset" must be two numbers, across and down, or null to inherit the tileset\'s.'),
                 array_key_exists('movesWith', $params) && (is_string($params['movesWith']) || $params['movesWith'] === null)
                     ? $params['movesWith'] : throw new InvalidRequest('"movesWith" must be a gameplay layer name or null.'),
             ),

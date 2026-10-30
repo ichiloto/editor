@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Maps;
 
 use Ichiloto\Engine\Field\MapGraphics;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 
 /**
  * Keeps a map's tile layer settings (`'tileLayers' => ['floor' => ['offset' =>
@@ -70,13 +71,16 @@ final class TileLayerSettings
 
     /**
      * Sets one tile layer's offset across and down, in field cells, and the
-     * gameplay layer it moves with, or none. No offset (0, 0) and no layer
-     * leave their keys out. An offset equal to the authored one keeps the
-     * authored numbers.
+     * gameplay layer it moves with, or none. The map holds an offset only
+     * where it differs from the one the layer inherits from its tileset
+     * ({@see Tileset::$layerOffsets}, none: 0, 0), so the tileset keeps
+     * owning the rest; null inherits. No layer leaves its key out. An offset
+     * equal to the authored one keeps the authored numbers.
      *
-     * @param array<int, mixed> $offset Across and down.
+     * @param array<int, mixed>|null $offset Across and down, or null to inherit.
+     * @param array{float, float} $inherited The offset the tileset gives the layer.
      */
-    public static function setLayer(mixed $settings, string $name, array $offset, ?string $movesWith): mixed
+    public static function setLayer(mixed $settings, string $name, ?array $offset, ?string $movesWith, array $inherited = [0.0, 0.0]): mixed
     {
         if ($settings !== null && ! is_array($settings)) {
             return $settings;
@@ -85,9 +89,7 @@ final class TileLayerSettings
         if (! is_array($layer)) {
             $layer = [];
         }
-        $zero = array_is_list($offset) && count($offset) === 2
-            && array_all($offset, static fn(mixed $value): bool => (is_int($value) || is_float($value)) && (float) $value === 0.0);
-        if ($zero) {
+        if ($offset === null || self::isSameOffset($inherited, $offset)) {
             unset($layer[self::OFFSET_KEY]);
         } elseif (! self::isSameOffset($layer[self::OFFSET_KEY] ?? null, $offset)) {
             $layer[self::OFFSET_KEY] = array_map(static fn(mixed $value): mixed =>

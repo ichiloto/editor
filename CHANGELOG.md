@@ -12,6 +12,13 @@
   with undo and redo byte for byte; saving refuses a Skit the Engine would skip and a change its source cannot
   hold before anything is written. Validation reports a `play_skit` naming no Skit or a missing one, one playing a
   Skit gated to another map, a trigger or cue the Engine refuses and a cue sound the project has no file for.
+- Tileset layer offsets, as Engine f76964e reads them: Database > Tilesets in the GUI editor gives a tile layer of
+  the tileset's own pieces, kinds and stacks its drawing **Offset** under **Layer Offsets** (`layerOffsets`),
+  typed as decimals or fractions such as `0, -1/3` and validated by the Engine's `TileLayerOffset`. A map's tile
+  layer settings take any fraction within the Engine's limit, and `tileLayer.settings` takes `offset` `null` to
+  inherit the tileset's. The session's tile layers add `inheritedOffset`, `overridesTileset` and `offsetLimit`,
+  and `offset` is the offset the layer draws at. The Terminal editor is unchanged.
+
 - World-object tiles, as Engine 81c5961 composes them: a world object's **Graphical Tiles** rows (`tiles2d`) choose
   one of the map's tile layers, a cell the object owns and a tile of the map's tileset (the row carries
   `tilePicker` for the palette), and the session's `worldObjects.setTiles` and `worldObjects.unsetTiles` set and
@@ -100,6 +107,12 @@
 
 ### Removed
 
+- A map's tile layer offset no longer has to be -0.5, 0 or 0.5: the Editor's refusal of other fractions is
+  removed, as the Engine now accepts any offset from -0.5 to 0.5 field cells.
+- A map no longer writes a tile layer offset equal to the one its tileset gives the layer, and an explicit
+  `[0, 0]` is now written where the tileset gives the layer another offset. Setting a tile layer's offset or
+  `movesWith` is now refused while the map's tileset cannot load, where it previously wrote the settings without
+  knowing what the layer inherits.
 - The legacy-tag reading of map rows: an unrecognised tag such as `<blue>` is read as its glyphs, as the Engine
   reads it, no longer as a style.
 - The dialogue catalogue's `skits` key: Dialogue Portraits and Speaker Names refuse a catalogue that still has it

@@ -36,6 +36,7 @@ use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\IO\Console\SgrStyleState;
 use Symfony\Component\Console\Output\AnsiColorMode;
 use Symfony\Component\Console\Terminal;
+use Ichiloto\Engine\Rendering\Tilesets\TileLayerOffset;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Editor\Maps\EditableGrid;
@@ -877,12 +878,17 @@ final class ProjectMap
     /**
      * The map's tile layers in drawing order, as an editor lists them: each
      * one's name, order, file in the map's folder, and its settings as the
-     * Engine reads them: its offset across and down in field cells, the
-     * gameplay layer its settings name it `movesWith`, and the gameplay layer
-     * it belongs to ({@see MapGraphics::resolveLayerOwners()}). When the
-     * settings cannot be read, `issue` says why and no layer has settings.
+     * Engine reads them: the offset it draws at across and down in field
+     * cells, the offset it inherits from the tileset
+     * ({@see Tileset::$layerOffsets}, none: 0, 0) and whether the map
+     * overrides that one, the gameplay layer its settings name it
+     * `movesWith`, and the gameplay layer it belongs to
+     * ({@see MapGraphics::resolveLayerOwners()}). When the settings cannot be
+     * read, `issue` says why and no layer has settings. `offsetLimit` is the
+     * largest offset either way the Engine accepts
+     * ({@see TileLayerOffset::MAX_ABSOLUTE}); any fraction within it is valid.
      *
-     * @return array{layers: list<array{name: string, order: int, file: string, offset: ?array{float, float}, movesWith: ?string, owner: ?string}>, issue: ?string}
+     * @return array{layers: list<array{name: string, order: int, file: string, offset: ?array{float, float}, inheritedOffset: ?array{float, float}, overridesTileset: bool, movesWith: ?string, owner: ?string}>, issue: ?string, offsetLimit: float}
      */
     public function describeTileLayers(): array
     {
@@ -906,14 +912,19 @@ final class ProjectMap
             $issue = $error->getMessage();
         }
 
+        $inherited = static fn(string $name): array => $tileset?->layerOffsets[$name] ?? [0.0, 0.0];
+
         return ['layers' => array_map(static fn(array $layer): array => [
             'name' => $layer['name'],
             'order' => $layer['order'],
             'file' => MapGraphics::DIRECTORY . '/' . basename($layer['path']),
-            'offset' => $issue === null ? ($offsets[$layer['name']] ?? [0.0, 0.0]) : null,
+            // An explicit map offset overrides the tileset's, as MapGraphics composes them.
+            'offset' => $issue === null ? ($offsets[$layer['name']] ?? $inherited($layer['name'])) : null,
+            'inheritedOffset' => $issue === null ? $inherited($layer['name']) : null,
+            'overridesTileset' => $issue === null && isset($offsets[$layer['name']]),
             'movesWith' => $movesWith[$layer['name']] ?? null,
             'owner' => $owners[$layer['name']] ?? null,
-        ], $layers), 'issue' => $issue];
+        ], $layers), 'issue' => $issue, 'offsetLimit' => TileLayerOffset::MAX_ABSOLUTE];
     }
 
     /**
@@ -970,21 +981,28 @@ final class ProjectMap
 
     /**
      * Sets a tile layer's offset across and down, in field cells, and the
-     * gameplay layer its tiles move with, or none. The map's settings must
-     * read as the Engine reads them once set.
+     * gameplay layer its tiles move with, or none. The map holds the offset
+     * only where it differs from the one the tileset gives the layer; null
+     * inherits that one. The map's settings must read as the Engine reads
+     * them once set.
      *
-     * @param array<int, mixed> $offset Across and down, each one of {@see MapGraphics::OFFSET_STEPS}.
+     * @param array<int, mixed>|null $offset Across and down, each within {@see TileLayerOffset::MAX_ABSOLUTE}, or null to inherit.
      * @throws MapSourceRefusal When there is no such layer, or the Engine would refuse the settings.
      */
-    public function setTileLayerSettings(string $name, array $offset, ?string $movesWith): void
+    public function setTileLayerSettings(string $name, ?array $offset, ?string $movesWith): void
     {
         $this->assertEditable();
         $names = array_column($this->layers->getTileLayers(), 'name');
         if (! in_array($name, $names, true)) {
             throw new MapSourceRefusal("There is no tile layer {$name}. Nothing was changed.");
         }
+        try {
+            $inherited = $this->loadTileset()?->layerOffsets[$name] ?? [0.0, 0.0];
+        } catch (InvalidArgumentException | RuntimeException $error) {
+            throw new MapSourceRefusal(rtrim($error->getMessage(), '.') . '. Its tileset must load to set an offset over it. Nothing was changed.', previous: $error);
+        }
         $settings = $this->getMapDataField([MapGraphics::SETTINGS_KEY]);
-        $next = TileLayerSettings::setLayer($settings, $name, $offset, $movesWith);
+        $next = TileLayerSettings::setLayer($settings, $name, $offset, $movesWith, $inherited);
         try {
             MapGraphics::readLayersMovingWith($next, $names, $this->getGameplayLayerNames(), $this->mapId);
         } catch (InvalidArgumentException $error) {

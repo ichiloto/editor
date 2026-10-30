@@ -64,6 +64,7 @@ use Ichiloto\Engine\Field\MapAtlasTerrain;
 use Ichiloto\Engine\Rendering\Tilesets\TerrainKind;
 use Ichiloto\Engine\Rendering\Tilesets\TerrainPassage;
 use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
+use Ichiloto\Engine\Rendering\Tilesets\TileLayerOffset;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
@@ -2077,7 +2078,43 @@ final class RecordSchemaCatalog
                 keyField: 'id',
             ),
             subLists: [self::terrainKindList($graphical), self::tilesetStackList(), self::placeIconList(),
-                ...($graphical ? [self::tilesetThicketList()] : [])],
+                ...($graphical ? [self::tilesetThicketList(), self::layerOffsetList()] : [])],
+            // The Engine reads a tileset's layer offsets with every map drawn with it, so one it would refuse is never written.
+            saveCheck: static function (array $payload): ?string {
+                try {
+                    TileLayerOffset::readAll($payload[TileLayerOffset::DATA_KEY] ?? [], 'Layer offsets');
+                    return null;
+                } catch (\InvalidArgumentException $error) {
+                    return $error->getMessage();
+                }
+            },
+        );
+    }
+
+    /**
+     * A tileset's layer offsets, the Engine's Tileset::$layerOffsets, keyed by
+     * tile layer: where the art of that layer draws, across and down in field
+     * cells, on every map drawn with the tileset, so the art owns its own
+     * placement (a candle drawn a third of a row up onto its table). A map
+     * overrides one in its own tile layer settings. Collision, terminal cells
+     * and events stay where they are. Graphical authoring, so the GUI
+     * editor's.
+     */
+    private static function layerOffsetList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: TileLayerOffset::DATA_KEY,
+            prefix: 'layerOffset',
+            singular: 'layer offset',
+            fields: [
+                new RecordField('layer', 'Tile Layer', options: [''], entryChoices: ReferenceCatalog::TILESET_TILE_LAYERS),
+                new RecordField('offset', 'Offset (across, down; field cells)', codec: RecordFieldCodec::LAYER_OFFSET),
+            ],
+            blank: ['layer' => 'tiles', 'offset' => [0, 0]],
+            heading: 'Layer Offsets',
+            removeWhenEmpty: true,
+            keyField: 'layer',
+            valueField: 'offset',
         );
     }
 

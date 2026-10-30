@@ -127,4 +127,12 @@ enum RecordFieldCodec: string
      * page's conditions and battle commands name an enemy by.
      */
     case TROOP_MEMBER = 'troop_member';
+
+    /**
+     * A tile layer's drawing offset, the Engine's TileLayerOffset: across and
+     * down in field cells, stored as `[x, y]` and shown as `x, y`. Each is any
+     * fraction within the Engine's limit, typed as a decimal or as `a/b` (a
+     * third of a row is `-1/3`); whole numbers stay integers.
+     */
+    case LAYER_OFFSET = 'layer_offset';
 }

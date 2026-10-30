@@ -576,6 +576,21 @@ autotile is. The game hides a character in the deepest thicket among the
 tiles its cell shows. The terminal, collision, movement and encounters are
 unchanged, and the terminal Database neither shows nor drops thickets.
 
+### Layer Offsets
+
+Some art draws away from the cell it stands for, such as a candle on a
+table top, a window up a wall or a counter's front face. The GUI editor's
+Database > Tilesets gives a tile layer its drawing offset under **Layer
+Offsets** (`layerOffsets`): the **Tile Layer**, chosen among the tile layers
+the tileset's pieces, terrain kinds and stacks write, and its **Offset**
+across and down in field cells, typed as `0, -1/3` or `0, 0.5`. Each number
+is any fraction from -0.5 to 0.5; a third of a row is typed exactly as
+`-1/3`. Every map drawn with the tileset draws that layer at that offset
+unless the map gives the layer one of its own (see
+[Map Graphics](#map-graphics)). Collision, terminal cells, events and saves stay
+where they are. The Engine reads each offset before anything is saved, and the
+terminal Database neither shows nor drops them.
+
 ### Stacked Pieces
 
 Some decorations overlap their neighbours, such as the peaks over a world
@@ -668,6 +683,18 @@ intact:
   pasting a block on that gameplay layer carries its tiles cell for cell, in
   the same undo step, so a moved chest or room keeps its art. Other tile
   layers, and blocks on the event layer, leave tiles where they are.
+
+- Each tile layer draws at the offset its tileset gives it under
+  [Layer Offsets](#layer-offsets), or none. The GUI editor's layer settings
+  set a map's own offset for the layer (`'tileLayers' => ['decor' => ['offset'
+  => [0, -0.5]]]`), any fraction from -0.5 to 0.5 field cells. The map holds an
+  offset only where it differs from the one the layer inherits: choosing the
+  inherited offset again, or inheriting it (`tileLayer.settings` with `offset`
+  `null`), removes the map's own, and a zero over a tileset's offset is kept as
+  the map's. The session's map reply gives each layer the `offset` it draws
+  at, its `inheritedOffset`, whether the map `overridesTileset`, and the
+  map's `offsetLimit`. Setting an offset is refused while the map's tileset
+  cannot load, since what the layer inherits is then unknown.
 
 - Resizing the map crops or pads every tile layer with empty tiles (`0`) in the
   same undo step and save as the terminal layers. A resized tile layer is
