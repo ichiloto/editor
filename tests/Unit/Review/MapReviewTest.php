@@ -186,3 +186,36 @@ it('refuses a region or subject off the map, and an unknown actor', function () 
         ->and(fn() => $session->renderMapReview(new MapRenderView('nowhere')))
         ->toThrow(Ichiloto\Editor\Session\SessionRefusal::class, 'There is no map nowhere');
 });
+
+
+it('reviews newly authored and revised field resources before saving, with undo and no source writes', function () {
+    $root = mapReviewProject();
+    writeTilesetTestPng($root . '/assets/Graphics/Props/ReviewRed.png', 48, 48);
+    writeTilesetTestPng($root . '/assets/Graphics/Props/ReviewBlue.png', 48, 48);
+    $before = sourceHashTree($root . '/assets');
+    $session = EditorSession::open($root);
+    $category = \Ichiloto\Editor\Field\FieldResourceFields::CATEGORY;
+    $session->createDatabaseRecord($category);
+    $apply = static function (string $field, string $value) use ($session, $category): void {
+        $row = array_find($session->readDatabaseRecord($category, 0)['rows'],
+            static fn(array $row): bool => ($row['key']['field'] ?? null) === $field);
+        $session->applyDatabaseRecord($category, 0, $row['key'], $value);
+    };
+    $apply('id', 'review-tree');
+    $apply('sprites2d.asset', 'Graphics/Props/ReviewRed.png');
+    $session->createWorldObject('test-map', $session->readMap('test-map')['revision'], 'review-tree-001', 4, 3, 'review-tree');
+    $asset = static function () use ($session): string {
+        $rendering = $session->renderMapReview(new MapRenderView('test-map'));
+        $sprite = array_find($rendering->still->sprites,
+            static fn($sprite): bool => $sprite->id === 'world-object:test-map:review-tree-001');
+        return $sprite?->asset ?? '';
+    };
+    expect($asset())->toBe('Graphics/Props/ReviewRed.png');
+    $apply('sprites2d.asset', 'Graphics/Props/ReviewBlue.png');
+    expect($asset())->toBe('Graphics/Props/ReviewBlue.png');
+    $session->undo();
+    expect($asset())->toBe('Graphics/Props/ReviewRed.png');
+    $session->redo();
+    expect($asset())->toBe('Graphics/Props/ReviewBlue.png')
+        ->and(sourceHashTree($root . '/assets'))->toBe($before);
+});

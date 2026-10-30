@@ -170,7 +170,9 @@ relocation planning also read the current tileset catalogue for every map; a
 new tileset and its map can be checked and saved in one transaction. An invalid
 current dependency still refuses the transaction. Painting, piece lists, pickers,
 the map world the GUI draws and the validation `changes.commit` runs all read
-these current records. Battle previews and the cinematic preview field still
+these current records. Map reviews also resolve world-object resources from
+the current catalogue, including resources created earlier in an unsaved batch.
+Battle previews and the cinematic preview field still
 read the saved items, enemies, summons and maps until the Engine can take them
 from the Editor; commit or save first when one of those must show an edit.
 Inserting or removing rows, and creating or duplicating a map, write their

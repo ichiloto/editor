@@ -785,7 +785,8 @@ two side by side for every view. `--player X,Y[,HEADING]` stands the player
 on a cell for door checks, `--actor ID` shows an actor there, `--scale 0.5`
 adds an overview, and `--changes BATCH` renders a batch before it is applied,
 writing nothing. The session serves the same render to an editor as
-`EditorSession::renderMapReview()`, unsaved edits included, and writes it as
+`EditorSession::renderMapReview()`, including newly created field resources and
+unsaved artwork/resource edits, and writes it as
 `map.review`: the GUI toolbar's review button asks for a folder, writes the
 review of the open map there and opens its page. See Rendering
 Maps For Review in [Change Maps From A Script](guides/change-maps-from-a-script.md).
