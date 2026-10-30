@@ -34,6 +34,8 @@ use Ichiloto\Engine\Field\MapTerrainKinds;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\IO\Console\SgrStyleState;
+use Symfony\Component\Console\Output\AnsiColorMode;
+use Symfony\Component\Console\Terminal;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Editor\Maps\EditableGrid;
@@ -128,7 +130,7 @@ final class ProjectMap
         $this->editableData = $data;
         $this->layers = $layers ?? new MapLayers($directory, true, [[
             'id' => MapLayers::BASE, 'name' => 'terrain', 'order' => 0, 'decoration' => false,
-            'path' => $mapPath, 'grid' => new EditableGrid(implode("\n", $tileLines), legacyTags: true),
+            'path' => $mapPath, 'grid' => new EditableGrid(implode("\n", $tileLines)),
         ]], new EditableGrid(implode("\n", $eventLines)), $eventPath);
         $this->loadedData = $data;
         $this->sourceData = $data;
@@ -1684,16 +1686,45 @@ final class ProjectMap
     }
 
     /**
-     * Returns the `fg=` value a styling prefix renders in. Nested tags
-     * override outer ones, so the last declared foreground wins.
+     * Returns the foreground a cell with this styling prefix is shown in, as
+     * the Engine's own formatter shows it: tags and ANSI controls in their
+     * authored order, closed styles included, so a prefix that replays a
+     * row's earlier controls reads as the colour actually in force. Hex
+     * colours are read at full precision, whatever the host terminal shows.
      *
      * @param string $prefix The cell's styling prefix bytes.
-     * @return string|null The `fg=` value, or null when none is declared.
+     * @return string|null A named colour or `#rrggbb`, or null when none is in force.
      */
     public static function getInnermostForeground(string $prefix): ?string
     {
+        // A map holds few distinct styles and the canvas reads one per cell it draws, so each is formatted once.
+        static $read = [];
+        if (array_key_exists($prefix, $read)) {
+            return $read[$prefix];
+        }
+        if (count($read) >= 4096) {
+            $read = [];
+        }
+
+        return $read[$prefix] = self::readForeground($prefix);
+    }
+
+    private static function readForeground(string $prefix): ?string
+    {
+        // The formatter resolves hex colours by the terminal's colour mode, so
+        // it is read in truecolour for this call only, as the Engine persists them.
+        $mode = Terminal::getColorMode();
+        Terminal::setColorMode(AnsiColorMode::Ansi24);
+        try {
+            $shown = TerminalText::visibleSymbols($prefix . 'x');
+        } finally {
+            Terminal::setColorMode($mode);
+        }
+        if (count($shown) !== 1) {
+            return null;
+        }
         $state = new SgrStyleState();
-        preg_match_all('/\x1b\[[0-9;]*m/', $prefix, $sequences);
+        preg_match_all('/\x1b\[[0-9;]*m/', strstr($shown[0], 'x', true) ?: '', $sequences);
         foreach ($sequences[0] as $sequence) {
             $state->apply($sequence);
         }
@@ -1721,11 +1752,7 @@ final class ProjectMap
                 return sprintf('#%02x%02x%02x', $cube[intdiv($index, 36)], $cube[intdiv($index % 36, 6)], $cube[$index % 6]);
             }
         }
-        if (preg_match_all('/<[^>]*\bfg=([^;>]+)[^>]*>/', $prefix, $matches) < 1) {
-            return null;
-        }
-
-        return $matches[1][array_key_last($matches[1])];
+        return null;
     }
 
     /**

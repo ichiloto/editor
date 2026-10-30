@@ -20,13 +20,12 @@ it('keys repeated cells by the exact glyph prefix and suffix without merging sty
             ['symbol' => '0', 'prefix' => '<fg=blue>', 'suffix' => '</>'],
             ['symbol' => 'x', 'prefix' => '<fg=red>', 'suffix' => '</>'],
         ],
-        [
-            ['symbol' => '0', 'prefix' => "\033[31m", 'suffix' => "\033[0m"],
-            ['symbol' => '0', 'prefix' => "\033[31m", 'suffix' => "\033[0m"],
-            ['symbol' => '0', 'prefix' => '<fg=red>', 'suffix' => '</>'],
-        ],
+        // A row mixing ANSI and tags is read as the Engine reads it: each cell replays the row's controls.
+        TerminalText::parseSourceCells("\033[31m00\033[0m<fg=red>0</>"),
         [['symbol' => '0', 'prefix' => '<fg=red><options=bold>', 'suffix' => '</></>']],
-    ])->and($grid->getSource())->toBe($source);
+    ])->and($grid->cells[1][0])->toBe($grid->cells[1][1])
+        ->and($grid->cells[1][2]['prefix'])->not->toBe($grid->cells[1][0]['prefix'])
+        ->and($grid->getSource())->toBe($source);
 });
 
 it('keeps repeated cell values independently editable with exact source and snapshot restoration', function () {
@@ -112,10 +111,11 @@ function readEngineRowGlyphs(string $row): array
     return array_map(TerminalText::stripAnsi(...), new MapLayer('literal', 0, false, 'synthetic', $row)->getRowGlyphs(0));
 }
 
-it('writes a styled literal delimiter or backslash beside styled neighbours so the Engine and a reload read the same cells', function (string $glyph, bool $legacyTags) {
-    $text = "<fg=green>abc</>d\n<fg=red>untouched \\</> <\n<fg=blue>xyz</>";
+it('writes a styled literal delimiter or backslash beside styled neighbours so the Engine and a reload read the same cells', function (string $glyph) {
+    // The untouched row holds a styled backslash and a less-than, written as the Engine composes them.
+    $text = "<fg=green>abc</>d\n<fg=red>untouched </>" . TerminalText::composeSourceCell('\\', '<fg=red>', '</>') . " <\n<fg=blue>xyz</>";
     $source = MapGridSource::buildSource($text, 'LITERALS');
-    $grid = new EditableGrid($text, $source, $legacyTags);
+    $grid = new EditableGrid($text, $source);
     $untouched = $grid->getLines();
     $grid->cells[0][1] = ['symbol' => $glyph, 'prefix' => '<fg=red>', 'suffix' => '</>'];
     $grid->cells[0][3] = ['symbol' => $glyph, 'prefix' => '', 'suffix' => ''];
@@ -130,7 +130,7 @@ it('writes a styled literal delimiter or backslash beside styled neighbours so t
         ->and($written)->not->toContain("\0");
 
     // Reading the written rows back gives the painted cells, and their colours stay distinct.
-    $reloaded = new EditableGrid(implode("\n", $rows), $written, $legacyTags);
+    $reloaded = new EditableGrid(implode("\n", $rows), $written);
     expect($reloaded->getSymbols()[0])->toBe(['a', $glyph, 'c', $glyph])
         ->and($reloaded->getSymbols()[2])->toBe(['x', 'y', $glyph])
         ->and(ProjectMap::getInnermostForeground($reloaded->cells[0][1]['prefix']))->toBe('red')
@@ -142,7 +142,7 @@ it('writes a styled literal delimiter or backslash beside styled neighbours so t
     $reloaded->cells[0][0] = ['symbol' => 'q', 'prefix' => '<fg=green>', 'suffix' => '</>'];
     expect(readEngineRowGlyphs(explode("\n", MapGridSource::parseSource($reloaded->getSource(), 'synthetic'))[0]))
         ->toBe(['q', $glyph, 'c', $glyph]);
-})->with(['less-than' => '<', 'greater-than' => '>', 'backslash' => '\\'])->with(['layered' => false, 'legacy tags' => true]);
+})->with(['less-than' => '<', 'greater-than' => '>', 'backslash' => '\\']);
 
 it('keeps separately painted literal cells from joining into a formatter tag or escaping one another', function () {
     $glyphs = ['<', 'i', 'n', 'f', 'o', '>', '\\', '<', 'f', 'g', '=', 'r', 'e', 'd', '>'];
@@ -153,8 +153,7 @@ it('keeps separately painted literal cells from joining into a formatter tag or 
     }
     $row = MapGridSource::parseSource($grid->getSource(), 'synthetic');
     expect(readEngineRowGlyphs($row))->toBe($glyphs)
-        ->and(new EditableGrid($row)->getSymbols()[0])->toBe($glyphs)
-        ->and(new EditableGrid($row, legacyTags: true)->getSymbols()[0])->toBe($glyphs);
+        ->and(new EditableGrid($row)->getSymbols()[0])->toBe($glyphs);
 });
 
 it('refuses to write a literal delimiter in a style the formatter cannot compose, writing nothing', function () {
@@ -163,4 +162,40 @@ it('refuses to write a literal delimiter in a style the formatter cannot compose
     $grid = new EditableGrid($text, $source);
     $grid->cells[0][0] = ['symbol' => '<', 'prefix' => '<not-a-style>', 'suffix' => '</>'];
     expect(fn() => $grid->getSource())->toThrow(MapSourceRefusal::class, 'Nothing was written.');
+});
+
+it('reads every row exactly as the Engine source parser does, escapes and unrecognised tags included', function (string $row) {
+    $text = MapGridSource::parseSource(MapGridSource::buildSource($row, 'ROWS'), 'synthetic');
+    expect(new EditableGrid($text)->cells)->toBe([TerminalText::parseSourceCells($text)]);
+})->with([
+    'escaped delimiter' => ['a\\<b'],
+    'unrecognised tag, read as its glyphs' => ['#  <blue>~~~</blue>  #'],
+    'colour across a literal less-than' => ["\033[31ma<b\033[0m"],
+    'nested styles' => ['<fg=red><options=bold>x</></>y'],
+]);
+
+it('refuses a row the Engine cannot split into independent cells before anything can be written', function () {
+    expect(fn() => new EditableGrid("ab\n<fg=red>a\\</>"))
+        ->toThrow(MapSourceRefusal::class, 'Row 1 cannot be read as independent cells');
+});
+
+it('keeps a map whose row the Engine refuses browsable and read-only, its files untouched', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Maps/test-map/test-map.map.php';
+    file_put_contents($path, str_replace('#          #', '#<fg=red>a\\</>        #', (string) file_get_contents($path), $count));
+    $before = sourceHashTree($root);
+    $map = array_find(\Ichiloto\Editor\ProjectWorkspace::fromProject($root)->maps, static fn(ProjectMap $map): bool => $map->mapId === 'test-map');
+
+    expect($count)->toBeGreaterThan(0)
+        ->and($map->getGridSourceIssue())->toContain('cannot be read as independent cells')
+        ->and(fn() => $map->setTileSymbol(1, 1, '@'))->toThrow(MapSourceRefusal::class, 'read-only')
+        ->and(sourceHashTree($root))->toBe($before);
+});
+
+it('refuses to write a cell whose style would change the glyphs the Engine reads, writing nothing', function () {
+    $text = 'ab';
+    $grid = new EditableGrid($text, MapGridSource::buildSource($text, 'STYLES'));
+    // An unrecognised tag is glyphs to the Engine, so the painted cell would read back as more than one.
+    $grid->cells[0][0] = ['symbol' => 'x', 'prefix' => '<not-a-style>', 'suffix' => ''];
+    expect(fn() => $grid->getSource())->toThrow(MapSourceRefusal::class, 'would not read back as the cells painted');
 });
