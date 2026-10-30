@@ -39,6 +39,7 @@ use Ichiloto\Engine\Progression\ProgressionSettings;
 use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
 use Ichiloto\Editor\Events\ScriptReferenceScope;
+use Ichiloto\Editor\Field\NpcBedFields;
 use Ichiloto\Editor\Events\ScriptReferenceSource;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
@@ -2541,12 +2542,7 @@ final class RecordSchemaCatalog
      */
     public static function mapNpcs(bool $graphical = false): RecordSchema
     {
-        return new RecordSchema(
-            key: 'map_npcs',
-            entryNoun: 'NPC',
-            storage: RecordStorage::MAP_OWNED,
-            relativePath: '',
-            fields: [
+        $fields = [
                 // Identity
                 new RecordField('id', 'Id'),
                 new RecordField('name', 'Name'),
@@ -2577,7 +2573,17 @@ final class RecordSchemaCatalog
                 ...self::cueFields(),
                 // Completion writes
                 new RecordField('sets', 'After Talking', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
-            ],
+        ];
+
+        return new RecordSchema(
+            key: 'map_npcs',
+            entryNoun: 'NPC',
+            storage: RecordStorage::MAP_OWNED,
+            relativePath: '',
+            fields: $fields,
+            // The bed an NPC rests in; its rows past the bed object exist once it has one.
+            fieldsFor: static fn(array $npc): array => [...$fields, ...NpcBedFields::getFields($npc, $graphical)],
+            prepareEdit: static fn(array $npc, string $field, array $before = []): array => NpcBedFields::prepareEdit($npc, $field, $before),
             labelKey: 'name',
             identityKey: 'id',
             blank: [

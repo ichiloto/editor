@@ -45,6 +45,8 @@ final class NpcInspector
     private const array SECTIONS = [
         'Identity' => ['id', 'name'],
         'Placement' => ['x', 'y'],
+        // Every bed row; which exist depends on the bed ({@see NpcBedFields::getFields()}).
+        'Bed' => [NpcBedFields::BED . '.*'],
         'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
         'Movement' => ['movement', 'directionFix', 'facing', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
         'Visibility' => ['conditions'],
@@ -116,6 +118,7 @@ final class NpcInspector
 
         foreach (self::SECTIONS as $title => $ids) {
             $rows = [];
+            $ids = self::expandSectionIds($ids, array_map(strval(...), array_keys($byId)));
 
             if ($title === 'Cue' && $npc !== null && $npc->getScript() === []
                 && ! (is_array($npc->toArray()['cue'] ?? null) && $npc->hasDialogueVariants())) {
@@ -134,6 +137,10 @@ final class NpcInspector
                 }
 
                 unset($byId[$id]);
+            }
+
+            if ($title === 'Bed' && $npc !== null && is_array($npc->toArray()[NpcBedFields::BED] ?? null)) {
+                $rows[] = ['label' => '  X and Y', 'value' => 'where it stands once it gets up', 'editable' => false];
             }
 
             if ($rows !== []) {
@@ -158,6 +165,29 @@ final class NpcInspector
         }
 
         return $grouped;
+    }
+
+    /**
+     * A section's field ids, a trailing `.*` standing for every row under that
+     * key, in the order the rows come.
+     *
+     * @param list<string> $ids
+     * @param list<string> $rowIds
+     * @return list<string>
+     */
+    private static function expandSectionIds(array $ids, array $rowIds): array
+    {
+        $expanded = [];
+        foreach ($ids as $id) {
+            if (! str_ends_with($id, '.*')) {
+                $expanded[] = $id;
+                continue;
+            }
+            $prefix = substr($id, 0, -1);
+            array_push($expanded, ...array_filter($rowIds, static fn(string $row): bool => str_starts_with($row, $prefix)));
+        }
+
+        return $expanded;
     }
 
     /**

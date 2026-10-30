@@ -4,6 +4,33 @@
 
 ### Added
 
+- NPC beds, as Engine bf49893 reads them (`CinematicCommandSchema::export()['bedOccupancy']`): the NPC Inspector's
+  **Bed** rows pick the world object on the NPC's map it rests in (`bed.object`, among objects whose field resource
+  declares attachments), the resource attachment its occupant lies on (`bed.attachment`), its `Starting Posture`
+  from the Engine's `BedPosture` (`lying`, `sitting`, `standing`) and its `Occupied Bed Glyph` (`bed.terminal`). The
+  GUI editor's NPC rows add the character's lying and sitting poses (`bed.poses2d`) and its into-posture clips
+  (`bed.transitions2d`), a clip written with `loop => false`. Every edit is read by the Engine's
+  `NpcBedDefinition` and refused before anything changes when it would not load; edits stay in the map's own
+  source with undo and redo byte for byte, in the Terminal and GUI editors alike. Validation now gives the
+  Engine's bed preflight the map's resolved physical occupancy, so `npc.bed` reports a missing bed object, an object
+  without the attachment, a bed cell that is not solid, a blocked exit and shared slots on legacy maps too, where it
+  previously reported only that the occupancy was missing.
+- Cinematic conversations, as Engine bf49893 and e26fa26 read them (`conversationFacing`): a cinematic's
+  **Conversation** section binds `Conversation Speakers` (a stable key to the player, an NPC of the maps it runs on
+  or a staged cast member), picks each speaker's default addressee, declares `Conversation Groups` of bound
+  speakers, and picks the `Initial Conversation Group`; its text lines pick their `Conversation Speaker` and
+  `Addressee` among the bound speakers. Renaming a speaker or group renames it wherever the cinematic names it, and
+  removing one still named is refused, naming where. The new `cinematic_conversation_speakers` reference kind lists
+  a cinematic's speakers, and a list of scoped references (a group's speakers) is refused before writing when it
+  names one outside its choices. Validation adds a hint naming each group or addressee that names an unbound
+  speaker to the Engine's refusal, and reports speakers the cinematic cannot reach and lines selecting an unbound
+  speaker. A group's own addressees and facing overrides, and the conversation's facing overrides, are preserved
+  as authored without rows of their own.
+- Shared record layer: a keyed list can rewrite its record's references to an entry's key when the key changes, or
+  refuse removing an entry still named (`RecordSubList::$remapKeyReferences`); a record-level field chosen among
+  values its own record decides now offers them as options, as list entries' fields did; a schema's `prepareEdit`
+  receives the record before the edit; and `RecordField::withLabel()` relabels a field where several of its kind
+  share a pane. `FieldSpriteFields` takes the path and label of the role it authors.
 - Bed posture and conversation group commands, as Engine bf49893 registers them: `set_bed_posture` picks its
   `Occupant` among the NPCs of the map an event belongs to, or of a cinematic's start map and every map it
   transfers to, and chooses its `Posture` and `Transition Seconds`; `select_conversation_group` picks its `Group`

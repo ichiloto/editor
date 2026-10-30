@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\ConversationFields;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\ProjectWorkspace;
@@ -122,7 +123,12 @@ trait CutsceneValidation
             try {
                 $definition = $asset->cinematicDefinition();
             } catch (Throwable $throwable) {
-                return [...$issues, Issue::error($where, $throwable->getMessage(), 'The Engine refuses this cinematic as it stands; the message names the path.')];
+                // Where the conversation names a speaker it does not bind, say where.
+                $unbound = ConversationFields::findUnboundNames($data);
+                return [...$issues, Issue::error($where, $throwable->getMessage(), $unbound === []
+                    ? 'The Engine refuses this cinematic as it stands; the message names the path.'
+                    : sprintf('%s, which no conversation speaker binds. Bind it under Conversation Speakers or choose a bound speaker.',
+                        implode('; ', $unbound)))];
             }
 
             return [...$issues, ...$this->checkCinematicReferences($workspace, $asset, $definition->commands, $definition->finalizer)];
@@ -192,7 +198,7 @@ trait CutsceneValidation
 
         $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'map' => ScriptMapState::startOn($startMap !== '' ? $startMap : null, $npcIds), 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => [],
             // Declared once in the definition, so every command of the cinematic may select any of them.
-            'conversationGroups' => ReferenceCatalog::listConversationGroups($data),
+            'conversationGroups' => ConversationFields::listGroups($data),
             'attachmentsByMap' => $this->readAttachmentsByMap($workspace), 'graphicalMaps' => $this->listGraphicalMaps($workspace)];
         foreach ((array) ($data['cast'] ?? []) as $entry) {
             if (is_array($entry) && is_array($entry['at'] ?? null)) {
@@ -204,6 +210,43 @@ trait CutsceneValidation
         }
         $issues = [...$issues, ...$this->walkCinematicCommands($commands, $where, $known, $context)];
         $issues = [...$issues, ...$this->walkCinematicCommands($finalizer, $where . ' finalizer', $known, $context)];
+
+        return [...$issues, ...$this->checkConversationReferences($workspace, $asset, $commands, $where)];
+    }
+
+    /**
+     * Checks what a cinematic's conversation names that the Engine can only
+     * resolve as the scene plays: each speaker's NPC on a map the cinematic
+     * runs on and each staged speaker in its cast, and each speaker or
+     * addressee a text line selects among the speakers it binds.
+     *
+     * @param array<int, mixed> $commands
+     * @return Issue[]
+     */
+    protected function checkConversationReferences(ProjectWorkspace $workspace, CutsceneAsset $asset, array $commands, string $where): array
+    {
+        $conversation = ConversationFields::readConversation($asset->data());
+        $speakers = is_array($conversation['speakers'] ?? null) ? $conversation['speakers'] : [];
+        $references = new ReferenceCatalog($workspace, currentCutscene: $asset);
+        $issues = [];
+        foreach ($speakers as $key => $subject) {
+            $id = is_array($subject) && is_string($subject['id'] ?? null) ? $subject['id'] : null;
+            [$choices, $noun, $hint] = match (is_array($subject) ? ($subject['kind'] ?? null) : null) {
+                'npc' => [$references->listScopedChoices('map_npcs') ?? [], 'NPC', 'Choose an NPC on its start map or a map it transfers to.'],
+                'staged_actor' => [$references->valuesFor('cinematic_cast'), 'staged actor', 'Choose a staged actor its cast declares or a command stages.'],
+                default => [null, '', ''],
+            };
+            if ($choices !== null && $id !== null && ! in_array($id, $choices, true)) {
+                $issues[] = Issue::error($where, sprintf('Its conversation speaker "%s" is %s "%s", which this cinematic cannot reach.', $key, $noun, $id), $hint);
+            }
+        }
+        $bound = array_map(strval(...), array_keys($speakers));
+        foreach (ConversationFields::listLineSelections($commands) as ['field' => $field, 'key' => $key]) {
+            if (! in_array($key, $bound, true)) {
+                $issues[] = Issue::error($where, sprintf('A text line selects %s "%s", which its conversation does not bind.', $field, $key),
+                    'Choose one of the conversation speakers, or bind it under Conversation Speakers.');
+            }
+        }
 
         return $issues;
     }

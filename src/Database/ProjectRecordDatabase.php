@@ -100,7 +100,8 @@ final class ProjectRecordDatabase
                 throw new \InvalidArgumentException(sprintf('%s "%s" is not one this entry offers; choose one of its own.', $field->label, strval($value)));
             }
         }
-        if ($references !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects'], true) && $value !== null) {
+        if ($references !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects',
+            \Ichiloto\Editor\Field\NpcBedFields::BED_OBJECTS], true) && $value !== null) {
             $choices = $field->reference === 'cinematic_movement_routes'
                 ? $references->getMovementRouteIds($record, $ownerPath)
                 : $references->valuesFor($field->reference);
@@ -110,10 +111,13 @@ final class ProjectRecordDatabase
                 }
             }
         }
-        $scoped = $references !== null && $field->reference !== null && is_string($value) ? $references->listScopedChoices($field->reference) : null;
-        if ($scoped !== null && ! in_array($value, $scoped, true)) {
-            // Choices that depend on where the script runs: refused only where that is known.
-            throw new \InvalidArgumentException(sprintf('%s "%s" is not one this script can name here; choose one from the picker.', $field->label, $value));
+        $scoped = $references !== null && $field->reference !== null && $value !== null ? $references->listScopedChoices($field->reference) : null;
+        foreach ($scoped === null ? [] : (is_array($value) ? $value : [$value]) as $selected) {
+            if (! in_array($selected, $scoped, true)) {
+                // Choices that depend on where the script runs: refused only where that is known.
+                throw new \InvalidArgumentException(sprintf('%s "%s" is not one this script can name here; choose one from the picker.',
+                    $field->label, is_scalar($selected) ? strval($selected) : get_debug_type($selected)));
+            }
         }
         return $value;
     }
@@ -155,13 +159,19 @@ final class ProjectRecordDatabase
     /**
      * @param (\Closure(int): ?int)|null $indexMap How entries' indexes moved, for a list whose entries the
      *   record names by index; null when none moved.
+     * @param array{0: string, 1: ?string}|null $keyChange For a keyed list the record names entries of by key, the
+     *   key that changed and what it became, null for a removed entry; null when no key changed.
      */
-    private function writeRecordEntries(ProjectRecord $record, RecordSubList $list, array $entries, ?\Closure $indexMap = null): void
+    private function writeRecordEntries(ProjectRecord $record, RecordSubList $list, array $entries, ?\Closure $indexMap = null,
+        ?array $keyChange = null): void
     {
         $draft = clone $record;
         $draft->setEntries($list, $entries);
         if ($indexMap !== null && $list->remapIndexReferences !== null) {
             $draft->restorePayload(($list->remapIndexReferences)((array) $draft->toArray(), $indexMap));
+        }
+        if ($keyChange !== null && $list->remapKeyReferences !== null && $keyChange[0] !== $keyChange[1]) {
+            $draft->restorePayload(($list->remapKeyReferences)((array) $draft->toArray(), $keyChange[0], $keyChange[1]));
         }
         $this->assertProposedRecord($record, $draft);
         $record->restorePayload($draft->toArray());
@@ -626,21 +636,38 @@ final class ProjectRecordDatabase
             $map = self::readNested($entry, $field->referenceMapKey);
             $row['referenceMap'] = is_string($map) ? $map : '';
         }
-        if ($field->entryChoices !== null && $references !== null && ($row['editable'] ?? true) !== false) {
-            // A field of the entry itself lives in the entry.
-            $holderPath = implode('.', array_slice(explode('.', $field->key), 0, -1));
-            $holder = $holderPath === '' ? $entry : self::readNested($entry, $holderPath);
-            $values = $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], $owner);
-            $row['options'] = ['', ...$values];
-            $row['choices'] = [['value' => '', 'label' => $field->noneLabel()],
-                ...array_map(static fn(string $value): array => ['value' => $value, 'label' => $value], $values)];
-        }
+        $row = self::describeEntryChoices($field, $row, $entry, $owner, $references);
         if ($field->dialogueSpeaker === null || $this->authoringReferences === null) {
             return [$row];
         }
 
         return DialogueEmotionFields::describeRows($row, self::readNested($entry, $field->key),
             $this->authoringReferences->describeDialogueEmotions($field->dialogueSpeaker, $entry, $owner));
+    }
+
+    /**
+     * A row chosen among the values its own entry decides, with those values
+     * as its options ({@see RecordField::$entryChoices}); any other row as it is.
+     *
+     * @param array<string, mixed> $row
+     * @param array<string, mixed> $entry What the field belongs to: a list entry, or the record itself.
+     * @param array<string, mixed> $owner The record.
+     * @return array<string, mixed>
+     */
+    private static function describeEntryChoices(RecordField $field, array $row, array $entry, array $owner, ?ReferenceCatalog $references): array
+    {
+        if ($field->entryChoices === null || $references === null || ($row['editable'] ?? true) === false) {
+            return $row;
+        }
+        // A field of the entry itself lives in the entry.
+        $holderPath = implode('.', array_slice(explode('.', $field->key), 0, -1));
+        $holder = $holderPath === '' ? $entry : self::readNested($entry, $holderPath);
+        $values = $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], $owner);
+        $row['options'] = ['', ...$values];
+        $row['choices'] = [['value' => '', 'label' => $field->noneLabel()],
+            ...array_map(static fn(string $value): array => ['value' => $value, 'label' => $value], $values)];
+
+        return $row;
     }
 
     /**
@@ -667,8 +694,9 @@ final class ProjectRecordDatabase
         $fields = [];
 
         foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
-            $fields[] = self::describeField($field, self::displayValue($field, $record->get($field->key)), $field->key, $isEditable,
-                authored: $record->get($field->key));
+            $fields[] = self::describeEntryChoices($field, self::describeField($field, self::displayValue($field, $record->get($field->key)),
+                $field->key, $isEditable, authored: $record->get($field->key)), (array) $record->toArray(), (array) $record->toArray(),
+                $this->findRecordReferences($record));
         }
         if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
             $fields = PlayerPresentationFields::describeFields($fields, (array) $record->toArray(), $this->authoringReferences?->getAssetRoot());
@@ -983,7 +1011,7 @@ final class ProjectRecordDatabase
                 $draft->set($field->key, $value);
             }
             if ($this->schema->prepareEdit !== null) {
-                $draft->restorePayload(($this->schema->prepareEdit)((array) $draft->toArray(), $field->key));
+                $draft->restorePayload(($this->schema->prepareEdit)((array) $draft->toArray(), $field->key, is_array($before) ? $before : (array) $before));
             }
             $this->dropStaleShapeFields($draft, $before);
             $this->assertProposedRecord($record, $draft);
@@ -1653,7 +1681,7 @@ final class ProjectRecordDatabase
             $old === $entryIndex => null,
             $old > $entryIndex => $old - 1,
             default => $old,
-        });
+        }, $subList->keyField !== null && is_array($removed) ? [strval($removed[$subList->keyField] ?? ''), null] : null);
         $this->touchState();
 
         return $removed;
@@ -3251,7 +3279,8 @@ final class ProjectRecordDatabase
                 $entries[$entryIndex] = self::withoutStaleVariantFields($subList, $before, $entries[$entryIndex]);
             }
 
-            $this->writeRecordEntries($record, $subList, $entries);
+            $this->writeRecordEntries($record, $subList, $entries, keyChange: $field->key === $subList->keyField
+                ? [strval($before[$field->key] ?? ''), strval($value)] : null);
             $this->touchState();
 
             return;

@@ -172,24 +172,19 @@ final readonly class RecordField
      */
     public function asReadOnly(): self
     {
-        return new self(
-            $this->key,
-            $this->label,
-            $this->type,
-            $this->options,
-            $this->removeWhenEmpty,
-            true,
-            $this->step,
-            $this->codec,
-            $this->reference,
-            $this->enumClass,
-            $this->allowsNone,
-            $this->displayDefault,
-            $this->blankLabel,
-            $this->writeTypes,
-            dialogueSpeaker: $this->dialogueSpeaker,
-            entryChoices: $this->entryChoices,
-        );
+        return $this->copyWith(['isReadOnly' => true]);
+    }
+
+    /** Returns this field under another label, where several of its kind sit in one pane (a pose per posture). */
+    public function withLabel(string $label): self
+    {
+        return $this->copyWith(['label' => $label]);
+    }
+
+    /** @param array<string, mixed> $changes Constructor arguments to replace, by name. */
+    private function copyWith(array $changes): self
+    {
+        return new self(...[...get_object_vars($this), ...$changes]);
     }
 
     /**
