@@ -203,6 +203,53 @@ it('defines a building piece over its cells: tiles, a glyph per cell, footprint,
     expect(array_column(expectAnswer($request('tilesets.preview', ['index' => 0]))['authoring'], 'id'))->toBe(['hut']);
 });
 
+it('sets a piece cell to a literal delimiter or backslash in its colour, saved, reloaded and undone through its Glyph Rows', function (string $glyph) {
+    $root = createBuildingProject();
+    $request = createBuildingRpc($root);
+    $path = $root . '/assets/Data/Tilesets/town.php';
+    defineHutPiece($root, $request);
+    $authored = (string) file_get_contents($path);
+    $glyphs = Tileset::load($root . '/assets', 'town')->pieces['hut']->glyphs;
+
+    // The coloured cell is set beside the piece's own coloured door glyph, and a plain one beside the roof's backslash.
+    expectAnswer($request('tilesets.setPieceGlyph', ['index' => 0, 'tileset' => 'town', 'piece' => 'hut', 'x' => 0, 'y' => 1,
+        'glyph' => $glyph, 'color' => 'red']));
+    expectAnswer($request('tilesets.setPieceGlyph', ['index' => 0, 'tileset' => 'town', 'piece' => 'hut', 'x' => 1, 'y' => 0,
+        'glyph' => $glyph, 'color' => '']));
+    $authoring = static fn(): array => array_find(expectAnswer($request('tilesets.preview', ['index' => 0]))['authoring'],
+        static fn(array $entry): bool => $entry['id'] === 'hut')['cells'];
+    expect($authoring()[1][0])->toBe(['symbol' => $glyph, 'color' => 'red'])
+        ->and($authoring()[1][1])->toBe(['symbol' => '⊓', 'color' => '#ffd75f'])
+        ->and($authoring()[0][1]['symbol'])->toBe($glyph);
+    expectAnswer($request('database.save', ['category' => 'tilesets']));
+
+    $expected = $glyphs;
+    $expected[1][0] = $glyph;
+    $expected[0][1] = $glyph;
+    expect(Tileset::load($root . '/assets', 'town')->pieces['hut']->glyphs)->toBe($expected)
+        ->and(file_get_contents($path))->toContain('<fg=#ffd75f>⊓</>');
+    // A fresh session reads the saved cells as the author set them.
+    $fresh = createBuildingRpc($root);
+    $cells = array_find(expectAnswer($fresh('tilesets.preview', ['index' => 0]))['authoring'],
+        static fn(array $entry): bool => $entry['id'] === 'hut')['cells'];
+    expect($cells[1][0])->toBe(['symbol' => $glyph, 'color' => 'red'])
+        ->and(array_column($cells[0], 'symbol'))->toBe($expected[0]);
+
+    expectAnswer($request('history.undo'));
+    expectAnswer($request('history.undo'));
+    expectAnswer($request('database.save', ['category' => 'tilesets']));
+    expect(file_get_contents($path))->toBe($authored)
+        ->and(Tileset::load($root . '/assets', 'town')->pieces['hut']->glyphs)->toBe($glyphs);
+})->with(['less-than' => '<', 'greater-than' => '>', 'backslash' => '\\']);
+
+it('still refuses formatter markup or several characters offered as one piece glyph', function (string $glyph) {
+    $root = createBuildingProject();
+    $request = createBuildingRpc($root);
+    defineHutPiece($root, $request);
+    expect(expectRefusal($request('tilesets.setPieceGlyph', ['index' => 0, 'tileset' => 'town', 'piece' => 'hut', 'x' => 0, 'y' => 0,
+        'glyph' => $glyph])))->toBe('A cell holds one character that fills one terminal cell.');
+})->with(['markup' => '<fg=red>x</>', 'escaped tag' => '\\<', 'two characters' => '<>']);
+
 it('marks a dragged rectangle of tiles above characters, or takes the mark away, as one undo step', function () {
     $root = createBuildingProject();
     $request = createBuildingRpc($root);

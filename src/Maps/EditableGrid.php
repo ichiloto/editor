@@ -40,26 +40,38 @@ final class EditableGrid
         // Keep the pool local to this parse so closed maps retain no cache.
         $cellValues = [];
         return array_map(static function (string $line) use ($legacyTags, &$cellValues): array {
-            preg_match_all('/<[^>]+>|[^<]+|</u', $line, $matches);
+            // As in the Engine's source parser, a tag never spans an ANSI
+            // boundary: composed literal delimiters stay literal cells.
+            preg_match_all('/<[^<>\x1b]+>|[^<]+|</u', $line, $matches);
             $cells = $tags = [];
+            $literal = '';
+            // Text between two tags is read as one run, so an ANSI style
+            // carries over a literal < to the glyphs it colours.
+            $readLiteral = static function () use (&$literal, &$cells, &$tags, &$cellValues): void {
+                foreach (TerminalText::visibleSymbols($literal) as $symbol) {
+                    preg_match('/\A((?:\x1b\[[0-9;]*m)*)(.*?)((?:\x1b\[[0-9;]*m)*)\z/us', $symbol, $styled);
+                    $glyph = $styled[2] ?? $symbol;
+                    $prefix = implode('', $tags) . ($styled[1] ?? '');
+                    $suffix = ($styled[3] ?? '') . str_repeat('</>', count($tags));
+                    $cells[] = $cellValues[$prefix][$suffix][$glyph] ??= [
+                        'symbol' => $glyph, 'prefix' => $prefix, 'suffix' => $suffix,
+                    ];
+                }
+                $literal = '';
+            };
             foreach ($matches[0] as $segment) {
                 if (preg_match('/^<[^\/][^>]*>$/u', $segment) === 1
                     && ($legacyTags || TerminalText::stripAnsi($segment . 'x</>') === 'x')) {
+                    $readLiteral();
                     $tags[] = $segment;
                 } elseif (preg_match('/^<\/[^>]*>$/u', $segment) === 1 && ($legacyTags || $tags !== [])) {
+                    $readLiteral();
                     array_pop($tags);
                 } else {
-                    foreach (TerminalText::visibleSymbols($segment) as $symbol) {
-                        preg_match('/\A((?:\x1b\[[0-9;]*m)*)(.*?)((?:\x1b\[[0-9;]*m)*)\z/us', $symbol, $styled);
-                        $glyph = $styled[2] ?? $symbol;
-                        $prefix = implode('', $tags) . ($styled[1] ?? '');
-                        $suffix = ($styled[3] ?? '') . str_repeat('</>', count($tags));
-                        $cells[] = $cellValues[$prefix][$suffix][$glyph] ??= [
-                            'symbol' => $glyph, 'prefix' => $prefix, 'suffix' => $suffix,
-                        ];
-                    }
+                    $literal .= $segment;
                 }
             }
+            $readLiteral();
             return $cells;
         }, $lines);
     }
@@ -81,6 +93,16 @@ final class EditableGrid
         return $grid;
     }
 
+    /**
+     * The grid's rows as source. Unchanged rows keep their authored bytes.
+     * A changed row shares one style run between neighbours of equal style;
+     * a formatter delimiter or backslash is composed alone by the Engine
+     * ({@see TerminalText::composeSourceCell()}), so it can never escape a
+     * closing tag or join its neighbours into markup.
+     *
+     * @return list<string>
+     * @throws MapSourceRefusal When a literal delimiter's style cannot be composed; nothing is written.
+     */
     public function getLines(): array
     {
         $lines = [];
@@ -92,6 +114,16 @@ final class EditableGrid
             $line = '';
             $open = null;
             foreach ($cells as $cell) {
+                if (strpbrk($cell['symbol'], '<>\\') !== false) {
+                    try {
+                        $line .= ($open[1] ?? '') . TerminalText::composeSourceCell($cell['symbol'], $cell['prefix'], $cell['suffix']);
+                    } catch (\InvalidArgumentException $error) {
+                        throw new MapSourceRefusal(sprintf('Row %d cannot hold %s in its style: %s Nothing was written.',
+                            $index, $cell['symbol'], $error->getMessage()), previous: $error);
+                    }
+                    $open = null;
+                    continue;
+                }
                 $style = [$cell['prefix'], $cell['suffix']];
                 if ($style !== $open) {
                     $line .= ($open[1] ?? '') . $style[0];

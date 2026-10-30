@@ -1474,7 +1474,18 @@ final class ProjectMap
                 $anchorHighlight = array_key_exists($column, $npcCells[$row] ?? []) || array_key_exists($column, $stampPreview[$row] ?? [])
                     ? "\033[7m" : '';
                 if (! $this->layers->legacy && is_array($tileCell)) {
-                    $styled = TerminalText::formatStyles($tileCell['prefix'] . $anchorHighlight . $tileSymbol . $tileCell['suffix']);
+                    $source = $tileCell['prefix'] . $anchorHighlight . $tileSymbol . $tileCell['suffix'];
+                    // A literal <, > or backslash is drawn as it is written: the
+                    // Engine composes it so it cannot escape its closing tag.
+                    if (strpbrk($tileSymbol, '<>\\') !== false) {
+                        try {
+                            $source = TerminalText::composeSourceCell($tileSymbol, $tileCell['prefix'] . $anchorHighlight, $tileCell['suffix']);
+                        } catch (\InvalidArgumentException) {
+                            // Saving refuses a style the formatter cannot compose;
+                            // until then the canvas shows the cell's style text.
+                        }
+                    }
+                    $styled = TerminalText::formatStyles($source);
                     $styled = ($tileCell['dim'] ?? false) ? "\033[2m" . $styled . "\033[0m" : $styled;
                     $mergedSymbols[] = $anchorHighlight === '' ? $styled : $styled . "\033[0m";
                     continue;
