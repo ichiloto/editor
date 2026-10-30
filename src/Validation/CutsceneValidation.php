@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
@@ -190,6 +191,8 @@ trait CutsceneValidation
         }
 
         $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'map' => ScriptMapState::startOn($startMap !== '' ? $startMap : null, $npcIds), 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => [],
+            // Declared once in the definition, so every command of the cinematic may select any of them.
+            'conversationGroups' => ReferenceCatalog::listConversationGroups($data),
             'attachmentsByMap' => $this->readAttachmentsByMap($workspace), 'graphicalMaps' => $this->listGraphicalMaps($workspace)];
         foreach ((array) ($data['cast'] ?? []) as $entry) {
             if (is_array($entry) && is_array($entry['at'] ?? null)) {
@@ -232,7 +235,7 @@ trait CutsceneValidation
      *
      * @param array<int, mixed> $commands
      * @param array<string, string[]> $known
-     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>, conversationGroups?: list<string>} $context
      * @return Issue[]
      */
     protected function walkCinematicCommands(
@@ -258,7 +261,8 @@ trait CutsceneValidation
                 $registered = ScriptCommandRegistry::getCatalog()->findDefinition($type);
 
                 if ($registered !== null) {
-                    $issues = [...$issues, ...$this->checkRegisteredReferences($registered, $command, $where, $known)];
+                    $issues = [...$issues, ...$this->checkRegisteredReferences($registered, $command, $where, $known,
+                        $context['map'], $context['conversationGroups'] ?? [])];
                 }
 
                 continue;
@@ -411,7 +415,7 @@ trait CutsceneValidation
      * Event files, cast ids, current-map NPCs, and recursion safety.
      *
      * @param array<string, string[]> $known
-     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>, conversationGroups?: list<string>} $context
      * @param string[] $commonEventStack
      * @return Issue[]
      */
@@ -460,7 +464,7 @@ trait CutsceneValidation
      * NPC on the map the cinematic is on.
      *
      * @param array<string, mixed> $command
-     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>, conversationGroups?: list<string>} $context
      * @return Issue[]
      */
     protected function checkCinematicSubject(array $command, string $where, array $context): array
@@ -533,7 +537,7 @@ trait CutsceneValidation
     }
 
     /**
-     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>, conversationGroups?: list<string>} $context
      * @return Issue[]
      */
     protected function checkStagedActorReference(string $actorId, string $where, array $context): array

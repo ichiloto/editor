@@ -38,7 +38,8 @@ use Ichiloto\Engine\Progression\LevelUpRecovery;
 use Ichiloto\Engine\Progression\ProgressionSettings;
 use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
-use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Editor\Events\ScriptReferenceScope;
+use Ichiloto\Editor\Events\ScriptReferenceSource;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
@@ -3043,21 +3044,37 @@ final class RecordSchemaCatalog
             ScriptCommandFieldKind::NUMBER => [new RecordField($field->key, $field->label, InputControlType::FLOAT)],
             ScriptCommandFieldKind::BOOLEAN => [RecordField::boolean($field->key, $field->label, removeWhenEmpty: false)],
             ScriptCommandFieldKind::OPTION => [new RecordField($field->key, $field->label, options: $field->options, removeWhenEmpty: ! $field->required)],
-            // A troop member is the owning troop's own, never a project resource.
-            ScriptCommandFieldKind::REFERENCE => [$field->reference === ScriptCommandReference::TROOP_MEMBER
-                ? RecordField::troopMember($field->key, $field->label, $field->required) : RecordField::reference(
-                $field->key,
-                $field->label,
-                ProjectScriptCommands::getReferenceCategory($field->reference
-                    ?? throw new LogicException("Reference field {$field->key} names no resource."))
-                    ?? throw new LogicException("Reference field {$field->key} names no project resource."),
-                allowsNone: ! $field->required,
-            )],
+            ScriptCommandFieldKind::REFERENCE => [self::describeRegisteredReference($field)],
             ScriptCommandFieldKind::POSITION => [
                 new RecordField("{$field->key}.x", "{$field->label} X", InputControlType::INTEGER),
                 new RecordField("{$field->key}.y", "{$field->label} Y", InputControlType::INTEGER),
             ],
             ScriptCommandFieldKind::LIST => [new RecordField($field->key, $field->label, isReadOnly: true)],
+        };
+    }
+
+    /**
+     * Describes a declared reference field by where its values come from. A
+     * kind this Editor does not know stays editable as plain text, labelled
+     * as such, and validation reports each command that uses it; it never
+     * stops the schema, and so the project, from loading.
+     */
+    private static function describeRegisteredReference(ScriptCommandField $field): RecordField
+    {
+        $source = ScriptReferenceSource::forReference($field->reference
+            ?? throw new LogicException("Reference field {$field->key} names no resource."));
+
+        return match ($source->scope) {
+            // A troop member is the owning troop's own, never a project resource.
+            ScriptReferenceScope::OWNING_TROOP => RecordField::troopMember($field->key, $field->label, $field->required),
+            ScriptReferenceScope::PROJECT, ScriptReferenceScope::CURRENT_MAP, ScriptReferenceScope::CURRENT_CINEMATIC => RecordField::reference(
+                $field->key,
+                $field->label,
+                $source->category ?? throw new LogicException("Reference field {$field->key} has no picker category."),
+                allowsNone: ! $field->required,
+            ),
+            ScriptReferenceScope::UNSUPPORTED => new RecordField($field->key, sprintf('%s (typed: unknown reference kind %s)', $field->label, $source->reference->value),
+                removeWhenEmpty: ! $field->required),
         };
     }
 

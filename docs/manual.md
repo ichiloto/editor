@@ -2614,7 +2614,8 @@ Supported command types, matching the engine's interpreter:
 | `branch` | Conditions, Then (fixed), Else (fixed) |
 
 Registered commands follow the built-in ones in the `Type` options: the
-Engine's `shop`, `inn`, `payday`, `collect_income`, `adjust_income` and `recruit_actor`, then any the project declares in
+Engine's `shop`, `inn`, `payday`, `collect_income`, `adjust_income`, `recruit_actor`, `select_conversation_group`
+and `set_bed_posture`, then any the project declares in
 `assets/Data/script-commands.php` (see the Engine's story events guide). Their
 rows come from their declarations:
 
@@ -2626,6 +2627,22 @@ rows come from their declarations:
 | `collect_income` | Schedule (picked from Income), Result Variable |
 | `adjust_income` | Schedule (picked from Income), Amount (negative for a deduction) |
 | `recruit_actor` | Actor (picked from Actors; required), Starting Level (`authored` or `partyAverage`; average of the permanent roster including reserves, rounded down before joining) |
+| `select_conversation_group` | Group (picked from the cinematic's conversation groups; required) |
+| `set_bed_posture` | Occupant (picked from the map's NPCs; required), Posture (`lying`, `sitting` or `standing`), Transition Seconds (0 to 30) |
+
+A reference's picker lists what the command can name where it runs. An
+`Occupant` is an NPC of the map an event belongs to; in a cinematic it is an
+NPC of its start map or of any map it transfers to, and in a Common Event one
+of the map its callers run it on. A `Group` is one the cinematic declares under
+`presentation.conversation.groups`. Where those choices are known, a value
+outside them is refused before anything changes. Validation follows the
+script: it reports an NPC that is not on the map the script is on at that
+command, a group the cinematic does not declare, and a group selected outside
+a cinematic.
+
+When the Engine has a reference kind this Editor does not know, the project
+still opens. The field is typed as plain text, its label names the kind, and
+validation reports each command that uses it until the Editor has its picker.
 
 A command's first list, such as a shop's merchandise, is edited like a
 route's steps: with the settings cursor on one of its entry rows, `Shift+O`

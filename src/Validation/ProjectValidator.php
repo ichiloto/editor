@@ -22,7 +22,8 @@ use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Engine\Core\WorldConditionExclusion;
 use Ichiloto\Editor\Events\CommandMapContext;
-use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Editor\Events\ScriptReferenceScope;
+use Ichiloto\Editor\Events\ScriptReferenceSource;
 use Ichiloto\Editor\Field\MapAreaAuthoring;
 use Ichiloto\Editor\Field\MapAreaRefusal;
 use Ichiloto\Editor\Field\MapEncounters;
@@ -3612,10 +3613,11 @@ class ProjectValidator
     $categories = self::DIRECT_REFERENCE_CATEGORIES;
 
     foreach (ScriptCommandReference::cases() as $reference) {
-      $category = ProjectScriptCommands::getReferenceCategory($reference);
+      // Map-local and cinematic-local kinds are checked where the script runs, never against the whole project.
+      $source = ScriptReferenceSource::forReference($reference);
 
-      if ($category !== null) {
-        $categories[] = $category;
+      if ($source->scope === ScriptReferenceScope::PROJECT && $source->category !== null) {
+        $categories[] = $source->category;
       }
     }
 
@@ -3955,7 +3957,8 @@ class ProjectValidator
       $registered = ScriptCommandRegistry::getCatalog()->findDefinition($type);
 
       if ($registered !== null) {
-        $issues = [...$issues, ...$this->checkRegisteredCommand($registered, $command, $where, $known)];
+        // Outside a cinematic there is no conversation to select a group of.
+        $issues = [...$issues, ...$this->checkRegisteredCommand($registered, $command, $where, $known, $context['map'], null)];
       } elseif (! in_array($type, EventInterpreter::COMMAND_TYPES, true)) {
         $issues[] = Issue::error(
           $where,
@@ -5076,7 +5079,14 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issues found.
    */
-  protected function checkRegisteredCommand(ScriptCommandDefinition $definition, array $command, string $where, array $known): array
+  protected function checkRegisteredCommand(
+    ScriptCommandDefinition $definition,
+    array $command,
+    string $where,
+    array $known,
+    ?ScriptMapState $map = null,
+    ?array $conversationGroups = null,
+  ): array
   {
     $issues = array_map(
       static fn(string $problem): Issue => Issue::error(
@@ -5087,26 +5097,66 @@ class ProjectValidator
       $definition->findProblems($command),
     );
 
-    return [...$issues, ...$this->checkRegisteredReferences($definition, $command, $where, $known)];
+    return [...$issues, ...$this->checkRegisteredReferences($definition, $command, $where, $known, $map, $conversationGroups)];
   }
 
   /**
    * Checks every resource a registered command names, in its list entries
-   * too.
+   * too, where the command runs: a project resource against the project, an
+   * NPC against the map the script is on at that point, a conversation group
+   * against the cinematic running it. A reference kind this Editor does not
+   * know is reported on each command that declares one, never thrown.
    *
    * @param array<string, mixed> $command The authored command.
    * @param array<string, string[]> $known What the project defines.
+   * @param ScriptMapState|null $map Where the script is, when known.
+   * @param list<string>|null $conversationGroups The running cinematic's conversation groups; null outside a cinematic.
    * @return Issue[] The issues found.
    */
-  protected function checkRegisteredReferences(ScriptCommandDefinition $definition, array $command, string $where, array $known): array
+  protected function checkRegisteredReferences(
+    ScriptCommandDefinition $definition,
+    array $command,
+    string $where,
+    array $known,
+    ?ScriptMapState $map = null,
+    ?array $conversationGroups = null,
+  ): array
   {
-    $check = function (ScriptCommandField $field, array $data) use (&$check, $where, $known): array {
+    $check = function (ScriptCommandField $field, array $data) use (&$check, $definition, $where, $known, $map, $conversationGroups): array {
       $value = ScriptCommandField::readPath($data, $field->key);
 
-      $category = $field->reference === null ? null : ProjectScriptCommands::getReferenceCategory($field->reference);
+      if ($field->kind === ScriptCommandFieldKind::REFERENCE && $field->reference !== null) {
+        $source = ScriptReferenceSource::forReference($field->reference);
+        $text = is_string($value) ? trim($value) : '';
 
-      if ($field->kind === ScriptCommandFieldKind::REFERENCE && $category !== null && is_string($value)) {
-        return $this->checkReference($value, $category, strtolower($field->label), $where, $known);
+        return match ($source->scope) {
+          ScriptReferenceScope::PROJECT => $text === '' ? [] : $this->checkReference($text, $source->category ?? '', strtolower($field->label), $where, $known),
+          // The Engine's troop page validation checks a member against its troop.
+          ScriptReferenceScope::OWNING_TROOP => [],
+          ScriptReferenceScope::CURRENT_MAP => $text === '' || $map?->npcIds === null || in_array($text, $map->npcIds, true) ? [] : [Issue::error(
+            $where,
+            sprintf('Its %s command names NPC "%s", which is not on %s.', $definition->type, $text, $map->description ?? '(unknown map)'),
+            'The runtime stops the script at this command. Choose an NPC on the map the script is on at that point.'
+          )],
+          ScriptReferenceScope::CURRENT_CINEMATIC => match (true) {
+            $conversationGroups === null => [Issue::error(
+              $where,
+              sprintf('Its %s command selects conversation group "%s" outside a cinematic.', $definition->type, $text),
+              'The runtime stops the script at this command. Only a cinematic declares conversation groups; run it from one.'
+            )],
+            $text === '' || in_array($text, $conversationGroups, true) => [],
+            default => [Issue::error(
+              $where,
+              sprintf('Its %s command selects conversation group "%s", which this cinematic does not declare.', $definition->type, $text),
+              'The runtime stops the cinematic at this command. Choose a group its conversation declares, or declare it.'
+            )],
+          },
+          ScriptReferenceScope::UNSUPPORTED => [Issue::error(
+            $where,
+            sprintf('Its %s command\'s %s is an Engine "%s" reference this Editor does not know.', $definition->type, strtolower($field->label), $source->reference->value),
+            $source->describeUnsupported()
+          )],
+        };
       }
 
       if ($field->kind !== ScriptCommandFieldKind::LIST || ! is_array($value)) {

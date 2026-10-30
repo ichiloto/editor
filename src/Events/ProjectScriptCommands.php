@@ -6,7 +6,6 @@ namespace Ichiloto\Editor\Events;
 
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
-use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Throwable;
 
@@ -71,29 +70,5 @@ final class ProjectScriptCommands
     public function activate(): void
     {
         ScriptCommandRegistry::configure($this->catalog);
-    }
-
-    /**
-     * Returns the Editor reference category for a resource a command names.
-     *
-     * @param ScriptCommandReference $reference The resource.
-     * @return string|null The ReferenceCatalog category; null for a troop member, which the owning troop holds.
-     */
-    public static function getReferenceCategory(ScriptCommandReference $reference): ?string
-    {
-        return match ($reference) {
-            // The item store resolves every inventory definition.
-            ScriptCommandReference::ITEM => 'inventory',
-            ScriptCommandReference::MUSIC => 'bgm',
-            ScriptCommandReference::SOUND => 'sfx',
-            ScriptCommandReference::MAP => 'maps',
-            ScriptCommandReference::TROOP => 'troops',
-            ScriptCommandReference::QUEST => 'quests',
-            ScriptCommandReference::ACTOR => 'actors',
-            ScriptCommandReference::STAGE_TIMELINE => 'stage_timelines',
-            ScriptCommandReference::INCOME_SCHEDULE => 'income_schedules',
-            // The owning troop's members: chosen from that troop, checked by the Engine's page validation.
-            ScriptCommandReference::TROOP_MEMBER => null,
-        };
     }
 }
