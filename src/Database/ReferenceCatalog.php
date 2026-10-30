@@ -57,6 +57,9 @@ final class ReferenceCatalog
     /** The encounter terrains the project's terrain kinds meet ({@see \Ichiloto\Engine\Rendering\Tilesets\TerrainKind::$encounters}). */
     public const string ENCOUNTER_TERRAINS = 'encounter_terrains';
 
+    /** The entry choice source of a tileset's tile layers ({@see listEntryChoices()}). */
+    public const string TILESET_TILE_LAYERS = 'tileset_tile_layers';
+
     public const array CATEGORIES = [
         'actors',
         'actor_ids',
@@ -358,6 +361,8 @@ final class ReferenceCatalog
             'text_roles' => $this->loadTextRoleIds(),
             'font_assets' => self::getFontAssets($this->workspace->projectRoot),
             'dialogue_identities' => array_column($this->listDialogueIdentities(), 'id'),
+            // play_skit names a Skit by the stable id the Engine keys Skits by, never its title.
+            SkitPlaybackFields::REFERENCE_CATEGORY => array_keys($this->listSkitTitles()),
             default => $this->recordValues($category),
         };
     }
@@ -660,7 +665,8 @@ final class ReferenceCatalog
      * other than the kind itself. `mastery_within_branches`: the tree's branches other than the branch choosing, any
      * of which it may grow within once it shares that branch's region. `tileset_whole_pieces`: the pieces of the tileset a place icon belongs to that are
      * stamped whole, any of which can show a place type. `tileset_thickets`: the thickets of the tileset a terrain
-     * kind belongs to.
+     * kind belongs to. `tileset_tile_layers`: the tile layers the tileset's pieces, terrain kinds and stacks write,
+     * any of which it can give a drawing offset.
      *
      * @param array<string, mixed> $holder What the field lives in.
      * @param array<string, mixed> $owner The record holding the entry.
@@ -688,6 +694,9 @@ final class ReferenceCatalog
                 $this->workspace->getRecordDatabase(MasteryFields::BRANCHES)?->getRecords() ?? []),
                 static fn(string $id): bool => $id !== '' && $id !== ($holder['id'] ?? null)));
         }
+        if ($source === self::TILESET_TILE_LAYERS) {
+            return self::listTilesetTileLayers($owner);
+        }
         if ($source === 'tileset_thickets') {
             $thickets = is_array($owner['thickets'] ?? null) ? $owner['thickets'] : [];
             return array_values(array_map(strval(...), array_keys($thickets)));
@@ -699,6 +708,29 @@ final class ReferenceCatalog
         $map = $this->getSubjectMap();
         $found = $map === null || !is_string($objectId) ? null : \Ichiloto\Editor\Field\WorldObjectAuthoring::findAttachments($map, $objectId);
         return array_map(static fn(\Ichiloto\Engine\Field\WorldObjectAttachment $attachment): string => $attachment->id, $found['attachments'] ?? []);
+    }
+
+    /**
+     * The tile layers a tileset's pieces, terrain kinds and stacks write, as
+     * the Engine reads the tileset, in the order they first appear; none
+     * while the tileset cannot be read.
+     *
+     * @param array<string, mixed> $tileset
+     * @return list<string>
+     */
+    private static function listTilesetTileLayers(array $tileset): array
+    {
+        try {
+            $read = \Ichiloto\Engine\Rendering\Tilesets\Tileset::fromArray('edited', $tileset);
+        } catch (InvalidArgumentException) {
+            return [];
+        }
+        $layers = [];
+        foreach ($read->getPlacements(true) as $piece) {
+            array_push($layers, ...$read->getPieceTileLayers($piece));
+        }
+
+        return array_values(array_unique([...$layers, ...$read->getStackLayers()]));
     }
 
     public function getSubjectMap(): ?ProjectMap
@@ -924,6 +956,15 @@ final class ReferenceCatalog
             $labels = [];
             foreach ($this->loadFieldResourceNames() as $id => $name) {
                 $labels[(string) $id] = sprintf('%s (%s)', $name, $id);
+            }
+
+            return $labels;
+        }
+
+        if ($category === SkitPlaybackFields::REFERENCE_CATEGORY) {
+            $labels = [];
+            foreach ($this->listSkitTitles() as $id => $title) {
+                $labels[$id] = $title !== '' && $title !== $id ? sprintf('%s (%s)', $title, $id) : $id;
             }
 
             return $labels;
@@ -1589,6 +1630,25 @@ final class ReferenceCatalog
      * @param string $category The category key.
      * @return string[] The values.
      */
+    /**
+     * The project's Skits' titles, keyed by stable id, in the order the
+     * Skit category lists them.
+     *
+     * @return array<string, string>
+     */
+    private function listSkitTitles(): array
+    {
+        $titles = [];
+        foreach ($this->workspace->getRecordDatabase(SkitPlaybackFields::REFERENCE_CATEGORY)?->getRecords() ?? [] as $record) {
+            $id = $record->get('id');
+            if (is_string($id) && trim($id) !== '') {
+                $titles[$id] = trim(strval($record->get('title') ?? ''));
+            }
+        }
+
+        return $titles;
+    }
+
     private function recordValues(string $category): array
     {
         $database = $this->workspace->getRecordDatabase($category);

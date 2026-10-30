@@ -2241,15 +2241,17 @@ final class EditorSession
     }
 
     /**
-     * Sets a tile layer's offset across and down in field cells (each -0.5,
-     * 0 or 0.5) and the gameplay layer its tiles move with, or none, as one
-     * undo step, validated as the Engine reads them.
+     * Sets a tile layer's offset across and down in field cells (any
+     * fraction within the Engine's limit), or null to inherit the one its
+     * tileset gives it, and the gameplay layer its tiles move with, or none,
+     * as one undo step, validated as the Engine reads them. The map holds an
+     * offset only where it differs from the inherited one.
      *
-     * @param array<int, mixed> $offset
+     * @param array<int, mixed>|null $offset
      * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
      * @throws SessionRefusal When the map is unknown, stale or the Engine would refuse the settings.
      */
-    public function setTileLayerSettings(string $mapId, int $revision, string $name, array $offset, ?string $movesWith): array
+    public function setTileLayerSettings(string $mapId, int $revision, string $name, ?array $offset, ?string $movesWith): array
     {
         return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
             LayerEditor::setTileLayerSettings($map, $name, $offset, $movesWith));

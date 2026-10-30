@@ -17,6 +17,7 @@ use Ichiloto\Editor\Database\KnowledgeCommandShape;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Engine\Core\WorldConditionExclusion;
@@ -145,6 +146,9 @@ class ProjectValidator
    */
   protected array $troopHabitats = [];
 
+  /** @var array<string, string> The map each Skit that names one plays on, by Skit id, read once per validation. */
+  protected array $skitMaps = [];
+
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
   protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
 
@@ -161,6 +165,7 @@ class ProjectValidator
     $this->troopHabitats = $this->readTroopHabitats($workspace);
     $this->knowledgeCatalogData = null;
     $this->commonEventScripts = $this->eventScriptsById($workspace);
+    $this->skitMaps = $this->readSkitMaps($workspace);
     $this->cinematicCommonEventIds = [];
     $this->legacyCommonEventIds = [];
 
@@ -3591,7 +3596,7 @@ class ProjectValidator
    */
   protected const array DIRECT_REFERENCE_CATEGORIES = [
     'quests', 'maps', 'troops', 'inventory', 'bgm', 'sfx', 'common_events', 'cinematics', 'summons',
-    'animations', 'effects', 'actors', 'income_schedules',
+    'animations', 'effects', 'actors', 'income_schedules', SkitPlaybackFields::REFERENCE_CATEGORY,
   ];
 
   /**
@@ -3709,6 +3714,55 @@ class ProjectValidator
   }
 
   /**
+   * Checks a command that plays a selected Skit: it must name a current
+   * Skit, and one gated to a map must be played on that map, as the runtime
+   * fails a Skit its map gate refuses. Story conditions are runtime state,
+   * so they are not judged here.
+   *
+   * @param array<string, mixed> $command
+   * @param array<string, string[]> $known
+   * @return Issue[]
+   */
+  protected function checkSkitPlayback(array $command, string $where, array $known, ScriptMapState $map): array
+  {
+    $skit = trim(strval($command[SkitPlaybackFields::getReferenceField()] ?? ''));
+    if ($skit === '') {
+      return [Issue::error($where, 'It plays no skit.', 'Choose a skit from the picker.')];
+    }
+    $issues = $this->checkReference($skit, SkitPlaybackFields::REFERENCE_CATEGORY, 'skit', $where, $known);
+    $gate = $this->skitMaps[$skit] ?? null;
+    if ($issues === [] && $gate !== null && $map->mapIds !== null && ! in_array($gate, $map->mapIds, true)) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('It plays the skit "%s", which plays only on the map "%s", from %s.', $skit, $gate, $map->description),
+        'The runtime fails this command. Play the skit on its map, or change the skit\'s Where.'
+      );
+    }
+
+    return $issues;
+  }
+
+  /**
+   * The map each Skit that names one plays on, by Skit id.
+   *
+   * @return array<string, string>
+   */
+  protected function readSkitMaps(ProjectWorkspace $workspace): array
+  {
+    $maps = [];
+    foreach ($workspace->getRecordDatabase(SkitPlaybackFields::REFERENCE_CATEGORY)?->getRecords() ?? [] as $record) {
+      $skit = (array) $record->toArray();
+      $id = trim(strval($skit['id'] ?? ''));
+      $map = trim(strval($skit['where'] ?? ''));
+      if ($id !== '' && $map !== '') {
+        $maps[$id] = $map;
+      }
+    }
+
+    return $maps;
+  }
+
+  /**
    * Checks the skits' map and conditions.
    *
    * @param ProjectWorkspace $workspace The project.
@@ -3745,6 +3799,13 @@ class ProjectValidator
       }
 
       $issues = [...$issues, ...$this->checkConditions((array) ($skit['conditions'] ?? []), $where, $known)];
+      try {
+        foreach (SkitPlaybackFields::readSkitPlayback($skit, ucfirst($where))['sounds'] as $cue => $sound) {
+          $issues = [...$issues, ...$this->checkReference($sound, 'sfx', sprintf('%s sound', $cue), $where, $known)];
+        }
+      } catch (InvalidArgumentException $exception) {
+        $issues[] = Issue::error($where, $exception->getMessage(), 'The runtime skips this skit. Choose its trigger and sounds from their pickers.');
+      }
       foreach ($skit['beats'] ?? [] as $index => $beat) {
         if (! is_array($beat)) {
           $issues[] = Issue::error($where, 'Each skit beat must be a data record.');
@@ -3921,6 +3982,10 @@ class ProjectValidator
           ...$issues,
           ...$this->checkReference(strval($command[$key] ?? ''), $category, $noun, $where, $known),
         ];
+      }
+
+      if ($type === SkitPlaybackFields::getCommandType()) {
+        $issues = [...$issues, ...$this->checkSkitPlayback($command, $where, $known, $context['map'])];
       }
 
       if ($type === 'field_animation') {

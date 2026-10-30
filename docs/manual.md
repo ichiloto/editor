@@ -576,6 +576,21 @@ autotile is. The game hides a character in the deepest thicket among the
 tiles its cell shows. The terminal, collision, movement and encounters are
 unchanged, and the terminal Database neither shows nor drops thickets.
 
+### Layer Offsets
+
+Some art draws away from the cell it stands for, such as a candle on a
+table top, a window up a wall or a counter's front face. The GUI editor's
+Database > Tilesets gives a tile layer its drawing offset under **Layer
+Offsets** (`layerOffsets`): the **Tile Layer**, chosen among the tile layers
+the tileset's pieces, terrain kinds and stacks write, and its **Offset**
+across and down in field cells, typed as `0, -1/3` or `0, 0.5`. Each number
+is any fraction from -0.5 to 0.5; a third of a row is typed exactly as
+`-1/3`. Every map drawn with the tileset draws that layer at that offset
+unless the map gives the layer one of its own (see
+[Map Graphics](#map-graphics)). Collision, terminal cells, events and saves stay
+where they are. The Engine reads each offset before anything is saved, and the
+terminal Database neither shows nor drops them.
+
 ### Stacked Pieces
 
 Some decorations overlap their neighbours, such as the peaks over a world
@@ -668,6 +683,18 @@ intact:
   pasting a block on that gameplay layer carries its tiles cell for cell, in
   the same undo step, so a moved chest or room keeps its art. Other tile
   layers, and blocks on the event layer, leave tiles where they are.
+
+- Each tile layer draws at the offset its tileset gives it under
+  [Layer Offsets](#layer-offsets), or none. The GUI editor's layer settings
+  set a map's own offset for the layer (`'tileLayers' => ['decor' => ['offset'
+  => [0, -0.5]]]`), any fraction from -0.5 to 0.5 field cells. The map holds an
+  offset only where it differs from the one the layer inherits: choosing the
+  inherited offset again, or inheriting it (`tileLayer.settings` with `offset`
+  `null`), removes the map's own, and a zero over a tileset's offset is kept as
+  the map's. The session's map reply gives each layer the `offset` it draws
+  at, its `inheritedOffset`, whether the map `overridesTileset`, and the
+  map's `offsetLimit`. Setting an offset is refused while the map's tileset
+  cannot load, since what the layer inherits is then unknown.
 
 - Resizing the map crops or pads every tile layer with empty tiles (`0`) in the
   same undo step and save as the terminal layers. A resized tile layer is
@@ -2472,7 +2499,8 @@ scans the directory and keys skits by their `id` field, not by filename, so
 renaming an `Id` in the editor does not require renaming the file.
 
 Fields: `Id`, `Title`, `Where (map id)`, `Backdrop`, `Conditions`,
-`Speed (chars/sec)`, then each beat's `Actor` or `Non-actor Speaker`, its `Emotion` and its `Text`.
+`Speed (chars/sec)`, `Trigger`, `Open Sound`, `Close Sound`, then each beat's
+`Actor` or `Non-actor Speaker`, its `Emotion` and its `Text`.
 The emotion is chosen among the speaker's emotions (see
 [Dialogue Portraits and Emotions](#dialogue-portraits-and-emotions)).
 
@@ -2484,7 +2512,23 @@ The emotion is chosen among the speaker's emotions (see
   region's. Validation warns where a skit would show none.
 - `Conditions` is the shared world-condition line described under
   [Condition Lines](#condition-lines).
+- `Trigger` is `prompt` (the default) for a skit the field prompt offers, or
+  `script` for a story conversation that only a `play_skit` command plays.
+  The values and the default are the Engine's.
+- `Open Sound` and `Close Sound` are optional sound effects, chosen from the
+  project's SFX: one plays when the skit opens, the other when it closes.
+  Clearing both removes `sounds`.
 - `Shift+O` and `Shift+X` add and remove beats.
+
+A `play_skit` command in an event script or cinematic plays one skit, chosen
+in its `Skit` picker among the project's skits, listed as `Title (id)` and
+stored by id. The skit's `Where` and `Conditions` still apply when a script
+plays it, and a skit already seen completes at once. Validation reports a
+`play_skit` that names no skit or one the project does not have, and one
+that plays a skit gated to another map than the one the script is on. It also
+reports a skit trigger or sound cue the Engine would refuse, and a sound the
+project has no file for. Saving refuses a skit the Engine would skip, and a
+change its source cannot hold, before anything is written.
 
 `Shift+A` creates a new skit as its own file, named after its generated id.
 
@@ -2558,6 +2602,7 @@ Supported command types, matching the engine's interpreter:
 | `give_gold` | Amount |
 | `play_sound` | Sound |
 | `play_music` | Music |
+| `play_skit` | Skit (picked from Skits) |
 | `accept_quest` | Quest Id |
 | `common_event` | Event Script |
 | `knowledge` | Operation, Subject, Report, Replacement Report, Observation, Outcome, Source, Confidence |

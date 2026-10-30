@@ -217,14 +217,14 @@ final class LayerEditor
     }
 
     /**
-     * Sets a tile layer's offset across and down, in field cells, and the
-     * gameplay layer its tiles move with, or none.
+     * Sets a tile layer's offset across and down, in field cells, or null to
+     * inherit its tileset's, and the gameplay layer its tiles move with, or none.
      *
-     * @param array<int, mixed> $offset
+     * @param array<int, mixed>|null $offset
      * @return LayerEdit
      * @throws MapSourceRefusal When there is no such layer, or the Engine would refuse the settings.
      */
-    public static function setTileLayerSettings(ProjectMap $map, string $name, array $offset, ?string $movesWith): array
+    public static function setTileLayerSettings(ProjectMap $map, string $name, ?array $offset, ?string $movesWith): array
     {
         return self::describeEdit(self::record($map, 'Tile layer settings',
             static fn() => $map->setTileLayerSettings($name, $offset, $movesWith)), $name);

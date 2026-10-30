@@ -3832,6 +3832,10 @@ final class ProjectRecordDatabase
             return intval($match[1]) - 1;
         }
 
+        if ($field->codec === RecordFieldCodec::LAYER_OFFSET) {
+            return LayerOffsetCodec::decode($trimmed, $field->label);
+        }
+
         if ($field->codec === RecordFieldCodec::POINT) {
             if ($trimmed === '' && $field->removeWhenEmpty) {
                 return null;
@@ -4097,6 +4101,7 @@ final class ProjectRecordDatabase
             RecordFieldCodec::POINT => is_array($value)
                 ? implode(', ', array_map(strval(...), array_values($value)))
                 : ProjectRecord::stringify($value),
+            RecordFieldCodec::LAYER_OFFSET => LayerOffsetCodec::encode($value),
             RecordFieldCodec::TROOP_MEMBER => is_int($value) ? sprintf('Member %d', $value + 1) : 'None',
             RecordFieldCodec::BATTLE_TEST => is_array($value)
                 ? (string) json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)

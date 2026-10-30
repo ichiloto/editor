@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
@@ -287,6 +288,10 @@ trait CutsceneValidation
 
             if ($type === 'field_animation') {
                 $issues = [...$issues, ...$this->checkFieldAnimationReference($command, $where, $known)];
+            }
+
+            if ($type === SkitPlaybackFields::getCommandType()) {
+                $issues = [...$issues, ...$this->checkSkitPlayback($command, $where, $known, $context['map'])];
             }
 
             if ($type === 'checkpoint') {
