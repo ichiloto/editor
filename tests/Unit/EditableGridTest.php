@@ -2,8 +2,12 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\EditableGrid;
+use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\MapGridSource;
+use Ichiloto\Engine\Field\MapLayer;
+use Ichiloto\Engine\IO\Console\TerminalText;
 
 it('keys repeated cells by the exact glyph prefix and suffix without merging styled identities', function () {
     $text = "<fg=red>00</><fg=blue>0</><fg=red>x</>\n\033[31m00\033[0m<fg=red>0</>\n<fg=red><options=bold>0</></>";
@@ -100,4 +104,63 @@ it('holds a multi-map workload of repeated editable cells within the unchanged 1
         ->and($result['independent'])->toBeTrue()
         ->and($result['limit'])->toBe('128M')
         ->and($result['peak'])->toBeLessThan(128 * 1024 * 1024);
+});
+
+/** The glyphs the Engine reads from one written row, without their colours. */
+function readEngineRowGlyphs(string $row): array
+{
+    return array_map(TerminalText::stripAnsi(...), new MapLayer('literal', 0, false, 'synthetic', $row)->getRowGlyphs(0));
+}
+
+it('writes a styled literal delimiter or backslash beside styled neighbours so the Engine and a reload read the same cells', function (string $glyph, bool $legacyTags) {
+    $text = "<fg=green>abc</>d\n<fg=red>untouched \\</> <\n<fg=blue>xyz</>";
+    $source = MapGridSource::buildSource($text, 'LITERALS');
+    $grid = new EditableGrid($text, $source, $legacyTags);
+    $untouched = $grid->getLines();
+    $grid->cells[0][1] = ['symbol' => $glyph, 'prefix' => '<fg=red>', 'suffix' => '</>'];
+    $grid->cells[0][3] = ['symbol' => $glyph, 'prefix' => '', 'suffix' => ''];
+    $grid->cells[2][2] = ['symbol' => $glyph, 'prefix' => '<fg=blue>', 'suffix' => '</>'];
+
+    $written = $grid->getSource();
+    $rows = explode("\n", MapGridSource::parseSource($written, 'synthetic'));
+    expect(readEngineRowGlyphs($rows[0]))->toBe(['a', $glyph, 'c', $glyph])
+        ->and(readEngineRowGlyphs($rows[2]))->toBe(['x', 'y', $glyph])
+        // The row nobody edited keeps its authored bytes, its own backslash and less-than included.
+        ->and($rows[1])->toBe($untouched[1])
+        ->and($written)->not->toContain("\0");
+
+    // Reading the written rows back gives the painted cells, and their colours stay distinct.
+    $reloaded = new EditableGrid(implode("\n", $rows), $written, $legacyTags);
+    expect($reloaded->getSymbols()[0])->toBe(['a', $glyph, 'c', $glyph])
+        ->and($reloaded->getSymbols()[2])->toBe(['x', 'y', $glyph])
+        ->and(ProjectMap::getInnermostForeground($reloaded->cells[0][1]['prefix']))->toBe('red')
+        ->and(ProjectMap::getInnermostForeground($reloaded->cells[0][3]['prefix']))->toBeNull()
+        ->and(ProjectMap::getInnermostForeground($reloaded->cells[2][2]['prefix']))->toBe('blue')
+        ->and($reloaded->getSource())->toBe($written);
+
+    // A further edit of the reloaded row writes the same cells again.
+    $reloaded->cells[0][0] = ['symbol' => 'q', 'prefix' => '<fg=green>', 'suffix' => '</>'];
+    expect(readEngineRowGlyphs(explode("\n", MapGridSource::parseSource($reloaded->getSource(), 'synthetic'))[0]))
+        ->toBe(['q', $glyph, 'c', $glyph]);
+})->with(['less-than' => '<', 'greater-than' => '>', 'backslash' => '\\'])->with(['layered' => false, 'legacy tags' => true]);
+
+it('keeps separately painted literal cells from joining into a formatter tag or escaping one another', function () {
+    $glyphs = ['<', 'i', 'n', 'f', 'o', '>', '\\', '<', 'f', 'g', '=', 'r', 'e', 'd', '>'];
+    $text = str_repeat('.', count($glyphs));
+    $grid = new EditableGrid($text, MapGridSource::buildSource($text, 'LITERALS'));
+    foreach ($glyphs as $x => $glyph) {
+        $grid->cells[0][$x] = ['symbol' => $glyph, 'prefix' => '', 'suffix' => ''];
+    }
+    $row = MapGridSource::parseSource($grid->getSource(), 'synthetic');
+    expect(readEngineRowGlyphs($row))->toBe($glyphs)
+        ->and(new EditableGrid($row)->getSymbols()[0])->toBe($glyphs)
+        ->and(new EditableGrid($row, legacyTags: true)->getSymbols()[0])->toBe($glyphs);
+});
+
+it('refuses to write a literal delimiter in a style the formatter cannot compose, writing nothing', function () {
+    $text = 'ab';
+    $source = MapGridSource::buildSource($text, 'LITERALS');
+    $grid = new EditableGrid($text, $source);
+    $grid->cells[0][0] = ['symbol' => '<', 'prefix' => '<not-a-style>', 'suffix' => '</>'];
+    expect(fn() => $grid->getSource())->toThrow(MapSourceRefusal::class, 'Nothing was written.');
 });

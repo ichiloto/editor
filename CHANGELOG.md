@@ -79,9 +79,15 @@
 
 - The dialogue catalogue's `skits` key: Dialogue Portraits and Speaker Names refuse a catalogue that still has it
   and name `ichiloto upgrade` (format 4), which moves each skit background to its skit's `Backdrop`.
+- The refusal of `<` as a stamped piece's cell glyph (`tilesets.setPieceGlyph`). A piece cell now takes `<`, `>`
+  and `\` like any other glyph; formatter markup or several characters offered as one glyph are still refused.
 
 ### Fixed
 
+- A coloured `\` painted on a map, or set as a piece cell, no longer escapes its closing colour tag, and painted
+  `<` and `>` cells no longer join their neighbours into a formatter tag. The Editor writes those cells through
+  the Engine's `TerminalText::composeSourceCell()`, so the game, a reload and the terminal canvas read the glyph
+  painted, in its column and colour. Rows nobody edited keep their authored bytes.
 - Save relocation planning and workspace reachability read the current tileset catalogue, including a newly staged tileset in the same atomic transaction. Saved baseline reachability remains separate; missing or invalid current dependencies still refuse.
 
 - Directory records identified by filename, including tilesets and event scripts, now honor explicit identities when creating and duplicating records. Unsafe or occupied names are refused, and generated names remain unique across unsaved records.
