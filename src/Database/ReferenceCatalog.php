@@ -628,7 +628,8 @@ final class ReferenceCatalog
      * what the field lives in. `world_object_attachments`: the attachments declared by the resource of the world
      * object a subject reference (`at`) names, on the subject map; none until it names an object that has some.
      * `terrain_grounds`: the ground kinds of the tileset a terrain kind belongs to, those that stand on nothing,
-     * other than the kind itself. `tileset_whole_pieces`: the pieces of the tileset a place icon belongs to that are
+     * other than the kind itself. `mastery_within_branches`: the tree's branches other than the branch choosing, any
+     * of which it may grow within once it shares that branch's region. `tileset_whole_pieces`: the pieces of the tileset a place icon belongs to that are
      * stamped whole, any of which can show a place type. `tileset_thickets`: the thickets of the tileset a terrain
      * kind belongs to.
      *
@@ -651,6 +652,12 @@ final class ReferenceCatalog
             $pieces = is_array($owner['pieces'] ?? null) ? $owner['pieces'] : [];
             return array_values(array_map(strval(...), array_keys(array_filter($pieces, static fn(mixed $piece): bool
                 => is_array($piece) && ($piece['connects'] ?? null) === null))));
+        }
+        if ($source === MasteryFields::WITHIN_CHOICES) {
+            // Every branch of the tree other than the one choosing.
+            return array_values(array_filter(array_map(static fn(ProjectRecord $record): string => strval($record->get('id')),
+                $this->workspace->getRecordDatabase(MasteryFields::BRANCHES)?->getRecords() ?? []),
+                static fn(string $id): bool => $id !== '' && $id !== ($holder['id'] ?? null)));
         }
         if ($source === 'tileset_thickets') {
             $thickets = is_array($owner['thickets'] ?? null) ? $owner['thickets'] : [];
