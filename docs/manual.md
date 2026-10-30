@@ -54,17 +54,17 @@ is what the code draws rather than a sketch of it:
  ┌─Assets [Focus]───────────────┐ ┌─Canvas─────────────────────┐ ┌─Inspector──────────────────────┐
  │ Maps                         │ │ Preview: test-map          │ │   Name: Test Map               │
  │ > test-map                   │ │ Test Map |  | 12 x 5 | vie │ │   Region:                      │
+ │                              │ │ ############               │ │   Role: Not set                │
+ │                              │ │ #  ~~~     #               │ │   Place Type: Not set          │
+ │                              │ │ #          #               │ │   Skit Backdrop: None: skits   │
+ │                              │ │ #          #               │ │     here show no backdrop      │
  │                              │ │ ############               │ │   Kind: Not set                │
- │                              │ │ #  ~~~     #               │ │   Description: A tiny fixture  │
- │                              │ │ #          #               │ │                map.            │
- │                              │ │ #          #               │ │   Size                         │
- │                              │ │ ############               │ │     X: 12                      │
+ │                              │ │                            │ │   Description: A tiny fixture  │
+ │                              │ │                            │ │                map.            │
+ │                              │ │                            │ │   Size                         │
+ │                              │ │                            │ │     X: 12                      │
  │                              │ │                            │ │     Y: 5                       │
  │                              │ │                            │ │   Events · 1                   │
- │                              │ │                            │ │   Triggers · 0                 │
- │                              │ │                            │ │   Audio                        │
- │                              │ │                            │ │     Background Music: (None)   │
- │                              │ │                            │ │     Music Variants · None      │
  └─/:Filter  Del:Delete─────────┘ └─i:Paint L:Layer ?:Help─────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
