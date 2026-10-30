@@ -46,6 +46,7 @@ use Ichiloto\Engine\Field\SkitSpeaker;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
@@ -3583,6 +3584,47 @@ class ProjectValidator
   }
 
   /**
+   * The reference categories the validator's own checks name directly.
+   * Registered script commands add theirs through
+   * {@see collectKnownReferences()}, so a new command reference kind never
+   * needs listing here.
+   */
+  protected const array DIRECT_REFERENCE_CATEGORIES = [
+    'quests', 'maps', 'troops', 'inventory', 'bgm', 'sfx', 'common_events', 'cinematics', 'summons',
+    'animations', 'effects', 'actors', 'income_schedules',
+  ];
+
+  /**
+   * What the project defines, for every category a reference check may
+   * consult: the validator's direct categories and every category a
+   * registered command's reference resolves to. Every reference check reads
+   * this one map, so no check knows fewer kinds than the commands it walks.
+   *
+   * @return array<string, string[]> The values, by ReferenceCatalog category.
+   */
+  protected function collectKnownReferences(ProjectWorkspace $workspace): array
+  {
+    $categories = self::DIRECT_REFERENCE_CATEGORIES;
+
+    foreach (ScriptCommandReference::cases() as $reference) {
+      $category = ProjectScriptCommands::getReferenceCategory($reference);
+
+      if ($category !== null) {
+        $categories[] = $category;
+      }
+    }
+
+    $catalog = new ReferenceCatalog($workspace);
+    $known = [];
+
+    foreach (array_unique($categories) as $category) {
+      $known[$category] = $catalog->valuesFor($category);
+    }
+
+    return $known;
+  }
+
+  /**
    * Checks everything that names another resource.
    *
    * The editor's pickers keep new references honest, but a project also
@@ -3596,21 +3638,7 @@ class ProjectValidator
    */
   protected function checkReferences(ProjectWorkspace $workspace): array
   {
-    $catalog = new ReferenceCatalog($workspace);
-    $known = [
-      'quests' => $catalog->valuesFor('quests'),
-      'maps' => $catalog->valuesFor('maps'),
-      'troops' => $catalog->valuesFor('troops'),
-      'inventory' => $catalog->valuesFor('inventory'),
-      'bgm' => $catalog->valuesFor('bgm'),
-      'sfx' => $catalog->valuesFor('sfx'),
-      'common_events' => $catalog->valuesFor('common_events'),
-      'cinematics' => $catalog->valuesFor('cinematics'),
-      'animations' => $catalog->valuesFor('animations'),
-      'effects' => $catalog->valuesFor('effects'),
-      'actors' => $catalog->valuesFor('actors'),
-      'income_schedules' => $catalog->valuesFor('income_schedules'),
-    ];
+    $known = $this->collectKnownReferences($workspace);
 
     return [
       ...$this->checkConfigReferences($workspace, $known),
