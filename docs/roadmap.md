@@ -1283,6 +1283,21 @@ GUI's complete offline release suite passes 140 tests. These checks do not
 close native visual acceptance, other platforms, or the separately assigned
 retained-underlay terminal/collision restoration correction.
 
+October 30 ordinary action cut-ins follow Engine e3bede2: an effect declaring
+the shared stage is admitted by its caller-owned stage or by battle, chosen by
+its consumer through one Editor rule (`EffectPreviewContext`): battle when an
+animation binds it as caster or target effect. Saving accepts a stage either
+consumer admits; validation reports each consumer's refusal at that consumer.
+The Terminal preview's `B` moves a staged effect between battle and its owned
+stage. The host's `cutscenes.timeline` reply adds `stageContext` (`battle`,
+`stage` or null) and keeps `ownedStage` true only for the owned-stage consumer;
+`cutscenes.preview` serves the stage canvas compiled with that consumer's
+admission. Remaining GUI work: route a battle-bound staged effect to the stage
+canvas when the battle test party cannot play it (today the GUI falls back to
+the field scene, which refuses stages), offer a stage-context choice beside
+the battle/field routing, and show the stage lanes beside the battle preview's
+source/target phases. Native visual acceptance of a cut-in remains open.
+
 **A cutscene is a pair, and the pair is one asset.** `CutsceneAsset` reads
 `<id>.data.php` with `<id>.script.php` or `<id>.timeline.php`, knows which
 keys belong to which file, is dirty by content, and saves atomically:

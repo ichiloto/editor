@@ -124,13 +124,8 @@ final class EffectValidator
             $uses[$effect][$battle ? 'battle' : 'field'][] = $where;
         };
 
-        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
-            foreach (['sourceEffect', 'targetEffect'] as $field) {
-                $effect = $animation->get($field);
-                if (is_string($effect) && $effect !== '') {
-                    $use($effect, true, sprintf('assets/Data/animations.php: %s %s', strval($animation->get('name')), $field));
-                }
-            }
+        foreach (self::findBattleUses($workspace) as $effect => $places) {
+            $uses[$effect]['battle'] = $places;
         }
 
         foreach (self::findStageUses($workspace, $issues) as $effect => $places) {
@@ -174,6 +169,28 @@ final class EffectValidator
             foreach ($tileset->pieces as $piece) {
                 if ($piece->effect !== null) {
                     $use($piece->effect, false, sprintf('assets/%s/%s.php piece %s', Tileset::DIRECTORY, $id, $piece->id));
+                }
+            }
+        }
+
+        return $uses;
+    }
+
+    /**
+     * Returns where battle plays each effect: the battle animations that
+     * bind it as their source or target effect, which is also how battle
+     * selects an ordinary action's staged cut-in and its impact.
+     *
+     * @return array<string, list<string>> Effect id to the animation fields that bind it.
+     */
+    public static function findBattleUses(ProjectWorkspace $workspace): array
+    {
+        $uses = [];
+        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
+            foreach (['sourceEffect', 'targetEffect'] as $field) {
+                $effect = $animation->get($field);
+                if (is_string($effect) && $effect !== '') {
+                    $uses[$effect][] = sprintf('assets/Data/animations.php: %s %s', strval($animation->get('name')), $field);
                 }
             }
         }

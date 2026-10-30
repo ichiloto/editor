@@ -4,6 +4,13 @@
 
 ### Added
 
+- Ordinary battle action cut-ins, as Engine e3bede2 plays them: an effect declaring the shared cinematic stage is
+  authored with the same camera, cover, subject and stage image rows, selectors and undo as a Summon stage, and
+  bound through an animation's existing Caster Effect and Target Effect pickers. Battle or the caller owning the
+  stage admits it, chosen by the effect's consumer: battle when an animation binds it. Saving accepts a stage
+  either consumer admits, validation reports a refusal at the consumer that names it, and the GUI host's
+  `cutscenes.timeline` reply adds `stageContext`. The Terminal preview's `B` now moves a staged effect between
+  battle and its owned stage, where it previously stayed on the owned stage.
 - Skit backdrops that follow the place, through the Engine's `SkitBackdrop`: a map's `Skit Backdrop` Inspector
   row (`skitBackdrop`), a Regions Database page over the Engine's `RegionCatalog` (`assets/Data/regions.php`, one
   record per region name with its skit backdrop) and a skit's optional `Backdrop` (`backdrop`), each chosen with
