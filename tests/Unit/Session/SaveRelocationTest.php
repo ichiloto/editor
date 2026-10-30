@@ -314,13 +314,20 @@ it('relocates outside newly added bound areas even when the old origin lies insi
     expect(sourceHashTree($root))->toBe($before);
 });
 
-it('permits a relocation to stay in the same unchanged historical event', function () {
+it('lands a save from inside an unchanged event outside every event, as the Engine requires of a landing', function () {
     $root = savedSyntheticBoundStoryAreaProject();
     $session = EditorSession::open($root);
     $map = getPhysicalOccupancyMap($session);
+    // The saved event's own floor is the nearest plain floor; the landing still leaves the event.
     $map->setTileSymbol(1, 2, '#');
     $plan = SaveRelocationPlanner::plan($map, $root);
-    expect($plan->relocations)->toBe([['map' => 'home', 'cells' => [[1, 2]], 'to' => [1, 1]]]);
+    $area = \Ichiloto\Engine\Core\CellArea::fromCells([[1, 1], [2, 1], [1, 2]]);
+    expect($plan)->not->toBeNull()
+        ->and(array_merge(...array_column($plan->relocations, 'cells')))->toBe([[1, 2]]);
+    foreach ($plan->relocations as $move) {
+        expect($area->containsCell(...$move['to']))->toBeFalse()
+            ->and(getPhysicalOccupancyMap($session)->getEventMarkerAt(...$move['to']))->toBeNull();
+    }
 });
 
 it('keeps a newly overlapping event separate from an old event on the same named area', function () {
@@ -345,4 +352,38 @@ it('treats replaced behavior under a reused marker as new event ownership', func
     foreach ($plan->relocations as $move) {
         expect(in_array($move['to'], [[1, 1], [2, 1], [1, 2]], true))->toBeFalse();
     }
+});
+
+/** The fixture with a saved door to town on home's floor at (1, 1). */
+function savedSyntheticTransferProject(): string
+{
+    $root = mapLineRemovalProject();
+    $home = $root . '/assets/Maps/home';
+    file_put_contents($home . '/home.event.php', Ichiloto\Engine\Field\MapGridSource::buildSource("      \n T  W \n      \n D  S \n      ", 'AUTHORED'));
+    file_put_contents($home . '/home.data.php', str_replace("'events' => [", "'events' => [\n    'T' => ['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\TransferPlayerTrigger',"
+        . " 'data' => ['destinationMap' => 'town', 'spawnPoint' => ['x' => 2, 'y' => 1], 'spawnSprite' => ['North']]],", (string) file_get_contents($home . '/home.data.php')));
+
+    return $root;
+}
+
+it('moves no save off a door whose destination changes, since it covers the same ground', function () {
+    $root = savedSyntheticTransferProject();
+    $session = EditorSession::open($root);
+    $map = getPhysicalOccupancyMap($session);
+    $map->setEventField('T', ['data', 'spawnPoint', 'x'], 3);
+    $map->setEventField('T', ['data', 'spawnSprite'], ['South']);
+
+    expect($map->isDirty())->toBeTrue()
+        ->and(SaveRelocationPlanner::plan($map, $root))->toBeNull();
+});
+
+it('moves saves only off the floor a door newly covers when it moves and its destination changes', function () {
+    $root = savedSyntheticTransferProject();
+    $session = EditorSession::open($root);
+    $session->moveEvent('home', $session->readMap('home')['revision'], 'T', 1, 0);
+    getPhysicalOccupancyMap($session)->setEventField('T', ['data', 'spawnPoint', 'x'], 3);
+
+    $relocations = SaveRelocationPlanner::plan(getPhysicalOccupancyMap($session), $root)->relocations;
+    expect(array_merge(...array_column($relocations, 'cells')))->toBe([[2, 1]])
+        ->and(getPhysicalOccupancyMap($session)->getEventMarkerAt(...$relocations[0]['to']))->toBeNull();
 });

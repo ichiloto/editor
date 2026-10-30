@@ -3291,17 +3291,17 @@ in the saved map, a save standing on such a cell would load inside it. That
 includes walkable floor no route reaches today, since an older layout may have
 reached it. A cell is
 taken when it becomes something that blocks movement (furniture, a wall,
-painted collision, trees) or when an NPC is added or moved onto it. Walkable
+painted collision, trees), when an NPC is added or moved onto it, or when an
+event now covers it that did not cover it in the saved map. Walkable
 grass, exits and save points take nothing, and an NPC that stays put moves no
-save. With a save compatibility
+save. A transfer whose destination, spawn or conditions change covers the same
+ground, so it moves no save; only floor a transfer newly covers does. With a save compatibility
 manifest (`assets/Data/save-compatibility.php`), `Ctrl+S` first shows each such
 cell and where saves on it will land: the nearest plain floor the player can
-reach after the edit, found by walking from the cell. NPC cells and painted
-event cells refuse landing. A bound event area permits a move within that same
-event only when the saved source proves the origin already belonged to it.
-New or replaced event behavior, newly covered territory and overlapping new
-events each require landing outside the new event. Map retirement has no
-same-map historical origin and continues to require event-free floor.
+reach after the edit, found by walking from the cell, outside every NPC cell
+and every event, painted or bound to an object or area, as the Engine's save
+compatibility contract requires of a landing. A save standing inside an event
+lands outside it too. Map retirement landings follow the same rule.
 **Save and move saves** writes the map and a `relocations` step that raises
 the manifest's content version by one; **Cancel** saves nothing. The step is
 its own undo: `Ctrl+Z` after the save removes it from the manifest, and undoing

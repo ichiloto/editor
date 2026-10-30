@@ -365,7 +365,9 @@ retirement written in its batch again: each landing, moved by the steps
 written after it (rows inserted in the same batch move it), must still be a
 cell a save can stand on in the maps the batch leaves, or the batch is
 refused. Relocations `changes.commit` writes for the batch's maps go in a
-later step, so they move landed saves as they move any other save.
+later step, so they move landed saves as they move any other save. A map the
+batch retires, into itself or onto another map, gets no relocations of its
+own: its retirement already moves every save made on it.
 
 The Engine reads a step as a migration class or as declared position edits,
 never both. So a batch that registers a class and also changes a map in a

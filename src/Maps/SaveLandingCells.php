@@ -8,17 +8,24 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Core\CellArea;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\NpcPlacement;
+use Ichiloto\Engine\Field\Reachability\ReachabilityEvent;
 use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
 use Ichiloto\Engine\Field\Validation\MapEventResolver;
 
 /**
  * Where a migrated save may stand on one map, as the map holds it: the one
  * rule every save landing the Editor writes into the manifest follows
- * (relocations, map retirements). A save lands on plain floor the player can
- * reach: never off the map, on a cell that blocks movement, on grass, an
- * exit or a save point, on a cell an NPC starts on, or inside an event its
- * own cell was not already in, painted or bound to an object or area, so
- * loading it starts nothing new.
+ * (relocations, map retirements). The Engine's save compatibility contract
+ * freezes each landing in the manifest and requires open floor, free of
+ * events and NPCs and reachable, because loading a save never consults the
+ * mutable map. So a save lands on plain floor the player can reach: never
+ * off the map, on a cell that blocks movement, on grass, an exit or a save
+ * point, on a cell an NPC starts on, or inside any event, painted or bound
+ * to an object or area, so loading it starts nothing.
+ *
+ * It also says which cells an event now covers that the same kind of event
+ * did not cover in the saved map ({@see getNewEventCells()}): a save
+ * standing on such a cell would load inside something new.
  *
  * @package Ichiloto\Editor\Maps
  */
@@ -28,7 +35,8 @@ final class SaveLandingCells
      * @param array<int, array<int, int>> $grid Resolved collision by row then column.
      * @param array<string, true> $npcs NPC start cells by `x,y`.
      * @param array<string, true> $events Event marker cells by `x,y`.
-     * @param list<array{area: CellArea, previous: list<CellArea>}> $areas Current event areas and the matching saved event's areas.
+     * @param list<array{area: CellArea, previous: list<CellArea>}> $areas Current event areas and the saved areas whose
+     *     events a save there would already have stood in ({@see readMap()}).
      */
     private function __construct(
         public readonly string $mapId,
@@ -44,6 +52,8 @@ final class SaveLandingCells
      * Reads the map as it is held, unsaved edits included.
      *
      * @param MapReachabilityReport $report Where the player can reach on this map.
+     * @param list<array<string, mixed>> $savedEvents The map's resolved events as saved on disk: each current event's
+     *     saved counterpart is the same event unchanged, or for an exit any saved exit ({@see isSameOccupant()}).
      */
     public static function readMap(ProjectMap $map, MapReachabilityReport $report, array $savedEvents = []): self
     {
@@ -61,7 +71,7 @@ final class SaveLandingCells
             if (!is_array($event['area'] ?? null)) { continue; }
             $previous = [];
             foreach ($savedEvents as $saved) {
-                if (!is_array($saved) || !is_array($saved['area'] ?? null) || !self::isSameEvent($event, $saved)) { continue; }
+                if (!is_array($saved) || !is_array($saved['area'] ?? null) || !self::isSameOccupant($event, $saved)) { continue; }
                 $previous[] = CellArea::fromArray($saved['area'], 'Saved event area');
             }
             $areas[] = ['area' => CellArea::fromArray($event['area'], 'Event area'), 'previous' => $previous];
@@ -71,16 +81,38 @@ final class SaveLandingCells
             $events, $areas, $report);
     }
 
-    /** A marker identifies its event; its behavior and subject must also remain the same.
-     * Legacy markerless entries qualify only when their exact territory remains unchanged. */
-    private static function isSameEvent(array $current, array $saved): bool
+    /**
+     * Whether a save standing in the saved event already stood in what the
+     * current event is. Exits match any exit: the Engine's reachability reads
+     * every transfer as a cell that takes the player off the map when stepped
+     * onto ({@see ReachabilityEvent::$isExit}), so a changed destination,
+     * spawn or condition changes where the exit leads and nothing about the
+     * ground it covers; only cells an exit newly covers are new. Other events
+     * match only themselves: a marker identifies its event, and its behavior
+     * and subject must also remain the same. Legacy markerless entries qualify
+     * only when their exact territory remains unchanged.
+     */
+    private static function isSameOccupant(array $current, array $saved): bool
     {
+        if (self::isExit($current) && self::isExit($saved)) { return true; }
         if (!isset($current['marker']) && ($current['area'] ?? null) != ($saved['area'] ?? null)) { return false; }
         unset($current['area'], $saved['area']);
         return $current == $saved;
     }
 
-    /** Cells newly covered by each event, preserving event ownership when areas overlap. @return array<string, true> */
+    /** Whether a resolved event takes the player off the map, as the Engine's reachability reads it. */
+    private static function isExit(array $event): bool
+    {
+        return new ReachabilityEvent(CellArea::fromArray($event['area'], 'Event area'), strval($event['class'] ?? ''))->isExit;
+    }
+
+    /**
+     * Cells each event covers that its saved counterpart did not
+     * ({@see isSameOccupant()}), preserving event ownership when areas
+     * overlap: a save standing there would load inside something new.
+     *
+     * @return array<string, true>
+     */
     public function getNewEventCells(): array
     {
         $cells = [];
@@ -122,23 +154,14 @@ final class SaveLandingCells
             && ! CollisionType::from($this->grid[$y][$x])->blocksMovement();
     }
 
-    /**
-     * Whether a save may land on the cell.
-     *
-     * @param array{int, int}|null $from The cell in the saved map, whose matching historical events it may stay
-     *     inside; null for a save arriving from another map. Without saved evidence all event areas refuse landing.
-     */
-    public function canLand(int $x, int $y, ?array $from = null): bool
+    /** Whether a save may land on the cell. */
+    public function canLand(int $x, int $y): bool
     {
-        return $this->findLandingRefusal($x, $y, $from) === null;
+        return $this->findLandingRefusal($x, $y) === null;
     }
 
-    /**
-     * Says why a save may not land on the cell, or null when it may.
-     *
-     * @param array{int, int}|null $from As for {@see canLand()}.
-     */
-    public function findLandingRefusal(int $x, int $y, ?array $from = null): ?string
+    /** Says why a save may not land on the cell, or null when it may. */
+    public function findLandingRefusal(int $x, int $y): ?string
     {
         $type = $this->grid[$y][$x] ?? null;
         if ($type === null) {
@@ -154,8 +177,7 @@ final class SaveLandingCells
         if ($collision !== CollisionType::NONE) {
             return sprintf('it is not plain floor (%s)', strtolower(str_replace('_', ' ', $collision->name)));
         }
-        if (isset($this->events["{$x},{$y}"]) || array_any($this->areas, static fn(array $entry): bool => $entry['area']->containsCell($x, $y)
-            && ($from === null || !array_any($entry['previous'], static fn(CellArea $area): bool => $area->containsCell(...$from))))) {
+        if (isset($this->events["{$x},{$y}"]) || array_any($this->areas, static fn(array $entry): bool => $entry['area']->containsCell($x, $y))) {
             return 'an event is there';
         }
         if (! $this->report->isReachable($x, $y)) {

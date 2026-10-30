@@ -6829,6 +6829,40 @@ final class EditorSession
     }
 
     /**
+     * The maps a change set retires, by the retirements it wrote that the
+     * manifest still declares (an undone one is gone). A retirement moves
+     * every save made on its map before the step, a map retired into itself
+     * included, onto landings {@see findRetirementRefusal()} judges on the
+     * maps the change set leaves, so those maps need no relocations of their
+     * own: a later relocation step would plan cells of the old layout for
+     * saves that already stand on the landings.
+     *
+     * @param array{retirements?: list<array{from: int, map: string}>} $changes
+     * @return list<string>
+     */
+    private function listRetiredMaps(array $changes): array
+    {
+        $retirements = $changes['retirements'] ?? [];
+        if ($retirements === []) {
+            return [];
+        }
+        try {
+            $manifest = PhpDataFile::evaluateIsolated($this->workspace->projectRoot . '/' . SaveManifestStep::PATH, $this->workspace->projectRoot);
+            $retired = [];
+            foreach ($retirements as ['from' => $from, 'map' => $map]) {
+                if (SaveMapRetirement::findRetirement(is_array($manifest) ? $manifest : [], $from, $map) !== null) {
+                    $retired[] = $map;
+                }
+            }
+        } catch (Throwable) {
+            // An unreadable manifest refuses the change set through findRetirementRefusal(); its maps plan as any other.
+            return [];
+        }
+
+        return $retired;
+    }
+
+    /**
      * Why the map retirements a change set wrote no longer land on open
      * floor, once its edits and the steps written after them have moved the
      * maps under them; null when every landing may still be stood on.
@@ -6908,7 +6942,8 @@ final class EditorSession
      * nowhere). Warnings never refuse it.
      * A map retirement the change set wrote is checked again: each landing,
      * moved by the save steps written after it, must still be a cell a save
-     * can stand on in the maps the change set leaves.
+     * can stand on in the maps the change set leaves. A map it retires, into
+     * itself or another map, plans no relocations ({@see listRetiredMaps()}).
      *
      * Everything it left unsaved -- databases, cutscenes, maps and the save
      * relocations its maps need -- is then written as one transaction: every
@@ -6942,10 +6977,12 @@ final class EditorSession
         $outcome = ['maps' => $changed, 'saved' => [], 'written' => [], 'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $reported),
             'blocking' => count($blocking), 'relocated' => [], 'backupFailures' => []];
 
-        // A map the change set made holds no save, though its blank files were written when it was made.
+        // A map the change set made holds no save, though its blank files were written when it was made, and a map it
+        // retires has every save moved off it by the retirement, onto landings checked again below.
         $made = array_values(array_diff(array_keys($this->getMapsById()), array_keys($changes['revisions'])));
+        $unrelocated = [...$made, ...$this->listRetiredMaps($changes)];
         $changedMaps = array_values(array_filter(array_map(fn(string $mapId): ?ProjectMap => $this->getMapsById()[$mapId] ?? null, $changed),
-            static fn(?ProjectMap $map): bool => $map?->isDirty() === true && ! in_array($map->mapId, $made, true)));
+            static fn(?ProjectMap $map): bool => $map?->isDirty() === true && ! in_array($map->mapId, $unrelocated, true)));
         // The change set writes one manifest step for every map that moves saves.
         $relocations = SaveRelocationPlanner::planAll($changedMaps, $this->workspace->projectRoot)?->describeMoves() ?? [];
         $retirementRefusal = $blocking === [] ? $this->findRetirementRefusal($changes) : null;
@@ -6974,7 +7011,7 @@ final class EditorSession
         };
 
         try {
-            $saves = WorkspaceSave::prepareAll($this->workspace, $relocateSaves ? fn(Command $step) => $this->history->record($step) : null, $made);
+            $saves = WorkspaceSave::prepareAll($this->workspace, $relocateSaves ? fn(Command $step) => $this->history->record($step) : null, $unrelocated);
             $written = SaveSet::commit($this->workspace->projectRoot, $saves, $backup);
         } catch (SaveSetAdoptionFailure $partial) {
             // The files are written: the change set is, though the editor's view of it is not current.
