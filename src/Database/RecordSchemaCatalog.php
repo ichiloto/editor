@@ -1770,6 +1770,8 @@ final class RecordSchemaCatalog
                     allowsNone: true, displayDefault: self::SKIT_BACKDROP_NONE),
                 new RecordField('conditions', 'Conditions', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
                 new RecordField('speed', 'Speed (chars/sec)', InputControlType::INTEGER, removeWhenEmpty: true),
+                // How it plays (offered at the field prompt, or selected by a story script) and its lifecycle sounds.
+                ...SkitPlaybackFields::getSkitFields(),
             ],
             labelKey: 'title',
             identityKey: 'id',
@@ -1793,6 +1795,8 @@ final class RecordSchemaCatalog
                 blank: ['actor' => '', 'text' => 'Say something.'],
                 exclusiveFields: [['actor', 'speaker']],
             ),
+            // The Engine skips a Skit whose trigger or sounds it cannot read, so neither is written.
+            saveCheck: static fn(array $payload): ?string => SkitPlaybackFields::checkSkit($payload),
         );
     }
 
@@ -2824,6 +2828,8 @@ final class RecordSchemaCatalog
             'play_music' => [
                 RecordField::reference('music', 'Music', 'bgm'),
             ],
+            // A story conversation, chosen among the project's current Skits by stable id.
+            SkitPlaybackFields::getCommandType() => SkitPlaybackFields::getCommandFields(),
             'accept_quest' => [
                 RecordField::reference('id', 'Quest', 'quests'),
             ],

@@ -358,6 +358,8 @@ final class ReferenceCatalog
             'text_roles' => $this->loadTextRoleIds(),
             'font_assets' => self::getFontAssets($this->workspace->projectRoot),
             'dialogue_identities' => array_column($this->listDialogueIdentities(), 'id'),
+            // play_skit names a Skit by the stable id the Engine keys Skits by, never its title.
+            SkitPlaybackFields::REFERENCE_CATEGORY => array_keys($this->listSkitTitles()),
             default => $this->recordValues($category),
         };
     }
@@ -924,6 +926,15 @@ final class ReferenceCatalog
             $labels = [];
             foreach ($this->loadFieldResourceNames() as $id => $name) {
                 $labels[(string) $id] = sprintf('%s (%s)', $name, $id);
+            }
+
+            return $labels;
+        }
+
+        if ($category === SkitPlaybackFields::REFERENCE_CATEGORY) {
+            $labels = [];
+            foreach ($this->listSkitTitles() as $id => $title) {
+                $labels[$id] = $title !== '' && $title !== $id ? sprintf('%s (%s)', $title, $id) : $id;
             }
 
             return $labels;
@@ -1589,6 +1600,25 @@ final class ReferenceCatalog
      * @param string $category The category key.
      * @return string[] The values.
      */
+    /**
+     * The project's Skits' titles, keyed by stable id, in the order the
+     * Skit category lists them.
+     *
+     * @return array<string, string>
+     */
+    private function listSkitTitles(): array
+    {
+        $titles = [];
+        foreach ($this->workspace->getRecordDatabase(SkitPlaybackFields::REFERENCE_CATEGORY)?->getRecords() ?? [] as $record) {
+            $id = $record->get('id');
+            if (is_string($id) && trim($id) !== '') {
+                $titles[$id] = trim(strval($record->get('title') ?? ''));
+            }
+        }
+
+        return $titles;
+    }
+
     private function recordValues(string $category): array
     {
         $database = $this->workspace->getRecordDatabase($category);

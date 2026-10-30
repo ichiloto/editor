@@ -4,6 +4,14 @@
 
 ### Added
 
+- Story-selected Skits, as Engine 5b3558b plays them through `CinematicCommandSchema::export()['skitPlayback']`: a
+  `play_skit` command in event scripts and cinematics chooses its Skit in a `Skit` picker over the project's Skits,
+  listed as `Title (id)` and stored by stable id, and a Skit's `Trigger` (`prompt` or `script`, the Engine's
+  default `prompt`) and optional `Open Sound` and `Close Sound` (`sounds.open`, `sounds.close`) are chosen from the
+  Engine's values and the project's SFX in the Terminal and GUI editors. Edits are made in the Skit's own source,
+  with undo and redo byte for byte; saving refuses a Skit the Engine would skip and a change its source cannot
+  hold before anything is written. Validation reports a `play_skit` naming no Skit or a missing one, one playing a
+  Skit gated to another map, a trigger or cue the Engine refuses and a cue sound the project has no file for.
 - World-object tiles, as Engine 81c5961 composes them: a world object's **Graphical Tiles** rows (`tiles2d`) choose
   one of the map's tile layers, a cell the object owns and a tile of the map's tileset (the row carries
   `tilePicker` for the palette), and the session's `worldObjects.setTiles` and `worldObjects.unsetTiles` set and
@@ -101,6 +109,7 @@
 
 ### Fixed
 
+- The `skits` reference kind lists Skits by the stable id the Engine keys them by, where it listed their titles.
 - `composer analyse` and a bare `vendor/bin/phpstan analyse` read the Engine named by `ICHILOTO_ENGINE_SRC`, as
   `vendor/bin/pest` does: `phpstan.neon` includes `tests/phpstan-engine.php`, which adds that checkout's source
   when the variable is set. Before, only `-c tests/phpstan-engine.php` read it, and the default run analysed the

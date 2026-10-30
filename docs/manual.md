@@ -2472,7 +2472,8 @@ scans the directory and keys skits by their `id` field, not by filename, so
 renaming an `Id` in the editor does not require renaming the file.
 
 Fields: `Id`, `Title`, `Where (map id)`, `Backdrop`, `Conditions`,
-`Speed (chars/sec)`, then each beat's `Actor` or `Non-actor Speaker`, its `Emotion` and its `Text`.
+`Speed (chars/sec)`, `Trigger`, `Open Sound`, `Close Sound`, then each beat's
+`Actor` or `Non-actor Speaker`, its `Emotion` and its `Text`.
 The emotion is chosen among the speaker's emotions (see
 [Dialogue Portraits and Emotions](#dialogue-portraits-and-emotions)).
 
@@ -2484,7 +2485,23 @@ The emotion is chosen among the speaker's emotions (see
   region's. Validation warns where a skit would show none.
 - `Conditions` is the shared world-condition line described under
   [Condition Lines](#condition-lines).
+- `Trigger` is `prompt` (the default) for a skit the field prompt offers, or
+  `script` for a story conversation that only a `play_skit` command plays.
+  The values and the default are the Engine's.
+- `Open Sound` and `Close Sound` are optional sound effects, chosen from the
+  project's SFX: one plays when the skit opens, the other when it closes.
+  Clearing both removes `sounds`.
 - `Shift+O` and `Shift+X` add and remove beats.
+
+A `play_skit` command in an event script or cinematic plays one skit, chosen
+in its `Skit` picker among the project's skits, listed as `Title (id)` and
+stored by id. The skit's `Where` and `Conditions` still apply when a script
+plays it, and a skit already seen completes at once. Validation reports a
+`play_skit` that names no skit or one the project does not have, and one
+that plays a skit gated to another map than the one the script is on. It also
+reports a skit trigger or sound cue the Engine would refuse, and a sound the
+project has no file for. Saving refuses a skit the Engine would skip, and a
+change its source cannot hold, before anything is written.
 
 `Shift+A` creates a new skit as its own file, named after its generated id.
 
@@ -2558,6 +2575,7 @@ Supported command types, matching the engine's interpreter:
 | `give_gold` | Amount |
 | `play_sound` | Sound |
 | `play_music` | Music |
+| `play_skit` | Skit (picked from Skits) |
 | `accept_quest` | Quest Id |
 | `common_event` | Event Script |
 | `knowledge` | Operation, Subject, Report, Replacement Report, Observation, Outcome, Source, Confidence |
