@@ -11,7 +11,6 @@ use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Battle\Presentation\BattleArenaBindings;
 use Ichiloto\Engine\Battle\Presentation\BattleFooting;
-use Ichiloto\Engine\Battle\Presentation\BattleGround;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use InvalidArgumentException;
@@ -22,14 +21,8 @@ use Throwable;
  * Battle Arenas: the backgrounds graphical battles are fought on and the
  * ground each picture shows, the Engine's {@see BattleArenaBindings} file.
  * An arena's ground top is the far edge battlers may stand on, just below
- * its horizon or walkable edge; its bottom (the near edge) and depth scale
- * default to the battle theme's. The depth scale is one of two models the
- * Engine reads, never both: the legacy far edge scale (`perspective`), or a
- * measured scale (`scaleReference`): the floor's horizon, the reference row
- * where the shared battler body keeps its size, the upright pixels per real
- * unit there and optionally the floor's vanishing point. Switching models is
- * one explicit step ({@see setDepthModel()}); an edit that would leave both is
- * refused. Its footing marks the picture's land (a
+ * its horizon or walkable edge; its bottom (the near edge) and perspective
+ * default to the battle theme's. Its footing marks the picture's land (a
  * road's dirt, not its verge or rocks) and water as polygons of canvas
  * points; the party stands on land and each enemy where its habitat lives.
  * An arena marking neither is land throughout.
@@ -72,15 +65,6 @@ final class BattleArenaFields
                     displayDefault: '(the theme\'s gap above the battle UI)'),
                 new RecordField('ground.perspective', 'Far Edge Scale', InputControlType::FLOAT, removeWhenEmpty: true,
                     displayDefault: '1 (no perspective)'),
-                // A measured scale is set whole by setDepthModel(); each value can then be typed on its own.
-                new RecordField('ground.scaleReference.horizonY', 'Measured Horizon (canvas y)', InputControlType::FLOAT,
-                    removeWhenEmpty: true, displayDefault: '(no measured scale)'),
-                new RecordField('ground.scaleReference.referenceY', 'Measured Reference Row (canvas y)', InputControlType::FLOAT,
-                    removeWhenEmpty: true, displayDefault: '(no measured scale)'),
-                new RecordField('ground.scaleReference.pixelsPerUnit', 'Measured Pixels Per Unit', InputControlType::FLOAT,
-                    removeWhenEmpty: true, displayDefault: '(no measured scale)'),
-                new RecordField('ground.scaleReference.vanishingX', 'Measured Vanishing X (canvas x)', InputControlType::FLOAT,
-                    removeWhenEmpty: true, displayDefault: '(none)'),
                 // The arena's light on battlers' contact shadows: darker in a mine, softer on bright grass.
                 new RecordField('shadow.strength', 'Shadow Strength', InputControlType::FLOAT, removeWhenEmpty: true,
                     displayDefault: '1 (the theme\'s)'),
@@ -92,109 +76,7 @@ final class BattleArenaFields
             subLists: [...array_map(self::getFootingList(...), self::FOOTED_HABITATS), self::getVariantList()],
             projection: new KeyedDictionaryProjection('arenas'),
             saveCheck: self::checkArenas(...),
-            editCheck: self::checkGroundEdit(...),
         );
-    }
-
-    /**
-     * Why the Engine could not read an arena's ground as an edit of its
-     * depth scale model leaves it, or null when it can or the edit leaves
-     * the model alone. The Engine's
-     * own ground reading decides; the reason adds how to make the change the
-     * author meant: a measured scale replaces the far edge scale only through
-     * an explicit switch, and its values start together.
-     *
-     * @param array<string, mixed> $before
-     * @param array<string, mixed> $after
-     */
-    public static function checkGroundEdit(array $before, array $after): ?string
-    {
-        $ground = $after['ground'] ?? [];
-        $was = is_array($before['ground'] ?? null) ? $before['ground'] : [];
-        // Band edges alone are read at save, beside the theme they inherit from.
-        $model = static fn(mixed $ground): array => is_array($ground) ? array_intersect_key($ground, ['perspective' => 0, 'scaleReference' => 0]) : [];
-        if ($model($ground) === $model($was)) {
-            return null;
-        }
-        try {
-            BattleGround::fromArray($ground);
-
-            return null;
-        } catch (InvalidArgumentException $refused) {
-            $hint = match (true) {
-                is_array($ground) && array_key_exists('perspective', $ground) && array_key_exists('scaleReference', $ground)
-                    => array_key_exists('scaleReference', $was)
-                        ? ' This arena uses a measured scale; switch it to a far edge scale explicitly (Use Far Edge Scale, arenas.setDepthModel), which removes the measured scale in the same step.'
-                        : ' This arena uses a far edge scale; switch it to a measured scale explicitly (Use Measured Scale, arenas.setDepthModel), which removes the far edge scale in the same step.',
-                is_array($ground) && array_key_exists('scaleReference', $ground) && ! array_key_exists('scaleReference', $was)
-                    => ' Start a measured scale with its horizon, reference row and pixels per unit together (Use Measured Scale, arenas.setDepthModel).',
-                default => '',
-            };
-
-            return $refused->getMessage() . $hint;
-        }
-    }
-
-    /**
-     * Sets the depth scale model an arena's ground declares, as one step:
-     * a measured scale, the legacy far edge scale, or neither, so the arena
-     * keeps the battle theme's. The model named replaces the one the arena
-     * had, which is the explicit switch between them. The Engine's ground
-     * reading decides what is accepted; whole numbers stay integers, as an
-     * author writes them.
-     *
-     * @param array<string, mixed>|null $scaleReference horizonY, referenceY, pixelsPerUnit and optional vanishingX.
-     * @throws RecordRefusal When the arenas cannot be written, there is no such arena, both models are given, or the ground is refused.
-     */
-    public static function setDepthModel(ProjectRecordDatabase $arenas, int $index, int|float|null $perspective, ?array $scaleReference,
-        string $label): RecordChange
-    {
-        if (! $arenas->isEditable()) {
-            throw new RecordRefusal(sprintf('Read-only: %s.', $arenas->getReadOnlyReason() ?? 'the arenas cannot be written'));
-        }
-        $record = $arenas->getRecordByIndex($index) ?? throw new RecordRefusal(sprintf('%s has no record %d.', self::CATEGORY, $index));
-        $before = $record->toArray();
-        $ground = is_array($before['ground'] ?? null) ? $before['ground'] : [];
-        unset($ground['perspective'], $ground['scaleReference']);
-        if ($perspective !== null) {
-            $ground['perspective'] = self::keepWhole($perspective);
-        }
-        if ($scaleReference !== null) {
-            // The Engine's own order and keys; an unknown or missing key is refused below with its reason.
-            $order = array_flip(['horizonY', 'referenceY', 'pixelsPerUnit', 'vanishingX']);
-            uksort($scaleReference, static fn(int|string $a, int|string $b): int => ($order[$a] ?? 9) <=> ($order[$b] ?? 9));
-            $ground['scaleReference'] = array_map(static fn(mixed $value): mixed => is_int($value) || is_float($value) ? self::keepWhole($value) : $value,
-                $scaleReference);
-        }
-        try {
-            BattleGround::fromArray($ground);
-        } catch (InvalidArgumentException $refused) {
-            throw new RecordRefusal($refused->getMessage(), previous: $refused);
-        }
-        $record->set('ground', $ground === [] ? null : $ground);
-        $after = $record->toArray();
-        if ($after === $before) {
-            return new RecordChange(null, $index);
-        }
-        try {
-            $arenas->assertSourceAccepts($index);
-        } catch (SourcePreservationRefusal|SourceIdentityConflict|RuntimeException $refused) {
-            $record->restorePayload($before);
-
-            throw new RecordRefusal($refused->getMessage(), previous: $refused);
-        }
-
-        return new RecordChange(new GenericCommand(
-            $label,
-            static fn() => $record->restorePayload($after),
-            static fn() => $record->restorePayload($before),
-        ), $index);
-    }
-
-    /** A whole number as an integer, as an author writes it; any other value as it is. */
-    private static function keepWhole(int|float $value): int|float
-    {
-        return is_float($value) && is_finite($value) && floor($value) === $value && abs($value) < PHP_INT_MAX ? (int) $value : $value;
     }
 
     /**

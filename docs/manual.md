@@ -1600,66 +1600,11 @@ skill's effects, a quest's rewards) listed under them.
 | Regions | `assets/Data/regions.php` (`regions`) | Editable - one record per region, keyed by its name: its skit backdrop, chosen as a project image | Same, with the image shown beside its path |
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
 | Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, an image or a sign board, and an optional occupancy stamp |
-| Battle Arenas | `assets/Data/Presentation/arenas.php` (`arenas`) | Not shown: graphical battle presentation | One record per arena, keyed by its stable id (set when it is created): name, background image and optional crop, and the ground its picture shows: far edge (`Ground Far Edge`, just below the horizon or walkable edge), near edge and depth scale (a far edge scale or a measured scale, see Battle Arena Depth Scale), each defaulting to the battle theme's. Every troop's formation stands on the chosen arena's ground. `Terrain Variants` name the arena drawn for each encounter terrain a random battle on this arena starts on (`variants`, terrain => arena), the arena itself when its picture already shows that terrain |
+| Battle Arenas | `assets/Data/Presentation/arenas.php` (`arenas`) | Not shown: graphical battle presentation | One record per arena, keyed by its stable id (set when it is created): name, background image and optional crop, and the ground its picture shows: far edge (`Ground Far Edge`, just below the horizon or walkable edge), near edge and far-edge scale, each defaulting to the battle theme's. Every troop's formation stands on the chosen arena's ground. `Terrain Variants` name the arena drawn for each encounter terrain a random battle on this arena starts on (`variants`, terrain => arena), the arena itself when its picture already shows that terrain |
 | Default Battle Arena | `assets/Data/Presentation/arenas.php` (`default`) | Not shown | The arena a battle that names none is fought on |
 | Text Roles | `assets/Data/Presentation/text.php` (`roles`) | Not shown: graphical text | One record per text role: the project's fonts, first choice first, a size and a colour |
 | Menu Theme | `assets/Data/Presentation/menus.php` (`atlas`, `icons`) | Not shown: graphical presentation | One row per setting: the minimap atlas's corner sizes, margin, marker size and frame, and an image per icon role |
 | Actor Battle Art, Enemy Battle Art, Battle Scale | `assets/Data/Presentation/battlers.php` | Not shown: graphical battle art | Editable from the actor's or enemy's own page (see Battle Art) |
-
-### Battle Arena Depth Scale
-
-An arena's ground declares how battlers shrink as they stand further back in
-one of two ways the Engine reads, never both:
-
-- `Far Edge Scale` (`ground.perspective`): the legacy ratio of a battler's size
-  on the far edge to one on the near edge. `1` keeps every row the same size.
-- A measured scale (`ground.scaleReference`), read from the picture:
-  `Measured Horizon` (`horizonY`, the floor's horizon, which may lie above the
-  canvas), `Measured Reference Row` (`referenceY`, the ground row where the
-  project's shared battler body keeps its size), `Measured Pixels Per Unit`
-  (`pixelsPerUnit`, upright canvas pixels per real unit, such as a metre, at
-  the reference row) and an optional `Measured Vanishing X` (`vanishingX`). All
-  are battle canvas coordinates of the final composed backdrop. A battler at
-  feet row `y` is drawn `(y - horizonY) / (referenceY - horizonY)` times its
-  reference size, by the Engine's `BattleGroundScale`.
-
-The session's `arenas.setDepthModel` (`scaleReference`, `perspective`, or
-neither for the theme's model) sets the model as one undo step and removes the
-other one in that same step: this is the only way to switch. The GUI editor's
-arena page offers it as `Use Measured Scale`, `Use Far Edge Scale` and `Use
-the Theme's Depth Scale`, the names refusals give. A
-measured scale starts with its horizon, reference row and pixels per unit
-together; afterwards each value can be typed on its own row. Typing a
-measured value on an arena with a far edge scale, a far edge scale on an arena
-with a measured scale, or one measured value before a measured scale exists is
-refused with the Engine's reason and the switch to use. Saving still checks
-the arena with the battle theme: a horizon must lie above the arena's ground.
-An arena with neither keeps the theme's model.
-
-The arena preview (`arenas.preview`) can stand a physical-height guide on the
-arena: a figure of a real height, in the unit `pixelsPerUnit` counts, at the
-reference row, at rows the author picks (the front of a stage) and at each
-battler's feet beside its body span, each height projected by the Engine's
-`BattleGroundScale::getProjectedHeight()`, the scale the battle stands
-battlers by. The guide height is the preview request's `guide.height`, else
-the project's editor preference `editor.battleScaleGuide.height` in
-`ichiloto.json` (for example `{"editor": {"battleScaleGuide": {"height":
-1.8}}}`); with neither there is no guide. Rows are `guide.rows`, each a canvas
-`y` with an optional `x`, `label` and `elevation`. A row with an `elevation`
-stands the guide on a raised surface such as a stage: `y` is the floor row
-beneath it, which sets the guide's scale, and the drawn feet (`feetY`) rise by
-the elevation's projected height there. The guide is an authoring aid and is
-never written to the arena or read by the game. A row at or above the horizon
-says why it has no height; an arena without a measured scale says it has no
-physical guide. The preview answer's `ground.scaleReference` gives the
-horizon, reference row and vanishing point to draw, and its `depthModel` the
-model the arena itself declares: `measured`, `farEdge`, or `theme` when it
-declares neither, whatever a drag previews. A preview's dragged
-`ground.scaleReference` or `ground.perspective` stands in for the arena's own
-model, and dragged measured values lie over its measured scale, so a trial
-scale is previewed as it would replace the arena's without writing anything.
-
-The Terminal battle and the Terminal editor never read an arena's depth scale.
 
 Player Field Appearance edits only `graphicalSubject` and `sprites2d`, preserving
 the player's Terminal glyphs and unrelated authored source. Selecting

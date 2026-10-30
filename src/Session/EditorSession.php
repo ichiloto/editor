@@ -143,7 +143,6 @@ use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\TroopAuthoring;
 use Ichiloto\Editor\Database\BattleArenaFields;
-use Ichiloto\Editor\Database\BattleScaleGuide;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationBattler;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
 use Ichiloto\Engine\Battle\Presentation\BattleStageSlot;
@@ -4032,23 +4031,14 @@ final class EditorSession
      * fields and `$footing` footing polygons (by habitat, `land` or `water`)
      * as they stand while being dragged, laid over the arena's own and read
      * by the Engine as authored ones are, so a drag shows the battle's
-     * picture as it goes; nothing is written. A dragged depth scale model
-     * (`perspective` or `scaleReference`) stands in for the arena's own, and
-     * a dragged measured value over its measured scale, so a trial scale is
-     * previewed as it would replace the arena's. The answer's `guide` is the
-     * physical-height guide ({@see BattleScaleGuide}) at `$guide`'s height,
-     * else the project's, at its rows and each battler's feet; null when
-     * neither names a height. The answer's `depthModel` is the depth scale
-     * model the arena itself declares (`measured`, `farEdge`, or `theme` when
-     * it declares neither), never a dragged one.
+     * picture as it goes; nothing is written.
      *
      * @param array<string, mixed> $ground
      * @param array<string, mixed> $footing
-     * @param array<string, mixed> $guide A guide `height` and `rows`, each a canvas `y` with an optional `x` and `label`.
      * @return array<string, mixed>
-     * @throws SessionRefusal When the arena or troop is unknown, the project has no graphical battle, or the ground, footing or guide is refused.
+     * @throws SessionRefusal When the arena or troop is unknown, the project has no graphical battle, or the ground or footing is refused.
      */
-    public function readArenaPreview(int $index, ?int $troop = null, array $ground = [], array $footing = [], array $guide = []): array
+    public function readArenaPreview(int $index, ?int $troop = null, array $ground = [], array $footing = []): array
     {
         $record = $this->requireRecordDatabase(BattleArenaFields::CATEGORY)->getRecordByIndex($index)
             ?? throw new SessionRefusal(sprintf('%s has no record %d.', BattleArenaFields::CATEGORY, $index));
@@ -4064,67 +4054,8 @@ final class EditorSession
             $members[$position]['battler'] = self::describeFormationBattler($battler, $clearance['enemies'][$position]);
         }
         $troopNames = array_map(static fn($entry): string => (string) $entry->get('name'), $troops->getRecords());
-        try {
-            $scaleGuide = BattleScaleGuide::read($guide, $this->workspace->projectRoot)
-                ?->describe($formation, array_column($view['party'], 'name'), array_map(strval(...), array_column($members, 'enemy')));
-        } catch (InvalidArgumentException $refused) {
-            throw new SessionRefusal('The scale guide cannot be shown: ' . $refused->getMessage(), previous: $refused);
-        }
 
-        // The model the arena itself declares, whatever a drag previews: the one its depth scale switch stands at.
-        $declared = $record->toArray()['ground'] ?? null;
-        $depthModel = match (true) {
-            is_array($declared) && array_key_exists('scaleReference', $declared) => 'measured',
-            is_array($declared) && array_key_exists('perspective', $declared) => 'farEdge',
-            default => 'theme',
-        };
-
-        return [...$view, 'members' => $members, 'troop' => $troop, 'troops' => array_values($troopNames), 'guide' => $scaleGuide,
-            'depthModel' => $depthModel];
-    }
-
-    /**
-     * Sets the depth scale model of a battle arena's ground, as one undo
-     * step: a measured scale (`scaleReference`: horizonY, referenceY,
-     * pixelsPerUnit and optional vanishingX, in battle canvas units), the
-     * legacy far edge scale (`perspective`), or neither, so the arena keeps
-     * the battle theme's. The model named replaces the one the arena had;
-     * this is the only way to switch between them. The battle's own reading
-     * of the arena with the theme decides what is accepted, before anything
-     * is recorded.
-     *
-     * @param array<string, mixed>|null $scaleReference
-     * @return array{changed: bool, records: list<string>}
-     * @throws SessionRefusal When the arena is unknown or read-only, both models are given, or the battle refuses the ground.
-     */
-    public function setArenaDepthModel(int $index, int|float|null $perspective = null, ?array $scaleReference = null): array
-    {
-        $arenas = $this->requireRecordDatabase(BattleArenaFields::CATEGORY);
-        $label = match (true) {
-            $scaleReference !== null => 'Use measured scale',
-            $perspective !== null => 'Use far edge scale',
-            default => 'Use the theme\'s depth scale',
-        };
-        try {
-            $change = BattleArenaFields::setDepthModel($arenas, $index, $perspective, $scaleReference, $label);
-        } catch (RecordRefusal $refusal) {
-            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
-        }
-        if ($change->command === null) {
-            return ['changed' => false, 'records' => $arenas->getEntryLabels()];
-        }
-        try {
-            $catalog = $this->requireBattleLayoutCatalog('set an arena\'s depth scale on');
-            $id = (string) $arenas->getRecordByIndex($index)?->get('id');
-            $catalog->ui?->getGround($catalog->arenas[$id] ?? null);
-        } catch (SessionRefusal|InvalidArgumentException $refused) {
-            $change->command->undo();
-
-            throw new SessionRefusal($refused->getMessage(), previous: $refused);
-        }
-        $this->history->record($change->command);
-
-        return ['changed' => true, 'records' => $arenas->getEntryLabels()];
+        return [...$view, 'members' => $members, 'troop' => $troop, 'troops' => array_values($troopNames)];
     }
 
     /**
@@ -4492,12 +4423,8 @@ final class EditorSession
                 }
                 foreach (['ground' => $ground, 'footing' => $footing] as $key => $dragged) {
                     $declared = $arenas['arenas'][$id][$key] ?? [];
-                    $declared = is_array($declared) ? $declared : [];
-                    if ($key === 'ground') {
-                        [$declared, $dragged] = self::layDraggedDepthModel($declared, $dragged);
-                    }
                     if ($dragged !== []) {
-                        $arenas['arenas'][$id][$key] = [...$declared, ...$dragged];
+                        $arenas['arenas'][$id][$key] = [...(is_array($declared) ? $declared : []), ...$dragged];
                     }
                 }
             }
@@ -4633,31 +4560,6 @@ final class EditorSession
         }
 
         return $described;
-    }
-
-    /**
-     * A dragged ground over an arena's declared one, for its depth scale
-     * model: a dragged model stands in for the declared one, since the
-     * Engine reads one at a time, and dragged measured values lie over the
-     * declared measured scale, so a drag of its horizon alone keeps the rest.
-     *
-     * @param array<array-key, mixed> $declared
-     * @param array<string, mixed> $dragged
-     * @return array{0: array<array-key, mixed>, 1: array<string, mixed>}
-     */
-    private static function layDraggedDepthModel(array $declared, array $dragged): array
-    {
-        if (array_key_exists('scaleReference', $dragged)) {
-            if (is_array($dragged['scaleReference']) && is_array($declared['scaleReference'] ?? null)) {
-                $dragged['scaleReference'] = [...$declared['scaleReference'], ...$dragged['scaleReference']];
-            }
-            unset($declared['perspective']);
-        }
-        if (array_key_exists('perspective', $dragged)) {
-            unset($declared['scaleReference']);
-        }
-
-        return [$declared, $dragged];
     }
 
     /**

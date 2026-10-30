@@ -563,19 +563,7 @@ final class SessionHost
             'arenas.preview' => $session->readArenaPreview(self::requireInt($params, 'index'),
                 is_int($params['troop'] ?? null) ? $params['troop'] : null,
                 is_array($params['ground'] ?? null) ? $params['ground'] : [],
-                is_array($params['footing'] ?? null) ? $params['footing'] : [],
-                is_array($params['guide'] ?? null) ? $params['guide'] : []),
-            'arenas.setDepthModel' => $session->setArenaDepthModel(self::requireInt($params, 'index'),
-                match (true) {
-                    ! isset($params['perspective']) => null,
-                    is_int($params['perspective']) || is_float($params['perspective']) => $params['perspective'],
-                    default => throw new InvalidRequest('"perspective" must be a number.'),
-                },
-                match (true) {
-                    ! isset($params['scaleReference']) => null,
-                    is_array($params['scaleReference']) => $params['scaleReference'],
-                    default => throw new InvalidRequest('"scaleReference" must be an object of horizonY, referenceY, pixelsPerUnit and optional vanishingX.'),
-                }),
+                is_array($params['footing'] ?? null) ? $params['footing'] : []),
             'arenas.setFooting' => $session->setArenaFooting(self::requireInt($params, 'index'),
                 match ($params['habitat'] ?? null) {
                     'land' => EnemyHabitat::LAND,
