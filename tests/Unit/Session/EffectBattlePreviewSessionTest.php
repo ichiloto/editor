@@ -98,7 +98,7 @@ it('previews movement and full recovery through production phase clocks while is
             'attack' => ['image' => 'Graphics/Attack.png', 'columns' => 2, 'frames' => [0, ...array_fill(0, 18, 1)],
                 'fps' => 20, 'loop' => false, 'impactFrame' => 1],
             'move' => ['image' => 'Graphics/Move.png', 'columns' => 2, 'frames' => [0,1], 'fps' => 20],
-            'return' => ['image' => 'Graphics/Move.png', 'columns' => 2, 'frames' => [1,0], 'fps' => 20],
+            'return' => ['image' => 'Graphics/Move.png', 'columns' => 2, 'frames' => [1,0], 'fps' => 20, 'loop' => false],
         ],
     ]]], true) . ';');
     $before = file_get_contents($binding);
@@ -114,7 +114,7 @@ it('previews movement and full recovery through production phase clocks while is
         ->and($home)->toBe($normal['phases']['target']['start'] + 108);
     $returned = $session->readEffectBattlePreview($index, $home);
     expect($returned['phase'])->toBe('return')->and($image($returned)['sourceRect']['x'] ?? null)->toBe(8)
-        ->and($image($session->readEffectBattlePreview($index, $home + 6))['sourceRect']['x'] ?? null)->toBe(0);
+        ->and($image($session->readEffectBattlePreview($index, $home + (int)ceil($normal['phases']['return']['length'] / 2)))['sourceRect']['x'] ?? null)->toBe(0);
     $reduced = $session->readEffectBattlePreview($index, 0, reducedMotion: true);
     expect($reduced['phases'])->not->toHaveKey('recovery')
         ->and($reduced['phases']['return']['start'])->toBeLessThan($home)->and($image($reduced))->toBeNull();

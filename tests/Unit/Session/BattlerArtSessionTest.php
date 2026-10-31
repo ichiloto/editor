@@ -216,8 +216,9 @@ it('authors movement roles through the existing shared role picker and binding w
     expect(readBattlerRow($session, $index, 'pose0Role')['options'])->toContain('move', 'return');
     setBattlerRow($session, $index, 'pose0Role', $role);
     setBattlerRow($session, $index, 'pose0Image', 'Graphics/Enemies/BatAttack.png');
+    if ($role === 'return') { setBattlerRow($session, $index, 'pose0Loop', 'false'); }
     $session->saveDatabase('battler_enemies');
     $pose = BattlerBindings::load($root . '/assets')->enemyPoses['Regular Bat']->getPose(
         \Ichiloto\Engine\Battle\Presentation\BattlePoseRole::from($role));
-    expect($pose->asset)->toBe('Graphics/Enemies/BatAttack.png')->and($pose->loop)->toBeTrue();
+    expect($pose->asset)->toBe('Graphics/Enemies/BatAttack.png')->and($pose->loop)->toBe($role === 'move');
 })->with(['move', 'return']);

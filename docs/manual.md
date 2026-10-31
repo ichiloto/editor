@@ -2246,7 +2246,8 @@ bindings file. Per actor (by definition id) or enemy (by name) it holds:
   since a pose without it loops.
 - Movement roles: `move` loops during advance; optional `return` supplies the
   walk home, otherwise the battle reuses `move`. Both use the existing sheet
-  controls and require looping with no impact entry. Each phase starts its
+  controls with no impact entry. Advance loops; setting return Loops to false
+  plays its entries once across the return duration. Each phase starts its
   own frame clock. A battle-effect preview includes the same movement and
   completes anchored action recovery before returning. Reduced-motion and
   Terminal previews retain their existing stationary/timing paths.
