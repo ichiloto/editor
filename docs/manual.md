@@ -3026,6 +3026,22 @@ and otherwise retargeted to a new variable so nothing else changes. A
 variable the file builds with its own code is never replaced by a copy of
 its result: an edit under it is refused, naming the variable.
 
+Command lists that splice in a spread (`...require __DIR__ . '/shared.php'`,
+`...$walk`) stay editable around it. Every entry written beside the spread is
+one command, so the commands the spread adds are the run between them: those
+keep their source and are never rewritten, and the entries before and after
+it are edited, inserted, moved and removed as in any list. A change to the
+spread's own commands is refused, naming the spread, as is a list with two or
+more spreads, whose share each adds is known only by evaluating them. In a
+keyed array that merges in a spread, a key written after every spread is
+edited in place and a new key is added after its last entry; a key written
+before a spread, or brought by one, is refused. A command a file's helper
+returns (`$line('Kaelion', 'What?')`) takes a new field by spreading the call
+into an array that writes the field after it,
+`[...$line('Kaelion', 'What?'), 'emotion' => 'Surprised']`, which later edits
+change in place; changing or removing a field the call itself returns is
+refused.
+
 A save is one transaction over the pair, and so is a first save, an
 overwrite and a deletion. Each proposed file is staged beside its
 destination and read back, so what the engine evaluates and hydrates is the

@@ -154,8 +154,10 @@ it('rotates the shared field epoch on actual detach and resize but not a repeate
         $field->exchangeScene([previewWindowReady()], $field->sessionId);
         $field->detachScene();
         $detached = $field->sessionId;
+        // Detaching gives the scene back the field's own Terminal presentation.
         expect($detached)->not->toBe($initial)
-            ->and($field->scene->getPresentationContext())->toBeNull()
+            ->and($field->scene->getPresentationContext()?->graphical)->toBeFalse()
+            ->and($field->scene->getPresentationContext()?->getActivePresentations())->toBe($field->presentation->getActivePresentations())
             ->and(count($field->frame()))->toBe(12);
         $field->detachScene();
         expect($field->sessionId)->toBe($detached);
@@ -399,4 +401,45 @@ it('completes a transfer only when its destination map actually loads, keeping t
     } finally {
         $session->close();
     }
+});
+
+it('owns an isolated Terminal presentation for the whole field and gives back what each graphical view replaced', function () {
+    $root = createPreviewContractProject();
+    $before = sourceHashTree($root);
+    $clock = 2.5;
+    $field = PreviewField::open($root, 'harbour', new Vector2(2, 3), 40, 12, static function () use (&$clock): float {
+        return $clock;
+    });
+    try {
+        $terminal = $field->scene->getPresentationContext();
+        expect($terminal)->not->toBeNull()
+            ->and($terminal->graphical)->toBeFalse()
+            ->and($terminal->supports('world_canvas'))->toBeFalse()
+            ->and([$terminal->grid->columns, $terminal->grid->rows])->toBe([40, 12])
+            ->and($terminal->getActivePresentations())->toBe($field->presentation->getActivePresentations())
+            ->and($terminal->getPresentationTime())->toBe(2.5);
+        $clock = 4.0;
+        expect($terminal->getPresentationTime())->toBe(4.0);
+
+        // A still borrows the scene and gives the Terminal presentation back.
+        $field->composeStill(static fn(string $capability): bool => true);
+        expect($field->scene->getPresentationContext())->toBe($terminal);
+
+        // The window's view replaces it while attached; a still taken meanwhile gives the view back.
+        $field->exchangeScene([previewWindowReady()], $field->sessionId);
+        $window = $field->scene->getPresentationContext();
+        expect($window)->not->toBe($terminal)->and($window->graphical)->toBeTrue();
+        $field->composeStill(static fn(string $capability): bool => true);
+        expect($field->scene->getPresentationContext())->toBe($window);
+        $field->detachScene();
+        expect($field->scene->getPresentationContext())->toBe($terminal);
+
+        // A new screen size is a new Terminal presentation of that size.
+        $field->resize(50, 16);
+        $resized = $field->scene->getPresentationContext();
+        expect($resized->graphical)->toBeFalse()->and([$resized->grid->columns, $resized->grid->rows])->toBe([50, 16]);
+    } finally {
+        $field->dispose();
+    }
+    expect(sourceHashTree($root))->toBe($before);
 });
