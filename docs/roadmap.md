@@ -239,7 +239,8 @@ Names edits `speakers`. Every line the Engine reads `emotion` from (event and
 cinematic `text`, NPC lines, skit beats, Dialogue and Shop event pages) offers
 the emotions of the identity its speaker resolves to through the Engine's own
 `resolveSpeakerId`; an emotion the identity lacks is kept and warned about, in
-the row and in validation. A catalogue that builds its identities with PHP code
+the row and in validation, as is a line naming no emotion while its speaker has
+emotions beyond Neutral. A catalogue that builds its identities with PHP code
 is read-only on Dialogue Portraits, saying so (Last Legend's builds them in a
 loop over directories, so its identities are authored there once the Game
 writes them as data); its literal speaker names stay editable. The GUI shows an

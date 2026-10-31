@@ -4,6 +4,12 @@
 
 ### Added
 
+- Dialogue lines naming no emotion: every skit beat, event and cinematic `text` command, NPC line and map Dialogue
+  or Shop event page whose speaker's catalogue identity has emotions beyond Neutral, yet names none, now gets an
+  `Emotion Warning` row beside its `Emotion` picker and a validation warning. Both list the speaker's emotions as
+  the Engine's dialogue catalogue resolves them (`resolveSpeakerId`), and choosing any emotion, `Neutral` included,
+  clears them. Validation now names each skit beat, NPC line and event page with the opening of its text, as it
+  already did for `text` commands.
 - NPC beds, as Engine bf49893 reads them (`CinematicCommandSchema::export()['bedOccupancy']`): the NPC Inspector's
   **Bed** rows pick the world object on the NPC's map it rests in (`bed.object`, among objects whose field resource
   declares attachments), the resource attachment its occupant lies on (`bed.attachment`), its `Starting Posture`
