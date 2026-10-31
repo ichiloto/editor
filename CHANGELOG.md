@@ -4,6 +4,10 @@
 
 ### Added
 
+- Graphical NPC named placements expose the shared resting-art image/sheet/animation fields and asset picker.
+  Save, validation and undo retain the existing placement identity and physical cells. Terminal placement
+  editing preserves graphical metadata while exposing physical fields only.
+
 - World Power first-use control hints are editable with the shared structured list: select a semantic action from
   the project's current input catalogue (including unbound actions and Engine defaults), then author its label.
   Terminal and graphical authoring share the picker, add/remove, save and undo paths. Selecting an unknown action

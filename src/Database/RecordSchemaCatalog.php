@@ -2667,7 +2667,7 @@ final class RecordSchemaCatalog
             // frame. The runtime runs it INSTEAD of dialogue when non-empty.
             commandLists: ['script' => self::eventCommandList('script', $graphical)],
             // Named destinations commit_npc_placement saves, beside the pages.
-            subLists: [NpcPlacementFields::getList()],
+            subLists: [NpcPlacementFields::getList($graphical)],
         );
     }
 

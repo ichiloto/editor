@@ -205,3 +205,54 @@ it('offers a cinematic\'s placements from every map it runs on', function (): vo
     expect($row['options'])->toBe(['', 'default', 'quay'])
         ->and(fn() => $session->applyDatabaseRecord('cutscenes/cinematic', 0, $row['key'], 'pier'))->toThrow(SessionRefusal::class, 'not one this entry offers');
 });
+
+
+require_once __DIR__ . '/../Support/MapGraphicsFixtures.php';
+
+function placementArtRow(EditorSession $session, string $label): array
+{
+    return array_find($session->readNpc('harbour', 0)['rows'], static fn(array $row): bool => str_ends_with(trim($row['label'] ?? ''), $label))
+        ?? throw new RuntimeException('Missing resting-art row ' . $label);
+}
+
+it('authors named-placement resting art with a picker and preserves independent physical state and source history', function (): void {
+    [$root, $path] = placementProject(['placements' => ['arrived' => ['x' => 8, 'y' => 5, 'facing' => 'west',
+        'sprites2d' => ['asset' => 'Graphics/Rest.png', 'cells' => ['width' => 2, 'height' => 2], 'layer' => 100]]]]);
+    writeTilesetTestPng($root . '/assets/Graphics/Rest.png', 8, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/Revised.png', 12, 12);
+    $original = file_get_contents($path);
+    $session = EditorSession::open($root);
+    $row = placementArtRow($session, 'Resting Art Image / Pose Sheet');
+    expect($row['reference'])->toBe('png_assets');
+    $session->applyNpc('harbour', $session->readNpc('harbour', 0)['revision'], 0, $row['key'], 'Graphics/Revised.png');
+    $row = placementArtRow($session, 'Resting Art Visual Size (cells)');
+    $session->applyNpc('harbour', $session->readNpc('harbour', 0)['revision'], 0, $row['key'], '3, 2');
+    $session->saveMap('harbour');
+    $edited = file_get_contents($path);
+    $npc = (require $path)['npcs'][0];
+    expect($npc['placements']['arrived'])->toBe(['x' => 8, 'y' => 5, 'facing' => 'west',
+        'sprites2d' => ['asset' => 'Graphics/Revised.png', 'cells' => ['width' => 3, 'height' => 2], 'layer' => 100]])
+        ->and($npc['sprite'])->toBe('K')->and($npc['id'])->toBe('keeper')
+        ->and(placementIssueMessages($root, 'placement'))->toBe([])
+        ->and($edited)->toContain('// Harbour, authored by hand.');
+    $session->undo(); $session->undo(); $session->saveMap('harbour');
+    expect(file_get_contents($path))->toBe($original);
+    $session->redo(); $session->redo(); $session->saveMap('harbour');
+    expect(file_get_contents($path))->toBe($edited);
+});
+
+it('keeps resting-art editing out of the Terminal while preserving it through physical edits and reporting invalid art', function (): void {
+    [$root, $path] = placementProject(['placements' => ['arrived' => ['x' => 8, 'y' => 5,
+        'sprites2d' => ['asset' => 'Graphics/Missing.png', 'layer' => 100]]]]);
+    $workspace = \Ichiloto\Editor\ProjectWorkspace::fromProject($root, graphical: false);
+    $map = array_find($workspace->maps, static fn($map): bool => $map->mapId === 'harbour');
+    $inspector = new \Ichiloto\Editor\Field\NpcInspector($map, graphical: false);
+    expect(array_filter($inspector->records()->getSettingsFields(0), static fn(array $row): bool =>
+        str_contains($row['label'] ?? '', 'Resting Art')))->toBe([]);
+    $session = EditorSession::open($root);
+    applyPlacementRow($session, 'placement0X', '6');
+    $session->saveMap('harbour');
+    expect((require $path)['npcs'][0]['placements']['arrived'])->toBe(['x' => 6, 'y' => 5,
+        'sprites2d' => ['asset' => 'Graphics/Missing.png', 'layer' => 100]])
+        ->and(implode('\n', placementIssueMessages($root, 'resting art')))->toContain('unavailable');
+});

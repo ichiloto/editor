@@ -15,7 +15,7 @@ use InvalidArgumentException;
 /**
  * Authors an NPC's named placements (`CinematicCommandSchema::export()['npcPlacements']`):
  * stable names, each with the cell the NPC stands on there and an optional
- * heading. The NPC's own X and Y are its reserved `default` placement.
+ * heading and graphical resting art. The NPC's own X and Y are its reserved `default` placement.
  * `commit_npc_placement` saves one of these names once the real NPC has
  * walked there; the map's current cells resolve it at load.
  *
@@ -46,24 +46,27 @@ final class NpcPlacementFields
      * A new one starts on the NPC's own cell, which is floor wherever the NPC
      * itself may stand.
      */
-    public static function getList(): RecordSubList
+    public static function getList(bool $graphical = false): RecordSubList
     {
+        $fields = [
+            new RecordField(self::NAME, 'Name'),
+            new RecordField('x', 'X', InputControlType::INTEGER),
+            new RecordField('y', 'Y', InputControlType::INTEGER),
+            new RecordField('facing', 'Facing', options: ProjectNpc::DIRECTIONS, removeWhenEmpty: true, displayDefault: '(as it stands facing)'),
+        ];
         return new RecordSubList(
             key: self::PLACEMENTS,
             prefix: self::PREFIX,
             singular: 'placement',
-            fields: [
-                new RecordField(self::NAME, 'Name'),
-                new RecordField('x', 'X', InputControlType::INTEGER),
-                new RecordField('y', 'Y', InputControlType::INTEGER),
-                // Absent, the placement keeps the heading the NPC stands with.
-                new RecordField('facing', 'Facing', options: ProjectNpc::DIRECTIONS, removeWhenEmpty: true, displayDefault: '(as it stands facing)'),
-            ],
+            fields: $fields,
             blank: [self::NAME => 'placement', 'x' => 0, 'y' => 0],
             heading: 'Named Placements',
             removeWhenEmpty: true,
             keyField: self::NAME,
             blankFor: static fn(array $npc): array => [self::NAME => 'placement', 'x' => intval($npc['x'] ?? 0), 'y' => intval($npc['y'] ?? 0)],
+            getFields: $graphical ? static fn(array $entry): array => [...$fields,
+                ...FieldSpriteFields::getFields($entry, label: 'Resting Art')] : null,
+            prepareEdit: $graphical ? FieldSpriteFields::prepareEdit(...) : null,
         );
     }
 
