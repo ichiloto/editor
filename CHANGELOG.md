@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- NPC Inspector writes retain every unchanged authored dialogue representation, including explicit empty
+  fields and single-page wrappers on other residents. Only edited interaction pages are unfolded.
+  Unrelated NPC edits, save and undo preserve the original source values and comments.
+
 ### Added
 
 - Graphical NPC named placements expose the shared resting-art image/sheet/animation fields and asset picker.

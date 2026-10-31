@@ -290,8 +290,9 @@ final class NpcInspector
     private function build(): ProjectRecordDatabase
     {
         $entries = [];
+        $authored = $this->map->getNpcs()->toMapData();
 
-        foreach ($this->map->getNpcs()->toMapData() as $entry) {
+        foreach ($authored as $entry) {
             if (is_array($entry)) {
                 $npc = new ProjectNpc($entry);
                 $entry['dialogue'] = $npc->getPages();
@@ -308,12 +309,24 @@ final class NpcInspector
             RecordSchemaCatalog::mapNpcs($this->graphical),
             $this->map->dataPath,
             $entries,
-            function (array $written): void {
+            function (array $written) use ($authored, $entries): void {
                 $stored = [];
 
-                foreach ($written as $entry) {
-                    if (is_array($entry) && isset($entry['dialogue']) && is_array($entry['dialogue'])) {
-                        $entry = ProjectNpc::storePages($entry, $entry['dialogue']);
+                foreach ($written as $index => $entry) {
+                    if (is_array($entry)) {
+                        $original = $authored[$index] ?? null;
+                        $projected = $entries[$index] ?? null;
+                        // The Inspector owns page projection, not normalization of untouched source.
+                        // Record positions stay fixed here; NPC structural operations use NpcAuthoring.
+                        $unchanged = is_array($original) && is_array($projected)
+                            && array_key_exists('dialogue', $entry) === array_key_exists('dialogue', $projected)
+                            && ($entry['dialogue'] ?? null) === ($projected['dialogue'] ?? null);
+                        if ($unchanged) {
+                            if (array_key_exists('dialogue', $original)) { $entry['dialogue'] = $original['dialogue']; }
+                            else { unset($entry['dialogue']); }
+                        } elseif (isset($entry['dialogue']) && is_array($entry['dialogue'])) {
+                            $entry = ProjectNpc::storePages($entry, $entry['dialogue']);
+                        }
                     }
 
                     $stored[] = $entry;

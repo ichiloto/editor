@@ -256,3 +256,23 @@ it('keeps resting-art editing out of the Terminal while preserving it through ph
         'sprites2d' => ['asset' => 'Graphics/Missing.png', 'layer' => 100]])
         ->and(implode('\n', placementIssueMessages($root, 'resting art')))->toContain('unavailable');
 });
+
+
+it('preserves authored dialogue shapes on every NPC while editing a different placement field', function (): void {
+    [$root, $path] = placementProject(['dialogue' => [], 'placements' => ['dock' => ['x' => 5, 'y' => 1]]]);
+    $data = require $path;
+    $data['npcs'][] = ['id' => 'silent', 'name' => 'Silent', 'x' => 6, 'y' => 1, 'dialogue' => []];
+    $data['npcs'][] = ['id' => 'plain', 'name' => 'Plain', 'x' => 7, 'y' => 1,
+        'dialogue' => [['text' => 'Synthetic authored line.']], 'cue' => ['symbol' => '?']];
+    $data['npcs'][] = ['id' => 'paged', 'name' => 'Paged', 'x' => 8, 'y' => 1,
+        'dialogue' => [['lines' => [['text' => 'Synthetic authored page.']]]]];
+    file_put_contents($path, "<?php\n// Retain authored dialogue representation.\nreturn " . var_export($data, true) . ";\n");
+    $before = file_get_contents($path); $session = EditorSession::open($root);
+    $row = placementRow($session, 'x');
+    $session->applyNpc('harbour', $session->readNpc('harbour', 0)['revision'], 0, $row['key'], '3');
+    $session->saveMap('harbour');
+    $expected = $data; $expected['npcs'][0]['x'] = 3;
+    expect(require $path)->toBe($expected)->and(file_get_contents($path))->toContain('// Retain authored dialogue representation.');
+    $session->undo(); $session->saveMap('harbour');
+    expect(require $path)->toBe($data)->and(file_get_contents($path))->toBe($before);
+});
