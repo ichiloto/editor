@@ -2244,6 +2244,12 @@ bindings file. Per actor (by definition id) or enemy (by name) it holds:
   rest), a still or a sheet of frames with columns, rows, frames, frames per
   second, looping and a rest frame. **Loops** `false` is written to the file,
   since a pose without it loops.
+- Movement roles: `move` loops during advance; optional `return` supplies the
+  walk home, otherwise the battle reuses `move`. Both use the existing sheet
+  controls and require looping with no impact entry. Each phase starts its
+  own frame clock. A battle-effect preview includes the same movement and
+  completes anchored action recovery before returning. Reduced-motion and
+  Terminal previews retain their existing stationary/timing paths.
 - Impact entry: for a pose that plays once, the entry of its frames list
   shown at the action's impact, the start of its target phase. Entries count
   from 0 and include repeats, so frames `0, 1, 1, 2, 2, 3` offer

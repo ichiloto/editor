@@ -77,6 +77,7 @@ final class EffectBattlePreview
         EffectPresentation $presentation,
         callable $compile,
         int $binding = 0,
+        bool $reducedMotion = false,
     ): self {
         $state = new GameState();
         $found = [];
@@ -115,10 +116,13 @@ final class EffectBattlePreview
         $anchor = $presentation === EffectPresentation::GRAPHICAL ? $animation->sourceEffectAnchor : SourceEffectAnchor::SOURCE;
         $role = BattlePoseRole::getForAction($action);
         // The same stable actor binding used by production supplies the complete post-impact recovery.
-        $pose = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null && $catalog->getArenaFor($battle) !== null
-            ? ($catalog->actorPoses[$caster->actorId] ?? null)?->getPose($role) : null;
+        $poses = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null && $catalog->getArenaFor($battle) !== null
+            ? ($catalog->actorPoses[$caster->actorId] ?? null) : null;
+        $pose = $poses?->getPose($role);
         $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
-            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor, actionPose: $pose);
+            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor, actionPose: $pose,
+            movementPoses: !$reducedMotion && ($poses?->getPose(BattlePoseRole::MOVE) !== null
+                || $poses?->getPose(BattlePoseRole::RETURNING) !== null));
         $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $battle->partyRoster->battlers, $battle->troop->members->toArray());
         if ($targets === []) {
             throw new InvalidArgumentException(sprintf('%s has no one to act on in the battle test.', $action->name));

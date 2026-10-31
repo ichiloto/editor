@@ -204,3 +204,20 @@ it('sets how a battler meets the surface: its body rises or sinks by its elevati
     setBattlerRow($session, $index, 'grounding.bakedShadow', 'true');
     expect(fn() => $session->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class, 'stands at the height it was painted');
 });
+
+
+it('authors movement roles through the existing shared role picker and binding writer', function (string $role) {
+    $root = battlerArtProject();
+    $session = EditorSession::open($root);
+    $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
+    setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
+    $heading = array_find($session->readDatabaseRecord('battler_enemies', $index)['rows'], static fn(array $row): bool => ($row['listHeading'] ?? false) === true);
+    $session->addDatabaseItem('battler_enemies', $index, $heading['key'], true);
+    expect(readBattlerRow($session, $index, 'pose0Role')['options'])->toContain('move', 'return');
+    setBattlerRow($session, $index, 'pose0Role', $role);
+    setBattlerRow($session, $index, 'pose0Image', 'Graphics/Enemies/BatAttack.png');
+    $session->saveDatabase('battler_enemies');
+    $pose = BattlerBindings::load($root . '/assets')->enemyPoses['Regular Bat']->getPose(
+        \Ichiloto\Engine\Battle\Presentation\BattlePoseRole::from($role));
+    expect($pose->asset)->toBe('Graphics/Enemies/BatAttack.png')->and($pose->loop)->toBeTrue();
+})->with(['move', 'return']);

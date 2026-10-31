@@ -85,3 +85,41 @@ it('finishes impact-anchored recovery in the current graphical arena preview wit
     expect(array_map(file_get_contents(...), $sources))->toBe($before)
         ->and($session->listUnsavedChanges())->toBe([]);
 })->with([true, false]);
+
+
+it('previews movement and full recovery through production phase clocks while isolating reduced-motion caching', function () {
+    $root = effectBattlePreviewProject();
+    file_put_contents($root . '/config.php', "<?php return ['ui' => ['battle' => ['animation_pace' => 'fast']]];");
+    writeTilesetTestPng($root . '/assets/Graphics/Move.png', 16, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/Attack.png', 16, 8);
+    $binding = $root . '/assets/Data/Presentation/battlers.php';
+    file_put_contents($binding, '<?php return ' . var_export(['actors' => ['Kaelion' => [
+        'poses' => [
+            'attack' => ['image' => 'Graphics/Attack.png', 'columns' => 2, 'frames' => [0, ...array_fill(0, 18, 1)],
+                'fps' => 20, 'loop' => false, 'impactFrame' => 1],
+            'move' => ['image' => 'Graphics/Move.png', 'columns' => 2, 'frames' => [0,1], 'fps' => 20],
+            'return' => ['image' => 'Graphics/Move.png', 'columns' => 2, 'frames' => [1,0], 'fps' => 20],
+        ],
+    ]]], true) . ';');
+    $before = file_get_contents($binding);
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $normal = $session->readEffectBattlePreview($index, 0);
+    $image = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Move.png');
+    expect($image($normal)['sourceRect']['x'] ?? null)->toBe(0)
+        ->and($image($session->readEffectBattlePreview($index, 6))['sourceRect']['x'] ?? null)->toBe(8);
+    $home = $normal['phases']['return']['start'];
+    expect($normal['phases']['recovery']['length'])->toBeGreaterThan(0)
+        ->and($home)->toBe($normal['phases']['target']['start'] + 108);
+    $returned = $session->readEffectBattlePreview($index, $home);
+    expect($returned['phase'])->toBe('return')->and($image($returned)['sourceRect']['x'] ?? null)->toBe(8)
+        ->and($image($session->readEffectBattlePreview($index, $home + 6))['sourceRect']['x'] ?? null)->toBe(0);
+    $reduced = $session->readEffectBattlePreview($index, 0, reducedMotion: true);
+    expect($reduced['phases'])->not->toHaveKey('recovery')
+        ->and($reduced['phases']['return']['start'])->toBeLessThan($home)->and($image($reduced))->toBeNull();
+    $terminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL);
+    expect($terminal['phases'])->not->toHaveKey('recovery')->and($terminal['canvas'])->toBeNull()
+        ->and($session->readEffectBattlePreview($index, 0)['phases'])->toBe($normal['phases'])
+        ->and(file_get_contents($binding))->toBe($before)->and($session->listUnsavedChanges())->toBe([]);
+});

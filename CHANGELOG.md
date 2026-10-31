@@ -10,6 +10,11 @@
 
 ### Added
 
+- The existing battler role picker exposes Engine `move` and `return` roles.
+  Effect battle previews use their phase clocks and finish anchored recovery
+  before returning, matching production. Reduced-motion preview cache identity
+  keeps its prior timing separate from the normal-motion preview.
+
 - The map Inspector's Saving choice authors the Engine's `savePolicy` enum through
   shared constrained choices in Terminal and graphical editors. Undo preserves an
   omitted default; source-preserving save and reload retain the selected rule.
