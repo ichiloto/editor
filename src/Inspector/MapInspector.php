@@ -185,6 +185,7 @@ final readonly class MapInspector
                 'field' => 'region',
             ],
             $this->buildMapRoleField($map),
+            MapSavePolicyField::describeField($map),
             $this->buildPlaceTypeField($map),
             $this->buildSkitBackdropField($map),
             $this->buildMapKindField($map),

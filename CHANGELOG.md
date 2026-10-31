@@ -10,6 +10,10 @@
 
 ### Added
 
+- The map Inspector's Saving choice authors the Engine's `savePolicy` enum through
+  shared constrained choices in Terminal and graphical editors. Undo preserves an
+  omitted default; source-preserving save and reload retain the selected rule.
+
 - Graphical NPC named placements expose the shared resting-art image/sheet/animation fields and asset picker.
   Save, validation and undo retain the existing placement identity and physical cells. Terminal placement
   editing preserves graphical metadata while exposing physical fields only.

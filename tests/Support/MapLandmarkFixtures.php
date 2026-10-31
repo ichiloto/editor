@@ -34,7 +34,8 @@ PHP, (string) file_get_contents($file)));
 function findLandmarkRow(EditorSession $session, array $key, ?string $marker = null, string $mapId = 'test-map'): array
 {
     $rows = $session->readInspector($mapId, $marker)['rows'];
-    return array_find($rows, static fn(array $row): bool => array_intersect_assoc($key, $row['key'] ?? []) === $key && array_diff_key($key, $row['key'] ?? []) === [])
+    return array_find($rows, static fn(array $row): bool => array_all($key,
+        static fn(mixed $value, string $name): bool => array_key_exists($name, $row['key'] ?? []) && $row['key'][$name] === $value))
         ?? throw new RuntimeException('Missing inspector row ' . json_encode($key));
 }
 
