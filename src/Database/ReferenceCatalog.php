@@ -78,6 +78,9 @@ final class ReferenceCatalog
     /** The semantic icon roles the menu theme offers ({@see \Ichiloto\Editor\MenuPresentationSettings::listIconRoles()}). */
     public const string ICON_ROLES = 'icon_roles';
 
+    /** Authored project input actions plus Engine defaults, independent of installed player bindings. */
+    public const string INPUT_ACTIONS = 'input_actions';
+
     public const array CATEGORIES = [
         'actors',
         'actor_ids',
@@ -109,6 +112,7 @@ final class ReferenceCatalog
         self::WORLD_ABILITIES,
         // The theme's semantic icon roles, which a world power shows.
         self::ICON_ROLES,
+        self::INPUT_ACTIONS,
         'maps',
         'items',
         'weapons',
@@ -294,6 +298,7 @@ final class ReferenceCatalog
             'income_schedules' => array_keys($this->incomeScheduleNames()),
             self::WORLD_ABILITIES => array_keys($this->workspace->getWorldAbilities()->getLabels()),
             self::ICON_ROLES => $this->workspace->menuPresentation?->listIconRoles() ?? [],
+            self::INPUT_ACTIONS => array_keys(\Ichiloto\Engine\IO\InputManager::getProjectBindings($this->workspace->projectRoot)),
             'maps' => $this->workspace->mapIds,
             // A shop's stock is whatever the engine's ItemStore holds, and
             // that is everything in items.php: items, weapons and armors
@@ -818,6 +823,7 @@ final class ReferenceCatalog
         $cinematic = $this->currentCutscene?->type === CutsceneType::CINEMATIC ? $this->currentCutscene : null;
 
         return match ($category) {
+            self::INPUT_ACTIONS => $this->valuesFor(self::INPUT_ACTIONS),
             'map_npcs' => $this->currentMap !== null || $cinematic === null
                 ? $this->getSubjectMap()?->getNpcs()->ids()
                 : $this->listCinematicNpcIds($cinematic),
@@ -1073,6 +1079,15 @@ final class ReferenceCatalog
      */
     public function labelsFor(string $category): array
     {
+        if ($category === self::INPUT_ACTIONS) {
+            $labels = [];
+            foreach (\Ichiloto\Engine\IO\InputManager::getProjectBindings($this->workspace->projectRoot) as $action => $binding) {
+                $description = $binding['description'] ?? null;
+                $labels[$action] = is_string($description) && trim($description) !== ''
+                    ? sprintf('%s · %s', $action, $description) : $action;
+            }
+            return $labels;
+        }
         if (in_array($category, ['states', 'crisis_abilities'], true)) {
             $labels = [];
             foreach ($this->workspace->getRecordDatabase($category)?->getRecords() ?? [] as $record) {

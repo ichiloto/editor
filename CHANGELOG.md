@@ -4,6 +4,12 @@
 
 ### Added
 
+- World Power first-use control hints are editable with the shared structured list: select a semantic action from
+  the project's current input catalogue (including unbound actions and Engine defaults), then author its label.
+  Terminal and graphical authoring share the picker, add/remove, save and undo paths. Selecting an unknown action
+  is refused before mutation; existing authored actions survive unrelated label edits. Reading the catalogue
+  leaves installed player bindings, project input files and the working directory untouched.
+
 - Effect battle previews pass the selected actor's impact-anchored pose to the shared command timeline, so the
   final recovery entry and hold remain visible at Fast pacing. The stable actor id selects the pose after display
   names change. Terminal and arena-less inspection keep their existing clocks; movement and impact cues are unchanged.

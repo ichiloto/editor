@@ -71,8 +71,7 @@ it('authors world powers in their own source, with undo and redo byte for byte',
     expect(worldPowerRow($session, 1, 'conditions')['value'])->toContain('sprint')
         ->and(worldPowerRow($session, 1, 'iconRole')['reference'])->toBe(ReferenceCatalog::ICON_ROLES)
         ->and(worldPowerRow($session, 1, 'firstUse.effect')['reference'])->toBe('effects')
-        // Hints name input actions the Editor cannot list yet; they are kept as written.
-        ->and(worldPowerRow($session, 1, 'firstUse.hints')['kind'] ?? null)->toBe('info');
+        ->and(worldPowerRow($session, 1, 'firstUseHint0Action')['reference'])->toBe(ReferenceCatalog::INPUT_ACTIONS);
 
     applyWorldPowerRow($session, 1, 'description', 'See what others miss.');
     applyWorldPowerRow($session, 1, 'firstUse.message', 'Look again.');
@@ -166,4 +165,114 @@ it('checks a first-use effect plays once on the field, and what unlock condition
 
     expect(implode("\n", $messages('world power sprint first-use effect')))->toContain('no-such-effect')
         ->and(implode("\n", $messages('world power sprint conditions')))->toContain('no-such-quest');
+});
+
+
+it('picks project semantic actions, including unbound actions and Engine defaults, without installing input', function (): void {
+    $root = makeTemporaryProject();
+    writeAuthoredWorldPowers($root);
+    $input = $root . '/input.php';
+    file_put_contents($input, "<?php\nreturn ['inspect' => ['description' => 'Look closely.', 'keys' => []]];\n");
+    $before = file_get_contents($input);
+    $bindings = \Ichiloto\Engine\IO\InputManager::getBindings();
+    $cwd = getcwd();
+    $session = EditorSession::open($root);
+
+    $choices = $session->listReferences(null, ReferenceCatalog::INPUT_ACTIONS);
+    expect(array_column($choices, 'value'))->toContain('inspect', 'dash')
+        ->and(array_find($choices, static fn(array $choice): bool => $choice['value'] === 'inspect')['label'])->toContain('Look closely.')
+        ->and(\Ichiloto\Engine\IO\InputManager::getBindings())->toBe($bindings)
+        ->and(getcwd())->toBe($cwd)
+        ->and(file_get_contents($input))->toBe($before);
+
+    // A changed project's current action vocabulary is used on the next picker request.
+    file_put_contents($input, "<?php\nreturn ['salute' => ['description' => 'Greet someone.', 'keys' => []]];\n");
+    expect(array_column($session->listReferences(null, ReferenceCatalog::INPUT_ACTIONS), 'value'))->toContain('salute')->not->toContain('inspect');
+});
+
+it('edits first-use hints through the shared list and action picker, preserving values and comments through save undo and redo', function (): void {
+    $root = makeTemporaryProject();
+    $path = writeAuthoredWorldPowers($root);
+    file_put_contents($root . '/input.php', "<?php\nreturn ['inspect' => ['keys' => []], 'action' => ['keys' => []]];\n");
+    $original = file_get_contents($path);
+    $session = EditorSession::open($root);
+    $label = 'Inspect: shelves, doors; “look closer”';
+    $originalData = require $path;
+
+    expect(worldPowerRow($session, 1, 'firstUseHintList'))->toMatchArray(['listHeading' => true, 'childNoun' => 'control hint'])
+        ->and(worldPowerRow($session, 1, 'firstUseHint0Action'))->toMatchArray(['reference' => ReferenceCatalog::INPUT_ACTIONS]);
+    applyWorldPowerRow($session, 1, 'firstUseHint0Action', 'inspect');
+    applyWorldPowerRow($session, 1, 'firstUseHint0Label', $label);
+    $session->addDatabaseItem(WorldAbilityFields::CATEGORY, 1, worldPowerRow($session, 1, 'firstUseHint0Action')['key']);
+    applyWorldPowerRow($session, 1, 'firstUseHint1Action', 'dash');
+    applyWorldPowerRow($session, 1, 'firstUseHint1Label', 'Run');
+    $session->saveDatabase(WorldAbilityFields::CATEGORY);
+    $edited = file_get_contents($path);
+
+    expect((require $path)[1]['firstUse'])->toBe(['message' => 'Look closer.', 'hints' => [
+        ['action' => 'inspect', 'label' => $label], ['action' => 'dash', 'label' => 'Run'],
+    ]])->and($edited)->toContain('// Exploration powers, written by hand.');
+    $reopened = EditorSession::open($root);
+    expect(worldPowerRow($reopened, 1, 'firstUseHint0Label')['value'])->toBe($label)
+        ->and(worldPowerRow($reopened, 1, 'firstUseHint1Action')['value'])->toBe('dash');
+    foreach (range(1, 5) as $step) { $session->undo(); }
+    $session->saveDatabase(WorldAbilityFields::CATEGORY);
+    // The existing source writer wraps a changed plain-data list when it grows past its line width.
+    // Undo restores its authored data; that local reflow may remain after an intervening save.
+    expect(require $path)->toBe($originalData)
+        ->and(file_get_contents($path))->toContain('// Exploration powers, written by hand.');
+    foreach (range(1, 5) as $step) { $session->redo(); }
+    $session->saveDatabase(WorldAbilityFields::CATEGORY);
+    expect(file_get_contents($path))->toBe($edited);
+
+    $session->removeDatabaseItem(WorldAbilityFields::CATEGORY, 1, worldPowerRow($session, 1, 'firstUseHint1Action')['key']);
+    $session->removeDatabaseItem(WorldAbilityFields::CATEGORY, 1, worldPowerRow($session, 1, 'firstUseHint0Action')['key']);
+    $session->saveDatabase(WorldAbilityFields::CATEGORY);
+    expect((require $path)[1]['firstUse'])->toBe(['message' => 'Look closer.']);
+});
+
+it('refuses an unknown hint action atomically and preserves an older authored action on unrelated edits', function (): void {
+    $root = makeTemporaryProject();
+    $path = writeAuthoredWorldPowers($root);
+    file_put_contents($root . '/input.php', "<?php\nreturn ['inspect' => ['keys' => []]];\n");
+    $original = file_get_contents($path);
+    $session = EditorSession::open($root);
+    $before = $session->readDatabaseRecord(WorldAbilityFields::CATEGORY, 1);
+
+    expect(fn() => applyWorldPowerRow($session, 1, 'firstUseHint0Action', 'misspelled'))
+        ->toThrow(SessionRefusal::class, 'choose one from the picker')
+        ->and($session->readDatabaseRecord(WorldAbilityFields::CATEGORY, 1))->toBe($before)
+        ->and(file_get_contents($path))->toBe($original);
+    applyWorldPowerRow($session, 1, 'firstUseHint0Label', 'Look');
+    $session->saveDatabase(WorldAbilityFields::CATEGORY);
+    expect((require $path)[1]['firstUse']['hints'])->toBe([['action' => 'action', 'label' => 'Look']]);
+});
+
+
+it('offers the same hint action picker in Terminal and graphical authoring', function (bool $graphical): void {
+    $root = makeTemporaryProject();
+    writeAuthoredWorldPowers($root);
+    file_put_contents($root . '/input.php', "<?php\nreturn ['inspect' => ['keys' => []]];\n");
+    $workspace = ProjectWorkspace::fromProject($root, graphical: $graphical);
+    $database = $workspace->getRecordDatabase(WorldAbilityFields::CATEGORY);
+    $field = array_find($database->getSettingsFields(1), static fn(array $row): bool => ($row['field'] ?? null) === 'firstUseHint0Action');
+
+    expect($field)->toMatchArray(['reference' => ReferenceCatalog::INPUT_ACTIONS])
+        ->and($field)->not->toHaveKey('control')
+        ->and((new ReferenceCatalog($workspace))->valuesFor(ReferenceCatalog::INPUT_ACTIONS))->toContain('inspect', 'dash');
+})->with(['Terminal' => false, 'graphical' => true]);
+
+it('creates a hint-only first-use prompt and drops it when its last hint is removed', function (): void {
+    $root = makeTemporaryProject();
+    $path = writeAuthoredWorldPowers($root);
+    file_put_contents($root . '/input.php', "<?php\nreturn [];\n");
+    $session = EditorSession::open($root);
+    $session->addDatabaseItem(WorldAbilityFields::CATEGORY, 0, worldPowerRow($session, 0, 'firstUseHintList')['key'], true);
+    applyWorldPowerRow($session, 0, 'firstUseHint0Action', 'dash');
+    applyWorldPowerRow($session, 0, 'firstUseHint0Label', 'Run');
+    $session->saveDatabase(WorldAbilityFields::CATEGORY);
+    expect((require $path)[0]['firstUse'])->toBe(['hints' => [['action' => 'dash', 'label' => 'Run']]]);
+    $session->removeDatabaseItem(WorldAbilityFields::CATEGORY, 0, worldPowerRow($session, 0, 'firstUseHint0Action')['key']);
+    $session->saveDatabase(WorldAbilityFields::CATEGORY);
+    expect((require $path)[0])->not->toHaveKey('firstUse');
 });
