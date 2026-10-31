@@ -123,3 +123,31 @@ it('previews movement and full recovery through production phase clocks while is
         ->and($session->readEffectBattlePreview($index, 0)['phases'])->toBe($normal['phases'])
         ->and(file_get_contents($binding))->toBe($before)->and($session->listUnsavedChanges())->toBe([]);
 });
+
+it('previews the shared run-to-target plan while keeping Terminal and reduced motion at rest', function () {
+    $root = effectBattlePreviewProject();
+    writeTilesetTestPng($root . '/assets/Graphics/Contact.png', 32, 64);
+    writeTilesetTestPng($root . '/assets/Graphics/ContactEnemy.png', 32, 64);
+    $binding = $root . '/assets/Data/Presentation/battlers.php';
+    file_put_contents($binding, '<?php return ' . var_export([
+        'actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/Contact.png']]],
+        'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/ContactEnemy.png']]],
+    ], true) . ';');
+    $path = $root . '/assets/Data/animations.php'; $data = require $path;
+    $data[0]['movement'] = 'run-to-target';
+    file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
+    $sources = array_map(file_get_contents(...), [$path, $binding]);
+    $session = EditorSession::open($root); $effect = findEffectIndex($session, 'dusk-slash');
+    $home = $session->readEffectBattlePreview($effect, 0);
+    $strike = $session->readEffectBattlePreview($effect, $home['phases']['target']['start']);
+    $image = static fn(array $frame): array => array_find($frame['canvas']['images'],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Contact.png');
+    expect($home['phases'])->toHaveKey('recovery')
+        ->and($strike['diagnostics'])->toBe([])
+        ->and($image($strike)['destination'])->not->toBe($image($home)['destination']);
+    $rest = $session->readEffectBattlePreview($effect, 0, reducedMotion: true);
+    $terminal = $session->readEffectBattlePreview($effect, 0, presentation: EffectPresentation::TERMINAL);
+    expect($rest['phases'])->not->toHaveKey('recovery')->and($terminal['phases'])->not->toHaveKey('recovery')
+        ->and($terminal['canvas'])->toBeNull()->and($session->listUnsavedChanges())->toBe([])
+        ->and(array_map(file_get_contents(...), [$path, $binding]))->toBe($sources);
+});

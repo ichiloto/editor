@@ -119,18 +119,23 @@ final class EffectBattlePreview
         $poses = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null && $catalog->getArenaFor($battle) !== null
             ? ($catalog->actorPoses[$caster->actorId] ?? null) : null;
         $pose = $poses?->getPose($role);
-        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
-            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor, actionPose: $pose,
-            movementPoses: !$reducedMotion && ($poses?->getPose(BattlePoseRole::MOVE) !== null
-                || $poses?->getPose(BattlePoseRole::RETURNING) !== null));
         $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $battle->partyRoster->battlers, $battle->troop->members->toArray());
         if ($targets === []) {
             throw new InvalidArgumentException(sprintf('%s has no one to act on in the battle test.', $action->name));
         }
 
+        $graphical = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null
+            ? \Ichiloto\Engine\Battle\Presentation\GraphicalBattlePresentation::prepare($battle, $catalog, $assetRoot) : null;
+        $travel = !$reducedMotion && $animation->movement === \Ichiloto\Engine\Animations\ActionMovement::RUN_TO_TARGET
+            ? $graphical?->planActionTravel($caster, $targets, $action) : null;
+        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
+            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor, actionPose: $pose,
+            movementPoses: !$reducedMotion && ($poses?->getPose(BattlePoseRole::MOVE) !== null
+                || $poses?->getPose(BattlePoseRole::RETURNING) !== null), travel: $travel);
+
         return new self(
             new BattleCommandPreview($battle, $plan, $caster, $targets, $role,
-                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation),
+                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation, $graphical),
             $plan,
             $lane,
             array_map(static fn(array $context): array => ['caster' => $context['caster']->name, 'action' => $context['action']->name, 'lane' => $context['lane']], $found),

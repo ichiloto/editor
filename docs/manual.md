@@ -2251,6 +2251,15 @@ bindings file. Per actor (by definition id) or enemy (by name) it holds:
   own frame clock. A battle-effect preview includes the same movement and
   completes anchored action recovery before returning. Reduced-motion and
   Terminal previews retain their existing stationary/timing paths.
+- Reach (forward, down): the action pose's contact offset from its feet, in
+  standing-body units. Forward is non-negative; down may be negative to strike
+  above the feet. An empty value uses the standing body's forward edge.
+- Strike point: an optional pair from 0 to 1 across/down the battler's visible body.
+  It follows current artwork and mirroring; empty uses its near visible edge.
+- Animation Movement: `step` retains the short advance; `run-to-target` uses the
+  shared collision-safe graphical approach and backward return. Use separate
+  bindings for melee and ranged/area actions while sharing their effects.
+  Battle previews use the runtime plan and report an unreachable contact.
 - Impact entry: for a pose that plays once, the entry of its frames list
   shown at the action's impact, the start of its target phase. Entries count
   from 0 and include repeats, so frames `0, 1, 1, 2, 2, 3` offer

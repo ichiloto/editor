@@ -310,6 +310,8 @@ final class RecordSchemaCatalog
         $fields = [
             new RecordField('id', 'Id', InputControlType::INTEGER, isReadOnly: true),
             new RecordField('name', 'Name'),
+            new RecordField('movement', 'Movement', options: array_column(\Ichiloto\Engine\Animations\ActionMovement::cases(), 'value'),
+                removeWhenEmpty: true, displayDefault: \Ichiloto\Engine\Animations\ActionMovement::STEP->value),
             RecordField::reference('sourceEffect', 'Caster Effect', 'effects', allowsNone: true, noneLabel: '(none)'),
             RecordField::reference('targetEffect', 'Target Effect', 'effects', allowsNone: true, noneLabel: '(none)'),
             new RecordField('roles', 'Roles', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true,
@@ -341,7 +343,7 @@ final class RecordSchemaCatalog
             // The caster effect's start is offered once there is a caster effect, or a start authored for one.
             fieldsFor: static function (array $row) use ($fields, $anchor, $legacy): array {
                 $own = isset($row['sourceEffect']) || array_key_exists('sourceEffectAnchor', $row)
-                    ? [...array_slice($fields, 0, 3), $anchor, ...array_slice($fields, 3)] : $fields;
+                    ? [...array_slice($fields, 0, 4), $anchor, ...array_slice($fields, 4)] : $fields;
 
                 return array_key_exists('frames', $row) || array_key_exists('cues', $row) ? [...$own, ...$legacy] : $own;
             },
@@ -2319,6 +2321,8 @@ final class RecordSchemaCatalog
                 new RecordField(BattlerBindingProjection::IDENTITY, $actors ? 'Actor' : 'Enemy', isReadOnly: true),
                 RecordField::reference('artwork.image', 'Image', 'png_assets', allowsNone: true),
                 new RecordField('artwork.pivot', 'Ground Point', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 1 (bottom centre)'),
+                new RecordField('strikePoint', 'Strike Point', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true,
+                    displayDefault: '(near visible body edge)'),
                 new RecordField('scale.relativeSize', 'Size', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('scale.sourceSpan', 'Body Span', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('scale.horizontal', 'Measured Across', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
@@ -2350,6 +2354,8 @@ final class RecordSchemaCatalog
                         new RecordField('role', 'Role', options: array_map(static fn(BattlePoseRole $role): string => $role->value, BattlePoseRole::cases())),
                         RecordField::reference('image', 'Image', 'png_assets'),
                         new RecordField('pivot', 'Ground Point', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 1 (bottom centre)'),
+                        new RecordField('reach', 'Reach (forward, down)', codec: RecordFieldCodec::COORDINATES, removeWhenEmpty: true,
+                            displayDefault: '(standing body edge)'),
                         new RecordField('columns', 'Columns', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
                         new RecordField('rows', 'Rows', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
                         new RecordField('frames', 'Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true, displayDefault: '0'),
