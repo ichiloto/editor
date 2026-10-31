@@ -2028,6 +2028,22 @@ read-only; a new animation takes the next number after the largest. Like
 every Database category, edits are undoable and only the values you change
 are rewritten in `assets/Data/animations.php`, so its comments stay.
 
+With a Caster Effect chosen, **Caster Effect Starts** says when a graphical
+battle starts it: `source`, in its own phase before the target's (the
+default, which the file omits), or `target`, at the start of the target
+phase, still on the caster, together with the target effect and the
+caster's impact entry (see Battle Art). Its frames, cues and speed are
+unchanged; damage still lands when the target effect's own timing says. The
+terminal battle always plays it in its own phase. A caster effect that
+declares a cinematic stage needs its own phase, so validation reports one
+started at the target phase with the Engine's reason, and its graphical battle
+preview is refused. A save the Engine could not read is refused before
+anything is written.
+
+The effect's battle preview plays the action through the Engine's own command
+playback, so it shows the caster effect where the animation starts it and the
+caster's pose reaching its impact entry exactly as the target phase begins.
+
 **Roles** say which battle actions play the animation when they name no
 animation of their own. Enter opens a picker of every role the Engine
 supports; each pick adds or removes one role:
@@ -2195,7 +2211,19 @@ bindings file. Per actor (by definition id) or enemy (by name) it holds:
   down. It defaults to bottom centre.
 - Poses: each role the battle shows (idle, attack, guard, knockout and the
   rest), a still or a sheet of frames with columns, rows, frames, frames per
-  second, looping and a rest frame.
+  second, looping and a rest frame. **Loops** `false` is written to the file,
+  since a pose without it loops.
+- Impact entry: for a pose that plays once, the entry of its frames list
+  shown at the action's impact, the start of its target phase. Entries count
+  from 0 and include repeats, so frames `0, 1, 1, 2, 2, 3` offer
+  `Entry 3 · cell 2` for the first time cell 2 plays. The pose plays its
+  entries before the impact at its own rate, holds the last one while a long
+  announcement finishes, and speeds up only those entries when the lead-in is
+  shorter; from the impact on it keeps its own rate. A looping pose offers no
+  entry, and a save whose impact entry the Engine would refuse (the pose loops
+  again, or its frames no longer reach the entry) is refused before anything is
+  written. Without one, the pose keeps its own clock, which the formation views
+  show.
 - Body profile: its size against the scale reference, and the share of its
   image that size measures.
 

@@ -159,6 +159,22 @@ it('reports a stage battle refuses at the binding animation, and refuses saving 
     }
 });
 
+it('reports a staged caster effect anchored to the target phase with the Engine\'s reason, and refuses its graphical preview', function () {
+    $root = battleStageProject();
+    $session = EditorSession::open($root);
+    $anchor = array_find($session->readDatabaseRecord('animations', 0)['rows'], static fn(array $row): bool => $row['label'] === 'Caster Effect Starts');
+    $session->applyDatabaseRecord('animations', 0, $anchor['key'], 'target');
+    $session->saveDatabase('animations');
+    $issues = new EffectValidator()->validate(ProjectWorkspace::fromProject($root));
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->where)->toBe('assets/Data/animations.php: Striking Cut-in sourceEffectAnchor')
+        ->and($issues[0]->message)->toContain('striking-cut-in cannot start at the target phase', 'not a source cinematic stage')
+        ->and(fn() => $session->readEffectBattlePreview(battleStageIndex($session), 0))->toThrow(SessionRefusal::class, 'not a source cinematic stage')
+        // The terminal battle keeps the caster effect in its own phase.
+        ->and($session->readEffectBattlePreview(battleStageIndex($session), 0, presentation: EffectPresentation::TERMINAL)['lane'])->toBe('source');
+});
+
 it('authors camera, covers, subjects and image placement of an ordinary cut-in through the shared stage rows with source-preserving undo', function (bool $paired) {
     $root = battleStageProject($paired);
     $before = require battleStagePath($root);
