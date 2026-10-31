@@ -42,11 +42,12 @@ final class AssetImport
     {
         $bytes = self::readSource($source);
         $label = basename($source);
-        $pixels = PngPixels::decode($bytes, $label);
-        if ($pixels->width > PngAssetPreflight::MAX_DIMENSION || $pixels->height > PngAssetPreflight::MAX_DIMENSION) {
+        $header = PngPixels::readHeader($bytes, $label);
+        if ($header->width > PngAssetPreflight::MAX_DIMENSION || $header->height > PngAssetPreflight::MAX_DIMENSION) {
             throw new InvalidArgumentException(sprintf('%s is %d x %d pixels; the game draws images of at most %d pixels each way.',
-                $label, $pixels->width, $pixels->height, PngAssetPreflight::MAX_DIMENSION));
+                $label, $header->width, $header->height, PngAssetPreflight::MAX_DIMENSION));
         }
+        $pixels = PngPixels::decode($bytes, $label);
         $assets = rtrim($projectRoot, '/') . '/assets';
         $path = self::resolveDestination($assets, $destination);
         $target = $assets . '/' . $path;
