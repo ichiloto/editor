@@ -2613,14 +2613,20 @@ through Speaker Names (an NPC line with no speaker of its own speaks under
 the NPC's name). `Neutral` is always offered and is what a line without an
 emotion shows. A line that holds an emotion its speaker lacks keeps it, and
 an `Emotion Warning` row under it says so; the game shows the identity's
-Neutral artwork until that emotion exists.
+Neutral artwork until that emotion exists. A line that names no emotion while
+its speaker has emotions beyond Neutral also gets an `Emotion Warning` row,
+listing the emotions to choose from, since the game shows Neutral for every
+such line. Choosing any emotion, `Neutral` included, clears it.
 
 A catalogue that builds its identities with PHP code (a loop over
 directories) is shown read-only on Dialogue Portraits, saying so, since a
 save would replace that code with its result; Speaker Names stays editable
 when its labels are plain data. Validation reports a speaker name bound to
-no identity, an image the game cannot draw, and a line emotion its speaker
-lacks.
+no identity, an image the game cannot draw, a line emotion its speaker
+lacks, and, as a warning, every line naming no emotion whose speaker has
+emotions beyond Neutral. Each line warning names the file, the skit beat,
+NPC line, event page or `text` command with the opening of its text, and the
+speaker's emotions.
 
 ### Common Events
 

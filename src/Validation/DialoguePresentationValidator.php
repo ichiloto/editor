@@ -20,8 +20,9 @@ use Throwable;
 /**
  * Checks the game's dialogue presentation as its pages hold it, unsaved edits included: that the Engine reads the
  * catalogue, that every speaker name binds an identity it holds, that every portrait and bust is an image the game
- * can draw, and that every line's emotion is one its speaker's identity has. Missing artwork and unknown emotions
- * are warnings: the Engine draws the line with the identity's Neutral or base artwork, or none.
+ * can draw, that every line's emotion is one its speaker's identity has, and that every line whose speaker has more
+ * than one emotion names one. Missing artwork, unknown emotions and lines naming none are warnings: the Engine draws
+ * the line with the identity's Neutral or base artwork, or none.
  */
 final class DialoguePresentationValidator
 {
@@ -87,13 +88,12 @@ final class DialoguePresentationValidator
         return $issues;
     }
 
-    /** @return Issue[] Every line whose emotion its speaker's identity does not have. */
+    /** @return Issue[] Every line whose emotion its speaker's identity does not have, or that names none it could. */
     private function checkLines(ProjectWorkspace $workspace, DialoguePresentationCatalog $catalogue): array
     {
         $issues = [];
         $check = function (string $where, DialogueLineSpeaker $rule, array $line, array $owner = []) use (&$issues, $catalogue): void {
-            if (! array_key_exists('emotion', $line)) { return; }
-            $warning = DialogueEmotionFields::describeWarning($line['emotion'], DialogueEmotionFields::describeChoices($rule, $line, $owner, $catalogue));
+            $warning = DialogueEmotionFields::describeWarning($line['emotion'] ?? null, DialogueEmotionFields::describeChoices($rule, $line, $owner, $catalogue));
             if ($warning !== null) {
                 $issues[] = Issue::warning($where, $warning);
             }
@@ -105,7 +105,7 @@ final class DialoguePresentationValidator
             $skit = (array) $record->toArray();
             $where = $relative($record->sourcePath ?? 'assets/Data/Skits/' . $record->recordId . '.php');
             foreach (array_values((array) ($skit['beats'] ?? [])) as $index => $beat) {
-                if (is_array($beat)) { $check(sprintf('%s:beat %d', $where, $index + 1), DialogueLineSpeaker::forSkitBeat(), $beat); }
+                if (is_array($beat)) { $check(sprintf('%s:beat %d %s', $where, $index + 1, self::quoteLine($beat)), DialogueLineSpeaker::forSkitBeat(), $beat); }
             }
         }
         foreach ($workspace->getRecordDatabase('common_events')?->getRecords() ?? [] as $record) {
@@ -119,7 +119,7 @@ final class DialoguePresentationValidator
                 if (! is_array($npc)) { continue; }
                 $npcWhere = sprintf('%s:NPC %s', $where, (string) ($npc['id'] ?? $npc['name'] ?? $index + 1));
                 foreach ($this->listPages((array) ($npc['dialogue'] ?? [])) as $line => $page) {
-                    $check(sprintf('%s line %d', $npcWhere, $line + 1), DialogueLineSpeaker::forNpcLine(), $page, $npc);
+                    $check(sprintf('%s line %d %s', $npcWhere, $line + 1, self::quoteLine($page)), DialogueLineSpeaker::forNpcLine(), $page, $npc);
                 }
                 $this->visitTextCommands($npc, $npcWhere, $check);
             }
@@ -129,7 +129,7 @@ final class DialoguePresentationValidator
                 $class = ltrim((string) ($event['class'] ?? ''), '\\');
                 if (in_array($class, [DialogueEventTrigger::class, ShopEventTrigger::class], true)) {
                     foreach ($this->listPages((array) ($event['data']['dialogue'] ?? [])) as $line => $page) {
-                        $check(sprintf('%s page %d', $eventWhere, $line + 1), DialogueLineSpeaker::forText(), $page);
+                        $check(sprintf('%s page %d %s', $eventWhere, $line + 1, self::quoteLine($page)), DialogueLineSpeaker::forText(), $page);
                     }
                 }
                 $this->visitTextCommands($event, $eventWhere, $check);
@@ -174,10 +174,16 @@ final class DialoguePresentationValidator
     private function visitTextCommands(array $payload, string $where, callable $check): void
     {
         if (($payload['type'] ?? null) === 'text') {
-            $check(sprintf('%s:text "%s"', $where, mb_strimwidth((string) ($payload['text'] ?? ''), 0, 40, '...')), DialogueLineSpeaker::forText(), $payload);
+            $check(sprintf('%s:text %s', $where, self::quoteLine($payload)), DialogueLineSpeaker::forText(), $payload);
         }
         foreach ($payload as $value) {
             if (is_array($value)) { $this->visitTextCommands($value, $where, $check); }
         }
+    }
+
+    /** The opening of a line's text, quoted, so an author finds the line among its neighbours. */
+    private static function quoteLine(array $line): string
+    {
+        return '"' . mb_strimwidth(is_scalar($line['text'] ?? null) ? (string) $line['text'] : '', 0, 40, '...') . '"';
     }
 }
