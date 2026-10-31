@@ -40,6 +40,7 @@ use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
 use Ichiloto\Editor\Events\ScriptReferenceScope;
 use Ichiloto\Editor\Field\NpcBedFields;
+use Ichiloto\Editor\Field\NpcPlacementFields;
 use Ichiloto\Editor\Events\ScriptReferenceSource;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
@@ -149,6 +150,7 @@ final class RecordSchemaCatalog
             self::animations(),
             self::battleEntryRules(),
             self::crisisAbilities(),
+            \Ichiloto\Editor\Progression\WorldAbilityFields::getSchema(),
             self::items(),
             self::weapons(),
             self::armors(),
@@ -2629,6 +2631,8 @@ final class RecordSchemaCatalog
             // The NPC's inline script: the shared command vocabulary, in a
             // frame. The runtime runs it INSTEAD of dialogue when non-empty.
             commandLists: ['script' => self::eventCommandList('script', $graphical)],
+            // Named destinations commit_npc_placement saves, beside the pages.
+            subLists: [NpcPlacementFields::getList()],
         );
     }
 
@@ -2972,7 +2976,7 @@ final class RecordSchemaCatalog
                         array_push($fields, ...InnPresentationFields::getFields($value, $field->key, $field->label, $graphical));
                     } else {
                         array_push($fields, ...($field->kind === ScriptCommandFieldKind::LIST
-                            ? [new RecordField($field->key, $field->label, isReadOnly: true)] : self::describeRegisteredField($field)));
+                            ? [new RecordField($field->key, $field->label, isReadOnly: true)] : self::describeRegisteredField($field, $definition->fields)));
                     }
                 }
                 return $fields;
@@ -3014,7 +3018,8 @@ final class RecordSchemaCatalog
                 // holds letters alone.
                 prefix: lcfirst(implode('', array_map(ucfirst(...), preg_split('/[^A-Za-z]+/', $listField->key, flags: PREG_SPLIT_NO_EMPTY) ?: ['entry']))),
                 singular: strtolower($listField->label) . ' entry',
-                fields: array_merge(...array_map(self::describeRegisteredField(...), $listField->fields)),
+                fields: array_merge(...array_map(static fn(ScriptCommandField $field): array => self::describeRegisteredField($field, $listField->fields),
+                    $listField->fields)),
                 blank: self::getRegisteredBlankEntry($listField->fields[0]),
             );
         }
@@ -3040,9 +3045,10 @@ final class RecordSchemaCatalog
      * keep what the author sets, since a project's handler decides what an
      * absent one means.
      *
+     * @param list<ScriptCommandField> $siblings The fields declared beside it, which a placement's NPC is among.
      * @return RecordField[]
      */
-    private static function describeRegisteredField(ScriptCommandField $field): array
+    private static function describeRegisteredField(ScriptCommandField $field, array $siblings): array
     {
         return match ($field->kind) {
             ScriptCommandFieldKind::TEXT => [new RecordField($field->key, $field->label, removeWhenEmpty: ! $field->required)],
@@ -3050,7 +3056,7 @@ final class RecordSchemaCatalog
             ScriptCommandFieldKind::NUMBER => [new RecordField($field->key, $field->label, InputControlType::FLOAT)],
             ScriptCommandFieldKind::BOOLEAN => [RecordField::boolean($field->key, $field->label, removeWhenEmpty: false)],
             ScriptCommandFieldKind::OPTION => [new RecordField($field->key, $field->label, options: $field->options, removeWhenEmpty: ! $field->required)],
-            ScriptCommandFieldKind::REFERENCE => [self::describeRegisteredReference($field)],
+            ScriptCommandFieldKind::REFERENCE => [self::describeRegisteredReference($field, $siblings)],
             ScriptCommandFieldKind::POSITION => [
                 new RecordField("{$field->key}.x", "{$field->label} X", InputControlType::INTEGER),
                 new RecordField("{$field->key}.y", "{$field->label} Y", InputControlType::INTEGER),
@@ -3063,9 +3069,13 @@ final class RecordSchemaCatalog
      * Describes a declared reference field by where its values come from. A
      * kind this Editor does not know stays editable as plain text, labelled
      * as such, and validation reports each command that uses it; it never
-     * stops the schema, and so the project, from loading.
+     * stops the schema, and so the project, from loading. An NPC placement is
+     * chosen among the placements of the NPC its command's NPC field selects;
+     * a declaration naming no single NPC beside it is kept as typed too.
+     *
+     * @param list<ScriptCommandField> $siblings The fields declared beside it.
      */
-    private static function describeRegisteredReference(ScriptCommandField $field): RecordField
+    private static function describeRegisteredReference(ScriptCommandField $field, array $siblings): RecordField
     {
         $source = ScriptReferenceSource::forReference($field->reference
             ?? throw new LogicException("Reference field {$field->key} names no resource."));
@@ -3079,6 +3089,9 @@ final class RecordSchemaCatalog
                 $source->category ?? throw new LogicException("Reference field {$field->key} has no picker category."),
                 allowsNone: ! $field->required,
             ),
+            ScriptReferenceScope::SELECTED_NPC => ($npc = ScriptReferenceSource::findSelectingNpcField($field, $siblings)) === null
+                ? new RecordField($field->key, sprintf('%s (typed: no NPC field beside it)', $field->label), removeWhenEmpty: ! $field->required)
+                : RecordField::npcPlacement($field->key, $field->label, substr($npc->key, (int) strrpos('.' . $npc->key, '.')), $field->required),
             ScriptReferenceScope::UNSUPPORTED => new RecordField($field->key, sprintf('%s (typed: unknown reference kind %s)', $field->label, $source->reference->value),
                 removeWhenEmpty: ! $field->required),
         };

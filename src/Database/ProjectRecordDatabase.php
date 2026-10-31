@@ -96,7 +96,8 @@ final class ProjectRecordDatabase
         if ($references !== null && $field->entryChoices !== null && $value !== null) {
             // The choices read what the field lives in, as its row does.
             $holder = self::readNested((array) $record->toArray(), implode('.', array_slice($ownerPath === [] ? explode('.', $field->key) : $ownerPath, 0, -1)));
-            if (! in_array($value, $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], (array) $record->toArray()), true)) {
+            if (! in_array($value, $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], (array) $record->toArray(),
+                $field->entryChoicesSelector), true)) {
                 throw new \InvalidArgumentException(sprintf('%s "%s" is not one this entry offers; choose one of its own.', $field->label, strval($value)));
             }
         }
@@ -662,7 +663,7 @@ final class ProjectRecordDatabase
         // A field of the entry itself lives in the entry.
         $holderPath = implode('.', array_slice(explode('.', $field->key), 0, -1));
         $holder = $holderPath === '' ? $entry : self::readNested($entry, $holderPath);
-        $values = $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], $owner);
+        $values = $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], $owner, $field->entryChoicesSelector);
         $row['options'] = ['', ...$values];
         $row['choices'] = [['value' => '', 'label' => $field->noneLabel()],
             ...array_map(static fn(string $value): array => ['value' => $value, 'label' => $value], $values)];
@@ -1647,7 +1648,7 @@ final class ProjectRecordDatabase
 
         $entries = $record->getEntries($subList);
         $position = $at === null ? count($entries) : max(0, min(count($entries), $at));
-        array_splice($entries, $position, 0, [self::withUniqueKey($subList, $entries, $entry ?? $subList->blank)]);
+        array_splice($entries, $position, 0, [self::withUniqueKey($subList, $entries, $entry ?? $subList->getBlank((array) $record->toArray()))]);
         $this->writeRecordEntries($record, $subList, $entries, static fn(int $old): int => $old >= $position ? $old + 1 : $old);
         $this->touchState();
 

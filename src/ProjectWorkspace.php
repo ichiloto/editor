@@ -23,6 +23,8 @@ use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Events\ScriptCommandUses;
 use Ichiloto\Editor\Maps\MapFolder;
 use Ichiloto\Editor\Progression\ProjectWorldAbilities;
+use Ichiloto\Editor\Progression\WorldAbilityFields;
+use Ichiloto\Editor\Progression\WorldAbilityReferences;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
@@ -78,6 +80,10 @@ final readonly class ProjectWorkspace
             ScriptCommandReference::INCOME_SCHEDULE)[$id] ?? [];
         $this->getRecordDatabase('income_schedules')?->useIdentityReferences(fn(string $id): bool => $incomeUses($id) !== []);
         $this->getRecordDatabase('income_schedules')?->useDeletionReferences($incomeUses);
+        // A world power's id follows its name until a condition or command names it, and stays while one does.
+        $worldAbilityUses = fn(string $id): array => new WorldAbilityReferences($this)->describe($id);
+        $this->getRecordDatabase(WorldAbilityFields::CATEGORY)?->useIdentityReferences(fn(string $id): bool => $worldAbilityUses($id) !== []);
+        $this->getRecordDatabase(WorldAbilityFields::CATEGORY)?->useDeletionReferences($worldAbilityUses);
         // Marker roles follow the place categories as their page holds them, unsaved edits included.
         $this->menuPresentation?->useCategoryCatalog(fn(): \Ichiloto\Engine\Field\MapCategoryCatalog => new ReferenceCatalog($this)->getMapCategoryCatalog());
         // A place category stays while a landmark names it.
@@ -117,12 +123,20 @@ final readonly class ProjectWorkspace
     }
 
     /**
-     * The exploration powers the project declares, read from its current
-     * source: what pickers offer and validation checks references against.
+     * The exploration powers the project declares, as its World Powers page
+     * holds them, unsaved edits included: what pickers offer and validation
+     * checks references against. Until the page holds unsaved edits it holds
+     * the file as it stands, which is read itself, so the Engine also judges
+     * what the page cannot show (a file that returns no list).
      */
     public function getWorldAbilities(): ProjectWorldAbilities
     {
-        return ProjectWorldAbilities::fromProject($this->projectRoot);
+        $database = $this->getRecordDatabase(WorldAbilityFields::CATEGORY);
+
+        return $database === null || ! $database->isEditable() || ! $database->isDirty()
+            ? ProjectWorldAbilities::fromProject($this->projectRoot)
+            : ProjectWorldAbilities::fromEntries(array_map(static fn(\Ichiloto\Editor\Database\ProjectRecord $record): mixed => $record->toArray(),
+                $database->getRecords()));
     }
 
     /**
@@ -459,8 +473,10 @@ final readonly class ProjectWorkspace
      */
     public function analyzeReachability(): ProjectReachability
     {
-        // The Engine reads world_ability conditions through the installed catalogue: install the current source's.
-        ProjectWorldAbilities::installFromProject($this->projectRoot)->assertReadable();
+        // The Engine reads world_ability conditions through the installed catalogue: install the powers as saving would leave them.
+        $worldAbilities = $this->getWorldAbilities();
+        $worldAbilities->activate();
+        $worldAbilities->assertReadable();
         $unsaved = [];
         foreach ($this->maps as $map) {
             if ($map->isDirty()) {

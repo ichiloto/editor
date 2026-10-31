@@ -16,10 +16,12 @@ use Throwable;
  * read through the Engine's own {@see WorldAbilityCatalog::fromProject()}.
  *
  * The project source owns every ability; the Editor keeps no copy. Each read
- * takes the file as it stands, so a picker, a validation run and a condition
- * evaluation all see the same current definitions. A file the Engine refuses
- * leaves no catalogue and records why, for validation to report: the game
- * refuses to start on it too.
+ * takes the source as it stands: the file, or while the World Powers page is
+ * open the powers as it holds them, unsaved edits included, which is the file
+ * saving would write ({@see fromEntries()}). A picker, a validation run and a
+ * condition evaluation all see the same current definitions. A source the
+ * Engine refuses leaves no catalogue and records why, for validation to
+ * report: the game refuses to start on it too.
  *
  * Condition evaluation the Editor runs through the Engine (reachability,
  * previews) reads the catalogue the application installed, as the game's own
@@ -52,6 +54,20 @@ final readonly class ProjectWorldAbilities
             return new self(WorldAbilityCatalog::fromProject(rtrim($projectRoot, '/\\') . DIRECTORY_SEPARATOR . 'assets'), null);
         } catch (Throwable $error) {
             return new self(null, $error->getMessage());
+        }
+    }
+
+    /**
+     * Reads world abilities as the source would hold these entries, through the Engine's own catalogue.
+     *
+     * @param list<mixed> $entries The powers, in authored order.
+     */
+    public static function fromEntries(array $entries): self
+    {
+        try {
+            return new self(new WorldAbilityCatalog(array_values($entries)), null);
+        } catch (Throwable $error) {
+            return new self(null, sprintf('%s: %s', self::RELATIVE_PATH, $error->getMessage()));
         }
     }
 

@@ -8,6 +8,7 @@ use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Field\NpcBedFields;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
+use Ichiloto\Editor\Field\NpcPlacementFields;
 use Ichiloto\Engine\Field\Validation\MapCompletenessValidator;
 use Ichiloto\Engine\Field\Validation\MapTerrainKindRule;
 use Ichiloto\Engine\Field\Validation\MapValidationIssue;
@@ -58,8 +59,8 @@ final class MapCompletenessCheck
                 // The resources as this session holds them: one added in the same change set resolves.
                 self::readFieldCatalog($map),
                 requiresGraphics: $map->listTilesetIds() !== [],
-                // The physical grid the field resolves, which beds are checked against: declared or legacy alike.
-                occupancy: self::declaresBeds($map) ? $map->getPhysicalOccupancy() : null,
+                // The physical grid the field resolves, which beds and named NPC placements are checked against: declared or legacy alike.
+                occupancy: self::declaresPhysicalNpcCells($map) ? $map->getPhysicalOccupancy() : null,
             );
             if (array_any($map->getEditableData()['events'] ?? [], static fn($event): bool => is_array($event)
                 && is_a($event['class'] ?? '', \Ichiloto\Engine\Events\Triggers\PassageEventTrigger::class, true))) {
@@ -82,12 +83,13 @@ final class MapCompletenessCheck
         return self::describeIssues($map, $found);
     }
 
-    /** Whether any of the map's NPCs rests in a bed, whose physical cells the check reads. */
-    private static function declaresBeds(ProjectMap $map): bool
+    /** Whether any of the map's NPCs rests in a bed or declares named placements, whose physical cells the check reads. */
+    private static function declaresPhysicalNpcCells(ProjectMap $map): bool
     {
         $npcs = $map->getEditableData()['npcs'] ?? [];
 
-        return is_array($npcs) && array_any($npcs, static fn(mixed $npc): bool => is_array($npc) && array_key_exists(NpcBedFields::BED, $npc));
+        return is_array($npcs) && array_any($npcs, static fn(mixed $npc): bool => is_array($npc)
+            && (array_key_exists(NpcBedFields::BED, $npc) || array_key_exists(NpcPlacementFields::PLACEMENTS, $npc)));
     }
 
     /**

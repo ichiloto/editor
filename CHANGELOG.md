@@ -4,10 +4,28 @@
 
 ### Added
 
+- Database > World Powers authors `assets/Data/world-abilities.php` in its own source: each power's name (the id
+  follows it until a condition or command names the power), description, `Unlocks When` conditions, theme
+  `Icon Role` (picked through the new `icon_roles` reference category) and first-use message and effect (picked
+  from the project's effects). First-use hints are shown and kept as written: the Engine does not yet expose the
+  semantic input actions they name. Saving puts the file through the Engine's `WorldAbilityCatalog` and refuses
+  duplicate ids, undeclared dependencies, dependency cycles and malformed prompts before writing. A named power
+  cannot be deleted. Pickers, validation and reachability read the powers as the page holds them, unsaved edits
+  included; validation also reports a first-use effect that does not play once on the field and quests or items
+  an unlock condition names that the project lacks.
+- NPC named placements and `commit_npc_placement`, as the Engine's `CinematicCommandSchema::export()['npcPlacements']`
+  defines them: the NPC Inspector's `Named Placements` rows author each placement's name, cell and optional facing.
+  The Engine's `NpcPlacementSet` and `MapNpcPlacementRule` judge every edit, the NPC's own cell (its `default`
+  placement) and canvas moves included, and a name or cell they refuse is refused before the edit is kept. The
+  `npc_placement` script reference kind is picked among the placements of the NPC the command's own NPC field
+  selects, on the event's map or every map a cinematic runs on, and a value outside them is refused before
+  writing. A placement a command names is not removed or renamed. Validation reports a placement the NPC does not
+  declare on the map the script is on, an NPC with no placements, a declaration with no single NPC field beside
+  its placement field, and hand-written placements off the map's physical floor (`npc.placement`).
 - World powers, as the Engine's `WorldAbilityCatalog` reads them from `assets/Data/world-abilities.php`: the
   `world_ability` script reference kind (the `show_power_unlocks` command's **Power** rows) and the `world_ability`
   condition's **World Power** name pick among the project's declared powers through the new `world_abilities`
-  reference category, by stable id, labelled with their names, read from the file as it stands. Validation reports
+  reference category, by stable id, labelled with their names, read as Database > World Powers holds them. Validation reports
   a power the file does not declare in scripts, condition lines and the dash's unlock conditions, and reports a
   file the Engine refuses. Opening a project installs its catalogue for Engine evaluation (a project whose file
   cannot be read installs none, so another project's powers never answer), and reachability analysis, save
@@ -171,6 +189,9 @@
 
 ### Fixed
 
+- Registered commands that name an NPC through an `npc` reference field (`set_bed_posture`, `commit_npc_placement`)
+  now count as naming it: such an NPC is no longer deleted, or its id changed, while a script still names it.
+- Adding at an NPC's `Named Placements` heading or placement row adds to that list, never to its pages.
 - Every project failed to open, validate or render with `Unhandled match case ... CONVERSATION_GROUP` after Engine
   bf49893 added the `npc` and `conversation_group` reference kinds: the Editor mapped Engine reference kinds to
   pickers in a closed `match` that the schema catalogue runs for every project. `ScriptReferenceSource` now maps

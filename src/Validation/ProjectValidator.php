@@ -44,6 +44,7 @@ use Ichiloto\Engine\Field\EncounterTable;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
 use Ichiloto\Engine\Field\DashSettings;
+use Ichiloto\Engine\Field\NpcPlacementSet;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Ichiloto\Engine\Field\SkitSpeaker;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
@@ -3655,6 +3656,7 @@ class ProjectValidator
     return [
       ...$this->checkConfigReferences($workspace, $known),
       ...$this->checkDashConditionReferences($workspace, $known),
+      ...$this->checkWorldAbilityConditionReferences($workspace, $known),
       ...$this->checkSkitReferences($workspace, $known),
       ...$this->checkMapReferences($workspace, $known),
       ...$this->checkScriptReferences($workspace, $known),
@@ -3678,6 +3680,25 @@ class ProjectValidator
     return is_array($conditions) && array_is_list($conditions)
       ? $this->checkConditions($conditions, 'assets/Data/system.php: dash conditions', $known)
       : [];
+  }
+
+  /**
+   * Checks what each world power's unlock conditions name: the quests and
+   * items it waits on. The powers it depends on are the Engine catalogue's
+   * own to check, with its dependency cycles.
+   *
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkWorldAbilityConditionReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $issues = [];
+    foreach ($workspace->getWorldAbilities()->catalog?->getAbilities() ?? [] as $ability) {
+      $issues = [...$issues, ...$this->checkConditions($ability->conditions,
+        sprintf('%s: world power %s conditions', ProjectWorldAbilities::RELATIVE_PATH, $ability->id), $known)];
+    }
+
+    return $issues;
   }
 
   /**
@@ -5086,13 +5107,25 @@ class ProjectValidator
    */
   protected function checkWorldAbilitySource(ProjectWorkspace $workspace): array
   {
-    $problem = $workspace->getWorldAbilities()->loadProblem;
+    $abilities = $workspace->getWorldAbilities();
+    $problem = $abilities->loadProblem;
+    if ($problem !== null) {
+      return [Issue::error(
+        ProjectWorldAbilities::RELATIVE_PATH,
+        sprintf('The project\'s world abilities could not be read: %s', $problem),
+        'The game will not start until it is fixed. Until then every world power reference is reported as undeclared and reachability is not checked.'
+      )];
+    }
+    $issues = [];
+    // A first-use effect plays once in a finite field effect session, as a field_animation's does.
+    foreach ($abilities->catalog?->getAbilities() ?? [] as $ability) {
+      if ($ability->firstUse?->effect !== null) {
+        $issues = [...$issues, ...EffectValidator::checkOneShotFieldEffect($workspace->catalogs, $ability->firstUse->effect,
+          sprintf('%s: world power %s first-use effect', ProjectWorldAbilities::RELATIVE_PATH, $ability->id))];
+      }
+    }
 
-    return $problem === null ? [] : [Issue::error(
-      ProjectWorldAbilities::RELATIVE_PATH,
-      sprintf('The project\'s world abilities could not be read: %s', $problem),
-      'The game will not start until it is fixed. Until then every world power reference is reported as undeclared and reachability is not checked.'
-    )];
+    return $issues;
   }
 
   /**
@@ -5164,7 +5197,7 @@ class ProjectValidator
     ?array $conversationGroups = null,
   ): array
   {
-    $check = function (ScriptCommandField $field, array $data) use (&$check, $definition, $where, $known, $map, $conversationGroups): array {
+    $check = function (ScriptCommandField $field, array $data, array $siblings) use (&$check, $definition, $where, $known, $map, $conversationGroups): array {
       $value = ScriptCommandField::readPath($data, $field->key);
 
       if ($field->kind === ScriptCommandFieldKind::REFERENCE && $field->reference !== null) {
@@ -5193,6 +5226,7 @@ class ProjectValidator
               'The runtime stops the cinematic at this command. Choose a group its conversation declares, or declare it.'
             )],
           },
+          ScriptReferenceScope::SELECTED_NPC => $this->checkNpcPlacementReference($definition, $field, $siblings, $data, $text, $where, $map),
           ScriptReferenceScope::UNSUPPORTED => [Issue::error(
             $where,
             sprintf('Its %s command\'s %s is an Engine "%s" reference this Editor does not know.', $definition->type, strtolower($field->label), $source->reference->value),
@@ -5209,7 +5243,7 @@ class ProjectValidator
 
       foreach (array_filter($value, is_array(...)) as $entry) {
         foreach ($field->fields as $entryField) {
-          $issues = [...$issues, ...$check($entryField, $entry)];
+          $issues = [...$issues, ...$check($entryField, $entry, $field->fields)];
         }
       }
 
@@ -5218,7 +5252,65 @@ class ProjectValidator
     $issues = [];
 
     foreach ($definition->fields as $field) {
-      $issues = [...$issues, ...$check($field, $command)];
+      $issues = [...$issues, ...$check($field, $command, $definition->fields)];
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks a named NPC placement against the NPC its command's NPC field
+   * selects, on every map the script can be on at that point: that NPC must
+   * declare named placements through the Engine's reader, and this one among
+   * them or `default`. A declaration naming no single NPC beside the field
+   * is reported, as its value cannot be chosen. Unknown maps, and NPCs the
+   * NPC check already reports missing, are not judged here; a map whose
+   * placements the Engine refuses is reported by the map's own preflight.
+   *
+   * @param list<ScriptCommandField> $siblings The fields declared beside it.
+   * @param array<string, mixed> $data The object the fields live in.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcPlacementReference(ScriptCommandDefinition $definition, ScriptCommandField $field, array $siblings,
+    array $data, string $placement, string $where, ?ScriptMapState $map): array
+  {
+    $npcField = ScriptReferenceSource::findSelectingNpcField($field, $siblings);
+    if ($npcField === null) {
+      return [Issue::error($where, sprintf('Its %s command\'s %s cannot be chosen.', $definition->type, strtolower($field->label)),
+        ScriptReferenceSource::describeUnselectedNpc($field))];
+    }
+    $npcValue = ScriptCommandField::readPath($data, $npcField->key);
+    $npcId = is_string($npcValue) ? trim($npcValue) : '';
+    if ($placement === '' || $npcId === '' || $map?->mapIds === null || $this->validatedWorkspace === null) {
+      return [];
+    }
+    $issues = [];
+    foreach ($this->validatedWorkspace->maps as $candidate) {
+      if (! in_array($candidate->mapId, $map->mapIds, true)) {
+        continue;
+      }
+      foreach ($candidate->getNpcs()->all() as $npc) {
+        $entry = $npc->toArray();
+        if ($npc->getId() !== $npcId) {
+          continue;
+        }
+        if (! array_key_exists('placements', $entry)) {
+          $issues[] = Issue::error($where,
+            sprintf('Its %s command commits NPC "%s" to placement "%s", but that NPC declares no placements on %s.', $definition->type, $npcId, $placement, $candidate->mapId),
+            'The runtime stops the script at this command. Give the NPC named placements on its Placement rows, or remove the command.');
+          continue;
+        }
+        try {
+          $declared = array_map(strval(...), array_keys(NpcPlacementSet::fromEntry($entry)->placements));
+        } catch (\InvalidArgumentException) {
+          continue;
+        }
+        if (! in_array($placement, $declared, true)) {
+          $issues[] = Issue::error($where,
+            sprintf('Its %s command commits NPC "%s" to placement "%s", which that NPC does not declare on %s.', $definition->type, $npcId, $placement, $candidate->mapId),
+            sprintf('The runtime stops the script at this command. Choose one of: %s.', implode(', ', $declared)));
+        }
+      }
     }
 
     return $issues;

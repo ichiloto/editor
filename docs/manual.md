@@ -971,7 +971,7 @@ category uses - pickers, condition lines, world-write rows, command frames,
 | Group | Rows |
 | --- | --- |
 | Identity | `Id` (read-only), `Name` |
-| Placement | `X`, `Y` (the canvas moves it too) |
+| Placement | `X`, `Y` (the canvas moves it too), then `Named Placements` with each placement's `Name`, `X`, `Y` and `Facing` |
 | Bed | `Bed`, and once it rests in one `Occupant Attachment`, `Starting Posture`, `Occupied Bed Glyph`; the graphical editor adds its poses and clips |
 | Appearance | `Sprite`, `Facing North/South/East/West`, `Graphical Sprites` |
 | Movement | `Movement` (`fixed` / `wander`), `Direction Fix` (`false` / `true`), and while wandering `Wander X/Y/Width/Height` |
@@ -1027,6 +1027,22 @@ character says is read in the pane rather than in the edit buffer.
   and occupants sharing one bed whose presence conditions can both hold
   (`npc.bed`). Posture changes during a scene are the `set_bed_posture`
   command's.
+- **Named placements.** A placement is a stable name for another cell the
+  NPC stands on once a scene has walked it there; the `commit_npc_placement`
+  command saves that name, and the map's current cells place the NPC at load.
+  The NPC's own `X` and `Y` are its `default` placement. With the cursor on
+  the `Named Placements` heading, `Shift+O` adds one, starting on the NPC's
+  own cell; on a placement's rows `Shift+O` adds another after it and
+  `Shift+X` removes it. `Facing` is optional: cleared, the placement keeps
+  the heading the NPC stands with. A placement needs a stable NPC id. The
+  Engine's `NpcPlacementSet` reads every edit and its `MapNpcPlacementRule`
+  checks every destination, the NPC's own cell included, against the map's
+  physical floor, declared or resolved from its glyphs. A name it refuses
+  (`default`, a duplicate) or a cell that is not clear floor is refused
+  before the edit is kept, and so is moving the NPC onto such a cell. A
+  placement a `commit_npc_placement` command names is not removed or
+  renamed while it does; the refusal lists the scripts. Validation runs the
+  same rule over hand-written placements (`npc.placement`).
 - **Map-owned appearance.** For a fixed interaction already drawn on a map
   layer (such as a mounted notice on `fixtures`), clear the `Sprite` text
   completely and press `Enter`. This stores `'sprite' => ''`, not a missing
@@ -2301,6 +2317,34 @@ Each schedule has:
 Validation reads each schedule as the game will and names every one the game
 would refuse. The notices' wording lives in Terms (`messages.income.*`).
 
+### World Powers
+
+The project's exploration powers, such as Dash, in
+`assets/Data/world-abilities.php`, the file the Engine's `WorldAbilityCatalog`
+reads. A project without the file declares none; saving the first power
+creates it. The Engine's story events guide describes the runtime.
+
+Each power has:
+
+- a `Name`, which players read; the `Id` follows the name until a
+  `world_ability` condition or a command names the power, and then stays. A
+  power something names cannot be deleted; the status line lists what names it;
+- a `Description`;
+- `Unlocks When`, the shared world-condition editor. Every condition must
+  hold. A `world_ability` condition makes the power wait on another;
+- `Icon Role`, picked from the semantic icon roles the menu theme offers;
+- a first-use prompt: `First-Use Message` and `First-Use Effect`, picked
+  from the project's effects. `First-Use Hints` name input actions, which
+  the Editor cannot list yet; they are shown and kept as written.
+
+Edits are written into the file's own source. The Engine's catalogue reads
+the powers before anything is saved: a duplicate id, a dependency on a power
+that is not declared, a dependency cycle or a malformed first-use prompt is
+refused with its reason and nothing is written. Pickers and validation read
+the powers as this page holds them, unsaved edits included. Validation also
+reports a first-use effect that does not play once on the field, and quests
+or items an unlock condition names that the project lacks.
+
 ### Word Forms
 
 The game inflects names by English rules: one Potion, two Potions. A word
@@ -2636,8 +2680,8 @@ Supported command types, matching the engine's interpreter:
 | `branch` | Conditions, Then (fixed), Else (fixed) |
 
 Registered commands follow the built-in ones in the `Type` options: the
-Engine's `shop`, `inn`, `payday`, `collect_income`, `adjust_income`, `recruit_actor`, `select_conversation_group`
-and `set_bed_posture`, then any the project declares in
+Engine's `shop`, `inn`, `payday`, `collect_income`, `adjust_income`, `recruit_actor`, `select_conversation_group`,
+`set_bed_posture`, `commit_npc_placement` and `show_power_unlocks`, then any the project declares in
 `assets/Data/script-commands.php` (see the Engine's story events guide). Their
 rows come from their declarations:
 
@@ -2651,16 +2695,21 @@ rows come from their declarations:
 | `recruit_actor` | Actor (picked from Actors; required), Starting Level (`authored` or `partyAverage`; average of the permanent roster including reserves, rounded down before joining) |
 | `select_conversation_group` | Group (picked from the cinematic's conversation groups; required) |
 | `set_bed_posture` | Occupant (picked from the map's NPCs; required), Posture (`lying`, `sitting` or `standing`), Transition Seconds (0 to 30) |
+| `commit_npc_placement` | NPC (picked from the map's NPCs; required), Placement (picked from that NPC's named placements or `default`; required) |
+| `show_power_unlocks` | World Powers (picked from World Powers), Actor, Current Crisis Technique, Opening Announcement |
 
 A reference's picker lists what the command can name where it runs. An
-`Occupant` is an NPC of the map an event belongs to; in a cinematic it is an
+`Occupant` or `NPC` is an NPC of the map an event belongs to; in a cinematic it is an
 NPC of its start map or of any map it transfers to, and in a Common Event one
-of the map its callers run it on. A `Group` is one the cinematic declares under
+of the map its callers run it on. A `Placement` is one the NPC the command's
+`NPC` row selects declares, on those same maps; choose the NPC first. A `Group` is one the cinematic declares under
 `presentation.conversation.groups`. Where those choices are known, a value
 outside them is refused before anything changes. Validation follows the
 script: it reports an NPC that is not on the map the script is on at that
-command, a group the cinematic does not declare, and a group selected outside
-a cinematic.
+command, a placement that NPC does not declare there or an NPC that declares
+none, a group the cinematic does not declare, and a group selected outside
+a cinematic. `commit_npc_placement` saves the placement only once the real
+NPC has walked there; route it with `move_route` first.
 
 When the Engine has a reference kind this Editor does not know, the project
 still opens. The field is typed as plain text, its label names the kind, and
@@ -2856,8 +2905,10 @@ that id is unlocked. The powers are declared in
 optional icon role), the file the Engine's `WorldAbilityCatalog` reads. The
 condition editor's **World Power** name and the `show_power_unlocks` command's
 **Power** rows pick among the declared powers by id, labelled with their names,
-in authored order. The list is read from the file as it stands each time, so a
-change to the file appears without reopening the project.
+in authored order. They are authored on Database > World Powers; the list is
+read as that page holds the powers, unsaved edits included, and otherwise
+from the file as it stands, so a change to the file appears without
+reopening the project.
 
 Validation reports a power reference the file does not declare, in scripts,
 condition lines and the dash's unlock conditions in Database > System, and

@@ -83,6 +83,25 @@ final class MenuPresentationSettings extends ProjectSettingsFile
         return str_starts_with($path, self::ICONS . '.');
     }
 
+    /**
+     * The semantic icon roles the theme offers, as this file holds them, unsaved edits included: every role it
+     * binds and every atlas marker role the Engine draws. A world power or crisis technique names one of these.
+     *
+     * @return list<string>
+     */
+    public function listIconRoles(): array
+    {
+        $roles = [];
+        foreach ($this->getSettingRecords([self::ICONS]) as $record) {
+            $path = strval($record->get('path'));
+            if (self::isIcon($path)) {
+                $roles[] = substr($path, strlen(self::ICONS) + 1);
+            }
+        }
+
+        return array_values(array_unique($roles));
+    }
+
     /** Whether a setting binds an atlas marker the Engine draws with a pictogram of its own when unbound. */
     public function isMarkerIcon(string $path): bool
     {
