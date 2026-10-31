@@ -20,6 +20,8 @@ enum ScriptReferenceScope: string
     case CURRENT_MAP = 'current_map';
     /** Something the cinematic running the command declares. */
     case CURRENT_CINEMATIC = 'current_cinematic';
+    /** A named placement declared by the NPC the command's own NPC field selects, on the map the script is on. */
+    case SELECTED_NPC = 'selected_npc';
     /** An Engine reference kind this Editor has no picker for: kept as typed text and reported. */
     case UNSUPPORTED = 'unsupported';
 }

@@ -59,6 +59,9 @@ final readonly class RecordSubList
      * For a keyed list the record names entries of by key (a cinematic's conversation speakers, named by its
      * groups and lines): rewrites the record's references when an entry's key changes from the old key to the
      * new one, or refuses with a RecordRefusal a removal (new key null) while the key is still named.
+     * @param Closure(array<string, mixed>): array<string, mixed>|null $blankFor For a list beside the record's own
+     * whose new entry starts from the record (an NPC's placement starts on the NPC's cell): the blank, given the
+     * record; `blank` when null.
      */
     public function __construct(
         public string $key,
@@ -85,7 +88,19 @@ final readonly class RecordSubList
         /** The variant an entry that names none has, as its runtime reads it. */
         public ?string $variantDefault = null,
         public ?Closure $remapKeyReferences = null,
+        public ?Closure $blankFor = null,
     ) {
+    }
+
+    /**
+     * A new entry for this list in a record.
+     *
+     * @param array<string, mixed> $record The record the entry joins.
+     * @return array<string, mixed>
+     */
+    public function getBlank(array $record): array
+    {
+        return $this->blankFor === null ? $this->blank : ($this->blankFor)($record);
     }
 
     /** The variant an entry is: the one it names, or the list's default when it names none. */

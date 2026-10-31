@@ -64,6 +64,19 @@ final class ReferenceCatalog
     /** The conversation groups the current cinematic declares, which `select_conversation_group` selects among. */
     public const string CINEMATIC_CONVERSATION_GROUPS = 'cinematic_conversation_groups';
 
+    /** The project's declared world abilities, read through the Engine's WorldAbilityCatalog. */
+    public const string WORLD_ABILITIES = 'world_abilities';
+
+    /**
+     * An NPC's named placements, `default` among them: the category of the `npc_placement` reference kind and the
+     * entry choice source its field is chosen from, by the NPC the command's own NPC field selects
+     * ({@see listEntryChoices()}). Outside a command there is no NPC to list them for.
+     */
+    public const string NPC_PLACEMENTS = 'npc_placements';
+
+    /** The semantic icon roles the menu theme offers ({@see \Ichiloto\Editor\MenuPresentationSettings::listIconRoles()}). */
+    public const string ICON_ROLES = 'icon_roles';
+
     public const array CATEGORIES = [
         'actors',
         'actor_ids',
@@ -91,6 +104,10 @@ final class ReferenceCatalog
         'quests',
         // Income schedules, by stable id, for the income script commands.
         'income_schedules',
+        // The exploration powers the project declares, by stable id, for world_ability conditions and power commands.
+        self::WORLD_ABILITIES,
+        // The theme's semantic icon roles, which a world power shows.
+        self::ICON_ROLES,
         'maps',
         'items',
         'weapons',
@@ -110,6 +127,8 @@ final class ReferenceCatalog
         'png_assets',
         'elements',
         'map_npcs',
+        // An NPC's named placements, listed for the NPC a command selects.
+        self::NPC_PLACEMENTS,
         'map_world_objects',
         \Ichiloto\Editor\Field\NpcBedFields::BED_OBJECTS,
         // A map's minimap landmarks, by stable id.
@@ -280,6 +299,8 @@ final class ReferenceCatalog
                 $this->workspace->getRecordDatabase(MasteryFields::BRANCHES)?->getRecords() ?? []),
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'income_schedules' => array_keys($this->incomeScheduleNames()),
+            self::WORLD_ABILITIES => array_keys($this->workspace->getWorldAbilities()->getLabels()),
+            self::ICON_ROLES => $this->workspace->menuPresentation?->listIconRoles() ?? [],
             'maps' => $this->workspace->mapIds,
             // A shop's stock is whatever the engine's ItemStore holds, and
             // that is everything in items.php: items, weapons and armors
@@ -318,6 +339,8 @@ final class ReferenceCatalog
             // collection, a just-created NPC is offered at once and a deleted
             // one is gone.
             'map_npcs' => $this->listScopedChoices('map_npcs') ?? [],
+            // Only meaningful for the NPC a command names; its field lists them through listEntryChoices().
+            self::NPC_PLACEMENTS => [],
             'map_world_objects' => $this->getSubjectMap() === null ? [] : array_column(\Ichiloto\Editor\Field\WorldObjectAuthoring::readEntries($this->getSubjectMap()), 'id'),
             // A bed is a world object whose resource names where its occupant lies.
             \Ichiloto\Editor\Field\NpcBedFields::BED_OBJECTS => $this->listBedObjects(),
@@ -679,15 +702,24 @@ final class ReferenceCatalog
      * of which it may grow within once it shares that branch's region. `tileset_whole_pieces`: the pieces of the tileset a place icon belongs to that are
      * stamped whole, any of which can show a place type. `tileset_thickets`: the thickets of the tileset a terrain
      * kind belongs to. `tileset_tile_layers`: the tile layers the tileset's pieces, terrain kinds and stacks write,
-     * any of which it can give a drawing offset.
+     * any of which it can give a drawing offset. `npc_placements`: the named placements, `default` first, of the NPC
+     * the holder's `$selector` field names, on the map the command runs on or every map a cinematic runs on; none
+     * while it names no NPC that declares placements there.
      *
      * @param array<string, mixed> $holder What the field lives in.
      * @param array<string, mixed> $owner The record holding the entry.
+     * @param string|null $selector For a source whose choices belong to something another field of the holder
+     *   names, that field ({@see RecordField::$entryChoicesSelector}).
      * @return list<string>
      * @throws InvalidArgumentException For a source nothing reads.
      */
-    public function listEntryChoices(string $source, array $holder, array $owner = []): array
+    public function listEntryChoices(string $source, array $holder, array $owner = [], ?string $selector = null): array
     {
+        if ($source === self::NPC_PLACEMENTS) {
+            $npcId = $selector === null ? null : ($holder[$selector] ?? null);
+
+            return is_string($npcId) && trim($npcId) !== '' ? $this->listNpcPlacements(trim($npcId)) : [];
+        }
         if ($source === 'terrain_grounds') {
             // A keyed entry carries its key as its id while edited, and not as stored.
             $self = array_diff_key($holder, ['id' => true]);
@@ -803,12 +835,59 @@ final class ReferenceCatalog
     }
 
     /**
+     * The placements an NPC declares through the Engine's own reader, `default` (its root cell) first, on the maps
+     * a command naming it can run on: the subject map, or every map a cinematic runs on. An NPC whose placements
+     * the Engine refuses offers none; validation reports why.
+     *
+     * @return list<string>
+     */
+    private function listNpcPlacements(string $npcId): array
+    {
+        $cinematic = $this->currentCutscene?->type === CutsceneType::CINEMATIC ? $this->currentCutscene : null;
+        $maps = $this->currentMap !== null || $cinematic === null
+            ? array_filter([$this->getSubjectMap()])
+            : $this->listCinematicMaps($cinematic);
+        $placements = [];
+        foreach ($maps as $map) {
+            foreach ($map->getNpcs()->all() as $npc) {
+                $entry = $npc->toArray();
+                if ($npc->getId() !== $npcId || ! array_key_exists('placements', $entry)) {
+                    continue;
+                }
+                try {
+                    array_push($placements, ...array_map(strval(...), array_keys(\Ichiloto\Engine\Field\NpcPlacementSet::fromEntry($entry)->placements)));
+                } catch (InvalidArgumentException) {
+                    continue;
+                }
+            }
+        }
+
+        return array_values(array_unique($placements));
+    }
+
+    /**
      * The NPCs on the maps a cinematic runs on: its start map and every map
      * its commands, or the reusable event scripts they run, transfer to.
      *
      * @return list<string>
      */
     private function listCinematicNpcIds(CutsceneAsset $cinematic): array
+    {
+        $ids = [];
+        foreach ($this->listCinematicMaps($cinematic) as $map) {
+            array_push($ids, ...$map->getNpcs()->ids());
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    /**
+     * The maps a cinematic runs on: its start map and every map its commands, or the reusable event scripts they
+     * run, transfer to.
+     *
+     * @return list<ProjectMap>
+     */
+    private function listCinematicMaps(CutsceneAsset $cinematic): array
     {
         $scripts = [];
         foreach ($this->workspace->getRecordDatabase('common_events')?->getRecords() ?? [] as $record) {
@@ -822,14 +901,8 @@ final class ReferenceCatalog
             ...CommandMapContext::listTransferDestinations([...$cinematic->commands(), ...$finalizer],
                 static fn(string $id): ?array => $scripts[$id] ?? null),
         ], static fn(string $id): bool => $id !== '');
-        $ids = [];
-        foreach ($this->workspace->maps as $map) {
-            if (in_array($map->mapId, $mapIds, true)) {
-                array_push($ids, ...$map->getNpcs()->ids());
-            }
-        }
 
-        return array_values(array_unique($ids));
+        return array_values(array_filter($this->workspace->maps, static fn(ProjectMap $map): bool => in_array($map->mapId, $mapIds, true)));
     }
 
     public function getSubjectMap(): ?ProjectMap
@@ -1049,6 +1122,10 @@ final class ReferenceCatalog
 
         if ($category === 'battle_arenas') {
             return $this->loadArenaNames();
+        }
+
+        if ($category === self::WORLD_ABILITIES) {
+            return $this->workspace->getWorldAbilities()->getLabels();
         }
 
         if ($category === 'field_resources') {

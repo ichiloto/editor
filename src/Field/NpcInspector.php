@@ -44,7 +44,8 @@ final class NpcInspector
      */
     private const array SECTIONS = [
         'Identity' => ['id', 'name'],
-        'Placement' => ['x', 'y'],
+        // The root cell is the `default` placement; named ones are listed after it.
+        'Placement' => ['x', 'y', NpcPlacementFields::PREFIX . 'List', NpcPlacementFields::PREFIX . '*'],
         // Every bed row; which exist depends on the bed ({@see NpcBedFields::getFields()}).
         'Bed' => [NpcBedFields::BED . '.*'],
         'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
@@ -168,8 +169,9 @@ final class NpcInspector
     }
 
     /**
-     * A section's field ids, a trailing `.*` standing for every row under that
-     * key, in the order the rows come.
+     * A section's field ids, a trailing `*` standing for every row whose id
+     * starts with what precedes it (`bed.*`, every row under the bed), in the
+     * order the rows come.
      *
      * @param list<string> $ids
      * @param list<string> $rowIds
@@ -179,7 +181,7 @@ final class NpcInspector
     {
         $expanded = [];
         foreach ($ids as $id) {
-            if (! str_ends_with($id, '.*')) {
+            if (! str_ends_with($id, '*')) {
                 $expanded[] = $id;
                 continue;
             }

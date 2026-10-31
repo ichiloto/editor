@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Maps;
 
 use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Editor\Progression\ProjectWorldAbilities;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Storage\SourceSetPlan;
@@ -74,6 +75,8 @@ final class SaveRelocationPlanner
         if (! is_file($manifestPath) || $maps === []) {
             return null;
         }
+        // The Engine reads world_ability conditions through the installed catalogue: install the current source's.
+        ProjectWorldAbilities::installFromProject($root)->assertReadable();
         $reachability = ProjectReachability::analyze($root . '/assets');
         // Where saves land is judged on the maps as the change leaves them: a pocket it walls off is reachable today.
         $unsaved = [];

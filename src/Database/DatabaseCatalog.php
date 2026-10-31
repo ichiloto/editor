@@ -41,6 +41,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition(\Ichiloto\Editor\Field\RegionFields::CATEGORY, 'Regions', 'Choose what a whole region shows, such as the backdrop skits show on its maps that choose none.', true),
             new DatabaseCategoryDefinition('common_events', 'Common Events', 'Author cutscene and event command lists.', true),
             new DatabaseCategoryDefinition('quests', 'Quests', 'Author quests, objectives, and rewards.', true),
+            new DatabaseCategoryDefinition(\Ichiloto\Editor\Progression\WorldAbilityFields::CATEGORY, 'World Powers', 'Declare exploration powers such as Dash: when each unlocks, what it is called and its first-use prompt.', true),
             new DatabaseCategoryDefinition('income_schedules', 'Income', 'Pay the party on a schedule: salaries, stipends, rents.', true),
             new DatabaseCategoryDefinition(FieldCueFields::CATEGORY, 'Field Cues', 'Choose how cue marks and objective waymarks read on any ground: plate, bob, pointers, fade under the player and Terminal cell.', true),
             new DatabaseCategoryDefinition('skits', 'Skits', 'Write optional party banter scenes.', true),

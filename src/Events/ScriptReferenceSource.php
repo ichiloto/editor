@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Events;
 
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 
 /**
@@ -57,6 +59,8 @@ final readonly class ScriptReferenceSource
             ScriptCommandReference::ACTOR => self::project($reference, 'actors'),
             ScriptCommandReference::STAGE_TIMELINE => self::project($reference, 'stage_timelines'),
             ScriptCommandReference::INCOME_SCHEDULE => self::project($reference, 'income_schedules'),
+            // The exploration powers the project declares in its world-abilities source.
+            ScriptCommandReference::WORLD_ABILITY => self::project($reference, ReferenceCatalog::WORLD_ABILITIES),
             // The owning troop's members: chosen from that troop, checked by the Engine's page validation.
             ScriptCommandReference::TROOP_MEMBER => new self($reference, ScriptReferenceScope::OWNING_TROOP, null),
             // NPC ids are map-local: the map an event belongs to, or the maps a cinematic runs on.
@@ -64,8 +68,45 @@ final readonly class ScriptReferenceSource
             // The groups the running cinematic's conversation declares.
             ScriptCommandReference::CONVERSATION_GROUP => new self($reference, ScriptReferenceScope::CURRENT_CINEMATIC,
                 ReferenceCatalog::CINEMATIC_CONVERSATION_GROUPS),
+            // A named destination of the NPC the command's own NPC field selects: chosen among that NPC's placements.
+            ScriptCommandReference::NPC_PLACEMENT => new self($reference, ScriptReferenceScope::SELECTED_NPC, ReferenceCatalog::NPC_PLACEMENTS),
             default => new self($reference, ScriptReferenceScope::UNSUPPORTED, null),
         };
+    }
+
+    /**
+     * The NPC field a placement field's choices belong to: the one NPC
+     * reference beside it in the same object of the command, as the Engine
+     * declares `commit_npc_placement`'s NPC and placement. Null when the
+     * declaration holds none or more than one there, so the Editor cannot
+     * tell which NPC's placements the field names; the field is then kept as
+     * written and validation reports the declaration.
+     *
+     * @param list<ScriptCommandField> $siblings The fields declared beside it, itself included.
+     */
+    public static function findSelectingNpcField(ScriptCommandField $placement, array $siblings): ?ScriptCommandField
+    {
+        $parent = self::getParentPath($placement->key);
+        $npcs = array_values(array_filter($siblings, static fn(ScriptCommandField $field): bool =>
+            $field->kind === ScriptCommandFieldKind::REFERENCE && $field->reference === ScriptCommandReference::NPC
+            && self::getParentPath($field->key) === $parent));
+
+        return count($npcs) === 1 ? $npcs[0] : null;
+    }
+
+    /** Why a placement field has no picker: its declaration names no single NPC beside it. */
+    public static function describeUnselectedNpc(ScriptCommandField $placement): string
+    {
+        return sprintf('Its %s names no single NPC field beside it, so the Editor cannot tell whose placements it chooses among; the value is kept as typed. Declare exactly one npc reference next to it.',
+            strtolower($placement->label));
+    }
+
+    /** A dotted field key's parent object path; '' for a key of the command itself. */
+    private static function getParentPath(string $key): string
+    {
+        $at = strrpos($key, '.');
+
+        return $at === false ? '' : substr($key, 0, $at);
     }
 
     /** Why a field of an unsupported kind is plain text, for its label and validation. */

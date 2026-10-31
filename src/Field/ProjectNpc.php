@@ -40,7 +40,7 @@ final class ProjectNpc
      */
     public const array KNOWN_FIELDS = [
         'id', 'name', 'sprite', 'x', 'y', 'movement', 'facing', 'directionFix', 'wanderArea', 'sprites',
-        'conditions', 'dialogue', 'script', 'sets', 'sprites2d', 'cue', NpcBedFields::BED,
+        'conditions', 'dialogue', 'script', 'sets', 'sprites2d', 'cue', NpcBedFields::BED, NpcPlacementFields::PLACEMENTS,
     ];
 
     public const array MOVEMENTS = ['fixed', 'wander'];
