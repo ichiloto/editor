@@ -4,6 +4,14 @@
 
 ### Added
 
+- Source-preserving edits around spreads and helper calls: a command list that splices in one spread keeps the
+  spread and the commands it adds byte for byte while the entries written before and after it are edited, inserted,
+  moved and removed; a keyed array that merges in spreads edits keys written after every spread and adds new keys at
+  its end; and a record a file's helper call returns takes a new field as `[...$line(...), 'emotion' => 'Sad']`,
+  edited in place afterwards. Changes to what a spread adds, lists with two or more spreads, keys written before a
+  spread and fields a helper call returns are refused, naming the path. Last Legend's emotion pass can now save its
+  remaining lines in Listening Stone, High Shadow, Lanternrest and the Vax bargain.
+
 - Action impact alignment, as Engine abbc883 reads it: a battle pose's **Impact Entry** (`impactFrame`) is chosen
   among its own playback entries, repeats included, each shown with the sheet cell it plays (`Entry 3 · cell 2`),
   and only for a pose that plays once; an animation's **Caster Effect Starts** (`sourceEffectAnchor`) chooses
@@ -205,6 +213,13 @@
   and `\` like any other glyph; formatter markup or several characters offered as one glyph are still refused.
 
 ### Fixed
+
+- Terminal and headless field previews declare their own presentation owner for their whole life: an isolated,
+  non-graphical scene presentation with the preview's dialogue and choices and its clock, so cinematic dialogue
+  framing reads the preview's owners after a finalizer moves the player instead of a runtime UI the preview never
+  has. A graphical still or the window's attached view gives back the presentation it replaced when it ends, and a
+  resize gives the Terminal presentation the new screen size. The runtime UI singleton is neither initialized nor
+  borrowed.
 
 - A boolean field whose absence means true, or something other than false, now keeps `false` in the file: a
   battle pose's **Loops** `false` was dropped, so the pose went on looping; a pose's **Art Paints Its Shadow**

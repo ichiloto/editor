@@ -36,6 +36,13 @@ use Throwable;
  * cinematic in it; an effect preview shows an effect on it. The field owns
  * the Engine configuration it installs, the project directory every step
  * runs in, its screen and its graphical view; its clock is its owner's.
+ *
+ * It also owns what the scene presents for its whole life. A preview scene
+ * has no runtime UI or renderer to report its dialogue and modals, so the
+ * field declares them: its Terminal screen, with the field's own dialogue
+ * and clock, from the moment the scene exists, and a graphical presentation
+ * only while a still is composed or the window's view is attached, each of
+ * which gives back the presentation it replaced.
  */
 final class PreviewField
 {
@@ -86,6 +93,7 @@ final class PreviewField
             $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
             $camera = $field->scene->previewCamera();
             $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight);
+            $field->presentTerminal();
             $player = new PreviewPlayer($field->scene, $spawn);
             $field->scene->installPlayer($player);
             try {
@@ -118,6 +126,7 @@ final class PreviewField
             $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
             $camera = $field->scene->previewCamera();
             $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight);
+            $field->presentTerminal();
             $player = $spawn === null ? null : new PreviewPlayer($field->scene, $spawn, heading: $heading, appearance: $appearance);
             if ($player !== null) {
                 $field->scene->installPlayer($player);
@@ -169,7 +178,8 @@ final class PreviewField
      * as the editor window's graphical view composes them
      * ({@see PreviewSceneHost}). The field cell is the graphical field's, so
      * the camera keeps the screen it has; the Terminal picture is unchanged
-     * once the composition is taken.
+     * once the composition is taken, and the presentation the scene had --
+     * the field's Terminal one, or the window's view -- is given back.
      *
      * @param Closure(string): bool $supports The still renderer's capabilities.
      */
@@ -179,6 +189,7 @@ final class PreviewField
         $grid = new RendererGridConfig($this->screenWidth, $this->screenHeight, FieldViewport::TILE_SIZE, FieldViewport::TILE_SIZE);
         $composition = null;
         $this->run(function () use ($assetRoot, $grid, $supports, &$composition): void {
+            $replaced = $this->scene->getPresentationContext();
             $this->scene->setPresentationContext(new ScenePresentationContext($grid, $supports,
                 collectPresentations: fn(): array => $this->presentation->getActivePresentations(), readTime: $this->readTime,
                 assetRoot: $assetRoot));
@@ -188,8 +199,7 @@ final class PreviewField
                     fn(array $excluded, array $worldLayers) => Console::capturePresentation($grid->columns, $grid->rows,
                         $this->renderScene(...), $excluded, $worldLayers, $this->scene->getPresentationWorld() !== null));
             } finally {
-                $this->scene->setPresentationContext(null);
-                $this->scene->installFieldEffects(EffectPresentation::TERMINAL);
+                $this->scene->restorePresentation($replaced);
             }
         });
 
@@ -332,6 +342,8 @@ final class PreviewField
         $this->screenHeight = max(8, $height);
         $this->scene->previewCamera()->resize($this->screenWidth, $this->screenHeight);
         $this->presentation->resizeScreen($this->screenWidth, $this->screenHeight);
+        // The Terminal presentation is the screen's, so it takes the new size.
+        $this->run($this->presentTerminal(...));
     }
 
     /**
@@ -353,6 +365,25 @@ final class PreviewField
         }
 
         $this->configured = false;
+    }
+
+    /**
+     * Declares the scene's Terminal presentation: the field's screen in
+     * Terminal cells, no graphical capability, the field's own dialogue and
+     * choices as its presentation owners and the owner's clock as its time.
+     * The runtime UI and renderer belong to a running game, never to a
+     * preview, so they are neither initialized nor borrowed.
+     */
+    private function presentTerminal(): void
+    {
+        $this->scene->setPresentationContext(new ScenePresentationContext(
+            new RendererGridConfig($this->screenWidth, $this->screenHeight, 1, 1),
+            static fn(string $capability): bool => false,
+            graphical: false,
+            collectPresentations: fn(): array => $this->presentation->getActivePresentations(),
+            readTime: $this->readTime,
+            assetRoot: $this->projectRoot . '/assets',
+        ));
     }
 
     /** Draws everything the field draws, in the game's order. */

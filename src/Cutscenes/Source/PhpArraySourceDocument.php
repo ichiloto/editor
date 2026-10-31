@@ -646,6 +646,19 @@ final class PhpArraySourceDocument
             throw new RuntimeException(sprintf('No entry at %s to replace.', self::describePath($path)));
         }
 
+        return $this->replaceEntryValueEdit($entry, $literal);
+    }
+
+    /**
+     * Plans replacing the value of an entry the caller holds with a literal:
+     * where the entry writes it, or where the data only it names is written.
+     * An entry after a spread has no path the file can address, so a caller
+     * walking the source addresses it by the entry itself.
+     *
+     * @return array{0: int, 1: int, 2: string} The edit.
+     */
+    public function replaceEntryValueEdit(SourceEntry $entry, string $literal): array
+    {
         $value = $this->resolveNode($entry->value);
 
         if ($value !== $entry->value) {
@@ -788,6 +801,24 @@ final class PhpArraySourceDocument
 
         if ($array === null || $array->kind !== SourceNode::ARRAY || $array->bodyStart === null || $array->bodyEnd === null) {
             throw new RuntimeException(sprintf('No array at %s to insert into.', self::describePath($parentPath)));
+        }
+
+        return $this->insertEntryIntoEdit($array, $position, $key, $literal);
+    }
+
+    /**
+     * Plans inserting an entry into an array node the caller holds, ahead of
+     * the entry at a source position or after the last one. Positions count
+     * the entries the source writes, a spread as one.
+     *
+     * @param int|string|null $key The explicit key, or null for a list entry.
+     * @param string $literal Valid PHP for the value.
+     * @return array{0: int, 1: int, 2: string} The edit.
+     */
+    public function insertEntryIntoEdit(SourceNode $array, int $position, int|string|null $key, string $literal): array
+    {
+        if ($array->kind !== SourceNode::ARRAY || $array->bodyStart === null || $array->bodyEnd === null) {
+            throw new RuntimeException('Only an array node takes inserted entries.');
         }
 
         $line = $this->renderEntryLine($array, $key, $literal);
@@ -1430,6 +1461,7 @@ final class PhpArraySourceDocument
             $arrowAt = self::topLevelArrow($tokens, $cursor, $close);
             $key = null;
             $keyIsOpaque = false;
+            $isSpread = false;
             $entryStart = $tokens[$cursor]->pos;
             $valueAt = $cursor;
 
@@ -1463,6 +1495,7 @@ final class PhpArraySourceDocument
                     // A spread adds entries only PHP can count, so no later
                     // position or key in this array is the file's to address.
                     $keyIsOpaque = true;
+                    $isSpread = true;
                     $hasOpaqueKey = true;
                 }
             }
@@ -1491,7 +1524,7 @@ final class PhpArraySourceDocument
                 return null;
             }
 
-            $entries[] = new SourceEntry($key, $node, $entryStart, $node->end, $separatorEnd, $keyIsOpaque);
+            $entries[] = new SourceEntry($key, $node, $entryStart, $node->end, $separatorEnd, $keyIsOpaque, $isSpread);
         }
 
         if ($sawExplicit && $sawImplicit) {

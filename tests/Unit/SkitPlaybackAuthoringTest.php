@@ -135,7 +135,7 @@ it('refuses a Skit the Engine would skip before anything is written', function (
         ->and(file_get_contents($path))->toBe($original);
 });
 
-it('refuses a cue its source cannot hold rather than flattening the Skit', function (): void {
+it('adds a cue to sounds a call builds without flattening the call, and refuses changing a cue the call returns', function (): void {
     $root = makeTemporaryProject();
     $path = writePlaybackSkit($root, 'device-call', "  'title' => 'A Call',\n  'sounds' => array_merge(['open' => 'DeviceOn'], []),\n");
     $original = (string) file_get_contents($path);
@@ -144,7 +144,7 @@ it('refuses a cue its source cannot hold rather than flattening the Skit', funct
 
     $refused = null;
     try {
-        $database->setField($index, 'sounds.close', 'DeviceOff');
+        $database->setField($index, 'sounds.open', 'DeviceUp');
         $database->save();
     } catch (RuntimeException $error) {
         $refused = $error;
@@ -153,6 +153,16 @@ it('refuses a cue its source cannot hold rather than flattening the Skit', funct
     expect($refused)->toBeInstanceOf(RuntimeException::class)
         ->and($refused?->getMessage())->toBe('The value at sounds is written as an expression the editor cannot rewrite.')
         ->and(file_get_contents($path))->toBe($original);
+
+    $database = loadRecordDatabase($root, 'skits');
+    $database->setField($index, 'sounds.close', 'DeviceOff');
+    $database->save();
+
+    expect(file_get_contents($path))->toBe(str_replace(
+        "array_merge(['open' => 'DeviceOn'], []),",
+        "[...array_merge(['open' => 'DeviceOn'], []), 'close' => 'DeviceOff'],",
+        $original,
+    ))->and((static fn(): mixed => require $path)()['sounds'])->toBe(['open' => 'DeviceOn', 'close' => 'DeviceOff']);
 });
 
 it('validates what a play_skit command selects and what a Skit plays with', function (): void {

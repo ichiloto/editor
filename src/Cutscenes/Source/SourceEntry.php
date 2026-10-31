@@ -20,7 +20,10 @@ final readonly class SourceEntry
      * @param int $end The offset just past the value's last byte.
      * @param int $separatorEnd The offset just past the entry's trailing comma,
      *   or equal to $end when the entry has none.
-     * @param bool $keyIsOpaque Whether an explicit key was present but unreadable.
+     * @param bool $keyIsOpaque Whether an explicit key was present but
+     *   unreadable, or the entry is a spread.
+     * @param bool $isSpread Whether the entry is a spread (`...expression`),
+     *   which adds as many entries as PHP finds when it evaluates it.
      */
     public function __construct(
         public int|string|null $key,
@@ -29,6 +32,7 @@ final readonly class SourceEntry
         public int $end,
         public int $separatorEnd,
         public bool $keyIsOpaque = false,
+        public bool $isSpread = false,
     ) {
     }
 }
