@@ -131,7 +131,9 @@ final class EffectBattlePreview
         $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
             targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor, actionPose: $pose,
             movementPoses: !$reducedMotion && ($poses?->getPose(BattlePoseRole::MOVE) !== null
-                || $poses?->getPose(BattlePoseRole::RETURNING) !== null), travel: $travel);
+                || $poses?->getPose(BattlePoseRole::RETURNING) !== null), travel: $travel,
+            movePose: $reducedMotion ? null : $poses?->getPose(BattlePoseRole::MOVE),
+            returnPose: $reducedMotion ? null : $poses?->getPose(BattlePoseRole::RETURNING));
 
         return new self(
             new BattleCommandPreview($battle, $plan, $caster, $targets, $role,

@@ -128,9 +128,14 @@ it('previews the shared run-to-target plan while keeping Terminal and reduced mo
     $root = effectBattlePreviewProject();
     writeTilesetTestPng($root . '/assets/Graphics/Contact.png', 32, 64);
     writeTilesetTestPng($root . '/assets/Graphics/ContactEnemy.png', 32, 64);
+    writeTilesetTestPng($root . '/assets/Graphics/Lifecycle.png', 128, 64);
     $binding = $root . '/assets/Data/Presentation/battlers.php';
     file_put_contents($binding, '<?php return ' . var_export([
-        'actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/Contact.png']]],
+        'actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/Contact.png'], 'poses' => [
+            'attack' => ['image' => 'Graphics/Contact.png'],
+            'move' => ['image' => 'Graphics/Lifecycle.png', 'columns' => 4, 'frames' => [1,2], 'entryFrames' => [0], 'exitFrames' => [3]],
+            'return' => ['image' => 'Graphics/Lifecycle.png', 'columns' => 4, 'frames' => [2,1], 'loop' => false, 'entryFrames' => [3], 'exitFrames' => [0]],
+        ]]],
         'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/ContactEnemy.png']]],
     ], true) . ';');
     $path = $root . '/assets/Data/animations.php'; $data = require $path;
@@ -141,10 +146,17 @@ it('previews the shared run-to-target plan while keeping Terminal and reduced mo
     $home = $session->readEffectBattlePreview($effect, 0);
     $strike = $session->readEffectBattlePreview($effect, $home['phases']['target']['start']);
     $image = static fn(array $frame): array => array_find($frame['canvas']['images'],
-        static fn(array $image): bool => $image['asset'] === 'Graphics/Contact.png');
-    expect($home['phases'])->toHaveKey('recovery')
+        static fn(array $image): bool => in_array($image['asset'], ['Graphics/Contact.png', 'Graphics/Lifecycle.png'], true));
+    expect($home['phase'])->toBe('enter-advance')->and($image($home)['sourceRect']['x'])->toBe(0)
+        ->and($home['phases'])->toHaveKeys(['enter-advance','exit-advance','enter-return','exit-return'])
+        ->and($home['phases'])->toHaveKey('recovery')
         ->and($strike['diagnostics'])->toBe([])
         ->and($image($strike)['destination'])->not->toBe($image($home)['destination']);
+    $loop = $session->readEffectBattlePreview($effect, $home['phases']['advance']['start']);
+    $land = $session->readEffectBattlePreview($effect, $home['phases']['exit-return']['start']);
+    expect($loop['phase'])->toBe('advance')->and($image($loop)['sourceRect']['x'])->toBe(32)
+        ->and($land['phase'])->toBe('exit-return')->and($image($land)['sourceRect']['x'])->toBe(0)
+        ->and($image($land)['destination'])->toBe($image($home)['destination']);
     $rest = $session->readEffectBattlePreview($effect, 0, reducedMotion: true);
     $terminal = $session->readEffectBattlePreview($effect, 0, presentation: EffectPresentation::TERMINAL);
     expect($rest['phases'])->not->toHaveKey('recovery')->and($terminal['phases'])->not->toHaveKey('recovery')

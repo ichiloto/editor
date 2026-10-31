@@ -2359,6 +2359,8 @@ final class RecordSchemaCatalog
                         new RecordField('columns', 'Columns', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
                         new RecordField('rows', 'Rows', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
                         new RecordField('frames', 'Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true, displayDefault: '0'),
+                        new RecordField('entryFrames', 'Movement Entry Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
+                        new RecordField('exitFrames', 'Movement Exit Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
                         new RecordField('fps', 'Frames per Second', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '8'),
                         new RecordField('loop', 'Loops', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'true'),
                         new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),

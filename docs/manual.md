@@ -2251,6 +2251,12 @@ bindings file. Per actor (by definition id) or enemy (by name) it holds:
   own frame clock. A battle-effect preview includes the same movement and
   completes anchored action recovery before returning. Reduced-motion and
   Terminal previews retain their existing stationary/timing paths.
+- Movement Entry Frames / Movement Exit Frames: optional source-cell lists on
+  `move` and `return`, from the same sheet and frame rate. Each plays once while
+  the feet stay at departure or arrival, around the main run or hop. Leave empty
+  to keep the existing timing. Main run frames loop; a nonlooping main return
+  fits its distance-based duration. Preview and runtime use the same sequence
+  clocks. Other roles reject these movement-only fields on save.
 - Reach (forward, down): the action pose's contact offset from its feet, in
   standing-body units. Forward is non-negative; down may be negative to strike
   above the feet. An empty value uses the standing body's forward edge.

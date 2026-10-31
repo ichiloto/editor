@@ -254,3 +254,30 @@ it('round trips contact points and signed body-unit pose reach with undo and sav
     $reloaded->saveDatabase('battler_enemies');
     expect(file_get_contents($path))->toBe($before);
 });
+
+
+it('round trips optional movement entry and exit cells through the existing pose editor', function () {
+    $root = battlerArtProject(); $session = EditorSession::open($root);
+    $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
+    setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
+    $heading = array_find($session->readDatabaseRecord('battler_enemies', $index)['rows'], static fn(array $row): bool => ($row['listHeading'] ?? false) === true);
+    $session->addDatabaseItem('battler_enemies', $index, $heading['key'], true);
+    setBattlerRow($session, $index, 'pose0Role', 'move');
+    setBattlerRow($session, $index, 'pose0Image', 'Graphics/Enemies/BatAttack.png');
+    setBattlerRow($session, $index, 'pose0Columns', '4');
+    $session->saveDatabase('battler_enemies');
+    $path = $root . '/assets/' . BattlerBindings::FILE; $before = file_get_contents($path);
+    setBattlerRow($session, $index, 'pose0EntryFrames', '0,1');
+    setBattlerRow($session, $index, 'pose0ExitFrames', '2,3');
+    $session->undo(); $session->undo(); expect($session->listUnsavedChanges())->toBe([]);
+    $session->redo(); $session->redo(); $session->saveDatabase('battler_enemies');
+    $pose = BattlerBindings::load($root . '/assets')->enemyPoses['Regular Bat']->getPose(\Ichiloto\Engine\Battle\Presentation\BattlePoseRole::MOVE);
+    expect($pose->entryFrames)->toBe([0,1])->and($pose->exitFrames)->toBe([2,3]);
+    $saved = file_get_contents($path); $reloaded = EditorSession::open($root);
+    setBattlerRow($reloaded, $index, 'pose0EntryFrames', '4');
+    expect(fn() => $reloaded->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class)->and(file_get_contents($path))->toBe($saved);
+    $reloaded->undo();
+    setBattlerRow($reloaded, $index, 'pose0EntryFrames', '');
+    setBattlerRow($reloaded, $index, 'pose0ExitFrames', '');
+    $reloaded->saveDatabase('battler_enemies'); expect(file_get_contents($path))->toBe($before);
+});
