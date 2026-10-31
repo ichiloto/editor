@@ -57,6 +57,8 @@ final readonly class ScriptReferenceSource
             ScriptCommandReference::ACTOR => self::project($reference, 'actors'),
             ScriptCommandReference::STAGE_TIMELINE => self::project($reference, 'stage_timelines'),
             ScriptCommandReference::INCOME_SCHEDULE => self::project($reference, 'income_schedules'),
+            // The exploration powers the project declares in its world-abilities source.
+            ScriptCommandReference::WORLD_ABILITY => self::project($reference, ReferenceCatalog::WORLD_ABILITIES),
             // The owning troop's members: chosen from that troop, checked by the Engine's page validation.
             ScriptCommandReference::TROOP_MEMBER => new self($reference, ScriptReferenceScope::OWNING_TROOP, null),
             // NPC ids are map-local: the map an event belongs to, or the maps a cinematic runs on.

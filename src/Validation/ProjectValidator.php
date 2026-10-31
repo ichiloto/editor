@@ -20,7 +20,6 @@ use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
-use Ichiloto\Engine\Core\WorldConditionExclusion;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\ScriptReferenceScope;
 use Ichiloto\Editor\Events\ScriptReferenceSource;
@@ -32,6 +31,7 @@ use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
 use Ichiloto\Editor\PermanentGrowthCatalog;
+use Ichiloto\Editor\Progression\ProjectWorldAbilities;
 use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
@@ -43,6 +43,7 @@ use Ichiloto\Engine\Field\EncounterEntry;
 use Ichiloto\Engine\Field\EncounterTable;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
+use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Ichiloto\Engine\Field\SkitSpeaker;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
@@ -182,6 +183,7 @@ class ProjectValidator
 
     $issues = [
       ...$this->checkScriptCommandDeclarations($workspace),
+      ...$this->checkWorldAbilitySource($workspace),
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
       ...$this->checkTroops($workspace),
@@ -2969,12 +2971,14 @@ class ProjectValidator
     }
 
     $areaCells = $this->eventAreaCells($map);
+    // Exclusion follows the project's current world abilities, never a catalogue installed for another project.
+    $worldAbilities = $workspace->getWorldAbilities();
 
     foreach ($anchors as $index => $anchor) {
       foreach ($anchors as $otherIndex => $other) {
         // Phases whose visibility conditions exclude each other are never
         // on the field together, so they may share or overlap a tile.
-        if ($otherIndex <= $index || WorldConditionExclusion::proveExclusive($anchor['conditions'], $other['conditions'])) {
+        if ($otherIndex <= $index || $worldAbilities->proveExclusive($anchor['conditions'], $other['conditions'])) {
           continue;
         }
 
@@ -3598,6 +3602,7 @@ class ProjectValidator
   protected const array DIRECT_REFERENCE_CATEGORIES = [
     'quests', 'maps', 'troops', 'inventory', 'bgm', 'sfx', 'common_events', 'cinematics', 'summons',
     'animations', 'effects', 'actors', 'income_schedules', SkitPlaybackFields::REFERENCE_CATEGORY,
+    ReferenceCatalog::WORLD_ABILITIES,
   ];
 
   /**
@@ -3649,12 +3654,30 @@ class ProjectValidator
 
     return [
       ...$this->checkConfigReferences($workspace, $known),
+      ...$this->checkDashConditionReferences($workspace, $known),
       ...$this->checkSkitReferences($workspace, $known),
       ...$this->checkMapReferences($workspace, $known),
       ...$this->checkScriptReferences($workspace, $known),
       ...$this->checkTroopEventReferences($workspace, $known),
       ...$this->checkAchievementReferences($workspace, $known),
     ];
+  }
+
+  /**
+   * Checks what the dash's unlock conditions name: the quests, items and
+   * world powers it waits on. Their shape is the DashValidator's.
+   *
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkDashConditionReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $dash = $workspace->getSystemField(DashSettings::KEY);
+    $conditions = is_array($dash) ? ($dash[DashSettings::CONDITIONS] ?? null) : null;
+
+    return is_array($conditions) && array_is_list($conditions)
+      ? $this->checkConditions($conditions, 'assets/Data/system.php: dash conditions', $known)
+      : [];
   }
 
   /**
@@ -5012,6 +5035,7 @@ class ProjectValidator
       $issues = [...$issues, ...match ($type) {
         'quest' => $this->checkReference($name, 'quests', 'quest', $where, $known),
         'item', 'key_item' => $this->checkReference($name, 'inventory', 'item', $where, $known),
+        'world_ability' => $this->checkReference($name, ReferenceCatalog::WORLD_ABILITIES, 'world power', $where, $known),
         default => [],
       }];
     }
@@ -5051,6 +5075,24 @@ class ProjectValidator
     }
 
     return $this->validatedWorkspace === null ? [] : EffectValidator::checkOneShotFieldEffect($this->validatedWorkspace->catalogs, $effect, $where);
+  }
+
+  /**
+   * Reports a world-abilities source the Engine refuses, as the game's boot
+   * would refuse it.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkWorldAbilitySource(ProjectWorkspace $workspace): array
+  {
+    $problem = $workspace->getWorldAbilities()->loadProblem;
+
+    return $problem === null ? [] : [Issue::error(
+      ProjectWorldAbilities::RELATIVE_PATH,
+      sprintf('The project\'s world abilities could not be read: %s', $problem),
+      'The game will not start until it is fixed. Until then every world power reference is reported as undeclared and reachability is not checked.'
+    )];
   }
 
   /**
@@ -5215,6 +5257,14 @@ class ProjectValidator
 
     if (in_array($value, $known[$category] ?? [], true)) {
       return [];
+    }
+
+    if ($category === ReferenceCatalog::WORLD_ABILITIES) {
+      return [Issue::error(
+        $where,
+        sprintf('It names the %s "%s", which %s does not declare.', $noun, $value, ProjectWorldAbilities::RELATIVE_PATH),
+        'The game raises an error when it evaluates it. Choose the power from the picker, or declare it.'
+      )];
     }
 
     if (in_array($category, ['bgm', 'sfx'], true)) {

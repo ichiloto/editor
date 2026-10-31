@@ -64,6 +64,9 @@ final class ReferenceCatalog
     /** The conversation groups the current cinematic declares, which `select_conversation_group` selects among. */
     public const string CINEMATIC_CONVERSATION_GROUPS = 'cinematic_conversation_groups';
 
+    /** The project's declared world abilities, read through the Engine's WorldAbilityCatalog. */
+    public const string WORLD_ABILITIES = 'world_abilities';
+
     public const array CATEGORIES = [
         'actors',
         'actor_ids',
@@ -91,6 +94,8 @@ final class ReferenceCatalog
         'quests',
         // Income schedules, by stable id, for the income script commands.
         'income_schedules',
+        // The exploration powers the project declares, by stable id, for world_ability conditions and power commands.
+        self::WORLD_ABILITIES,
         'maps',
         'items',
         'weapons',
@@ -280,6 +285,7 @@ final class ReferenceCatalog
                 $this->workspace->getRecordDatabase(MasteryFields::BRANCHES)?->getRecords() ?? []),
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'income_schedules' => array_keys($this->incomeScheduleNames()),
+            self::WORLD_ABILITIES => array_keys($this->workspace->getWorldAbilities()->getLabels()),
             'maps' => $this->workspace->mapIds,
             // A shop's stock is whatever the engine's ItemStore holds, and
             // that is everything in items.php: items, weapons and armors
@@ -1049,6 +1055,10 @@ final class ReferenceCatalog
 
         if ($category === 'battle_arenas') {
             return $this->loadArenaNames();
+        }
+
+        if ($category === self::WORLD_ABILITIES) {
+            return $this->workspace->getWorldAbilities()->getLabels();
         }
 
         if ($category === 'field_resources') {

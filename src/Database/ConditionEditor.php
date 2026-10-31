@@ -33,6 +33,7 @@ final class ConditionEditor
         'item' => ['Item', 'inventory'],
         'key_item' => ['Key Item', 'inventory'],
         'map_event' => ['Map Event', 'maps'],
+        'world_ability' => ['World Power', ReferenceCatalog::WORLD_ABILITIES],
     ];
 
     /** The quest statuses a condition can require; the first is the default. */
@@ -431,6 +432,7 @@ final class ConditionEditor
             'variable' => sprintf('%s %s', strval($condition['op'] ?? '=='), strval($condition['value'] ?? 0)),
             'event' => 'happened',
             'map_event' => sprintf('event %s is done', strval($condition['marker'] ?? '')),
+            'world_ability' => 'is unlocked',
             default => '',
         };
 

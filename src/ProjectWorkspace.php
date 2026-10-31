@@ -22,6 +22,7 @@ use Ichiloto\Editor\Database\SkillReferences;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Events\ScriptCommandUses;
 use Ichiloto\Editor\Maps\MapFolder;
+use Ichiloto\Editor\Progression\ProjectWorldAbilities;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
@@ -113,6 +114,15 @@ final readonly class ProjectWorkspace
     public function getSystemField(string $key): mixed
     {
         return $this->getRecordDatabase('system')?->getRecordByIndex(0)?->get($key);
+    }
+
+    /**
+     * The exploration powers the project declares, read from its current
+     * source: what pickers offer and validation checks references against.
+     */
+    public function getWorldAbilities(): ProjectWorldAbilities
+    {
+        return ProjectWorldAbilities::fromProject($this->projectRoot);
     }
 
     /**
@@ -316,6 +326,8 @@ final readonly class ProjectWorkspace
         // validation accepts, exactly this project's registered commands.
         $scriptCommands = ProjectScriptCommands::fromProject($projectRoot);
         $scriptCommands->activate();
+        // The open project's world abilities answer every world_ability condition the Engine evaluates for it.
+        ProjectWorldAbilities::installFromProject($projectRoot);
 
         return new self(
             projectRoot: $projectRoot,
@@ -442,9 +454,13 @@ final readonly class ProjectWorkspace
     /**
      * Analyses where the player can reach as saving would leave the project:
      * maps with unsaved changes are read as this workspace holds them.
+     *
+     * @throws RuntimeException When the project's world abilities cannot be read.
      */
     public function analyzeReachability(): ProjectReachability
     {
+        // The Engine reads world_ability conditions through the installed catalogue: install the current source's.
+        ProjectWorldAbilities::installFromProject($this->projectRoot)->assertReadable();
         $unsaved = [];
         foreach ($this->maps as $map) {
             if ($map->isDirty()) {

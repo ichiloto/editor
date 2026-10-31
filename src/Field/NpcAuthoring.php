@@ -46,7 +46,7 @@ final readonly class NpcAuthoring
 
     private NpcReferences $references;
 
-    public function __construct(ProjectWorkspace $workspace)
+    public function __construct(private ProjectWorkspace $workspace)
     {
         $this->references = new NpcReferences($workspace);
     }
@@ -468,12 +468,14 @@ final readonly class NpcAuthoring
         $x = $npc->getX();
         $y = $npc->getY();
         $this->assertInsideMap($map, $x, $y);
+        // Phases are judged with the project's current world abilities, never another project's catalogue.
+        $worldAbilities = $this->workspace->getWorldAbilities();
 
         foreach ($npcs->indicesAt($x, $y) as $occupant) {
             $other = $npcs->get($occupant);
 
             if ($occupant === $ownIndex || $other === null
-                || WorldConditionExclusion::proveExclusive($npc->getConditions(), $other->getConditions())) {
+                || $worldAbilities->proveExclusive($npc->getConditions(), $other->getConditions())) {
                 continue;
             }
 

@@ -4,6 +4,16 @@
 
 ### Added
 
+- World powers, as the Engine's `WorldAbilityCatalog` reads them from `assets/Data/world-abilities.php`: the
+  `world_ability` script reference kind (the `show_power_unlocks` command's **Power** rows) and the `world_ability`
+  condition's **World Power** name pick among the project's declared powers through the new `world_abilities`
+  reference category, by stable id, labelled with their names, read from the file as it stands. Validation reports
+  a power the file does not declare in scripts, condition lines and the dash's unlock conditions, and reports a
+  file the Engine refuses. Opening a project installs its catalogue for Engine evaluation (a project whose file
+  cannot be read installs none, so another project's powers never answer), and reachability analysis, save
+  relocation and map line planning install the current file's powers first, so `ichiloto validate` no longer
+  stops on `world_ability` conditions with "Install the current WorldAbilityCatalog". NPC tile sharing in authoring
+  and validation judges exclusion with the project's powers; a condition naming an undeclared power proves nothing.
 - NPC beds, as Engine bf49893 reads them (`CinematicCommandSchema::export()['bedOccupancy']`): the NPC Inspector's
   **Bed** rows pick the world object on the NPC's map it rests in (`bed.object`, among objects whose field resource
   declares attachments), the resource attachment its occupant lies on (`bed.attachment`), its `Starting Posture`

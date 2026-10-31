@@ -2844,8 +2844,29 @@ quest:breakfast-duty:active; !switch:door_open:false; item:S-Potion:3
 | `item` | `item:<name>`, or `item:<name>:<quantity>` |
 | `key_item` | `key_item:<name>` |
 | `variable` | `variable:<name>:<op>:<value>` |
+| `world_ability` | `world_ability:<id>` |
 
 Unparseable entries are dropped rather than written back as garbage.
+
+#### World powers
+
+A `world_ability` condition holds while the project's exploration power with
+that id is unlocked. The powers are declared in
+`assets/Data/world-abilities.php` (id, name, description, conditions and an
+optional icon role), the file the Engine's `WorldAbilityCatalog` reads. The
+condition editor's **World Power** name and the `show_power_unlocks` command's
+**Power** rows pick among the declared powers by id, labelled with their names,
+in authored order. The list is read from the file as it stands each time, so a
+change to the file appears without reopening the project.
+
+Validation reports a power reference the file does not declare, in scripts,
+condition lines and the dash's unlock conditions in Database > System, and
+reports a file the Engine refuses (a malformed entry, an unknown dependency or
+a dependency cycle). Until such a file is fixed, reachability is not checked.
+When the Editor opens a project it installs that project's powers as the
+catalogue Engine evaluation reads, and installs them again before each
+reachability analysis, so NPC phases, save relocation and map line planning
+judge `world_ability` conditions by the open project's current powers.
 
 ## Cutscenes Screen
 
