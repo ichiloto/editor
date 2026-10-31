@@ -4,6 +4,14 @@
 
 ### Added
 
+- Sound import: `assets.import` brings music and sound effects into a project through the same planned, staged,
+  read-back and undoable write as images, the kind chosen by the name given (`AssetKind`: image or audio). A sound
+  must be the MP3, WAV or Ogg (Vorbis or Opus) its name says, read whole from its own bytes, and goes straight into
+  `assets/Audio/BGM` or `assets/Audio/SFX`; one sharing its name with another format there is refused, since the game
+  plays sounds by name. The reply gives its role and stored name with the format, duration, sample rate and channels
+  read from the file. Sounds of more than 48 MiB or 30 minutes are refused. Image replies now also carry
+  `kind: image`, and a destination with an unknown extension is refused naming both image and sound extensions.
+
 - Source-preserving edits around spreads and helper calls: a command list that splices in one spread keeps the
   spread and the commands it adds byte for byte while the entries written before and after it are edited, inserted,
   moved and removed; a keyed array that merges in spreads edits keys written after every spread and adds new keys at

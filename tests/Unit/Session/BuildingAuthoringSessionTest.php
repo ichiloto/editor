@@ -71,7 +71,7 @@ it('brings building art in through the asset picker, keeping its bytes, refusing
     $target = $root . '/assets/Graphics/Incoming/Hut.png';
 
     $imported = expectAnswer($request('assets.import', ['source' => $incoming, 'destination' => 'Graphics/Incoming/Hut.png']));
-    expect($imported)->toMatchArray(['path' => 'Graphics/Incoming/Hut.png', 'width' => 6, 'height' => 4, 'changed' => true])
+    expect($imported)->toBe(['kind' => 'image', 'path' => 'Graphics/Incoming/Hut.png', 'width' => 6, 'height' => 4, 'changed' => true])
         ->and(file_get_contents($target))->toBe(file_get_contents($incoming))
         ->and(ReferenceCatalog::getPngAssets($root))->toContain('Graphics/Incoming/Hut.png');
     // The same image again changes nothing; another one asks first.
@@ -98,7 +98,9 @@ it('brings building art in through the asset picker, keeping its bytes, refusing
         ->and(expectRefusal($request('assets.import', ['source' => $incoming, 'destination' => dirname($root) . '/Hut.png'])))
         ->toBe("Images are brought into the project's assets folder. Choose a place inside it.")
         ->and(expectRefusal($request('assets.import', ['source' => $incoming, 'destination' => 'Graphics/Hut.jpg'])))
-        ->toContain('is not a PNG\'s name');
+        ->toBe('Graphics/Hut.jpg is not the name of a file the game uses. Name an image with .png at the end, or a sound with .mp3, .wav or .ogg.')
+        ->and(expectRefusal($request('assets.import', ['source' => $incoming, 'destination' => 'Graphics/.png'])))
+        ->toBe("Graphics/.png is not a PNG's name. Name the image with .png at the end.");
 });
 
 it('copies an image\'s cells into free cells of a sheet pixel for pixel, never over art, with undo and redo', function () {

@@ -201,6 +201,7 @@ use WeakReference;
 final class EditorSession
 {
     use MapPlacementSession;
+    use AssetImportSession;
     use TilesetArtSession;
     use PlacedPieceSession;
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Assets\AudioRole;
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectDirectoryContext;
@@ -188,14 +189,6 @@ final class ReferenceCatalog
         // Music and sound are named without their extension; the game's players find the file and play it.
         'bgm' => ['kind' => 'audio', 'root' => 'assets/Audio/BGM'],
         'sfx' => ['kind' => 'audio', 'root' => 'assets/Audio/SFX'],
-    ];
-
-    /**
-     * Where each audio kind's files live, under assets/Audio.
-     */
-    private const array AUDIO_DIRECTORIES = [
-        'bgm' => 'BGM',
-        'sfx' => 'SFX',
     ];
 
     /**
@@ -1319,7 +1312,7 @@ final class ReferenceCatalog
         $directory = sprintf(
             '%s/assets/Audio/%s',
             rtrim($this->workspace->projectRoot, '/'),
-            self::AUDIO_DIRECTORIES[$category] ?? ''
+            AudioRole::from($category)->getFolder()
         );
 
         if (! is_dir($directory)) {
