@@ -6,6 +6,11 @@ namespace Ichiloto\Editor\Field;
 
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Events\ScriptReferenceSource;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Throwable;
@@ -14,10 +19,13 @@ use Throwable;
  * Finding what names an NPC's stable id.
  *
  * A `move_route` whose subject is `npc` names it by `npcId`, a camera or
- * cinematic subject of kind `npc` by `npcId` or `id`, a dialogue event by
+ * cinematic subject of kind `npc` by `npcId` or `id`, a registered command
+ * by any field its declaration marks as an `npc` reference, a dialogue event by
  * its data's `npcId`, and any map event by its `speakers`. Knowing what points at an id is what lets the editor
  * refuse to delete an NPC something still expects, and keep the id of one
- * something already names when it is renamed.
+ * something already names when it is renamed. A named placement is named by
+ * a registered command's `npc_placement` field beside an `npc` field naming
+ * the NPC ({@see describePlacement()}).
  *
  * NPC ids are map-local, so a reference is only a reference from that map's
  * own context: its map-authored events and their scripts, its NPCs' inline
@@ -45,10 +53,38 @@ final class NpcReferences
     {
         $npcId = trim($npcId);
 
-        if ($npcId === '') {
-            return [];
-        }
+        return $npcId === '' ? [] : $this->find($map, fn(array $commands): bool => $this->commandsName($commands, $npcId), $npcId);
+    }
 
+    /**
+     * Returns what commits the NPC to one of its named placements, in words:
+     * a registered command whose `npc_placement` field holds the name beside
+     * an `npc` field naming the NPC, from the map's own context.
+     *
+     * @param ProjectMap $map The map the NPC lives on.
+     * @param string $npcId The NPC's id.
+     * @param string $placement The placement's name.
+     * @return string[] Where each reference lives.
+     */
+    public function describePlacement(ProjectMap $map, string $npcId, string $placement): array
+    {
+        $npcId = trim($npcId);
+        $placement = trim($placement);
+
+        return $npcId === '' || $placement === '' ? []
+            : $this->find($map, static fn(array $commands): bool => self::commandsMatch($commands,
+                static fn(array $node): bool => self::registeredFieldsName($node, $npcId, $placement)), null);
+    }
+
+    /**
+     * Walks everything the map's context runs and says where commands match.
+     *
+     * @param \Closure(array<int|string, mixed>): bool $names Whether commands name what is looked for.
+     * @param string|null $npcId The NPC id a dialogue event's `npcId` and an event's `speakers` name, when the NPC itself is looked for.
+     * @return string[] Where each reference lives.
+     */
+    private function find(ProjectMap $map, \Closure $names, ?string $npcId): array
+    {
         $found = [];
         $usedScripts = [];
 
@@ -62,9 +98,9 @@ final class NpcReferences
             $label = sprintf('%s event %s', $map->mapId, strval($marker));
             $script = (array) ($data['script'] ?? []);
 
-            if (self::readText($data['npcId'] ?? null) === $npcId || $this->commandsName($script, $npcId)) {
+            if (($npcId !== null && self::readText($data['npcId'] ?? null) === $npcId) || $names($script)) {
                 $found[] = $label;
-            } elseif (in_array($npcId, array_map(self::readText(...), (array) ($definition['speakers'] ?? [])), true)) {
+            } elseif ($npcId !== null && in_array($npcId, array_map(self::readText(...), (array) ($definition['speakers'] ?? [])), true)) {
                 $found[] = $label . ' (speaker)';
             }
 
@@ -81,7 +117,7 @@ final class NpcReferences
         foreach ($map->getNpcs()->all() as $other) {
             $label = sprintf('NPC %s', $other->getName());
 
-            if ($this->commandsName($other->getScript(), $npcId)) {
+            if ($names($other->getScript())) {
                 $found[] = $label . ' script';
             }
 
@@ -91,9 +127,9 @@ final class NpcReferences
                 $variantLabel = sprintf('%s page %d', $label, $index + 1);
                 $script = (array) ($variant['script'] ?? []);
 
-                if ($this->commandsName($script, $npcId)) {
+                if ($names($script)) {
                     $found[] = $variantLabel;
-                } elseif (in_array($npcId, array_map(self::readText(...), (array) ($variant['speakers'] ?? [])), true)) {
+                } elseif ($npcId !== null && in_array($npcId, array_map(self::readText(...), (array) ($variant['speakers'] ?? [])), true)) {
                     $found[] = $variantLabel . ' (speaker)';
                 }
 
@@ -122,7 +158,7 @@ final class NpcReferences
             $cinematic = [...(array) ($data['cast'] ?? []), ...(array) ($data['finalizer'] ?? []), ...$commands];
             $label = sprintf('cinematic %s', $asset->id);
 
-            if ($this->commandsName($cinematic, $npcId)) {
+            if ($names($cinematic)) {
                 $found[] = $label;
             }
 
@@ -150,7 +186,7 @@ final class NpcReferences
                 $commands = $scripts[$scriptId] ?? [];
                 $label = sprintf('event script %s', $scriptId);
 
-                if ($this->commandsName($commands, $npcId)) {
+                if ($names($commands)) {
                     $found[] = sprintf('%s (via %s)', $label, $via);
                 }
 
@@ -201,22 +237,66 @@ final class NpcReferences
      */
     private function commandsName(array $commands, string $npcId): bool
     {
+        return self::commandsMatch($commands, static fn(array $node): bool =>
+            (strtolower(self::readText($node['kind'] ?? $node['subject'] ?? null)) === 'npc'
+                && self::readText($node['npcId'] ?? $node['id'] ?? null) === $npcId)
+            || self::registeredFieldsName($node, $npcId, null));
+    }
+
+    /**
+     * Determines whether any node of the commands, however deeply nested, matches.
+     *
+     * @param array<int|string, mixed> $commands The commands.
+     * @param \Closure(array<int|string, mixed>): bool $matches
+     */
+    private static function commandsMatch(array $commands, \Closure $matches): bool
+    {
         foreach ($commands as $node) {
-            if (! is_array($node)) {
-                continue;
-            }
-
-            if (strtolower(self::readText($node['kind'] ?? $node['subject'] ?? null)) === 'npc'
-                && self::readText($node['npcId'] ?? $node['id'] ?? null) === $npcId) {
-                return true;
-            }
-
-            if ($this->commandsName($node, $npcId)) {
+            if (is_array($node) && ($matches($node) || self::commandsMatch($node, $matches))) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /**
+     * Determines whether a registered command names the NPC through a field
+     * its declaration marks as an `npc` reference, or, with a placement, names
+     * that placement through an `npc_placement` field beside an `npc` field
+     * naming the NPC. List entries are read as their declaration nests them.
+     *
+     * @param array<int|string, mixed> $node A node that may be a command.
+     */
+    private static function registeredFieldsName(array $node, string $npcId, ?string $placement): bool
+    {
+        $definition = is_string($node['type'] ?? null) ? ScriptCommandRegistry::getCatalog()->findDefinition($node['type']) : null;
+        $read = static function (array $fields, array $data) use (&$read, $npcId, $placement): bool {
+            foreach ($fields as $field) {
+                $value = ScriptCommandField::readPath($data, $field->key);
+                if ($field->kind === ScriptCommandFieldKind::LIST) {
+                    if (is_array($value) && array_any(array_filter($value, is_array(...)), static fn(array $entry): bool => $read($field->fields, $entry))) {
+                        return true;
+                    }
+                    continue;
+                }
+                if ($field->kind !== ScriptCommandFieldKind::REFERENCE) {
+                    continue;
+                }
+                if ($placement === null && $field->reference === ScriptCommandReference::NPC && self::readText($value) === $npcId) {
+                    return true;
+                }
+                $npcField = $placement !== null && $field->reference === ScriptCommandReference::NPC_PLACEMENT && self::readText($value) === $placement
+                    ? ScriptReferenceSource::findSelectingNpcField($field, $fields) : null;
+                if ($npcField !== null && self::readText(ScriptCommandField::readPath($data, $npcField->key)) === $npcId) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        return $definition !== null && $read($definition->fields, $node);
     }
 
     /**

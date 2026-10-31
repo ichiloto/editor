@@ -12,6 +12,9 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Events\ScriptCommandUses;
 use Ichiloto\Engine\Animations\Field\FieldEffectManager;
+use Ichiloto\Engine\Animations\SourceEffectAnchor;
+use Ichiloto\Engine\Battle\BattleTurnTimings;
+use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Presentation\PartyStageSelection;
@@ -70,6 +73,39 @@ final class EffectValidator
             }
         }
 
+        return [...$issues, ...self::checkSourceEffectAnchors($workspace)];
+    }
+
+    /**
+     * Checks each animation whose caster effect starts at the target phase, as the Engine's graphical battle
+     * plans it: the caster effect then overlaps the target, on battlefield tracks, so a source cinematic stage,
+     * which needs its own sequential phase, is refused with the Engine's own reason. An effect that does not
+     * compile at all is reported with its other battle uses.
+     *
+     * @return Issue[]
+     */
+    private static function checkSourceEffectAnchors(ProjectWorkspace $workspace): array
+    {
+        $issues = [];
+        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
+            $effect = $animation->get('sourceEffect');
+            if ($animation->get('sourceEffectAnchor') !== SourceEffectAnchor::TARGET->value || ! is_string($effect) || $effect === '') {
+                continue;
+            }
+            try {
+                $source = $workspace->catalogs->loadEffectTimeline($effect, true, EffectPresentation::GRAPHICAL);
+            } catch (Throwable) {
+                continue;
+            }
+            try {
+                new BattleCommandTimeline(BattleTurnTimings::fromTotalDuration(1.0), $source, sourceEffectAnchor: SourceEffectAnchor::TARGET);
+            } catch (\InvalidArgumentException $refusal) {
+                $issues[] = Issue::error(sprintf('assets/Data/animations.php: %s sourceEffectAnchor', strval($animation->get('name'))),
+                    sprintf('Its caster effect %s cannot start at the target phase: %s', $effect, $refusal->getMessage()),
+                    'Start it in its own phase (source), or choose a caster effect played on battlefield tracks.');
+            }
+        }
+
         return $issues;
     }
 
@@ -124,13 +160,8 @@ final class EffectValidator
             $uses[$effect][$battle ? 'battle' : 'field'][] = $where;
         };
 
-        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
-            foreach (['sourceEffect', 'targetEffect'] as $field) {
-                $effect = $animation->get($field);
-                if (is_string($effect) && $effect !== '') {
-                    $use($effect, true, sprintf('assets/Data/animations.php: %s %s', strval($animation->get('name')), $field));
-                }
-            }
+        foreach (self::findBattleUses($workspace) as $effect => $places) {
+            $uses[$effect]['battle'] = $places;
         }
 
         foreach (self::findStageUses($workspace, $issues) as $effect => $places) {
@@ -174,6 +205,28 @@ final class EffectValidator
             foreach ($tileset->pieces as $piece) {
                 if ($piece->effect !== null) {
                     $use($piece->effect, false, sprintf('assets/%s/%s.php piece %s', Tileset::DIRECTORY, $id, $piece->id));
+                }
+            }
+        }
+
+        return $uses;
+    }
+
+    /**
+     * Returns where battle plays each effect: the battle animations that
+     * bind it as their source or target effect, which is also how battle
+     * selects an ordinary action's staged cut-in and its impact.
+     *
+     * @return array<string, list<string>> Effect id to the animation fields that bind it.
+     */
+    public static function findBattleUses(ProjectWorkspace $workspace): array
+    {
+        $uses = [];
+        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
+            foreach (['sourceEffect', 'targetEffect'] as $field) {
+                $effect = $animation->get($field);
+                if (is_string($effect) && $effect !== '') {
+                    $uses[$effect][] = sprintf('assets/Data/animations.php: %s %s', strval($animation->get('name')), $field);
                 }
             }
         }

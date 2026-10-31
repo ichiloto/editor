@@ -147,10 +147,10 @@ it('follows an anchor that moves without copying its cells, on ragged maps too',
 it('reports declarations the Engine refuses, and still lets an author repair them', function () {
     [, , $session] = createLandmarkProject("'landmarks' => [['id' => 'gate', 'kind' => 'building', 'anchor' => ['event' => 'T']]],");
     $map = getSessionMap($session);
-    expect(mapValidatorMessages($map, ['test-map' => $map]))->toContain('Minimap landmarks: A transfer landmark must use passage, entrance or exit so ordinary routes remain visible.');
+    expect(mapValidatorMessages($map, ['test-map' => $map]))->toContain('Minimap landmarks: A route landmark must use passage, entrance or exit.');
     expect(findLandmarkRow($session, ['target' => 'map-landmarks', 'field' => 'kind', 'index' => 0])['options'])->toBe(['passage', 'entrance', 'exit']);
     applyLandmarkRow($session, ['target' => 'map-landmarks', 'field' => 'kind', 'index' => 0], 'entrance');
-    expect(mapValidatorMessages($map, ['test-map' => $map]))->not->toContain('Minimap landmarks: A transfer landmark must use passage, entrance or exit so ordinary routes remain visible.');
+    expect(mapValidatorMessages($map, ['test-map' => $map]))->not->toContain('Minimap landmarks: A route landmark must use passage, entrance or exit.');
 });
 
 it('describes a selected world object from its own inspector, through the same rows', function () {

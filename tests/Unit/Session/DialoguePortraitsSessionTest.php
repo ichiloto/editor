@@ -251,3 +251,58 @@ it('chooses a cinematic text line\'s emotion as an event text command\'s', funct
     $session->saveAll();
     expect((require $script)[4])->toBe(['type' => 'text', 'name' => 'Mom', 'text' => 'Look at them.', 'emotion' => 'Worried']);
 });
+
+it('warns of every line naming no emotion when its speaker has more than Neutral to show, in validation and beside the line', function () {
+    $catalogue = str_replace("    'Mom' => 'Mira',\n", "    'Mom' => 'Mira',\n    'Guard' => 'Sentry',\n",
+        str_replace("  'resources' => [\n", "  'resources' => [\n    'Sentry' => ['portrait' => 'Graphics/Faces/Mira.png'],\n", syntheticDialogueCatalogue()));
+    [$root] = createDialogueProject($catalogue);
+    file_put_contents($root . '/assets/Data/Skits/breakfast-banter.php', <<<'PHP'
+<?php
+
+return [
+  'id' => 'breakfast-banter',
+  'title' => 'Breakfast Banter',
+  'where' => 'happyville/town-center',
+  'beats' => [
+    ['actor' => 'Kaelion', 'text' => 'Again?'],
+    ['actor' => 'Kaelion', 'text' => 'Fine.', 'emotion' => 'Neutral'],
+    ['speaker' => 'Mom', 'text' => 'Eat first.'],
+    ['speaker' => 'Guard', 'text' => 'Move along.'],
+    ['speaker' => 'A Stranger', 'text' => 'Hm.'],
+    ['speaker' => '', 'text' => 'The kettle whistles.'],
+  ],
+];
+PHP);
+    $data = $root . '/assets/Maps/test-map/test-map.data.php';
+    file_put_contents($data, str_replace("  'events' => [\n", <<<'PHP'
+  'events' => [
+    'D' => [
+      'class' => 'Ichiloto\Engine\Events\Triggers\DialogueEventTrigger',
+      'data' => ['dialogue' => [['name' => 'Mom', 'text' => 'Supper is ready.']]],
+    ],
+
+PHP, (string) file_get_contents($data)));
+    $events = $root . '/assets/Events/dresser-note.php';
+    file_put_contents($events, str_replace("'name' => '',", "'name' => 'Kaelion',", (string) file_get_contents($events), $named));
+    expect($named)->toBeGreaterThan(0);
+
+    $issues = new Ichiloto\Editor\Validation\DialoguePresentationValidator()->validate(Ichiloto\Editor\ProjectWorkspace::fromProject($root));
+    $messages = array_map(static fn($issue): string => $issue->severity->value . ' | ' . $issue->where . ' | ' . $issue->message, $issues);
+    $skit = array_values(array_filter($messages, static fn(string $message): bool => str_contains($message, 'breakfast-banter.php')));
+    // Kaelion and Mom have emotions to show; Neutral chosen, an identity with only Neutral, no identity and narration do not warn.
+    expect($skit)->toHaveCount(2)
+        ->and($skit[0])->toContain('warning | assets/Data/Skits/breakfast-banter.php:beat 1 "Again?"', 'Kaelion always shows Neutral', 'Neutral, Angry')
+        ->and($skit[1])->toContain(':beat 3 "Eat first."', 'Mira always shows Neutral', 'Neutral, Worried');
+    expect(array_filter($messages, static fn(string $message): bool => str_contains($message, ':event D page 1 "Supper is ready."')
+        && str_contains($message, 'Mira always shows Neutral')))->toHaveCount(1);
+    expect(array_filter($messages, static fn(string $message): bool => str_contains($message, 'dresser-note.php:text')
+        && str_contains($message, 'Kaelion always shows Neutral')))->not->toBeEmpty();
+
+    // The same warning sits beside the line in the record, and goes once an emotion is chosen.
+    $session = EditorSession::open($root);
+    $warnings = static fn(): array => array_values(array_map(static fn(array $row): string => (string) $row['label'],
+        array_filter($session->readDatabaseRecord('skits', 0)['rows'], static fn(array $row): bool => ($row['tone'] ?? null) === 'warning')));
+    expect($warnings())->toBe(['Beat 1 Emotion Warning', 'Beat 3 Emotion Warning']);
+    $session->applyDatabaseRecord('skits', 0, findDialogueRow($session, 'skits', 0, 'beat0Emotion')['key'], 'Angry');
+    expect($warnings())->toBe(['Beat 3 Emotion Warning']);
+});

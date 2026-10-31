@@ -8,35 +8,6 @@ use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 
 /** A battle effect previewed in an action the battle test party actually plays it in, by the Engine's own animation selection. Synthetic fixtures only. */
 
-/** The summon battle preview project with two effects, one of them played by an unarmed attack. */
-function effectBattlePreviewProject(): string
-{
-    $root = summonBattlePreviewProject();
-    foreach (['ember-spark' => emberSparkTimeline(), 'dusk-slash' => duskSlashTimeline()] as $id => $source) {
-        @mkdir($root . '/assets/Animations/' . $id, 0o777, true);
-        file_put_contents($root . '/assets/Animations/' . $id . '/' . $id . '.timeline.php', $source);
-    }
-    @mkdir($root . '/assets/Graphics/Effects', 0o777, true);
-    writeTilesetTestPng($root . '/assets/Graphics/Effects/dusk-slash.png', 32, 16);
-    // Dusk Slash is what an unarmed attack plays on its target; Ember Spark nothing plays.
-    file_put_contents($root . '/assets/Data/animations.php', "<?php\n\nreturn " . var_export([
-        ['id' => 1, 'name' => 'Dusk Slash', 'roles' => ['attack', 'attack-unarmed'], 'targetEffect' => 'dusk-slash'],
-    ], true) . ";\n");
-
-    return $root;
-}
-
-/** @return int The effect's place among the effect records. */
-function findEffectIndex(EditorSession $session, string $id): int
-{
-    foreach ($session->listDatabaseRecords('cutscenes/effect')['records'] as $index => $label) {
-        if (str_contains(strval($label), $id)) {
-            return $index;
-        }
-    }
-    throw new RuntimeException("No effect {$id}.");
-}
-
 it('previews an effect in the action that plays it, as the battle draws it, for both presentations', function () {
     $session = EditorSession::open(effectBattlePreviewProject());
     $index = findEffectIndex($session, 'dusk-slash');

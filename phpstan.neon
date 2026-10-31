@@ -1,7 +1,11 @@
 # Static analysis for the editor.
 #
 # The Editor consumes Engine contracts directly through its Composer runtime
-# dependency.
+# dependency. With ICHILOTO_ENGINE_SRC set, the included file reads that
+# sibling Engine checkout instead, as the test bootstrap does.
+includes:
+    - tests/phpstan-engine.php
+
 parameters:
     # Level 3 is free here and catches more than names that do not resolve:
     # an undefined property (`$category->title` for `label`) is a level 2

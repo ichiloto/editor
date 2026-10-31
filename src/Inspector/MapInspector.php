@@ -41,6 +41,8 @@ use Ichiloto\Engine\Events\Enumerations\EventEngagement;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
+use Ichiloto\Engine\Events\Triggers\EventCue;
+use Ichiloto\Engine\Events\Triggers\PassageEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
 use Ichiloto\Engine\Field\DashSettings;
@@ -1312,6 +1314,13 @@ final readonly class MapInspector
         if ($path === ['engagement']) {
             return $this->applyEventEngagement($map, $marker, $value);
         }
+        if ($path === ['cue', 'maxDistance']) {
+            $text = trim(strval($value));
+            if ($text === '') { $value = null; }
+            elseif (!ctype_digit($text) || (int) $text > EventCue::MAX_DISTANCE) {
+                throw new InspectorRefusal('Cue range must be 0..64 steps, or blank for unlimited range.');
+            } else { $value = (int) $text; }
+        }
         if (is_string($field['facingHeading'] ?? null)) {
             return $this->applyEventFacing($map, $marker, $field['facingHeading'], $value === true);
         }
@@ -1345,6 +1354,10 @@ final readonly class MapInspector
         $engagement = is_string($value) ? EventEngagement::tryFrom($value) : null;
         if ($engagement === null) {
             throw new InspectorRefusal('Choose to stand on the event or to face it from next to it.');
+        }
+        if (is_a($map->getEventDefinition($marker)['class'] ?? '', PassageEventTrigger::class, true)
+            && $engagement !== EventEngagement::FACING) {
+            throw new InspectorRefusal('An opening passage is operated from the adjacent facing cell.');
         }
         $held = $map->hasEventField($marker, ['engagement']);
         $old = $map->getEventField($marker, ['engagement']);
@@ -2218,6 +2231,12 @@ final readonly class MapInspector
         }
         $cueKindFields = [];
         if (is_array($rootFields['cue'])) {
+            $range = $rootFields['cue']['maxDistance'] ?? '';
+            if (!is_scalar($range)) { $range = '(invalid range)'; }
+            unset($rootFields['cue']['maxDistance']);
+            $cueKindFields[] = ['label' => 'Cue Range (steps, blank = unlimited)', 'value' => (string) $range,
+                'control' => new InputControl(InputControlType::TEXT, (string) $range),
+                'path' => ['cue', 'maxDistance'], 'optional' => true];
             $hasKind = array_key_exists('kind', $rootFields['cue']);
             $kind = $hasKind ? $rootFields['cue']['kind'] : '';
             $validKind = ! $hasKind || (is_string($kind) && EventCueKind::tryFrom($kind) !== null);
@@ -2232,6 +2251,16 @@ final readonly class MapInspector
                 'path' => ['cue', 'kind'],
                 'optional' => true,
             ];
+        }
+
+        if (is_a($definition['class'] ?? '', PassageEventTrigger::class, true)) {
+            $fields = array_map(static function (array $field): array {
+                if (in_array($field['path'] ?? [], [['data', 'mode'], ['data', 'reusable']], true)) {
+                    unset($field['control'], $field['options']);
+                    $field['editable'] = false;
+                }
+                return $field;
+            }, $fields);
         }
 
         return [
@@ -2663,6 +2692,7 @@ final readonly class MapInspector
     {
         return match ($className) {
             ScriptEventTrigger::class => ScriptEventTrigger::MODES,
+            PassageEventTrigger::class => [ScriptEventTrigger::MODE_ACTION],
             CinematicCommandSchema::CINEMATIC_TRIGGER_CLASS => CinematicCommandSchema::CINEMATIC_TRIGGER_MODES,
             default => null,
         };

@@ -5,6 +5,42 @@ performance/architecture trace of the Ichiloto editor, a comparative study of
 the hand-built Sendama console editor (the responsiveness benchmark), and an
 authoring-UX review. All measurements taken on this machine.*
 
+## Variable party authoring — 29 October 2026
+
+System data exposes Engine `battle.partySize` (1–8), with project validation.
+Registered field commands expose capacity changes, current-group selection with
+Actor pickers and idempotent regrouping through the existing command list and
+source-preserving saves. Battle Test reads the unsaved System capacity and now
+supports eight members through Engine's shared setup contract. This removes the
+previous four-member test ceiling; the project's legacy default remains three.
+Runtime membership and persistence are owned by Engine Party, rather than a
+second Editor state. Native editor consumers have not been launched for this
+change; headless authoring and source round trips are the validation surface.
+
+## Crisis technique authoring — in progress, 29 October 2026
+
+The shared Crisis Abilities database category authors activation thresholds,
+state references and guarded skill variants. Actor pages select a crisis resource
+through the existing reference picker. Save validation uses Engine's definition
+contract; incomplete activation is refused before writing. State pickers now
+store stable state IDs and show display names beside them, removing the previous
+display-name storage behavior. Headless round trips cover these surfaces. Full
+battle-feature authoring and graphical interaction verification remain pending.
+
+Skill effects now expose the Engine's explicit guaranteed-state setting, with
+source-preserving save/load checks. System's Dash Unlock Conditions field reuses
+the shared conditions authoring path; guarded dash settings survive a saved
+project reload and evaluate against live story state.
+
+Prepared-counter skill effects select their response from the existing constrained
+counter-skill picker and their stance from the state picker. Source-preserving
+round trips retain both references. Project validation checks those references
+and rejects a stance that persists outside its battle-owned reaction context.
+
+Skill effect authoring includes an ATB reset effect. State authoring exposes a
+validated ATB fill multiplier. Both round trip through the normal record service
+and consume Engine's current runtime contract.
+
 ## The one-paragraph diagnosis
 
 The editor is not slow because PHP is slow — **a full frame of real rendering
@@ -203,7 +239,8 @@ Names edits `speakers`. Every line the Engine reads `emotion` from (event and
 cinematic `text`, NPC lines, skit beats, Dialogue and Shop event pages) offers
 the emotions of the identity its speaker resolves to through the Engine's own
 `resolveSpeakerId`; an emotion the identity lacks is kept and warned about, in
-the row and in validation. A catalogue that builds its identities with PHP code
+the row and in validation, as is a line naming no emotion while its speaker has
+emotions beyond Neutral. A catalogue that builds its identities with PHP code
 is read-only on Dialogue Portraits, saying so (Last Legend's builds them in a
 loop over directories, so its identities are authored there once the Game
 writes them as data); its literal speaker names stay editable. The GUI shows an
@@ -1246,6 +1283,21 @@ one test / 56 assertions on current Game; it was not weakened or replaced.
 GUI's complete offline release suite passes 140 tests. These checks do not
 close native visual acceptance, other platforms, or the separately assigned
 retained-underlay terminal/collision restoration correction.
+
+October 30 ordinary action cut-ins follow Engine e3bede2: an effect declaring
+the shared stage is admitted by its caller-owned stage or by battle, chosen by
+its consumer through one Editor rule (`EffectPreviewContext`): battle when an
+animation binds it as caster or target effect. Saving accepts a stage either
+consumer admits; validation reports each consumer's refusal at that consumer.
+The Terminal preview's `B` moves a staged effect between battle and its owned
+stage. The host's `cutscenes.timeline` reply adds `stageContext` (`battle`,
+`stage` or null) and keeps `ownedStage` true only for the owned-stage consumer;
+`cutscenes.preview` serves the stage canvas compiled with that consumer's
+admission. Remaining GUI work: route a battle-bound staged effect to the stage
+canvas when the battle test party cannot play it (today the GUI falls back to
+the field scene, which refuses stages), offer a stage-context choice beside
+the battle/field routing, and show the stage lanes beside the battle preview's
+source/target phases. Native visual acceptance of a cut-in remains open.
 
 **A cutscene is a pair, and the pair is one asset.** `CutsceneAsset` reads
 `<id>.data.php` with `<id>.script.php` or `<id>.timeline.php`, knows which

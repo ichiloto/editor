@@ -116,9 +116,9 @@ For layered-map integration tests against an unpublished sibling Engine,
 set `ICHILOTO_ENGINE_SRC=/path/to/engine`. The test bootstrap prepends that
 checkout's source directory, including in isolated data-evaluation children;
 it does not modify `vendor`, dependency versions or the lockfile.
-Use `vendor/bin/phpstan analyse -c tests/phpstan-engine.php
---autoload-file=tests/bootstrap.php` with the same environment to analyse
-against that checkout instead of the installed Engine sources.
+`composer analyse` reads the same variable through
+`tests/phpstan-engine.php`, so static analysis checks the Editor against that
+checkout instead of the installed Engine sources.
 
 ## Project Links
 

@@ -968,12 +968,6 @@ final class CutsceneAsset
         return $this->compileEffect($presentation, $forBattle);
     }
 
-    /** Whether this effect declares its own graphical space, independent of its selected sequence. */
-    public function isOwnedStageEffect(): bool
-    {
-        return $this->type === CutsceneType::EFFECT && CutsceneHydration::isOwnedStage($this->partner);
-    }
-
     /**
      * Hydrates the cinematic as it stands in memory, unsaved edits included.
      *

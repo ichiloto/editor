@@ -3,7 +3,12 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Editor\Events\ScriptReferenceScope;
+use Ichiloto\Editor\Events\ScriptReferenceSource;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
+use Ichiloto\Engine\Events\Interpreter\EventExecutionScope;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\ProjectValidator;
@@ -60,29 +65,36 @@ afterEach(function (): void {
     ScriptCommandRegistry::reset();
 });
 
-it('maps every Engine command reference to an Editor resource category', function (): void {
+it('resolves every current Engine command reference to an Editor picker', function (): void {
     foreach (ScriptCommandReference::cases() as $reference) {
-        if ($reference === ScriptCommandReference::TROOP_MEMBER) {
+        $source = ScriptReferenceSource::forReference($reference);
+        // A new Engine kind falls through to the unsupported arm: this names it so the Editor gains its picker.
+        expect($source->isSupported)->toBeTrue("The Editor has no picker for the Engine's {$reference->value} references.");
+        if ($source->scope === ScriptReferenceScope::OWNING_TROOP) {
             // A troop member belongs to the troop that owns the page, never to the project's resources.
-            expect(ProjectScriptCommands::getReferenceCategory($reference))->toBeNull();
+            expect($source->category)->toBeNull();
             continue;
         }
-        expect(ProjectScriptCommands::getReferenceCategory($reference))->toBeString()->not->toBeEmpty();
+        expect($source->category)->toBeString()->not->toBeEmpty()
+            ->and(ReferenceCatalog::knows($source->category))->toBeTrue();
     }
 
-    expect(ProjectScriptCommands::getReferenceCategory(ScriptCommandReference::STAGE_TIMELINE))
-        ->toBe('stage_timelines');
+    expect(ScriptReferenceSource::forReference(ScriptCommandReference::STAGE_TIMELINE)->category)->toBe('stage_timelines')
+        ->and(ScriptReferenceSource::forReference(ScriptCommandReference::NPC)->scope)->toBe(ScriptReferenceScope::CURRENT_MAP)
+        ->and(ScriptReferenceSource::forReference(ScriptCommandReference::CONVERSATION_GROUP)->scope)->toBe(ScriptReferenceScope::CURRENT_CINEMATIC);
 });
 
 it('reads a project\'s declared commands without loading their handlers', function (): void {
     $root = makeTemporaryProject();
 
-    expect(ProjectScriptCommands::fromProject($root)->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'end_battle', 'concede']);
+    // The Engine's own vocabulary, whatever it currently registers.
+    $engine = ScriptCommandCatalog::createEngineCatalog()->types;
+    expect(ProjectScriptCommands::fromProject($root)->catalog->types)->toBe($engine);
 
     writeCarriageDeclarations($root);
     $commands = ProjectScriptCommands::fromProject($root);
 
-    expect($commands->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'end_battle', 'concede', 'hire_carriage'])
+    expect($commands->catalog->types)->toBe([...$engine, 'hire_carriage'])
         ->and($commands->catalog->findDefinition('hire_carriage')?->handlerClass)->toBe('Project\\Commands\\HireCarriage')
         ->and(class_exists('Project\\Commands\\HireCarriage', false))->toBeFalse()
         ->and($commands->declarationProblem)->toBeNull();
@@ -97,7 +109,10 @@ it('offers the open project\'s registered commands with their declared fields', 
     $inn = registeredVariantFields('inn');
     $carriage = registeredVariantFields('hire_carriage');
 
-    expect($list->fields[0]->options)->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, 'shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'hire_carriage'])
+    // A field script offers the Engine's field commands, then the project's.
+    $fieldCommands = array_keys(array_filter(ScriptCommandCatalog::createEngineCatalog()->definitions,
+        static fn($definition): bool => $definition->runsIn(EventExecutionScope::FIELD)));
+    expect($list->fields[0]->options)->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, ...$fieldCommands, 'hire_carriage'])
         ->and(array_keys($shop))->toBe(['buyRate', 'sellRate'])
         ->and($shop['sellRate']->type)->toBe(InputControlType::FLOAT)
         ->and(array_keys($inn))->toBe(['confirmDialogue.text', 'confirmDialogue.name', 'cost', 'spawnPoint.x', 'spawnPoint.y', 'bgm', 'presentation', 'resultVariable'])
@@ -206,4 +221,57 @@ it('edits a shop command\'s merchandise and keeps what it does not edit', functi
         'technicalMetadata' => ['preserve' => true],
         'sellRate' => 0.25,
     ]);
+});
+
+
+it('authors recruitment through the actor picker and preserves unrelated command metadata on save', function (): void {
+    $root = makeTemporaryProject();
+    ProjectWorkspace::fromProject($root);
+    $actor = registeredVariantFields('recruit_actor')['actor'];
+    expect($actor->reference)->toBe('actors')->and($actor->allowsNone)->toBeFalse();
+    $database = loadRecordDatabase($root, 'common_events');
+    $index = $database->addSubItem(0, ['type' => 'recruit_actor', 'actor' => 'old.identity', 'note' => ['keep' => true]]);
+    $fields = $database->getSettingsFields(0);
+    $field = array_find($fields, static fn($entry) => str_starts_with($entry['field'], "command{$index}")
+        && str_ends_with($entry['field'], 'Actor'));
+    expect($field)->not->toBeNull();
+    $database->setField(0, $field['field'], 'chosen.identity');
+    $database->save();
+    $saved = require $root . '/assets/Events/dresser-note.php';
+    expect($saved[$index])->toBe(['type' => 'recruit_actor', 'actor' => 'chosen.identity', 'note' => ['keep' => true]]);
+});
+
+
+it('round trips the constrained recruitment level policy with source metadata', function (): void {
+    $root = makeTemporaryProject();
+    ProjectWorkspace::fromProject($root);
+    $policy = registeredVariantFields('recruit_actor')['levelPolicy'];
+    expect($policy->options)->toBe(['authored', 'partyAverage']);
+    $database = loadRecordDatabase($root, 'common_events');
+    $index = $database->addSubItem(0, ['type' => 'recruit_actor', 'actor' => 'chosen.identity', 'note' => ['keep' => true]]);
+    $field = array_find($database->getSettingsFields(0), static fn($entry) => str_starts_with($entry['field'], "command{$index}")
+        && str_ends_with($entry['field'], 'LevelPolicy'));
+    expect($field)->not->toBeNull();
+    $database->setField(0, $field['field'], 'partyAverage');
+    $database->save();
+    $saved = require $root . '/assets/Events/dresser-note.php';
+    expect($saved[$index])->toBe(['type' => 'recruit_actor', 'actor' => 'chosen.identity', 'note' => ['keep' => true], 'levelPolicy' => 'partyAverage']);
+    $loaded = loadRecordDatabase($root, 'common_events');
+    $loaded->save();
+    expect((require $root . '/assets/Events/dresser-note.php')[$index])->toBe($saved[$index]);
+});
+
+it('authors present party members with actor pickers and retains source metadata', function (): void {
+    $root = makeTemporaryProject();
+    ProjectWorkspace::fromProject($root);
+    $database = loadRecordDatabase($root, 'common_events');
+    $index = $database->addSubItem(0, ['type' => 'select_party', 'members' => [['actor' => 'old.identity']], 'note' => ['keep' => true]]);
+    $database->save();
+    $saved = require $root . '/assets/Events/dresser-note.php';
+    expect($saved[$index])->toBe(['type' => 'select_party', 'members' => [['actor' => 'old.identity']], 'note' => ['keep' => true]]);
+    $schema = RecordSchemaCatalog::forKey('common_events');
+    $entry = $schema->subList;
+    expect(RecordSchemaCatalog::getEventCommandTypes())->toContain('select_party', 'regroup_party', 'set_party_size');
+    $definition = ScriptCommandRegistry::getCatalog()->findDefinition('select_party');
+    expect(ScriptReferenceSource::forReference($definition->fields[0]->fields[0]->reference)->category)->toBe('actors');
 });

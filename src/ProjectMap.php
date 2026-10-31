@@ -34,6 +34,9 @@ use Ichiloto\Engine\Field\MapTerrainKinds;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\IO\Console\SgrStyleState;
+use Symfony\Component\Console\Output\AnsiColorMode;
+use Symfony\Component\Console\Terminal;
+use Ichiloto\Engine\Rendering\Tilesets\TileLayerOffset;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Editor\Maps\EditableGrid;
@@ -128,7 +131,7 @@ final class ProjectMap
         $this->editableData = $data;
         $this->layers = $layers ?? new MapLayers($directory, true, [[
             'id' => MapLayers::BASE, 'name' => 'terrain', 'order' => 0, 'decoration' => false,
-            'path' => $mapPath, 'grid' => new EditableGrid(implode("\n", $tileLines), legacyTags: true),
+            'path' => $mapPath, 'grid' => new EditableGrid(implode("\n", $tileLines)),
         ]], new EditableGrid(implode("\n", $eventLines)), $eventPath);
         $this->loadedData = $data;
         $this->sourceData = $data;
@@ -875,12 +878,17 @@ final class ProjectMap
     /**
      * The map's tile layers in drawing order, as an editor lists them: each
      * one's name, order, file in the map's folder, and its settings as the
-     * Engine reads them: its offset across and down in field cells, the
-     * gameplay layer its settings name it `movesWith`, and the gameplay layer
-     * it belongs to ({@see MapGraphics::resolveLayerOwners()}). When the
-     * settings cannot be read, `issue` says why and no layer has settings.
+     * Engine reads them: the offset it draws at across and down in field
+     * cells, the offset it inherits from the tileset
+     * ({@see Tileset::$layerOffsets}, none: 0, 0) and whether the map
+     * overrides that one, the gameplay layer its settings name it
+     * `movesWith`, and the gameplay layer it belongs to
+     * ({@see MapGraphics::resolveLayerOwners()}). When the settings cannot be
+     * read, `issue` says why and no layer has settings. `offsetLimit` is the
+     * largest offset either way the Engine accepts
+     * ({@see TileLayerOffset::MAX_ABSOLUTE}); any fraction within it is valid.
      *
-     * @return array{layers: list<array{name: string, order: int, file: string, offset: ?array{float, float}, movesWith: ?string, owner: ?string}>, issue: ?string}
+     * @return array{layers: list<array{name: string, order: int, file: string, offset: ?array{float, float}, inheritedOffset: ?array{float, float}, overridesTileset: bool, movesWith: ?string, owner: ?string}>, issue: ?string, offsetLimit: float}
      */
     public function describeTileLayers(): array
     {
@@ -904,14 +912,19 @@ final class ProjectMap
             $issue = $error->getMessage();
         }
 
+        $inherited = static fn(string $name): array => $tileset?->layerOffsets[$name] ?? [0.0, 0.0];
+
         return ['layers' => array_map(static fn(array $layer): array => [
             'name' => $layer['name'],
             'order' => $layer['order'],
             'file' => MapGraphics::DIRECTORY . '/' . basename($layer['path']),
-            'offset' => $issue === null ? ($offsets[$layer['name']] ?? [0.0, 0.0]) : null,
+            // An explicit map offset overrides the tileset's, as MapGraphics composes them.
+            'offset' => $issue === null ? ($offsets[$layer['name']] ?? $inherited($layer['name'])) : null,
+            'inheritedOffset' => $issue === null ? $inherited($layer['name']) : null,
+            'overridesTileset' => $issue === null && isset($offsets[$layer['name']]),
             'movesWith' => $movesWith[$layer['name']] ?? null,
             'owner' => $owners[$layer['name']] ?? null,
-        ], $layers), 'issue' => $issue];
+        ], $layers), 'issue' => $issue, 'offsetLimit' => TileLayerOffset::MAX_ABSOLUTE];
     }
 
     /**
@@ -968,21 +981,28 @@ final class ProjectMap
 
     /**
      * Sets a tile layer's offset across and down, in field cells, and the
-     * gameplay layer its tiles move with, or none. The map's settings must
-     * read as the Engine reads them once set.
+     * gameplay layer its tiles move with, or none. The map holds the offset
+     * only where it differs from the one the tileset gives the layer; null
+     * inherits that one. The map's settings must read as the Engine reads
+     * them once set.
      *
-     * @param array<int, mixed> $offset Across and down, each one of {@see MapGraphics::OFFSET_STEPS}.
+     * @param array<int, mixed>|null $offset Across and down, each within {@see TileLayerOffset::MAX_ABSOLUTE}, or null to inherit.
      * @throws MapSourceRefusal When there is no such layer, or the Engine would refuse the settings.
      */
-    public function setTileLayerSettings(string $name, array $offset, ?string $movesWith): void
+    public function setTileLayerSettings(string $name, ?array $offset, ?string $movesWith): void
     {
         $this->assertEditable();
         $names = array_column($this->layers->getTileLayers(), 'name');
         if (! in_array($name, $names, true)) {
             throw new MapSourceRefusal("There is no tile layer {$name}. Nothing was changed.");
         }
+        try {
+            $inherited = $this->loadTileset()?->layerOffsets[$name] ?? [0.0, 0.0];
+        } catch (InvalidArgumentException | RuntimeException $error) {
+            throw new MapSourceRefusal(rtrim($error->getMessage(), '.') . '. Its tileset must load to set an offset over it. Nothing was changed.', previous: $error);
+        }
         $settings = $this->getMapDataField([MapGraphics::SETTINGS_KEY]);
-        $next = TileLayerSettings::setLayer($settings, $name, $offset, $movesWith);
+        $next = TileLayerSettings::setLayer($settings, $name, $offset, $movesWith, $inherited);
         try {
             MapGraphics::readLayersMovingWith($next, $names, $this->getGameplayLayerNames(), $this->mapId);
         } catch (InvalidArgumentException $error) {
@@ -1474,7 +1494,18 @@ final class ProjectMap
                 $anchorHighlight = array_key_exists($column, $npcCells[$row] ?? []) || array_key_exists($column, $stampPreview[$row] ?? [])
                     ? "\033[7m" : '';
                 if (! $this->layers->legacy && is_array($tileCell)) {
-                    $styled = TerminalText::formatStyles($tileCell['prefix'] . $anchorHighlight . $tileSymbol . $tileCell['suffix']);
+                    $source = $tileCell['prefix'] . $anchorHighlight . $tileSymbol . $tileCell['suffix'];
+                    // A literal <, > or backslash is drawn as it is written: the
+                    // Engine composes it so it cannot escape its closing tag.
+                    if (strpbrk($tileSymbol, '<>\\') !== false) {
+                        try {
+                            $source = TerminalText::composeSourceCell($tileSymbol, $tileCell['prefix'] . $anchorHighlight, $tileCell['suffix']);
+                        } catch (\InvalidArgumentException) {
+                            // Saving refuses a style the formatter cannot compose;
+                            // until then the canvas shows the cell's style text.
+                        }
+                    }
+                    $styled = TerminalText::formatStyles($source);
                     $styled = ($tileCell['dim'] ?? false) ? "\033[2m" . $styled . "\033[0m" : $styled;
                     $mergedSymbols[] = $anchorHighlight === '' ? $styled : $styled . "\033[0m";
                     continue;
@@ -1673,16 +1704,45 @@ final class ProjectMap
     }
 
     /**
-     * Returns the `fg=` value a styling prefix renders in. Nested tags
-     * override outer ones, so the last declared foreground wins.
+     * Returns the foreground a cell with this styling prefix is shown in, as
+     * the Engine's own formatter shows it: tags and ANSI controls in their
+     * authored order, closed styles included, so a prefix that replays a
+     * row's earlier controls reads as the colour actually in force. Hex
+     * colours are read at full precision, whatever the host terminal shows.
      *
      * @param string $prefix The cell's styling prefix bytes.
-     * @return string|null The `fg=` value, or null when none is declared.
+     * @return string|null A named colour or `#rrggbb`, or null when none is in force.
      */
     public static function getInnermostForeground(string $prefix): ?string
     {
+        // A map holds few distinct styles and the canvas reads one per cell it draws, so each is formatted once.
+        static $read = [];
+        if (array_key_exists($prefix, $read)) {
+            return $read[$prefix];
+        }
+        if (count($read) >= 4096) {
+            $read = [];
+        }
+
+        return $read[$prefix] = self::readForeground($prefix);
+    }
+
+    private static function readForeground(string $prefix): ?string
+    {
+        // The formatter resolves hex colours by the terminal's colour mode, so
+        // it is read in truecolour for this call only, as the Engine persists them.
+        $mode = Terminal::getColorMode();
+        Terminal::setColorMode(AnsiColorMode::Ansi24);
+        try {
+            $shown = TerminalText::visibleSymbols($prefix . 'x');
+        } finally {
+            Terminal::setColorMode($mode);
+        }
+        if (count($shown) !== 1) {
+            return null;
+        }
         $state = new SgrStyleState();
-        preg_match_all('/\x1b\[[0-9;]*m/', $prefix, $sequences);
+        preg_match_all('/\x1b\[[0-9;]*m/', strstr($shown[0], 'x', true) ?: '', $sequences);
         foreach ($sequences[0] as $sequence) {
             $state->apply($sequence);
         }
@@ -1710,11 +1770,7 @@ final class ProjectMap
                 return sprintf('#%02x%02x%02x', $cube[intdiv($index, 36)], $cube[intdiv($index % 36, 6)], $cube[$index % 6]);
             }
         }
-        if (preg_match_all('/<[^>]*\bfg=([^;>]+)[^>]*>/', $prefix, $matches) < 1) {
-            return null;
-        }
-
-        return $matches[1][array_key_last($matches[1])];
+        return null;
     }
 
     /**
@@ -1901,7 +1957,7 @@ final class ProjectMap
      */
     public function getNpcs(): NpcCollection
     {
-        return NpcCollection::fromMapData($this->editableData['npcs'] ?? null);
+        return NpcCollection::fromMapData($this->editableData['npcs'] ?? null, array_key_exists('npcs', $this->editableData));
     }
 
     /**
@@ -1918,6 +1974,14 @@ final class ProjectMap
     {
         $this->assertEditable();
         $entries = $npcs->toMapData();
+
+        if (!$npcs->hasDeclaration()) {
+            if (!array_key_exists('npcs', $this->editableData)) { return; }
+            $next = $this->editableData;
+            unset($next['npcs']);
+            $this->writeData($next);
+            return;
+        }
 
         if (($this->editableData['npcs'] ?? null) === $entries) {
             return;

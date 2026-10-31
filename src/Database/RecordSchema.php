@@ -95,7 +95,12 @@ final readonly class RecordSchema
         public ?Closure $subListsFor = null,
         /** Exclusive source owners refuse external edits rather than merging a stale snapshot. */
         public bool $requireUnchangedSource = false,
-        /** Normalize dependent fields on an edited record before accepting the draft. */
+        /**
+         * Normalize dependent fields on an edited record before accepting the draft: given the edited record, the
+         * field edited and the record before the edit.
+         *
+         * @var (Closure(array<string, mixed>, string, array<string, mixed>): array<string, mixed>)|null
+         */
         public ?Closure $prepareEdit = null,
     ) {
         if ($projection instanceof WholeFileProjection) {

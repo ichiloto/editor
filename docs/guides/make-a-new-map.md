@@ -110,6 +110,17 @@ A hand-written `.data.php` is edited in place, not regenerated: your comments,
 imports and expressions survive every save, and an edit the editor cannot make
 without destroying an authored expression is refused by name instead.
 
+## Opening A Hidden Passage
+
+Choose **Opening Passage** from the event-type picker and place its marker on
+walkable floor. It uses a one-shot Action interaction from the adjacent facing
+cell. **Available When** selects the conditions for sensing and interacting;
+**Cue Range** limits the marker to nearby logical steps. Clearing range restores
+unlimited cue range. The passage stays blocked until its Action completes.
+Use a world object's negated map-event condition to conceal the entrance until
+that completion. An optional secret Passage landmark can use the same saved
+completion for its reveal condition. Save, undo and redo preserve the source.
+
 ## Try It
 
 Press `Ctrl+T` to playtest from the cursor. The map has to be saved first — the

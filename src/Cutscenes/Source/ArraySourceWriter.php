@@ -284,6 +284,14 @@ final class ArraySourceWriter
 
         $old ??= [];
 
+        if ($new === [] && $path !== [] && $node->entries !== [] && $this->isPlainData($node)) {
+            // Plain data emptied of every entry holds nothing authored beyond them, so it is written
+            // as the empty array, as it was before an entry was added, not as brackets around blank lines.
+            $this->edits[] = $this->replacementFor($node, $path, $new);
+
+            return;
+        }
+
         if ($node->isList && $node->entries !== []) {
             if (! array_is_list($new)) {
                 throw new SourcePreservationRefusal(sprintf(

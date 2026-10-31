@@ -52,6 +52,9 @@ final readonly class RecordField
      * entry decides (an attachment of the world object the entry names), the
      * source {@see ReferenceCatalog::listEntryChoices()} reads them from. The
      * row offers them as options, and an edit outside them is refused.
+     * @param string|null $entryChoicesSelector For entry choices that belong to
+     * something another field of the same object names (an NPC placement
+     * belongs to the NPC its command selects), that field's key there.
      */
     public function __construct(
         public string $key,
@@ -73,7 +76,21 @@ final readonly class RecordField
         public ?DialogueLineSpeaker $dialogueSpeaker = null,
         public ?string $referenceMapKey = null,
         public ?string $entryChoices = null,
+        public ?string $entryChoicesSelector = null,
     ) {
+    }
+
+    /**
+     * Returns a named placement of the NPC another field beside it selects,
+     * chosen among the placements that NPC declares, `default` among them.
+     *
+     * @param string $npcKey The field beside it naming the NPC.
+     * @param bool $required Whether the entry must name one; an optional one drops out when cleared.
+     */
+    public static function npcPlacement(string $key, string $label, string $npcKey, bool $required = true): self
+    {
+        return new self($key, $label, options: [''], removeWhenEmpty: ! $required, displayDefault: '(choose a placement)',
+            entryChoices: ReferenceCatalog::NPC_PLACEMENTS, entryChoicesSelector: $npcKey);
     }
 
     /**
@@ -172,24 +189,19 @@ final readonly class RecordField
      */
     public function asReadOnly(): self
     {
-        return new self(
-            $this->key,
-            $this->label,
-            $this->type,
-            $this->options,
-            $this->removeWhenEmpty,
-            true,
-            $this->step,
-            $this->codec,
-            $this->reference,
-            $this->enumClass,
-            $this->allowsNone,
-            $this->displayDefault,
-            $this->blankLabel,
-            $this->writeTypes,
-            dialogueSpeaker: $this->dialogueSpeaker,
-            entryChoices: $this->entryChoices,
-        );
+        return $this->copyWith(['isReadOnly' => true]);
+    }
+
+    /** Returns this field under another label, where several of its kind sit in one pane (a pose per posture). */
+    public function withLabel(string $label): self
+    {
+        return $this->copyWith(['label' => $label]);
+    }
+
+    /** @param array<string, mixed> $changes Constructor arguments to replace, by name. */
+    private function copyWith(array $changes): self
+    {
+        return new self(...[...get_object_vars($this), ...$changes]);
     }
 
     /**

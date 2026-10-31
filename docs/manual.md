@@ -54,17 +54,17 @@ is what the code draws rather than a sketch of it:
  ┌─Assets [Focus]───────────────┐ ┌─Canvas─────────────────────┐ ┌─Inspector──────────────────────┐
  │ Maps                         │ │ Preview: test-map          │ │   Name: Test Map               │
  │ > test-map                   │ │ Test Map |  | 12 x 5 | vie │ │   Region:                      │
+ │                              │ │ ############               │ │   Role: Not set                │
+ │                              │ │ #  ~~~     #               │ │   Place Type: Not set          │
+ │                              │ │ #          #               │ │   Skit Backdrop: None: skits   │
+ │                              │ │ #          #               │ │     here show no backdrop      │
  │                              │ │ ############               │ │   Kind: Not set                │
- │                              │ │ #  ~~~     #               │ │   Description: A tiny fixture  │
- │                              │ │ #          #               │ │                map.            │
- │                              │ │ #          #               │ │   Size                         │
- │                              │ │ ############               │ │     X: 12                      │
+ │                              │ │                            │ │   Description: A tiny fixture  │
+ │                              │ │                            │ │                map.            │
+ │                              │ │                            │ │   Size                         │
+ │                              │ │                            │ │     X: 12                      │
  │                              │ │                            │ │     Y: 5                       │
  │                              │ │                            │ │   Events · 1                   │
- │                              │ │                            │ │   Triggers · 0                 │
- │                              │ │                            │ │   Audio                        │
- │                              │ │                            │ │     Background Music: (None)   │
- │                              │ │                            │ │     Music Variants · None      │
  └─/:Filter  Del:Delete─────────┘ └─i:Paint L:Layer ?:Help─────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
@@ -576,6 +576,21 @@ autotile is. The game hides a character in the deepest thicket among the
 tiles its cell shows. The terminal, collision, movement and encounters are
 unchanged, and the terminal Database neither shows nor drops thickets.
 
+### Layer Offsets
+
+Some art draws away from the cell it stands for, such as a candle on a
+table top, a window up a wall or a counter's front face. The GUI editor's
+Database > Tilesets gives a tile layer its drawing offset under **Layer
+Offsets** (`layerOffsets`): the **Tile Layer**, chosen among the tile layers
+the tileset's pieces, terrain kinds and stacks write, and its **Offset**
+across and down in field cells, typed as `0, -1/3` or `0, 0.5`. Each number
+is any fraction from -0.5 to 0.5; a third of a row is typed exactly as
+`-1/3`. Every map drawn with the tileset draws that layer at that offset
+unless the map gives the layer one of its own (see
+[Map Graphics](#map-graphics)). Collision, terminal cells, events and saves stay
+where they are. The Engine reads each offset before anything is saved, and the
+terminal Database neither shows nor drops them.
+
 ### Stacked Pieces
 
 Some decorations overlap their neighbours, such as the peaks over a world
@@ -668,6 +683,18 @@ intact:
   pasting a block on that gameplay layer carries its tiles cell for cell, in
   the same undo step, so a moved chest or room keeps its art. Other tile
   layers, and blocks on the event layer, leave tiles where they are.
+
+- Each tile layer draws at the offset its tileset gives it under
+  [Layer Offsets](#layer-offsets), or none. The GUI editor's layer settings
+  set a map's own offset for the layer (`'tileLayers' => ['decor' => ['offset'
+  => [0, -0.5]]]`), any fraction from -0.5 to 0.5 field cells. The map holds an
+  offset only where it differs from the one the layer inherits: choosing the
+  inherited offset again, or inheriting it (`tileLayer.settings` with `offset`
+  `null`), removes the map's own, and a zero over a tileset's offset is kept as
+  the map's. The session's map reply gives each layer the `offset` it draws
+  at, its `inheritedOffset`, whether the map `overridesTileset`, and the
+  map's `offsetLimit`. Setting an offset is refused while the map's tileset
+  cannot load, since what the layer inherits is then unknown.
 
 - Resizing the map crops or pads every tile layer with empty tiles (`0`) in the
   same undo step and save as the terminal layers. A resized tile layer is
@@ -785,7 +812,8 @@ two side by side for every view. `--player X,Y[,HEADING]` stands the player
 on a cell for door checks, `--actor ID` shows an actor there, `--scale 0.5`
 adds an overview, and `--changes BATCH` renders a batch before it is applied,
 writing nothing. The session serves the same render to an editor as
-`EditorSession::renderMapReview()`, unsaved edits included, and writes it as
+`EditorSession::renderMapReview()`, including newly created field resources and
+unsaved artwork/resource edits, and writes it as
 `map.review`: the GUI toolbar's review button asks for a folder, writes the
 review of the open map there and opens its page. See Rendering
 Maps For Review in [Change Maps From A Script](guides/change-maps-from-a-script.md).
@@ -943,7 +971,8 @@ category uses - pickers, condition lines, world-write rows, command frames,
 | Group | Rows |
 | --- | --- |
 | Identity | `Id` (read-only), `Name` |
-| Placement | `X`, `Y` (the canvas moves it too) |
+| Placement | `X`, `Y` (the canvas moves it too), then `Named Placements` with each placement's `Name`, `X`, `Y` and `Facing` |
+| Bed | `Bed`, and once it rests in one `Occupant Attachment`, `Starting Posture`, `Occupied Bed Glyph`; the graphical editor adds its poses and clips |
 | Appearance | `Sprite`, `Facing North/South/East/West`, `Graphical Sprites` |
 | Movement | `Movement` (`fixed` / `wander`), `Direction Fix` (`false` / `true`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` - a condition line |
@@ -977,6 +1006,43 @@ character says is read in the pane rather than in the edit buffer.
   onto that NPC's pages. The session's `npc.adoptEvent` does that move as
   one undo step, keeping a run-once event's saved completion for old saves.
 
+- **Beds.** `Bed` picks the world object on this map the NPC rests in,
+  among the objects whose field resource declares attachments; `(not in a
+  bed)` takes it out of its bed again. `Occupant Attachment` picks one of
+  that resource's attachments, the logical cell the occupant lies on, and
+  choosing another bed drops an attachment chosen on the first.
+  `Starting Posture` is the Engine's `lying` (its default), `sitting` or
+  `standing`, and `Occupied Bed Glyph` the one Terminal cell the occupied
+  bed shows (default `▣`). While it has a bed, the NPC's `X` and `Y` are
+  where it stands once it gets up. The graphical editor adds the
+  character's own `Lying Pose` and `Sitting Pose` and the `Into Lying`,
+  `Into Sitting` and `Into Standing` clips, each picked like any field
+  role; a clip plays once, so it is written with `loop => false` and one
+  that loops is refused. The Engine's `NpcBedDefinition` reads every edit,
+  and a value it refuses is refused before anything changes. Validation
+  runs the Engine's `MapBedRule` against the map's physical grid, declared
+  or resolved from its glyphs: it reports a bed object the map does not
+  have, an object whose resource lacks the attachment, an attachment cell
+  that is not a solid bed cell, a standing exit that is not clear floor,
+  and occupants sharing one bed whose presence conditions can both hold
+  (`npc.bed`). Posture changes during a scene are the `set_bed_posture`
+  command's.
+- **Named placements.** A placement is a stable name for another cell the
+  NPC stands on once a scene has walked it there; the `commit_npc_placement`
+  command saves that name, and the map's current cells place the NPC at load.
+  The NPC's own `X` and `Y` are its `default` placement. With the cursor on
+  the `Named Placements` heading, `Shift+O` adds one, starting on the NPC's
+  own cell; on a placement's rows `Shift+O` adds another after it and
+  `Shift+X` removes it. `Facing` is optional: cleared, the placement keeps
+  the heading the NPC stands with. A placement needs a stable NPC id. The
+  Engine's `NpcPlacementSet` reads every edit and its `MapNpcPlacementRule`
+  checks every destination, the NPC's own cell included, against the map's
+  physical floor, declared or resolved from its glyphs. A name it refuses
+  (`default`, a duplicate) or a cell that is not clear floor is refused
+  before the edit is kept, and so is moving the NPC onto such a cell. A
+  placement a `commit_npc_placement` command names is not removed or
+  renamed while it does; the refusal lists the scripts. Validation runs the
+  same rule over hand-written placements (`npc.placement`).
 - **Map-owned appearance.** For a fixed interaction already drawn on a map
   layer (such as a mounted notice on `fixtures`), clear the `Sprite` text
   completely and press `Enter`. This stores `'sprite' => ''`, not a missing
@@ -1468,6 +1534,13 @@ validation reports terrain the Engine would refuse.
 
 ### Actors
 
+The Actors category offers Starting Weapon, Shield, Head, Body and Accessory
+pickers. They store stable item identities under `data.initialEquipment` and
+offer equipment for the corresponding semantic slot. Choosing None clears that
+slot's starting assignment. These assignments equip a newly created actor;
+existing saved gear and empty slots remain as the player left them. Validation
+checks current item identities, slot compatibility and class equipment rules.
+
 An actor's Inspector opens with **Identity**: a `Definition Id`, which is
 what a save resolves the actor by. A project that declares none is resolved
 by display name, so the row says so, and renaming such an actor strands
@@ -1562,6 +1635,7 @@ skill's effects, a quest's rewards) listed under them.
 | Enemies | `assets/Data/Enemies/*.php` | Editable - one data record per file, which `enemies.php` loads | Same |
 | Troops | `assets/Data/troops.php` | Editable | Same |
 | Battle Entry | `assets/Data/battle-entry-rules.php` | Editable | Same |
+| Crisis Abilities | `assets/Data/crisis-abilities.php` | Editable - one record per stable id: name, badge label, description, the HP percentage and states that activate it, and its variants, each a skill with the world conditions that choose it | Same |
 | States | `assets/Data/states.php` | Editable | Same |
 | Animations | `assets/Data/animations.php` | Editable | Same |
 | Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, pieces by id with their glyphs and tiles, and place icons (the piece shown for each place type) | Same |
@@ -1581,6 +1655,7 @@ skill's effects, a quest's rewards) listed under them.
 | System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, battle engine, openings and time gauge settings, whether a level up restores HP and MP (on unless turned off), and the dash (Dash, Dash Speed Multiplier) | Same |
 | Configuration | `config.php` (`save`, `accessibility`, `ui`, `field`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
 | Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
+| Word Forms | `assets/Data/word-forms.php` (`words`) | Editable - one record per word as the game writes it, with its singular and plural forms | Same |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
 | Dialogue Portraits | `assets/Data/Presentation/dialogue.php` (`actors`, `resources`) | Editable - one record per speaker identity: what it speaks as (an actor, chosen, or a non-actor character with a stable id), its dialogue portrait and skit bust, and its emotions, each a name with its own portrait and bust, chosen as project images | Same, with each image shown beside its path |
 | Speaker Names | `assets/Data/Presentation/dialogue.php` (`speakers`) | Editable - one record per label lines are spoken under, and the dialogue portrait it shows | Same |
@@ -1685,6 +1760,16 @@ signal pulses on, lists it under **Attachments**: a **Stable Id**, the
 and the **Art Point X/Y (0..1)** where it is on the image, measured like the
 ground contact. When the art is replaced or re-cropped, update the art point
 here once; every visual staged on the feature follows it.
+**Appearance** classifies the image as `ground`, `water`, `barrier` or
+`overhead` for passage diagnostics. Leave it unclassified to retain image-based
+inspection. Ground images such as floors and overhead images such as curtains
+do not create walk-through warnings merely because they are opaque. A ground
+image covering a solid physical cell still produces an invisible-wall warning.
+This field never changes collision, occupancy stamps, drawing or saved positions.
+A resource owns its appearance for every placement; inline objects offer their
+own Appearance field. Choosing a resource removes the inline appearance together
+with its art and pivot, and Undo restores them together.
+
 Only the `resources` dictionary is edited; the
 catalogue's cues and action prompt are kept exactly as written. A new resource
 starts on the project's first image for the author to replace, an id is refused
@@ -1700,6 +1785,26 @@ conditions under which the game shows it, all of which must hold. None means
 always shown; clearing the list removes it from the map. Hiding an object
 changes only what is drawn: its cells, collision and events stay as authored,
 and the map's own glyphs show where it stood.
+
+Every world object can also present tiles of the map's own tileset, under
+**Graphical Tiles**: each row chooses one of the map's tile layers, a cell the
+object owns (one of its covered cells, or its anchor when it covers none) and
+the tile shown there, picked from the map's tile palette; `0` shows no tile.
+While the object is shown, its tiles take the place of the layer's own before
+neighbouring tiles join up and wall shadows are cast, so a concealed wall
+given the wall tile beside it reads as one unbroken wall, top, face and
+shadows included. When the object is hidden, as an opened passage hides its
+disguise, the layer's own tiles show and join up again. An object presented by
+its tiles needs no image of its own. A new row starts on the first tile layer
+and the first owned cell no object presents a tile on yet, showing the tile
+the layer already has there, so adding one changes nothing until a tile is
+chosen. Moving an object moves its tiles with it. The Engine's rules decide
+what is accepted before anything changes: layers the map has, cells the object
+owns, whole tile identities, one object per cell of a layer and at most 256
+tiles per object. The terminal, collision and the layer's own tiles never
+change. Graphical Tiles are authored in the GUI editor and through the session
+(`worldObjects.setTiles`, `worldObjects.unsetTiles`); the Terminal editor
+shows the map's glyphs as before.
 
 A resource shows an image or a sign board (Shows). A sign board names its
 board image, cut into fixed left and right caps and a centre that repeats so
@@ -1851,7 +1956,13 @@ stable id, and only the values the record sets: the Engine's defaults fill
 the rest. An item has its scope, occasion, battle animation and effects: a
 list under the Effects heading, each a type (HP or MP recovery, resurrection,
 HP damage, or a max HP or MP increase) with a value, a success rate and
-whether the value is an amount or a percentage. Equipment has its type,
+whether the value is an amount or a percentage. A `remove_state` effect selects
+the states it cures. An `add_state` effect selects one State, its Chance %, and
+whether application is Guaranteed (100% required). The item scope and occasion
+remain authored independently; the selected state owns duration, resistance and
+persistence. State references use the shared picker. Undo/Redo preserves the
+record source, and switching effect types removes fields owned by the old type.
+Equipment has its type,
 parameter changes, element and affinities, and its metadata (form, size,
 material, slot, availability, acquisition policy, special property). An
 armor that becomes an accessory drops its equipment type. Files are numbered
@@ -1933,6 +2044,22 @@ read-only; a new animation takes the next number after the largest. Like
 every Database category, edits are undoable and only the values you change
 are rewritten in `assets/Data/animations.php`, so its comments stay.
 
+With a Caster Effect chosen, **Caster Effect Starts** says when a graphical
+battle starts it: `source`, in its own phase before the target's (the
+default, which the file omits), or `target`, at the start of the target
+phase, still on the caster, together with the target effect and the
+caster's impact entry (see Battle Art). Its frames, cues and speed are
+unchanged; damage still lands when the target effect's own timing says. The
+terminal battle always plays it in its own phase. A caster effect that
+declares a cinematic stage needs its own phase, so validation reports one
+started at the target phase with the Engine's reason, and its graphical battle
+preview is refused. A save the Engine could not read is refused before
+anything is written.
+
+The effect's battle preview plays the action through the Engine's own command
+playback, so it shows the caster effect where the animation starts it and the
+caster's pose reaching its impact entry exactly as the target phase begins.
+
 **Roles** say which battle actions play the animation when they name no
 animation of their own. Enter opens a picker of every role the Engine
 supports; each pick adds or removes one role:
@@ -1986,6 +2113,19 @@ and field scripts keep playing the record until their own command names the
 timeline.
 
 ### Troops
+
+Each troop member has a Logical Row, Lane field, written as `front, 0` or
+`back, 0`. It stores `battlePosition` independently of terminal X/Y and graphical
+Battle Placement. Clearing it restores the Engine's distinct front-lane default.
+Malformed or duplicate authored logical positions refuse saving. These are the
+combat formation declarations. Skills offer Battle Targets (`scope`, `line`,
+`front_row`, `back_row`) and Ignore Cover. Choosing a line sets One scope; a row
+sets All scope. Geometry and cover piercing require Battle Screen occasion.
+Invalid skill records refuse saving before writing; unfinished drafts remain
+supported. Shared runtime selection and execution use the logical positions.
+The `change_formation` skill effect offers constrained `shuffle` and
+`move_to_front` operations, applied once after individual effects. Visible row
+changes are still being integrated.
 
 Encounter groups. Each troop has a `Name`, an optional `Escape Policy`, and a
 list of members flattened into the settings pane as `Member 1 Enemy`,
@@ -2058,6 +2198,24 @@ left out. A state grants it while active, and a skill once learned; spells
 do not grant one. Validation reports a grant the Engine would refuse, with
 the Engine's own reason.
 
+### Crisis Abilities
+
+A crisis ability is a project resource an actor page selects as its
+**Crisis Ability**. It is active for a conscious actor whose HP is below
+**HP Below %** or who has any of its **Activation States**; a record needs
+at least one of the two. Each variant names a battle-usable basic or special
+skill and the **World Conditions** that choose it, and exactly one variant
+may match at a time. A variant's **Skill** picker offers only the skills the
+Engine accepts there; summons and skills used only outside battle are left
+out. The **Badge Label** is the battle condition badge; left
+empty, the game shows the name's first three letters in capitals.
+
+A new crisis ability is active below 10% HP and has one variant: the
+project's first battle-usable basic or special skill. Without such a skill,
+creation is refused and says so. Saves are checked by the Engine's own
+reading, and validation reports a variant skill or activation state the
+project does not have.
+
 ### Battle Art
 
 The art an actor or enemy fights with in a graphical battle is bound to it as
@@ -2069,7 +2227,19 @@ bindings file. Per actor (by definition id) or enemy (by name) it holds:
   down. It defaults to bottom centre.
 - Poses: each role the battle shows (idle, attack, guard, knockout and the
   rest), a still or a sheet of frames with columns, rows, frames, frames per
-  second, looping and a rest frame.
+  second, looping and a rest frame. **Loops** `false` is written to the file,
+  since a pose without it loops.
+- Impact entry: for a pose that plays once, the entry of its frames list
+  shown at the action's impact, the start of its target phase. Entries count
+  from 0 and include repeats, so frames `0, 1, 1, 2, 2, 3` offer
+  `Entry 3 · cell 2` for the first time cell 2 plays. The pose plays its
+  entries before the impact at its own rate, holds the last one while a long
+  announcement finishes, and speeds up only those entries when the lead-in is
+  shorter; from the impact on it keeps its own rate. A looping pose offers no
+  entry, and a save whose impact entry the Engine would refuse (the pose loops
+  again, or its frames no longer reach the entry) is refused before anything is
+  written. Without one, the pose keeps its own clock, which the formation views
+  show.
 - Body profile: its size against the scale reference, and the share of its
   image that size measures.
 
@@ -2174,6 +2344,45 @@ Each schedule has:
 
 Validation reads each schedule as the game will and names every one the game
 would refuse. The notices' wording lives in Terms (`messages.income.*`).
+
+### World Powers
+
+The project's exploration powers, such as Dash, in
+`assets/Data/world-abilities.php`, the file the Engine's `WorldAbilityCatalog`
+reads. A project without the file declares none; saving the first power
+creates it. The Engine's story events guide describes the runtime.
+
+Each power has:
+
+- a `Name`, which players read; the `Id` follows the name until a
+  `world_ability` condition or a command names the power, and then stays. A
+  power something names cannot be deleted; the status line lists what names it;
+- a `Description`;
+- `Unlocks When`, the shared world-condition editor. Every condition must
+  hold. A `world_ability` condition makes the power wait on another;
+- `Icon Role`, picked from the semantic icon roles the menu theme offers;
+- a first-use prompt: `First-Use Message` and `First-Use Effect`, picked
+  from the project's effects. `First-Use Hints` name input actions, which
+  the Editor cannot list yet; they are shown and kept as written.
+
+Edits are written into the file's own source. The Engine's catalogue reads
+the powers before anything is saved: a duplicate id, a dependency on a power
+that is not declared, a dependency cycle or a malformed first-use prompt is
+refused with its reason and nothing is written. Pickers and validation read
+the powers as this page holds them, unsaved edits included. Validation also
+reports a first-use effect that does not play once on the field, and quests
+or items an unlock condition names that the project lacks.
+
+### Word Forms
+
+The game inflects names by English rules: one Potion, two Potions. A word
+the rules get wrong is listed here with the **Singular** and **Plural** the
+game shows for it. The **Word** is written exactly as the game writes it,
+such as an item's whole name, and every inflected name respects it. A new
+word starts with its own spelling in both forms. Blank or space-padded
+spellings are refused as they are typed, saves are checked by the Engine's
+own reading, and validation reports a word listed twice or a file the game
+could not read.
 
 ### Terms
 
@@ -2384,7 +2593,8 @@ scans the directory and keys skits by their `id` field, not by filename, so
 renaming an `Id` in the editor does not require renaming the file.
 
 Fields: `Id`, `Title`, `Where (map id)`, `Backdrop`, `Conditions`,
-`Speed (chars/sec)`, then each beat's `Actor` or `Non-actor Speaker`, its `Emotion` and its `Text`.
+`Speed (chars/sec)`, `Trigger`, `Open Sound`, `Close Sound`, then each beat's
+`Actor` or `Non-actor Speaker`, its `Emotion` and its `Text`.
 The emotion is chosen among the speaker's emotions (see
 [Dialogue Portraits and Emotions](#dialogue-portraits-and-emotions)).
 
@@ -2396,7 +2606,23 @@ The emotion is chosen among the speaker's emotions (see
   region's. Validation warns where a skit would show none.
 - `Conditions` is the shared world-condition line described under
   [Condition Lines](#condition-lines).
+- `Trigger` is `prompt` (the default) for a skit the field prompt offers, or
+  `script` for a story conversation that only a `play_skit` command plays.
+  The values and the default are the Engine's.
+- `Open Sound` and `Close Sound` are optional sound effects, chosen from the
+  project's SFX: one plays when the skit opens, the other when it closes.
+  Clearing both removes `sounds`.
 - `Shift+O` and `Shift+X` add and remove beats.
+
+A `play_skit` command in an event script or cinematic plays one skit, chosen
+in its `Skit` picker among the project's skits, listed as `Title (id)` and
+stored by id. The skit's `Where` and `Conditions` still apply when a script
+plays it, and a skit already seen completes at once. Validation reports a
+`play_skit` that names no skit or one the project does not have, and one
+that plays a skit gated to another map than the one the script is on. It also
+reports a skit trigger or sound cue the Engine would refuse, and a sound the
+project has no file for. Saving refuses a skit the Engine would skip, and a
+change its source cannot hold, before anything is written.
 
 `Shift+A` creates a new skit as its own file, named after its generated id.
 
@@ -2431,14 +2657,20 @@ through Speaker Names (an NPC line with no speaker of its own speaks under
 the NPC's name). `Neutral` is always offered and is what a line without an
 emotion shows. A line that holds an emotion its speaker lacks keeps it, and
 an `Emotion Warning` row under it says so; the game shows the identity's
-Neutral artwork until that emotion exists.
+Neutral artwork until that emotion exists. A line that names no emotion while
+its speaker has emotions beyond Neutral also gets an `Emotion Warning` row,
+listing the emotions to choose from, since the game shows Neutral for every
+such line. Choosing any emotion, `Neutral` included, clears it.
 
 A catalogue that builds its identities with PHP code (a loop over
 directories) is shown read-only on Dialogue Portraits, saying so, since a
 save would replace that code with its result; Speaker Names stays editable
 when its labels are plain data. Validation reports a speaker name bound to
-no identity, an image the game cannot draw, and a line emotion its speaker
-lacks.
+no identity, an image the game cannot draw, a line emotion its speaker
+lacks, and, as a warning, every line naming no emotion whose speaker has
+emotions beyond Neutral. Each line warning names the file, the skit beat,
+NPC line, event page or `text` command with the opening of its text, and the
+speaker's emotions.
 
 ### Common Events
 
@@ -2470,6 +2702,7 @@ Supported command types, matching the engine's interpreter:
 | `give_gold` | Amount |
 | `play_sound` | Sound |
 | `play_music` | Music |
+| `play_skit` | Skit (picked from Skits) |
 | `accept_quest` | Quest Id |
 | `common_event` | Event Script |
 | `knowledge` | Operation, Subject, Report, Replacement Report, Observation, Outcome, Source, Confidence |
@@ -2481,7 +2714,8 @@ Supported command types, matching the engine's interpreter:
 | `branch` | Conditions, Then (fixed), Else (fixed) |
 
 Registered commands follow the built-in ones in the `Type` options: the
-Engine's `shop`, `inn`, `payday`, `collect_income` and `adjust_income`, then any the project declares in
+Engine's `shop`, `inn`, `payday`, `collect_income`, `adjust_income`, `recruit_actor`, `select_conversation_group`,
+`set_bed_posture`, `commit_npc_placement` and `show_power_unlocks`, then any the project declares in
 `assets/Data/script-commands.php` (see the Engine's story events guide). Their
 rows come from their declarations:
 
@@ -2492,6 +2726,28 @@ rows come from their declarations:
 | `payday` | Schedule (picked from Income), Result Variable |
 | `collect_income` | Schedule (picked from Income), Result Variable |
 | `adjust_income` | Schedule (picked from Income), Amount (negative for a deduction) |
+| `recruit_actor` | Actor (picked from Actors; required), Starting Level (`authored` or `partyAverage`; average of the permanent roster including reserves, rounded down before joining) |
+| `select_conversation_group` | Group (picked from the cinematic's conversation groups; required) |
+| `set_bed_posture` | Occupant (picked from the map's NPCs; required), Posture (`lying`, `sitting` or `standing`), Transition Seconds (0 to 30) |
+| `commit_npc_placement` | NPC (picked from the map's NPCs; required), Placement (picked from that NPC's named placements or `default`; required) |
+| `show_power_unlocks` | World Powers (picked from World Powers), Actor, Current Crisis Technique, Opening Announcement |
+
+A reference's picker lists what the command can name where it runs. An
+`Occupant` or `NPC` is an NPC of the map an event belongs to; in a cinematic it is an
+NPC of its start map or of any map it transfers to, and in a Common Event one
+of the map its callers run it on. A `Placement` is one the NPC the command's
+`NPC` row selects declares, on those same maps; choose the NPC first. A `Group` is one the cinematic declares under
+`presentation.conversation.groups`. Where those choices are known, a value
+outside them is refused before anything changes. Validation follows the
+script: it reports an NPC that is not on the map the script is on at that
+command, a placement that NPC does not declare there or an NPC that declares
+none, a group the cinematic does not declare, and a group selected outside
+a cinematic. `commit_npc_placement` saves the placement only once the real
+NPC has walked there; route it with `move_route` first.
+
+When the Engine has a reference kind this Editor does not know, the project
+still opens. The field is typed as plain text, its label names the kind, and
+validation reports each command that uses it until the Editor has its picker.
 
 A command's first list, such as a shop's merchandise, is edited like a
 route's steps: with the settings cursor on one of its entry rows, `Shift+O`
@@ -2671,8 +2927,31 @@ quest:breakfast-duty:active; !switch:door_open:false; item:S-Potion:3
 | `item` | `item:<name>`, or `item:<name>:<quantity>` |
 | `key_item` | `key_item:<name>` |
 | `variable` | `variable:<name>:<op>:<value>` |
+| `world_ability` | `world_ability:<id>` |
 
 Unparseable entries are dropped rather than written back as garbage.
+
+#### World powers
+
+A `world_ability` condition holds while the project's exploration power with
+that id is unlocked. The powers are declared in
+`assets/Data/world-abilities.php` (id, name, description, conditions and an
+optional icon role), the file the Engine's `WorldAbilityCatalog` reads. The
+condition editor's **World Power** name and the `show_power_unlocks` command's
+**Power** rows pick among the declared powers by id, labelled with their names,
+in authored order. They are authored on Database > World Powers; the list is
+read as that page holds the powers, unsaved edits included, and otherwise
+from the file as it stands, so a change to the file appears without
+reopening the project.
+
+Validation reports a power reference the file does not declare, in scripts,
+condition lines and the dash's unlock conditions in Database > System, and
+reports a file the Engine refuses (a malformed entry, an unknown dependency or
+a dependency cycle). Until such a file is fixed, reachability is not checked.
+When the Editor opens a project it installs that project's powers as the
+catalogue Engine evaluation reads, and installs them again before each
+reachability analysis, so NPC phases, save relocation and map line planning
+judge `world_ability` conditions by the open project's current powers.
 
 ## Cutscenes Screen
 
@@ -2764,11 +3043,44 @@ The record pane groups the engine's cinematic definition: **Identity** (id,
 name, description, version), **Staging** (start map, initial presentation,
 reduced-motion policy), **Script** (the command list, opened as a frame),
 **Skip** (policy, checkpoints, the finalizer as a frame), **Metadata**
-(authoring) and **Cast**. Cast rows are `player`, `party_actor`, `npc` (a
+(authoring), **Conversation** and **Cast**. Cast rows are `player`, `party_actor`, `npc` (a
 stable map-local id on the start map) or `staged_actor` with every engine
 field: id, sprite or asset, x and y, facing, visible, collision and
 directional sprites. `Shift+O` on a cast row adds a member; `Delete` removes
 one.
+
+**Conversation** authors the field conversation the Engine turns speakers by
+(`presentation.conversation`, the `conversationFacing` contract):
+
+- `Conversation Speakers` binds each stable `Speaker Key` to a `Subject`:
+  the `player`, an `npc` picked among the NPCs of the start map and the maps
+  the cinematic transfers to, or a `staged_actor` picked from the cast and
+  the actors its commands stage. Two speakers may share a display name;
+  their keys keep them apart.
+- `Conversation Addressees` picks, per speaker, the speaker it turns to by
+  default, both among the bound speakers.
+- `Conversation Groups` declares the scene's phases: a `Group Id` and its
+  `Speakers`, a list picked among the bound speakers. An empty group
+  suspends field participation. A group's own addressees and facing
+  overrides, and the conversation's facing overrides, have no rows yet and
+  are written back as authored.
+- `Initial Conversation Group` picks the group the scene starts in;
+  `select_conversation_group` commands change it.
+- A cinematic's `text` lines add `Conversation Speaker` and `Addressee`,
+  picked among the bound speakers. A reusable Common Event cannot know which
+  cinematic runs it, so its lines do not offer them.
+
+`Shift+O` on a list's heading adds an entry at its head. Renaming a speaker
+key renames it everywhere the cinematic names it (addressees, facing
+overrides, groups and its lines), and renaming a group renames the initial
+group and the `select_conversation_group` commands that select it. Removing
+a speaker or group the cinematic still names is refused and names each
+place. The Engine's `CinematicConversation` judges the whole conversation
+when the cinematic is saved, before anything is written. Validation reports
+the Engine's refusal with a hint naming each group or addressee that names
+an unbound speaker, a speaker whose NPC is on no map the cinematic runs on
+or whose staged actor the cast does not declare, and a line selecting a
+speaker or addressee the conversation does not bind.
 
 #### The command tree
 
@@ -3123,15 +3435,22 @@ frames with their flips, flashes and shakes, each with its subject.
 
 | Key (Preview focused, effect) | Action |
 | --- | --- |
-| `B` | Play as battle or as the field compiles it (recompiles; a refusal is reported) |
+| `B` | Play as battle or as its other consumer compiles it: the field, or the caller owning its declared stage (recompiles; a refusal is reported) |
 | `D` | Put the battle caster on the other side |
 
 The preview starts as battle when a battle animation uses the effect or
 nothing on the field does. In battle a stroke with a facing is turned toward
 its target exactly as the battle turns it, so `D` shows both directions.
-An owned stage instead starts in its declared context; `B` does not change its
-ownership. The GUI GPUI tab paints the Engine's seekable stage canvas through
-the runtime's shared painter. A stage error is shown rather than replaced by
+An effect declaring a graphical stage is played by battle or by the caller
+that owns the stage, never by the field. Bound as an animation's caster or
+target effect, it is an ordinary action's staged cut-in or impact and the
+preview starts as battle; otherwise it starts as its owned stage. `B` moves
+between the two. The camera, covers, subjects and stage image placement are
+the same rows, selectors and undo that a Summon stage uses, edited in the GUI
+Editor; each consumer applies its own Engine admission, so a stage with battle
+cues or effect timing saves when battle admits it, and validation reports a
+refusal at the consumer that names it. The GUI GPUI tab paints the Engine's
+seekable stage canvas through the runtime's shared painter. A stage error is shown rather than replaced by
 a field frame, and late seek replies cannot overwrite a newer frame. The
 Terminal tab shows its separately authored sequence, not a graphical imitation.
 
@@ -3215,12 +3534,17 @@ in the saved map, a save standing on such a cell would load inside it. That
 includes walkable floor no route reaches today, since an older layout may have
 reached it. A cell is
 taken when it becomes something that blocks movement (furniture, a wall,
-painted collision, trees) or when an NPC is added or moved onto it. Walkable
+painted collision, trees), when an NPC is added or moved onto it, or when an
+event now covers it that did not cover it in the saved map. Walkable
 grass, exits and save points take nothing, and an NPC that stays put moves no
-save. With a save compatibility
+save. A transfer whose destination, spawn or conditions change covers the same
+ground, so it moves no save; only floor a transfer newly covers does. With a save compatibility
 manifest (`assets/Data/save-compatibility.php`), `Ctrl+S` first shows each such
 cell and where saves on it will land: the nearest plain floor the player can
-reach today, found by walking from the cell, never an event or NPC cell.
+reach after the edit, found by walking from the cell, outside every NPC cell
+and every event, painted or bound to an object or area, as the Engine's save
+compatibility contract requires of a landing. A save standing inside an event
+lands outside it too. Map retirement landings follow the same rule.
 **Save and move saves** writes the map and a `relocations` step that raises
 the manifest's content version by one; **Cancel** saves nothing. The step is
 its own undo: `Ctrl+Z` after the save removes it from the manifest, and undoing

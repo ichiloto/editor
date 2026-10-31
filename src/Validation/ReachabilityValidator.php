@@ -29,6 +29,11 @@ final class ReachabilityValidator
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
     {
+        // The analysis evaluates world_ability conditions; a world-abilities source the Engine refuses is
+        // reported by the check that owns it, which says reachability waits on it.
+        if ($workspace->getWorldAbilities()->loadProblem !== null) {
+            return [];
+        }
         $project = $workspace->analyzeReachability();
         $maps = array_column(array_map(static fn(ProjectMap $map): array => ['id' => $map->mapId, 'map' => $map], $workspace->maps), 'map', 'id');
         $untiled = [];

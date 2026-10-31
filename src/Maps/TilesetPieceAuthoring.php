@@ -70,7 +70,7 @@ final class TilesetPieceAuthoring
      *
      * @param list<string> $rows The Glyph Rows as authored.
      * @return list<string>
-     * @throws InvalidArgumentException When the cell is outside the rows or the glyph is not one terminal cell.
+     * @throws InvalidArgumentException When the cell is outside the rows, the glyph is not one terminal cell or its style cannot hold it.
      */
     public static function rewriteGlyph(array $rows, int $x, int $y, string $symbol, ?string $color): array
     {
@@ -78,7 +78,7 @@ final class TilesetPieceAuthoring
             throw new InvalidArgumentException("The piece has no row {$y}.");
         }
         if ($symbol === '' || TerminalText::symbolCount($symbol) !== 1 || TerminalText::displayWidth($symbol) !== 1
-            || str_contains($symbol, '<')) {
+            || preg_match('/\A\X\z/u', $symbol) !== 1) {
             throw new InvalidArgumentException('A cell holds one character that fills one terminal cell.');
         }
         $cells = TerminalText::parseSourceCells($rows[$y]);
@@ -86,9 +86,15 @@ final class TilesetPieceAuthoring
             throw new InvalidArgumentException("Row {$y} of the piece has no cell {$x}.");
         }
         [$prefix, $suffix] = CanvasEditor::resolvePaintStyle($symbol, $color, ['prefix' => $cells[$x]['prefix'], 'suffix' => $cells[$x]['suffix']]);
-        $source = array_map(static fn(array $cell): string => $cell['prefix'] . $cell['symbol'] . $cell['suffix'], $cells);
-        $source[$x] = $prefix . $symbol . $suffix;
-        $rows[$y] = implode('', $source);
+        $cells[$x] = ['symbol' => $symbol, 'prefix' => $prefix, 'suffix' => $suffix];
+        // Every cell of the row goes through the Engine's composition: an
+        // ordinary glyph keeps its bytes, and a literal <, > or backslash
+        // is bounded so it cannot escape a closing tag or join neighbours
+        // into markup, whichever cell changed.
+        $rows[$y] = implode('', array_map(
+            static fn(array $cell): string => TerminalText::composeSourceCell($cell['symbol'], $cell['prefix'], $cell['suffix']),
+            $cells,
+        ));
 
         return $rows;
     }

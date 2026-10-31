@@ -37,8 +37,13 @@ use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 use Ichiloto\Engine\Progression\LevelUpRecovery;
 use Ichiloto\Engine\Progression\ProgressionSettings;
 use Ichiloto\Engine\Field\DashSettings;
+use Ichiloto\Engine\Animations\Animation;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
-use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Engine\Animations\SourceEffectAnchor;
+use Ichiloto\Editor\Events\ScriptReferenceScope;
+use Ichiloto\Editor\Field\NpcBedFields;
+use Ichiloto\Editor\Field\NpcPlacementFields;
+use Ichiloto\Editor\Events\ScriptReferenceSource;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
@@ -64,6 +69,7 @@ use Ichiloto\Engine\Field\MapAtlasTerrain;
 use Ichiloto\Engine\Rendering\Tilesets\TerrainKind;
 use Ichiloto\Engine\Rendering\Tilesets\TerrainPassage;
 use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
+use Ichiloto\Engine\Rendering\Tilesets\TileLayerOffset;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
@@ -145,6 +151,8 @@ final class RecordSchemaCatalog
             self::troops(),
             self::animations(),
             self::battleEntryRules(),
+            self::crisisAbilities(),
+            \Ichiloto\Editor\Progression\WorldAbilityFields::getSchema(),
             self::items(),
             self::weapons(),
             self::armors(),
@@ -240,6 +248,7 @@ final class RecordSchemaCatalog
                 self::counterAttackField(),
                 // Protection: scales every hit a guard could block (0.5 halves it, 0 blocks it).
                 new RecordField('damageTakenRate', 'Damage Taken Rate', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
+                new RecordField('atbRate', 'ATB Fill Rate', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
                 // Cover: the bearer takes the single-target hits meant for its weakest ally.
                 RecordField::boolean('coversAllies', 'Covers Allies'),
                 // Confusion: the chance each turn that the bearer attacks a random battler of either side instead.
@@ -306,6 +315,10 @@ final class RecordSchemaCatalog
             new RecordField('roles', 'Roles', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true,
                 reference: 'animation_roles', uniqueAcrossRecords: true),
         ];
+        // When a graphical battle starts the caster effect: in its own phase (the Engine's default, omitted), or
+        // at the target phase's start, on the caster, beside the target effect and the pose's impact entry.
+        $anchor = new RecordField('sourceEffectAnchor', 'Caster Effect Starts', options: ['', SourceEffectAnchor::TARGET->value],
+            removeWhenEmpty: true, displayDefault: SourceEffectAnchor::SOURCE->value);
         $legacy = [
             new RecordField('position', 'Legacy Position',
                 options: array_map(static fn(AnimationTargetPosition $position): string => $position->value, AnimationTargetPosition::cases()),
@@ -325,9 +338,34 @@ final class RecordSchemaCatalog
             identityKey: 'id',
             // A numeric identity: a new animation takes the next free number.
             blank: ['id' => 1, 'name' => 'New Animation'],
-            fieldsFor: static fn(array $row): array => array_key_exists('frames', $row) || array_key_exists('cues', $row)
-                ? [...$fields, ...$legacy] : $fields,
+            // The caster effect's start is offered once there is a caster effect, or a start authored for one.
+            fieldsFor: static function (array $row) use ($fields, $anchor, $legacy): array {
+                $own = isset($row['sourceEffect']) || array_key_exists('sourceEffectAnchor', $row)
+                    ? [...array_slice($fields, 0, 3), $anchor, ...array_slice($fields, 3)] : $fields;
+
+                return array_key_exists('frames', $row) || array_key_exists('cues', $row) ? [...$own, ...$legacy] : $own;
+            },
+            saveCheck: self::checkAnimations(...),
         );
+    }
+
+    /**
+     * Why the Engine could not read the animations as they would be saved, or null when it can: each entry
+     * through its own Animation reader, the caster effect's start included.
+     *
+     * @param array<array-key, mixed> $whole The animations, as they would be saved.
+     */
+    public static function checkAnimations(array $whole, string $projectRoot): ?string
+    {
+        foreach ($whole as $index => $entry) {
+            try {
+                Animation::fromArray(is_array($entry) ? $entry : []);
+            } catch (\InvalidArgumentException|\ValueError|\TypeError $error) {
+                return sprintf('Animation %d could not be read as it would be saved: %s', intval($index) + 1, $error->getMessage());
+            }
+        }
+
+        return null;
     }
 
     private static function troops(): RecordSchema
@@ -382,6 +420,8 @@ final class RecordSchemaCatalog
                     RecordField::reference('enemy', 'Enemy', 'enemies'),
                     new RecordField('position.0', 'X', InputControlType::INTEGER),
                     new RecordField('position.1', 'Y', InputControlType::INTEGER),
+                    new RecordField('battlePosition', 'Logical Row, Lane', codec: RecordFieldCodec::BATTLE_POSITION,
+                        removeWhenEmpty: true, displayDefault: '(front row, distinct lane)'),
                     // The graphical battle's own placement: the column its feet stand on and how far back
                     // from any arena ground's near edge, and its contain limits; never the terminal position above.
                     // Without one the battle arranges the member beside the others.
@@ -398,7 +438,8 @@ final class RecordSchemaCatalog
             ),
             subLists: [self::troopEventPageList()],
             // The Engine reads event pages when a battle starts; a page it would refuse is refused here.
-            saveCheck: TroopEventPageContract::checkTroops(...),
+            saveCheck: static fn(array $troops, string $root): ?string => TroopEventPageContract::checkTroops($troops, $root)
+                ?? TroopLogicalFormationContract::checkTroops($troops, $root),
         );
     }
 
@@ -513,6 +554,43 @@ final class RecordSchemaCatalog
         );
     }
 
+    /** Crisis activation and form-dependent technique references, shared by both editors. */
+    private static function crisisAbilities(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'crisis_abilities', entryNoun: 'crisis ability', storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/' . \Ichiloto\Engine\Battle\CrisisAbilityCatalog::FILE,
+            fields: [new RecordField('id', 'Id'), new RecordField('name', 'Name'),
+                new RecordField('label', 'Badge Label', removeWhenEmpty: true),
+                new RecordField('description', 'Description', removeWhenEmpty: true),
+                new RecordField('hpBelowPercent', 'HP Below %', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('states', 'Activation States', reference: 'states', codec: RecordFieldCodec::CSV_LIST,
+                    removeWhenEmpty: true)],
+            labelKey: 'id', identityKey: 'id',
+            // The Engine reads a crisis only with an activation and a technique, so a new one starts
+            // active below 10% HP (the Engine documentation's example) on the project's first
+            // battle-usable basic or special skill; without one there is no technique to offer.
+            // That skill is the first the variant picker offers, from the same source.
+            makeBlank: static function (string $name, string $root): array {
+                $skill = ReferenceCatalog::getCrisisSkillNames(
+                    \Ichiloto\Engine\Entities\Skills\SkillCatalog::load($root . '/assets'))[0]
+                    ?? throw new RecordRefusal('A new crisis ability offers the project\'s first battle-usable basic or special skill. Add one under Skills first.');
+
+                return ['id' => 'new-crisis', 'name' => $name, 'hpBelowPercent' => 10.0, 'variants' => [['skill' => $skill]]];
+            },
+            subList: new RecordSubList(key: 'variants', prefix: 'variant', singular: 'variant', fields: [
+                RecordField::reference('skill', 'Skill', 'crisis_skills'),
+                new RecordField('conditions', 'World Conditions', codec: RecordFieldCodec::CONDITIONS, removeWhenEmpty: true),
+            ], blank: ['skill' => '']),
+            saveCheck: static function (array $whole, string $root): ?string {
+                try {
+                    new \Ichiloto\Engine\Battle\CrisisAbilityCatalog($whole);
+                } catch (\InvalidArgumentException $error) { return $error->getMessage(); }
+                return null;
+            },
+        );
+    }
+
     /** A skill's or item's Effect Scale, bounded and defaulted by the Engine's animation binding. */
     private static function animationScaleField(): RecordField
     {
@@ -567,14 +645,17 @@ final class RecordSchemaCatalog
                     new RecordField('description', 'Description'),
                 ],
                 blank: ['type' => 'hp_recovery', 'name' => 'Recover HP', 'description' => 'Recovers HP', 'value' => 50, 'successRate' => 1.0],
-                // A cure names the states it removes; every other effect carries a value.
-                variants: array_map(static fn(string $type): array => $type === 'remove_state'
-                    ? [new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST)]
-                    : [
+                variants: array_map(static fn(string $type): array => match ($type) {
+                    'remove_state' => [new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST)],
+                    'add_state' => [RecordField::reference('stateId', 'State', 'states'),
+                        new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
+                        new RecordField('guaranteed', 'Guaranteed', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false')],
+                    default => [
                         new RecordField('value', 'Value', InputControlType::INTEGER),
                         new RecordField('successRate', 'Success Rate', InputControlType::FLOAT),
                         new RecordField('valueBasis', 'Value Basis', options: $enumValues(ValueBasis::cases()), removeWhenEmpty: true, displayDefault: ValueBasis::ACTUAL->value),
-                    ], array_combine(array_keys(ItemRecord::EFFECTS), array_keys(ItemRecord::EFFECTS))),
+                    ],
+                }, array_combine(array_keys(ItemRecord::EFFECTS), array_keys(ItemRecord::EFFECTS))),
                 variantKey: 'type',
                 removeWhenEmpty: true,
             ),
@@ -1086,6 +1167,7 @@ final class RecordSchemaCatalog
                     'Battle Engine',
                     options: array_map(static fn(BattleEngineType $engine): string => $engine->value, BattleEngineType::cases()),
                 ),
+                new RecordField('battle.partySize', 'Battle Party Size (1–8)', InputControlType::INTEGER, displayDefault: '3'),
                 new RecordField('battle.opening.preemptiveChancePercent', 'Preemptive Chance %', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('battle.opening.ambushChancePercent', 'Ambush Chance %', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('battle.activeTime.mode', 'Time Gauge Mode', options: ['wait']),
@@ -1105,6 +1187,8 @@ final class RecordSchemaCatalog
                 RecordField::boolean('dash.' . DashSettings::ENABLED, 'Dash', displayDefault: 'false'),
                 new RecordField('dash.' . DashSettings::SPEED_MULTIPLIER, 'Dash Speed Multiplier', InputControlType::FLOAT,
                     removeWhenEmpty: true, displayDefault: InputControl::formatFloat(DashSettings::DEFAULT_SPEED_MULTIPLIER)),
+                new RecordField('dash.' . DashSettings::CONDITIONS, 'Dash Unlock Conditions',
+                    codec: RecordFieldCodec::CONDITIONS, removeWhenEmpty: true),
                 // Test settings, as RPG Maker keeps its Battle Test: normal play never reads them.
                 new RecordField(ProjectBattleTest::SYSTEM_KEY, 'Battle Test', removeWhenEmpty: true, codec: RecordFieldCodec::BATTLE_TEST),
             ],
@@ -1567,6 +1651,10 @@ final class RecordSchemaCatalog
             new RecordField('scope.number', 'Scope Number', options: array_map(static fn(ItemScopeNumber $number): string => $number->value, ItemScopeNumber::cases())),
             new RecordField('scope.status', 'Scope Status', options: array_map(static fn(ItemScopeStatus $status): string => $status->value, ItemScopeStatus::cases())),
             new RecordField('scope.targetCount', 'Target Count', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: 'Auto'),
+            new RecordField('battleTargeting.shape', 'Battle Targets', options: array_map(
+                static fn(\Ichiloto\Engine\Battle\Formation\BattleTargetShape $shape): string => $shape->value,
+                \Ichiloto\Engine\Battle\Formation\BattleTargetShape::cases()), removeWhenEmpty: true, displayDefault: 'scope'),
+            new RecordField('battleTargeting.ignoreCover', 'Ignore Cover', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
             new RecordField('invocation.message', 'Battle Message', displayDefault: self::SKILL_MESSAGE_DEFAULT),
             new RecordField('invocation.speed', 'Invoke Speed', InputControlType::INTEGER),
             new RecordField('invocation.accuracy', 'Accuracy', InputControlType::INTEGER),
@@ -1597,7 +1685,8 @@ final class RecordSchemaCatalog
             new RecordField('element', 'Element', reference: 'elements', removeWhenEmpty: true, allowsNone: true, displayDefault: '(none)'),
             new RecordField('variance', 'Variance', InputControlType::FLOAT),
             new RecordField('isCriticalHit', 'Can Critical', InputControlType::BOOLEAN, removeWhenEmpty: true),
-            ...($resolves ? [new RecordField('resolutionKind', 'Resolves As', reference: 'resolution_kinds', removeWhenEmpty: true, allowsNone: true, displayDefault: '(by effect)')] : []),
+            ...($resolves ? [new RecordField('resolutionKind', 'Resolves As', reference: 'resolution_kinds', removeWhenEmpty: true, allowsNone: true, displayDefault: '(by effect)'),
+                new RecordField('ignoresProtection', 'Ignore Guard / Protection', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false')] : []),
         ];
         $variants = [];
 
@@ -1608,7 +1697,16 @@ final class RecordSchemaCatalog
         $variants['add_state'] = [
             RecordField::reference('stateId', 'State', 'states'),
             new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
+            new RecordField('guaranteed', 'Guaranteed', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
         ];
+        $variants['prepare_counter'] = [
+            RecordField::reference('skill', 'Response Skill', 'counter_skills'),
+            RecordField::reference('stateId', 'Stance State', 'states'),
+        ];
+        $variants['reset_atb'] = [];
+        $variants['change_formation'] = [new RecordField('operation', 'Formation Change', options: array_map(
+            static fn(\Ichiloto\Engine\Battle\Formation\BattleFormationChange $operation): string => $operation->value,
+            \Ichiloto\Engine\Battle\Formation\BattleFormationChange::cases()))];
         $variants['remove_state'] = [
             new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST),
             // Rolled for each listed state the target has (a 75% treatment cures three times in four).
@@ -1628,6 +1726,17 @@ final class RecordSchemaCatalog
         return new RecordSchema(
             key: 'skills',
             entryNoun: 'skill',
+            prepareEdit: static function (array $entry, string $field): array {
+                if ($field === 'battleTargeting.shape') {
+                    $shape = \Ichiloto\Engine\Battle\Formation\BattleTargetShape::tryFrom($entry['battleTargeting']['shape'] ?? 'scope');
+                    if ($shape === \Ichiloto\Engine\Battle\Formation\BattleTargetShape::LINE) {
+                        $entry['scope']['number'] = ItemScopeNumber::ONE->value;
+                    } elseif (in_array($shape, [\Ichiloto\Engine\Battle\Formation\BattleTargetShape::FRONT_ROW, \Ichiloto\Engine\Battle\Formation\BattleTargetShape::BACK_ROW], true)) {
+                        $entry['scope']['number'] = ItemScopeNumber::ALL->value;
+                    }
+                }
+                return $entry;
+            },
             storage: RecordStorage::DIRECTORY,
             relativePath: 'assets/Data/' . SkillCatalog::DIRECTORY,
             fields: $fields,
@@ -1660,6 +1769,15 @@ final class RecordSchemaCatalog
             fieldsFor: static fn(array $row): array => strval($row['kind'] ?? '') === 'magic' ? [...$fields, $effectType] : [...$fields, self::counterAttackField()],
             recordClass: Skill::class,
             numberedFiles: true,
+            saveCheck: static function (array $payload, string $root): ?string {
+                try {
+                    $data = $payload['data'] ?? [];
+                    SkillDraft::isDraft($data) ? SkillDraft::fromArray($data) : SkillRecord::readSkill($data);
+                    return null;
+                } catch (\Throwable $failure) {
+                    return $failure->getMessage();
+                }
+            },
         );
     }
 
@@ -1688,6 +1806,8 @@ final class RecordSchemaCatalog
                     allowsNone: true, displayDefault: self::SKIT_BACKDROP_NONE),
                 new RecordField('conditions', 'Conditions', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
                 new RecordField('speed', 'Speed (chars/sec)', InputControlType::INTEGER, removeWhenEmpty: true),
+                // How it plays (offered at the field prompt, or selected by a story script) and its lifecycle sounds.
+                ...SkitPlaybackFields::getSkitFields(),
             ],
             labelKey: 'title',
             identityKey: 'id',
@@ -1711,6 +1831,8 @@ final class RecordSchemaCatalog
                 blank: ['actor' => '', 'text' => 'Say something.'],
                 exclusiveFields: [['actor', 'speaker']],
             ),
+            // The Engine skips a Skit whose trigger or sounds it cannot read, so neither is written.
+            saveCheck: static fn(array $payload): ?string => SkitPlaybackFields::checkSkit($payload),
         );
     }
 
@@ -1991,7 +2113,43 @@ final class RecordSchemaCatalog
                 keyField: 'id',
             ),
             subLists: [self::terrainKindList($graphical), self::tilesetStackList(), self::placeIconList(),
-                ...($graphical ? [self::tilesetThicketList()] : [])],
+                ...($graphical ? [self::tilesetThicketList(), self::layerOffsetList()] : [])],
+            // The Engine reads a tileset's layer offsets with every map drawn with it, so one it would refuse is never written.
+            saveCheck: static function (array $payload): ?string {
+                try {
+                    TileLayerOffset::readAll($payload[TileLayerOffset::DATA_KEY] ?? [], 'Layer offsets');
+                    return null;
+                } catch (\InvalidArgumentException $error) {
+                    return $error->getMessage();
+                }
+            },
+        );
+    }
+
+    /**
+     * A tileset's layer offsets, the Engine's Tileset::$layerOffsets, keyed by
+     * tile layer: where the art of that layer draws, across and down in field
+     * cells, on every map drawn with the tileset, so the art owns its own
+     * placement (a candle drawn a third of a row up onto its table). A map
+     * overrides one in its own tile layer settings. Collision, terminal cells
+     * and events stay where they are. Graphical authoring, so the GUI
+     * editor's.
+     */
+    private static function layerOffsetList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: TileLayerOffset::DATA_KEY,
+            prefix: 'layerOffset',
+            singular: 'layer offset',
+            fields: [
+                new RecordField('layer', 'Tile Layer', options: [''], entryChoices: ReferenceCatalog::TILESET_TILE_LAYERS),
+                new RecordField('offset', 'Offset (across, down; field cells)', codec: RecordFieldCodec::LAYER_OFFSET),
+            ],
+            blank: ['layer' => 'tiles', 'offset' => [0, 0]],
+            heading: 'Layer Offsets',
+            removeWhenEmpty: true,
+            keyField: 'layer',
+            valueField: 'offset',
         );
     }
 
@@ -2202,6 +2360,10 @@ final class RecordSchemaCatalog
                         // Whether this pose's art paints its own shadow, where the battler's other art does not.
                         new RecordField('bakedShadow', 'Art Paints Its Shadow', InputControlType::BOOLEAN, removeWhenEmpty: true,
                             displayDefault: '(the battler\'s)'),
+                        // The playback entry, repeats included, a battle shows at the action's impact: the start of
+                        // its target phase. Chosen among the frames of a pose that plays once.
+                        new RecordField('impactFrame', 'Impact Entry', InputControlType::INTEGER, removeWhenEmpty: true,
+                            codec: RecordFieldCodec::POSE_IMPACT_ENTRY, displayDefault: '(none: its own clock)'),
                     ],
                     blank: ['role' => BattlePoseRole::IDLE->value, 'image' => ''],
                     heading: 'Poses',
@@ -2417,12 +2579,7 @@ final class RecordSchemaCatalog
      */
     public static function mapNpcs(bool $graphical = false): RecordSchema
     {
-        return new RecordSchema(
-            key: 'map_npcs',
-            entryNoun: 'NPC',
-            storage: RecordStorage::MAP_OWNED,
-            relativePath: '',
-            fields: [
+        $fields = [
                 // Identity
                 new RecordField('id', 'Id'),
                 new RecordField('name', 'Name'),
@@ -2453,7 +2610,17 @@ final class RecordSchemaCatalog
                 ...self::cueFields(),
                 // Completion writes
                 new RecordField('sets', 'After Talking', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
-            ],
+        ];
+
+        return new RecordSchema(
+            key: 'map_npcs',
+            entryNoun: 'NPC',
+            storage: RecordStorage::MAP_OWNED,
+            relativePath: '',
+            fields: $fields,
+            // The bed an NPC rests in; its rows past the bed object exist once it has one.
+            fieldsFor: static fn(array $npc): array => [...$fields, ...NpcBedFields::getFields($npc, $graphical)],
+            prepareEdit: static fn(array $npc, string $field, array $before = []): array => NpcBedFields::prepareEdit($npc, $field, $before),
             labelKey: 'name',
             identityKey: 'id',
             blank: [
@@ -2499,6 +2666,8 @@ final class RecordSchemaCatalog
             // The NPC's inline script: the shared command vocabulary, in a
             // frame. The runtime runs it INSTEAD of dialogue when non-empty.
             commandLists: ['script' => self::eventCommandList('script', $graphical)],
+            // Named destinations commit_npc_placement saves, beside the pages.
+            subLists: [NpcPlacementFields::getList()],
         );
     }
 
@@ -2544,7 +2713,7 @@ final class RecordSchemaCatalog
                 DialogueLineSpeaker::forText(),
                 ['name' => '', 'text' => 'Something to say.'],
             ) : null,
-            commandLists: $className === ScriptEventTrigger::class
+            commandLists: $className !== null && is_a($className, ScriptEventTrigger::class, true)
                 ? ['script' => self::eventCommandList('script', $graphical)]
                 : [],
         );
@@ -2599,6 +2768,8 @@ final class RecordSchemaCatalog
         return [
             new RecordField('cue.symbol', 'Cue Symbol', removeWhenEmpty: true),
             new RecordField('cue.color', 'Cue Colour', options: FieldCueFields::COLORS, removeWhenEmpty: true, displayDefault: 'bright-yellow'),
+            new RecordField('cue.maxDistance', 'Cue Range (0..64 steps)', InputControlType::INTEGER,
+                removeWhenEmpty: true, displayDefault: '(unlimited)'),
             new RecordField('cue.conditions', 'Cue When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
         ];
     }
@@ -2740,6 +2911,8 @@ final class RecordSchemaCatalog
             'play_music' => [
                 RecordField::reference('music', 'Music', 'bgm'),
             ],
+            // A story conversation, chosen among the project's current Skits by stable id.
+            SkitPlaybackFields::getCommandType() => SkitPlaybackFields::getCommandFields(),
             'accept_quest' => [
                 RecordField::reference('id', 'Quest', 'quests'),
             ],
@@ -2838,7 +3011,7 @@ final class RecordSchemaCatalog
                         array_push($fields, ...InnPresentationFields::getFields($value, $field->key, $field->label, $graphical));
                     } else {
                         array_push($fields, ...($field->kind === ScriptCommandFieldKind::LIST
-                            ? [new RecordField($field->key, $field->label, isReadOnly: true)] : self::describeRegisteredField($field)));
+                            ? [new RecordField($field->key, $field->label, isReadOnly: true)] : self::describeRegisteredField($field, $definition->fields)));
                     }
                 }
                 return $fields;
@@ -2880,7 +3053,8 @@ final class RecordSchemaCatalog
                 // holds letters alone.
                 prefix: lcfirst(implode('', array_map(ucfirst(...), preg_split('/[^A-Za-z]+/', $listField->key, flags: PREG_SPLIT_NO_EMPTY) ?: ['entry']))),
                 singular: strtolower($listField->label) . ' entry',
-                fields: array_merge(...array_map(self::describeRegisteredField(...), $listField->fields)),
+                fields: array_merge(...array_map(static fn(ScriptCommandField $field): array => self::describeRegisteredField($field, $listField->fields),
+                    $listField->fields)),
                 blank: self::getRegisteredBlankEntry($listField->fields[0]),
             );
         }
@@ -2906,9 +3080,10 @@ final class RecordSchemaCatalog
      * keep what the author sets, since a project's handler decides what an
      * absent one means.
      *
+     * @param list<ScriptCommandField> $siblings The fields declared beside it, which a placement's NPC is among.
      * @return RecordField[]
      */
-    private static function describeRegisteredField(ScriptCommandField $field): array
+    private static function describeRegisteredField(ScriptCommandField $field, array $siblings): array
     {
         return match ($field->kind) {
             ScriptCommandFieldKind::TEXT => [new RecordField($field->key, $field->label, removeWhenEmpty: ! $field->required)],
@@ -2916,21 +3091,44 @@ final class RecordSchemaCatalog
             ScriptCommandFieldKind::NUMBER => [new RecordField($field->key, $field->label, InputControlType::FLOAT)],
             ScriptCommandFieldKind::BOOLEAN => [RecordField::boolean($field->key, $field->label, removeWhenEmpty: false)],
             ScriptCommandFieldKind::OPTION => [new RecordField($field->key, $field->label, options: $field->options, removeWhenEmpty: ! $field->required)],
-            // A troop member is the owning troop's own, never a project resource.
-            ScriptCommandFieldKind::REFERENCE => [$field->reference === ScriptCommandReference::TROOP_MEMBER
-                ? RecordField::troopMember($field->key, $field->label, $field->required) : RecordField::reference(
-                $field->key,
-                $field->label,
-                ProjectScriptCommands::getReferenceCategory($field->reference
-                    ?? throw new LogicException("Reference field {$field->key} names no resource."))
-                    ?? throw new LogicException("Reference field {$field->key} names no project resource."),
-                allowsNone: ! $field->required,
-            )],
+            ScriptCommandFieldKind::REFERENCE => [self::describeRegisteredReference($field, $siblings)],
             ScriptCommandFieldKind::POSITION => [
                 new RecordField("{$field->key}.x", "{$field->label} X", InputControlType::INTEGER),
                 new RecordField("{$field->key}.y", "{$field->label} Y", InputControlType::INTEGER),
             ],
             ScriptCommandFieldKind::LIST => [new RecordField($field->key, $field->label, isReadOnly: true)],
+        };
+    }
+
+    /**
+     * Describes a declared reference field by where its values come from. A
+     * kind this Editor does not know stays editable as plain text, labelled
+     * as such, and validation reports each command that uses it; it never
+     * stops the schema, and so the project, from loading. An NPC placement is
+     * chosen among the placements of the NPC its command's NPC field selects;
+     * a declaration naming no single NPC beside it is kept as typed too.
+     *
+     * @param list<ScriptCommandField> $siblings The fields declared beside it.
+     */
+    private static function describeRegisteredReference(ScriptCommandField $field, array $siblings): RecordField
+    {
+        $source = ScriptReferenceSource::forReference($field->reference
+            ?? throw new LogicException("Reference field {$field->key} names no resource."));
+
+        return match ($source->scope) {
+            // A troop member is the owning troop's own, never a project resource.
+            ScriptReferenceScope::OWNING_TROOP => RecordField::troopMember($field->key, $field->label, $field->required),
+            ScriptReferenceScope::PROJECT, ScriptReferenceScope::CURRENT_MAP, ScriptReferenceScope::CURRENT_CINEMATIC => RecordField::reference(
+                $field->key,
+                $field->label,
+                $source->category ?? throw new LogicException("Reference field {$field->key} has no picker category."),
+                allowsNone: ! $field->required,
+            ),
+            ScriptReferenceScope::SELECTED_NPC => ($npc = ScriptReferenceSource::findSelectingNpcField($field, $siblings)) === null
+                ? new RecordField($field->key, sprintf('%s (typed: no NPC field beside it)', $field->label), removeWhenEmpty: ! $field->required)
+                : RecordField::npcPlacement($field->key, $field->label, substr($npc->key, (int) strrpos('.' . $npc->key, '.')), $field->required),
+            ScriptReferenceScope::UNSUPPORTED => new RecordField($field->key, sprintf('%s (typed: unknown reference kind %s)', $field->label, $source->reference->value),
+                removeWhenEmpty: ! $field->required),
         };
     }
 

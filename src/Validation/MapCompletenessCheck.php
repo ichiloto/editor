@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Database\InventoryCatalog;
+use Ichiloto\Editor\Field\NpcBedFields;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
+use Ichiloto\Editor\Field\NpcPlacementFields;
 use Ichiloto\Engine\Field\Validation\MapCompletenessValidator;
 use Ichiloto\Engine\Field\Validation\MapTerrainKindRule;
 use Ichiloto\Engine\Field\Validation\MapValidationIssue;
@@ -17,7 +19,8 @@ use Throwable;
  * Checks a map against the Engine's completeness rule, the one every tool
  * and the game share ({@see MapCompletenessValidator}): its events and their
  * subjects, its chests' rewards, the gameplay glyphs it would show raw in the
- * graphical field, and its world objects' and NPCs' field art. The Editor
+ * graphical field, its world objects' and NPCs' field art, and its NPCs' beds
+ * against the physical grid. The Editor
  * keeps no copy of these rules; this adapter only supplies the map as it
  * stands in the workspace, unsaved edits included, and words the findings
  * for an author.
@@ -56,7 +59,14 @@ final class MapCompletenessCheck
                 // The resources as this session holds them: one added in the same change set resolves.
                 self::readFieldCatalog($map),
                 requiresGraphics: $map->listTilesetIds() !== [],
+                // The physical grid the field resolves, which beds and named NPC placements are checked against: declared or legacy alike.
+                occupancy: self::declaresPhysicalNpcCells($map) ? $map->getPhysicalOccupancy() : null,
             );
+            if (array_any($map->getEditableData()['events'] ?? [], static fn($event): bool => is_array($event)
+                && is_a($event['class'] ?? '', \Ichiloto\Engine\Events\Triggers\PassageEventTrigger::class, true))) {
+                $found = [...$found, ...MapCompletenessValidator::validateOpeningFloors($map->mapId,
+                    $map->getEditableData(), $map->getEventLayerCells(), $map->getPhysicalOccupancy()->collisionGrid)];
+            }
         } catch (Throwable $failure) {
             // The map's own reading checks say why it cannot be read; nothing is judged as complete.
             return [new Issue(Severity::ERROR, $map->mapId, 'Its completeness could not be checked: ' . $failure->getMessage(),
@@ -71,6 +81,15 @@ final class MapCompletenessCheck
         }
 
         return self::describeIssues($map, $found);
+    }
+
+    /** Whether any of the map's NPCs rests in a bed or declares named placements, whose physical cells the check reads. */
+    private static function declaresPhysicalNpcCells(ProjectMap $map): bool
+    {
+        $npcs = $map->getEditableData()['npcs'] ?? [];
+
+        return is_array($npcs) && array_any($npcs, static fn(mixed $npc): bool => is_array($npc)
+            && (array_key_exists(NpcBedFields::BED, $npc) || array_key_exists(NpcPlacementFields::PLACEMENTS, $npc)));
     }
 
     /**

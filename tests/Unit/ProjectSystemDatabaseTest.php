@@ -19,6 +19,21 @@ function systemRecords(string $root): ProjectRecordDatabase
     return ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('system'));
 }
 
+it('round trips story-gated dash conditions through shared System authoring', function () {
+    $root = scratchSystemProject();
+    file_put_contents($root . '/assets/Data/system.php', "<?php return ['title' => 'Synthetic'];");
+    $records = systemRecords($root);
+    $records->setField(0, 'dash.enabled', 'true');
+    $records->setField(0, 'dash.conditions', 'event:movement-unlocked');
+    $records->save();
+    $settings = \Ichiloto\Engine\Field\DashSettings::fromSystemData(require $root . '/assets/Data/system.php');
+    expect($settings->conditions)->toBe([['type' => 'event', 'name' => 'movement-unlocked']])
+        ->and($settings->isUnlocked(new \Ichiloto\Engine\Core\GameState()))->toBeFalse();
+    $state = new \Ichiloto\Engine\Core\GameState();
+    $state->recordStoryEvent('movement-unlocked');
+    expect($settings->isUnlocked($state))->toBeTrue();
+});
+
 /** What the System page shows for a field, as both editors read it. */
 function systemSettingsValue(string $root, string $field): ?string
 {
@@ -346,3 +361,18 @@ it('reports a dash or a map Disable Dashing the Engine would not read as an erro
     expect($issues)->toHaveCount(1)->and($issues[0]->map)->toBe($map->mapId)
         ->and($issues[0]->message)->toContain('disableDashing must be true or false');
 });
+
+
+it('authors battle capacities from one through eight without rewriting unrelated system data', function (int $size): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    $original = productionSystem();
+    file_put_contents($path, "<?php\nreturn " . var_export($original, true) . ";\n");
+    $database = systemRecords($root);
+    $database->setField(0, 'battle.partySize', (string) $size);
+    $database->save();
+    $saved = require $path;
+    expect($saved['battle']['partySize'])->toBe($size)
+      ->and($saved['battle']['unknownBattleSetting'])->toBe($original['battle']['unknownBattleSetting'])
+      ->and($saved['unknownSystemSetting'])->toBe($original['unknownSystemSetting']);
+})->with(range(1, 8));

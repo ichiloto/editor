@@ -115,8 +115,10 @@ final class CutsceneHydration
 
     /**
      * Proves an effect timeline can be played: each presentation must
-     * compile in an admitted context. An authored stage owns its space;
-     * battle/field admission cannot substitute for that ownership.
+     * compile in a context that admits it. A declared stage is played by a
+     * caller that owns the stage or by battle, as an action's staged cut-in
+     * or impact; the field never plays one, so field admission cannot stand
+     * in for it.
      *
      * @param array<string, mixed> $timeline The timeline file's array.
      * @throws RuntimeException Naming each presentation neither accepts, with the Engine's reasons.
@@ -128,7 +130,7 @@ final class CutsceneHydration
         foreach (EffectPresentation::cases() as $presentation) {
             $reasons = [];
 
-            $contexts = self::isOwnedStage($timeline) ? ['stage'] : ['battle', 'field'];
+            $contexts = self::declaresStage($timeline) ? ['stage', 'battle'] : ['battle', 'field'];
             foreach ($contexts as $context) {
                 try {
                     self::compileEffect($id, $timeline, $presentation, $context === 'battle', $projectRoot, $context === 'stage');
@@ -149,8 +151,8 @@ final class CutsceneHydration
         }
     }
 
-    /** Stage ownership belongs to the complete asset, not the tab being inspected. */
-    public static function isOwnedStage(array $timeline): bool
+    /** Whether the complete asset declares a graphical stage, whichever sequence is being inspected. */
+    public static function declaresStage(array $timeline): bool
     {
         $graphical = $timeline['presentations'][EffectPresentation::GRAPHICAL->value] ?? $timeline;
 
