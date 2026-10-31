@@ -113,15 +113,19 @@ final class EffectBattlePreview
         // battle starts the caster effect where the animation anchors it, as the battle does; the terminal keeps its
         // own source phase. The command's own target boundary then drives the pose's impact entry too.
         $anchor = $presentation === EffectPresentation::GRAPHICAL ? $animation->sourceEffectAnchor : SourceEffectAnchor::SOURCE;
+        $role = BattlePoseRole::getForAction($action);
+        // The same stable actor binding used by production supplies the complete post-impact recovery.
+        $pose = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null && $catalog->getArenaFor($battle) !== null
+            ? ($catalog->actorPoses[$caster->actorId] ?? null)?->getPose($role) : null;
         $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
-            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor);
+            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor, actionPose: $pose);
         $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $battle->partyRoster->battlers, $battle->troop->members->toArray());
         if ($targets === []) {
             throw new InvalidArgumentException(sprintf('%s has no one to act on in the battle test.', $action->name));
         }
 
         return new self(
-            new BattleCommandPreview($battle, $plan, $caster, $targets, BattlePoseRole::getForAction($action),
+            new BattleCommandPreview($battle, $plan, $caster, $targets, $role,
                 $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation),
             $plan,
             $lane,

@@ -4,6 +4,10 @@
 
 ### Added
 
+- Effect battle previews pass the selected actor's impact-anchored pose to the shared command timeline, so the
+  final recovery entry and hold remain visible at Fast pacing. The stable actor id selects the pose after display
+  names change. Terminal and arena-less inspection keep their existing clocks; movement and impact cues are unchanged.
+
 - Sound import: `assets.import` brings music and sound effects into a project through the same planned, staged,
   read-back and undoable write as images, the kind chosen by the name given (`AssetKind`: image or audio). A sound
   must be the MP3, WAV or Ogg (Vorbis or Opus) its name says, read whole from its own bytes, and goes straight into
