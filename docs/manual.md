@@ -1294,6 +1294,21 @@ misleading empty one. A track the project no longer has stays visible as
 one, and validation names it. There is no in-editor audition in this gate;
 the playtest plays the real thing.
 
+**Bringing sounds in.** A music track or sound effect comes into the project
+through the same import as an image (the session's `assets.import`): it is
+copied byte for byte, written at once rather than on Save, read back before it
+is kept, and removed again by Undo. Its name says its format (`.mp3`, `.wav`
+or `.ogg`), and its bytes must be that format, read whole: MPEG Layer III
+frames from first to last, PCM or floating-point WAV, or one Vorbis or Opus
+stream in Ogg pages whose checksums hold. It goes straight into
+`assets/Audio/BGM` or `assets/Audio/SFX`, where the game finds it by the name a
+field stores, its file name without the extension, so it never comes in beside
+another file of that name in another format. The reply names its role, that
+name, and the format, duration, sample rate and channels read from the file.
+The Editor brings in sound files of at most 48 MiB that play for at most 30
+minutes; save long music as MP3 or Ogg. Ogg plays where mpv, ffplay or paplay
+is installed; macOS's own player plays MP3 and WAV.
+
 **Music Variants.** Beneath the static track, `Music Variants` authors the
 engine's ordered `bgmVariants` list: story-dependent tracks the map plays
 instead of its default. The engine evaluates the variants in declaration

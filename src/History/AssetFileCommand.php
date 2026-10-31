@@ -7,11 +7,11 @@ namespace Ichiloto\Editor\History;
 use Ichiloto\Editor\Storage\SourceSetPlan;
 
 /**
- * An artwork file written at once, rather than on Save, kept in history: an
- * imported image, or a sheet given cells copied from another image. Undo puts
+ * An asset file written at once, rather than on Save, kept in history: an
+ * imported image or sound, or a sheet given cells copied from another image. Undo puts
  * back exactly the bytes there were, or removes a file the edit created, and
  * redo writes it again. Either refuses, changing nothing, when the file was
- * changed outside the Editor since. Artwork is read from disk by every view,
+ * changed outside the Editor since. Assets are read from disk by every view,
  * so nothing in the workspace is reloaded.
  */
 final class AssetFileCommand implements Command
