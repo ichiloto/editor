@@ -82,7 +82,13 @@ final class ProjectRecordDatabase
         return ($this->recordReferences === null ? null : ($this->recordReferences)($record)) ?? $this->authoringReferences;
     }
 
-    private function coerceReferenceField(ProjectRecord $record, RecordField $field, string $rawValue, array $ownerPath = []): mixed
+    /**
+     * @param list<int|string> $ownerPath Where the field is in the record, its own key included.
+     * @param array<array-key, mixed>|null $entry The list entry the field belongs to, as the list reads it; a keyed
+     *   list's entry is not where its path reads in the record, so its choices read the entry itself.
+     */
+    private function coerceReferenceField(ProjectRecord $record, RecordField $field, string $rawValue, array $ownerPath = [],
+        ?array $entry = null): mixed
     {
         $authored = (array) $record->toArray();
         foreach ($ownerPath === [] ? explode('.', $field->key) : $ownerPath as $segment) {
@@ -93,11 +99,20 @@ final class ProjectRecordDatabase
         }
         $value = self::coerce($field, $rawValue);
         $references = $this->findRecordReferences($record);
+        // What the field lives in, as its row reads it: its entry, or where its path reads in the record.
+        $parent = implode('.', array_slice(explode('.', $field->key), 0, -1));
+        $holder = $entry !== null ? ($parent === '' ? $entry : self::readNested($entry, $parent))
+            : self::readNested((array) $record->toArray(), implode('.', array_slice($ownerPath === [] ? explode('.', $field->key) : $ownerPath, 0, -1)));
         if ($references !== null && $field->entryChoices !== null && $value !== null) {
-            // The choices read what the field lives in, as its row does.
-            $holder = self::readNested((array) $record->toArray(), implode('.', array_slice($ownerPath === [] ? explode('.', $field->key) : $ownerPath, 0, -1)));
             if (! in_array($value, $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], (array) $record->toArray()), true)) {
                 throw new \InvalidArgumentException(sprintf('%s "%s" is not one this entry offers; choose one of its own.', $field->label, strval($value)));
+            }
+        }
+        if ($field->codec === RecordFieldCodec::POSE_IMPACT_ENTRY && $value !== null) {
+            // An impact names one of the pose's own playback entries, and only while it plays once.
+            if (! array_key_exists($value, PoseImpactEntries::listEntries(is_array($holder) ? $holder : []))) {
+                throw new \InvalidArgumentException(sprintf('%s must be one of the pose\'s own playback entries, and the pose must play once (Loops false). Nothing was changed.',
+                    $field->label));
             }
         }
         if ($references !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects',
@@ -630,6 +645,13 @@ final class ProjectRecordDatabase
             unset($row['control']);
             $row['options'] = $field->allowsNone ? ['None', ...$labels] : $labels;
             $row['value'] = is_int($current) ? ($labels[$current] ?? sprintf('Member %d (not in this troop)', $current + 1)) : 'None';
+        }
+        if ($field->codec === RecordFieldCodec::POSE_IMPACT_ENTRY && ($row['editable'] ?? true) !== false) {
+            // Chosen among the pose's own playback entries, each with the cell it plays.
+            $current = self::readNested($entry, $field->key);
+            unset($row['control']);
+            $row['options'] = ['', ...array_values(PoseImpactEntries::listEntries($entry))];
+            $row['value'] = is_int($current) ? PoseImpactEntries::describeValue($current, $entry) : $field->noneLabel();
         }
         if ($field->referenceMapKey !== null) {
             // A map-local reference reads the map its own entry names.
@@ -3265,7 +3287,7 @@ final class ProjectRecordDatabase
 
             $before = $entries[$entryIndex];
             $value = $this->coerceReferenceField($record, $field, $rawValue,
-                [...explode('.', $subList->key), $entryIndex, ...explode('.', $field->key)]);
+                [...explode('.', $subList->key), $entryIndex, ...explode('.', $field->key)], $entries[$entryIndex]);
             self::assertKeyAvailable($subList, $entries, $entryIndex, $field, $value);
             $entries[$entryIndex] = self::writeNested(
                 $entries[$entryIndex],
@@ -3361,7 +3383,7 @@ final class ProjectRecordDatabase
             }
 
             $value = $this->coerceReferenceField($record, $field, $rawValue,
-                [...$ownerPath, ...explode('.', $nestedList->key), $nestedIndex, ...explode('.', $field->key)]);
+                [...$ownerPath, ...explode('.', $nestedList->key), $nestedIndex, ...explode('.', $field->key)], $nestedEntries[$nestedIndex]);
             self::assertKeyAvailable($nestedList, $nestedEntries, $nestedIndex, $field, $value);
             $before = $nestedEntries[$nestedIndex];
             $nestedEntries[$nestedIndex] = self::writeNested(
@@ -3866,6 +3888,15 @@ final class ProjectRecordDatabase
             return intval($match[1]) - 1;
         }
 
+        if ($field->codec === RecordFieldCodec::POSE_IMPACT_ENTRY) {
+            if ($trimmed === '' || ($field->displayDefault !== null && $trimmed === $field->displayDefault)) {
+                return null;
+            }
+
+            return PoseImpactEntries::parse($trimmed)
+                ?? throw new \InvalidArgumentException(sprintf('%s names one of the pose\'s playback entries, as Entry 3 · cell 2.', $field->label));
+        }
+
         if ($field->codec === RecordFieldCodec::LAYER_OFFSET) {
             return LayerOffsetCodec::decode($trimmed, $field->label);
         }
@@ -4137,6 +4168,7 @@ final class ProjectRecordDatabase
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::LAYER_OFFSET => LayerOffsetCodec::encode($value),
             RecordFieldCodec::TROOP_MEMBER => is_int($value) ? sprintf('Member %d', $value + 1) : 'None',
+            RecordFieldCodec::POSE_IMPACT_ENTRY => is_int($value) ? sprintf('Entry %d', $value) : $field->noneLabel(),
             RecordFieldCodec::BATTLE_TEST => is_array($value)
                 ? (string) json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
                 : ProjectRecord::stringify($value),
@@ -4199,7 +4231,9 @@ final class ProjectRecordDatabase
 
     /**
      * Casts a boolean field, dropping the key when false and the schema
-     * treats false as "unset" (which is how the engine's defaults work).
+     * treats false as "unset": its absence reads as false. Where absence
+     * means something else (a pose that loops, a shadow the battler decides),
+     * false is a value of its own and is kept, as zero is for an integer.
      *
      * @param RecordField $field The field schema.
      * @param string $value The trimmed value.
@@ -4209,7 +4243,7 @@ final class ProjectRecordDatabase
     {
         $flag = InputControl::parseBoolean($value);
 
-        return $flag === false && $field->removeWhenEmpty ? null : $flag;
+        return $flag === false && $field->removeWhenEmpty && ($field->displayDefault ?? 'false') === 'false' ? null : $flag;
     }
 
     /**
@@ -4984,7 +5018,7 @@ final class ProjectRecordDatabase
             }
 
             $written = self::writeNested($entry, explode('.', $field->key), $this->coerceReferenceField($record, $field, $rawValue,
-                [...$ownerPath, ...explode('.', $field->key)]));
+                [...$ownerPath, ...explode('.', $field->key)], $entry));
             $written = $subList->removeConflictingFields($written, $field->key);
 
             if ($field->key === $subList->variantKey && $written !== null) {

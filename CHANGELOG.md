@@ -4,6 +4,17 @@
 
 ### Added
 
+- Action impact alignment, as Engine abbc883 reads it: a battle pose's **Impact Entry** (`impactFrame`) is chosen
+  among its own playback entries, repeats included, each shown with the sheet cell it plays (`Entry 3 · cell 2`),
+  and only for a pose that plays once; an animation's **Caster Effect Starts** (`sourceEffectAnchor`) chooses
+  `source`, omitted as the Engine's default, or `target`. Edits are refused before anything changes when the pose
+  could not take them, saves are read by the Engine's `BattlerBindings` and `Animation` readers and refused before
+  writing, and undo and redo restore the file byte for byte. The effect battle preview plans the command with the
+  animation's anchor in the graphical presentation (the terminal keeps the source phase), so the caster effect and
+  the pose's impact entry meet on the command's own target boundary; a pose without an impact entry keeps its own
+  clock. Its reply names the `sourceEffectAnchor` it played. Validation reports a caster effect declaring a
+  cinematic stage that is started at the target phase, with the Engine's reason.
+
 - NPC beds, as Engine bf49893 reads them (`CinematicCommandSchema::export()['bedOccupancy']`): the NPC Inspector's
   **Bed** rows pick the world object on the NPC's map it rests in (`bed.object`, among objects whose field resource
   declares attachments), the resource attachment its occupant lies on (`bed.attachment`), its `Starting Posture`
@@ -160,6 +171,13 @@
   and `\` like any other glyph; formatter markup or several characters offered as one glyph are still refused.
 
 ### Fixed
+
+- A boolean field whose absence means true, or something other than false, now keeps `false` in the file: a
+  battle pose's **Loops** `false` was dropped, so the pose went on looping; a pose's **Art Paints Its Shadow**
+  `false` was dropped, so it followed the battler; and a consumable item's **Consumable** `false` was dropped. As
+  for integers, false is removed only where absence reads as false.
+- A field chosen among its own entry's values now reads the entry as its list holds it when an edit is checked,
+  as its row does; an entry of a keyed list was read from its stored position, where the edit check found nothing.
 
 - Every project failed to open, validate or render with `Unhandled match case ... CONVERSATION_GROUP` after Engine
   bf49893 added the `npc` and `conversation_group` reference kinds: the Editor mapped Engine reference kinds to

@@ -3693,7 +3693,7 @@ final class EditorSession
 
         return [...$read, 'totalFrames' => $preview->totalFrames, 'fps' => BattleCommandTimeline::FPS,
             'assetRoot' => $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', 'lane' => $preview->lane,
-            'contexts' => $preview->contexts, 'binding' => $preview->binding,
+            'sourceEffectAnchor' => $preview->sourceEffectAnchor->value, 'contexts' => $preview->contexts, 'binding' => $preview->binding,
             'caster' => $preview->caster, 'targets' => $preview->targets, 'troop' => $troop['name'], 'phases' => $preview->phases];
     }
 

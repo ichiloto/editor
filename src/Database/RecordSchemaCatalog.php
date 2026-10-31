@@ -37,7 +37,9 @@ use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 use Ichiloto\Engine\Progression\LevelUpRecovery;
 use Ichiloto\Engine\Progression\ProgressionSettings;
 use Ichiloto\Engine\Field\DashSettings;
+use Ichiloto\Engine\Animations\Animation;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
+use Ichiloto\Engine\Animations\SourceEffectAnchor;
 use Ichiloto\Editor\Events\ScriptReferenceScope;
 use Ichiloto\Editor\Field\NpcBedFields;
 use Ichiloto\Editor\Events\ScriptReferenceSource;
@@ -311,6 +313,10 @@ final class RecordSchemaCatalog
             new RecordField('roles', 'Roles', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true,
                 reference: 'animation_roles', uniqueAcrossRecords: true),
         ];
+        // When a graphical battle starts the caster effect: in its own phase (the Engine's default, omitted), or
+        // at the target phase's start, on the caster, beside the target effect and the pose's impact entry.
+        $anchor = new RecordField('sourceEffectAnchor', 'Caster Effect Starts', options: ['', SourceEffectAnchor::TARGET->value],
+            removeWhenEmpty: true, displayDefault: SourceEffectAnchor::SOURCE->value);
         $legacy = [
             new RecordField('position', 'Legacy Position',
                 options: array_map(static fn(AnimationTargetPosition $position): string => $position->value, AnimationTargetPosition::cases()),
@@ -330,9 +336,34 @@ final class RecordSchemaCatalog
             identityKey: 'id',
             // A numeric identity: a new animation takes the next free number.
             blank: ['id' => 1, 'name' => 'New Animation'],
-            fieldsFor: static fn(array $row): array => array_key_exists('frames', $row) || array_key_exists('cues', $row)
-                ? [...$fields, ...$legacy] : $fields,
+            // The caster effect's start is offered once there is a caster effect, or a start authored for one.
+            fieldsFor: static function (array $row) use ($fields, $anchor, $legacy): array {
+                $own = isset($row['sourceEffect']) || array_key_exists('sourceEffectAnchor', $row)
+                    ? [...array_slice($fields, 0, 3), $anchor, ...array_slice($fields, 3)] : $fields;
+
+                return array_key_exists('frames', $row) || array_key_exists('cues', $row) ? [...$own, ...$legacy] : $own;
+            },
+            saveCheck: self::checkAnimations(...),
         );
+    }
+
+    /**
+     * Why the Engine could not read the animations as they would be saved, or null when it can: each entry
+     * through its own Animation reader, the caster effect's start included.
+     *
+     * @param array<array-key, mixed> $whole The animations, as they would be saved.
+     */
+    public static function checkAnimations(array $whole, string $projectRoot): ?string
+    {
+        foreach ($whole as $index => $entry) {
+            try {
+                Animation::fromArray(is_array($entry) ? $entry : []);
+            } catch (\InvalidArgumentException|\ValueError|\TypeError $error) {
+                return sprintf('Animation %d could not be read as it would be saved: %s', intval($index) + 1, $error->getMessage());
+            }
+        }
+
+        return null;
     }
 
     private static function troops(): RecordSchema
@@ -2327,6 +2358,10 @@ final class RecordSchemaCatalog
                         // Whether this pose's art paints its own shadow, where the battler's other art does not.
                         new RecordField('bakedShadow', 'Art Paints Its Shadow', InputControlType::BOOLEAN, removeWhenEmpty: true,
                             displayDefault: '(the battler\'s)'),
+                        // The playback entry, repeats included, a battle shows at the action's impact: the start of
+                        // its target phase. Chosen among the frames of a pose that plays once.
+                        new RecordField('impactFrame', 'Impact Entry', InputControlType::INTEGER, removeWhenEmpty: true,
+                            codec: RecordFieldCodec::POSE_IMPACT_ENTRY, displayDefault: '(none: its own clock)'),
                     ],
                     blank: ['role' => BattlePoseRole::IDLE->value, 'image' => ''],
                     heading: 'Poses',
