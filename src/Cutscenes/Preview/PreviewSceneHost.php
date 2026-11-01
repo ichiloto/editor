@@ -37,6 +37,7 @@ final class PreviewSceneHost
     private readonly RendererClient $client;
     private readonly RendererPresentation $presentation;
     private readonly SceneFrameComposer $composer;
+    private readonly PreviewPresentationCapabilities $capabilities;
     private bool $ready = false;
     /** The presentation this view attached to the scene, while attached. */
     private ?ScenePresentationContext $context = null;
@@ -58,6 +59,7 @@ final class PreviewSceneHost
     ) {
         $this->relay = new PreviewRendererRelay();
         $this->client = new RendererClient($this->relay);
+        $this->capabilities = new PreviewPresentationCapabilities($this->client->supports(...));
         $this->client->start(new RendererSessionConfig('Cinematic preview', $assetRoot, $grid, RendererProtocolVersion::V2));
         $this->presentation = new RendererPresentation($this->client, $grid);
         $this->composer = new SceneFrameComposer($assetRoot);
@@ -98,7 +100,7 @@ final class PreviewSceneHost
         }
         if ($this->ready) {
             $this->attachContext();
-            $composition = $this->composer->composeFrame($this->scene, $this->grid, $this->client->supports(...),
+            $composition = $this->composer->composeFrame($this->scene, $this->grid, $this->capabilities->supportsFeature(...),
                 fn(array $excluded, array $worldLayers) => Console::capturePresentation($this->grid->columns, $this->grid->rows,
                     $this->renderTerminal, $excluded, $worldLayers,
                     $this->scene instanceof RetainedWorldProviderInterface && $this->scene->getPresentationWorld() !== null));
@@ -135,7 +137,7 @@ final class PreviewSceneHost
             return;
         }
         $this->replaced = $this->scene->getPresentationContext();
-        $this->scene->setPresentationContext($this->context = new ScenePresentationContext($this->grid, $this->client->supports(...),
+        $this->scene->setPresentationContext($this->context = new ScenePresentationContext($this->grid, $this->capabilities->supportsFeature(...),
             collectPresentations: fn(): array => $this->dialogue->getActivePresentations(), readTime: $this->readTime,
             assetRoot: $this->assetRoot,
             // Text such as a sign's label is laid out by this window, through this preview's own client: never the game's.

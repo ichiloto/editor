@@ -352,6 +352,19 @@ Remaining, waiting on the Engine taking caller-supplied data:
   `KnowledgeCatalog::fromProject()` and `PlayerPresentationConfig::load()` read
   the project from disk.
 
+### Camera preview clock (remaining integration, 1 November 2026)
+
+Runtime Engine pans/routes can send a retained `camera_motion` destination while
+their logical samples follow PHP timing. The Editor's `PreviewPresentationCapabilities`
+withholds that optional free-running native interpolation in both live preview
+hosts and still composition. Paused, stepped and seeked previews continue to
+show their PHP playhead. This explicitly disables wall-clock camera motion in
+seekable previews until the Renderer accepts a controllable presentation clock.
+Smooth native previews remain required: the clock must support pause, resume,
+arbitrary seek/reset and consistent camera/sprite/world-canvas/text/edge-guidance
+sampling. Existing camera command fields, selectors and source round trips stay
+supported.
+
 ### Registered command lists (planned)
 
 The Engine lets a registered script command declare any number of `list`

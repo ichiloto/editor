@@ -185,6 +185,7 @@ final class PreviewField
      */
     public function composeStill(Closure $supports): SceneFrameComposition
     {
+        $supports = new PreviewPresentationCapabilities($supports)->supportsFeature(...);
         $assetRoot = $this->projectRoot . '/assets';
         $grid = new RendererGridConfig($this->screenWidth, $this->screenHeight, FieldViewport::TILE_SIZE, FieldViewport::TILE_SIZE);
         $composition = null;
