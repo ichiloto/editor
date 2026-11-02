@@ -18,6 +18,7 @@ use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposition;
 use Ichiloto\Engine\Rendering\Presentation\ScenePresentationContext;
 use Ichiloto\Engine\Rendering\Runtime\RendererRuntimeConfig;
 use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
+use Ichiloto\Engine\Rendering\Text\TextPreparationProviderInterface;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Config\PlaySettings;
@@ -182,29 +183,57 @@ final class PreviewField
      * the field's Terminal one, or the window's view -- is given back.
      *
      * @param Closure(string): bool $supports The still renderer's capabilities.
+     * @param TextPreparationProviderInterface|null $textPreparation Where project labels, such as a sign's, are
+     *     measured; without one the field composes no labels.
+     * @param (Closure(SceneFrameComposition): bool)|null $composeAgain Asked after each composition whether to
+     *     compose again in the same presentation, as a caller waiting for the labels it asked for does: the labels
+     *     a field has asked for are kept only while its presentation stays. The last composition is returned.
      */
-    public function composeStill(Closure $supports): SceneFrameComposition
+    public function composeStill(Closure $supports, ?TextPreparationProviderInterface $textPreparation = null,
+        ?Closure $composeAgain = null): SceneFrameComposition
     {
         $supports = new PreviewPresentationCapabilities($supports)->supportsFeature(...);
         $assetRoot = $this->projectRoot . '/assets';
         $grid = new RendererGridConfig($this->screenWidth, $this->screenHeight, FieldViewport::TILE_SIZE, FieldViewport::TILE_SIZE);
         $composition = null;
-        $this->run(function () use ($assetRoot, $grid, $supports, &$composition): void {
+        $this->run(function () use ($assetRoot, $grid, $supports, $textPreparation, $composeAgain, &$composition): void {
             $replaced = $this->scene->getPresentationContext();
             $this->scene->setPresentationContext(new ScenePresentationContext($grid, $supports,
                 collectPresentations: fn(): array => $this->presentation->getActivePresentations(), readTime: $this->readTime,
-                assetRoot: $assetRoot));
+                assetRoot: $assetRoot, textPreparation: $textPreparation));
             $this->scene->installFieldEffects(EffectPresentation::GRAPHICAL);
+            $composer = new SceneFrameComposer($assetRoot);
             try {
-                $composition = new SceneFrameComposer($assetRoot)->composeFrame($this->scene, $grid, $supports,
-                    fn(array $excluded, array $worldLayers) => Console::capturePresentation($grid->columns, $grid->rows,
-                        $this->renderScene(...), $excluded, $worldLayers, $this->scene->getPresentationWorld() !== null));
+                do {
+                    $composition = $composer->composeFrame($this->scene, $grid, $supports,
+                        fn(array $excluded, array $worldLayers) => Console::capturePresentation($grid->columns, $grid->rows,
+                            $this->renderScene(...), $excluded, $worldLayers, $this->scene->getPresentationWorld() !== null));
+                } while ($composeAgain !== null && $composeAgain($composition));
             } finally {
                 $this->scene->restorePresentation($replaced);
             }
         });
 
         return $composition ?? throw new \LogicException('The field composed no graphical picture.');
+    }
+
+    /**
+     * The field's signs: each world object whose resource is a sign board,
+     * by the graphical id its world canvas carries.
+     *
+     * @return array<string, array{id: string, x: int, y: int}>
+     */
+    public function findSigns(): array
+    {
+        $signs = [];
+        foreach ($this->scene->mapManager?->getWorldObjects() ?? [] as $object) {
+            if ($object->definition->resource?->sign !== null) {
+                $signs[$object->getGraphicalSpriteId()] = ['id' => $object->definition->id, 'x' => $object->definition->x,
+                    'y' => $object->definition->y];
+            }
+        }
+
+        return $signs;
     }
 
     /**

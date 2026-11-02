@@ -829,8 +829,10 @@ writes the Terminal field's characters and colours (`.ans` and a page of its
 own), a native-size PNG of the graphical field as the game composes it (tiles,
 sprites, world canvases such as a bed and its sleeper, and the field text of
 subjects shown by their glyph), and a `review.html` with the two side by side
-for every view. Signs are left out of the still: their boards need text
-measured by a graphical renderer. `--player X,Y[,HEADING]` stands the player
+for every view. Sign labels are measured and drawn by the installed GPUI
+renderer without a window (`--prepare-text`), so a sign reads as it does in
+play; a renderer that is missing or too old to have that mode leaves each
+sign out, and the view names every one it left out and why. `--player X,Y[,HEADING]` stands the player
 on a cell for door checks, `--actor ID` shows an actor there, `--scale 0.5`
 adds an overview, and `--changes BATCH` renders a batch before it is applied,
 writing nothing. The session serves the same render to an editor as

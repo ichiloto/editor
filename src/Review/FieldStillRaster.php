@@ -6,6 +6,8 @@ namespace Ichiloto\Editor\Review;
 
 use GdImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasLabel;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSprite;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSubjectOrder;
 use Ichiloto\Engine\Rendering\Presentation\PresentationTextLayer;
@@ -26,9 +28,10 @@ use RuntimeException;
  * ground anchor, raised by its lift and turned by its quarter turns, a crop
  * filling its size and a whole image contained in it; each text cell its
  * background, the field's own when it names none, and glyph; each world
- * canvas's pivot on its cell's ground anchor, its images in their layer
- * order, each cropped, mirrored and brightened, stretched to its destination
- * and clipped to its clip and to the canvas. Glyphs are drawn in a
+ * canvas's pivot on its cell's ground anchor, its images and labels in
+ * their layer order, each image cropped, mirrored and brightened and each
+ * label the graphical renderer's own raster of it, stretched to its
+ * destination and clipped to its clip and to the canvas. Glyphs are drawn in a
  * monospaced system font fitted to the cell.
  *
  * It reads only the presentation the Engine composed, never a map's source,
@@ -42,7 +45,8 @@ final class FieldStillRaster
     public const array CAPABILITIES = [
         RendererSessionConfig::FRAME_VIEWPORT, RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::SPRITE_PIVOT,
         RendererSessionConfig::SPRITE_LIFT, RendererSessionConfig::SPRITE_QUARTER_TURNS, RendererSessionConfig::TILE_COVERS,
-        RendererSessionConfig::TILE_SHADOWS, RendererSessionConfig::WORLD_CANVAS,
+        RendererSessionConfig::TILE_SHADOWS, RendererSessionConfig::WORLD_CANVAS, RendererSessionConfig::GRAPHICAL_CANVAS,
+        RendererSessionConfig::CANVAS_CLIP_OPACITY, RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
     ];
 
     /** The most pixels one native-size image holds; a larger view is drawn scaled down, a block of cells at a time. */
@@ -82,6 +86,8 @@ final class FieldStillRaster
     /** @var array<string, GdImage|null> */
     private array $images = [];
     private ?float $fontSize = null;
+    /** @var array<string, string> */
+    private array $labelRasters = [];
 
     public function __construct(private readonly string $assetRoot, private readonly ?string $fontPath = null)
     {
@@ -156,6 +162,7 @@ final class FieldStillRaster
         $this->cell = (int) $definition['cellWidth'];
         $this->tileset = $definition['tileset'] ?? null;
         $this->layers = $this->cells = $this->tiles = $this->covered = $this->sheets = $this->composed = [];
+        $this->labelRasters = $still->labelRasters;
         foreach ($definition['layers'] as $index => $layer) {
             $this->layers[] = ['id' => $layer['id'], 'layer' => (int) $layer['layer'], 'kind' => $layer['kind'],
                 'covers' => $layer['coversLayerId'] ?? null, 'index' => $index];
@@ -279,19 +286,22 @@ final class FieldStillRaster
     }
 
     /**
-     * Paints a world canvas with its pivot on its cell's ground anchor, its
-     * images clipped to the canvas. A canvas child the still cannot draw yet
-     * (an indicator, text, label or composite) is named in {@see $diagnostics}.
+     * Paints a world canvas with its pivot on its cell's ground anchor: its
+     * images and labels in one order by layer, images first at a tie, each
+     * clipped to the canvas. A label shows the raster the graphical renderer
+     * made of it ({@see FieldStill::$labelRasters}). A canvas child the still
+     * cannot draw (an indicator, text layer or composite), and a label with
+     * no raster, is named in {@see $diagnostics}.
      */
     private function drawWorldCanvas(GdImage $image, PresentationWorldCanvas $group, int $left, int $top, int $width, int $height): void
     {
         $canvas = $group->canvas;
         $canvasLeft = (int) round(($group->x + 0.5) * $this->cell - $group->pivot->x * $canvas->width) - $left;
         $canvasTop = (int) round(($group->y + 1) * $this->cell - $group->pivot->y * $canvas->height) - $top;
-        foreach (['indicators' => $canvas->indicators, 'text layers' => $canvas->textLayers, 'labels' => $canvas->labels,
+        foreach (['indicators' => $canvas->indicators, 'text layers' => $canvas->textLayers,
             'composites' => $canvas->composites] as $kind => $children) {
             if ($children !== []) {
-                $this->diagnose(sprintf('World canvas %s draws %s, which a still does not draw; it shows the canvas\'s images alone.',
+                $this->diagnose(sprintf('World canvas %s draws %s, which a still does not draw; it shows the canvas\'s images and labels alone.',
                     $group->id, $kind));
             }
         }
@@ -299,11 +309,15 @@ final class FieldStillRaster
             return;
         }
         $surface = self::createCanvas($canvas->width, $canvas->height, transparent: true);
-        // Images of equal layer paint in the order listed.
-        $images = $canvas->images;
-        usort($images, static fn(CanvasImage $a, CanvasImage $b): int => $a->layer <=> $b->layer);
-        foreach ($images as $part) {
-            $this->drawCanvasImage($surface, $part, $group->id);
+        // Children of equal layer paint in the order the renderer lists them: images, then labels.
+        $children = [...$canvas->images, ...$canvas->labels];
+        usort($children, static fn(CanvasImage|CanvasLabel $a, CanvasImage|CanvasLabel $b): int => $a->layer <=> $b->layer);
+        foreach ($children as $child) {
+            if ($child instanceof CanvasImage) {
+                $this->drawCanvasImage($surface, $child, $group->id);
+            } else {
+                $this->drawCanvasLabel($surface, $child, $group->id);
+            }
         }
         imagecopy($image, $surface, $canvasLeft, $canvasTop, 0, 0, $canvas->width, $canvas->height);
     }
@@ -324,24 +338,60 @@ final class FieldStillRaster
 
             return;
         }
-        $destination = $part->destination;
+        $this->drawCanvasPicture($surface, $source, [$sourceX, $sourceY, $sourceWidth, $sourceHeight], $part->destination,
+            $part->clipRect, $part->opacity, $part->brightness, $part->flipX, $part->flipY);
+    }
+
+    /**
+     * Draws one canvas label into its canvas's surface: the renderer's raster
+     * of it, less its guard, filling the label's paint bounds, turned when the
+     * label is, clipped and faded.
+     */
+    private function drawCanvasLabel(GdImage $surface, CanvasLabel $label, string $canvasId): void
+    {
+        $layoutId = $label->measurement->layoutId;
+        $bytes = $this->labelRasters[$layoutId] ?? null;
+        $raster = $bytes === null ? false : @imagecreatefromstring($bytes);
+        $guard = StillLabelPreparation::RASTER_GUARD;
+        if ($raster === false || imagesx($raster) <= 2 * $guard || imagesy($raster) <= 2 * $guard) {
+            $this->diagnose(sprintf('Label %s of world canvas %s has no raster from the graphical renderer; it is left out.',
+                $label->id, $canvasId));
+
+            return;
+        }
+        imagesavealpha($raster, true);
+        $turned = $label->rotation === 180;
+        $this->drawCanvasPicture($surface, $raster, [$guard, $guard, imagesx($raster) - 2 * $guard, imagesy($raster) - 2 * $guard],
+            new CanvasRectangle($label->paintBounds->x, $label->paintBounds->y, $label->paintBounds->width, $label->paintBounds->height),
+            $label->clipRect, $label->opacity, 1.0, $turned, $turned);
+    }
+
+    /**
+     * Draws a region of a picture into a canvas surface as the renderer
+     * samples one: mirrored, brightened and faded, stretched to its
+     * destination, masked by its clip and by the surface.
+     *
+     * @param array{int, int, int, int} $source The region's x, y, width and height in the picture.
+     */
+    private function drawCanvasPicture(GdImage $surface, GdImage $picture, array $source, CanvasRectangle $destination,
+        ?CanvasRectangle $clip, float $opacity, float $brightness, bool $flipX, bool $flipY): void
+    {
+        [$sourceX, $sourceY, $sourceWidth, $sourceHeight] = $source;
         $drawLeft = (int) round($destination->x);
         $drawTop = (int) round($destination->y);
         $drawWidth = max(1, (int) round($destination->x + $destination->width) - $drawLeft);
         $drawHeight = max(1, (int) round($destination->y + $destination->height) - $drawTop);
         $stretched = self::createCanvas($drawWidth, $drawHeight, transparent: true);
         imagealphablending($stretched, false);
-        imagecopyresampled($stretched, $source, 0, 0, $sourceX, $sourceY, $drawWidth, $drawHeight, $sourceWidth, $sourceHeight);
-        if ($part->flipX && $part->flipY) {
+        imagecopyresampled($stretched, $picture, 0, 0, $sourceX, $sourceY, $drawWidth, $drawHeight, $sourceWidth, $sourceHeight);
+        if ($flipX && $flipY) {
             imageflip($stretched, IMG_FLIP_BOTH);
-        } elseif ($part->flipX || $part->flipY) {
-            imageflip($stretched, $part->flipX ? IMG_FLIP_HORIZONTAL : IMG_FLIP_VERTICAL);
+        } elseif ($flipX || $flipY) {
+            imageflip($stretched, $flipX ? IMG_FLIP_HORIZONTAL : IMG_FLIP_VERTICAL);
         }
-        if ($part->brightness < 1 || $part->opacity < 1) {
-            self::adjustPixels($stretched, $part->brightness, $part->opacity);
+        if ($brightness < 1 || $opacity < 1) {
+            self::adjustPixels($stretched, $brightness, $opacity);
         }
-        // The clip masks the stretched image; the surface masks it to the canvas.
-        $clip = $part->clipRect;
         $maskLeft = $clip === null ? $drawLeft : max($drawLeft, (int) round($clip->x));
         $maskTop = $clip === null ? $drawTop : max($drawTop, (int) round($clip->y));
         $maskRight = $clip === null ? $drawLeft + $drawWidth : min($drawLeft + $drawWidth, (int) round($clip->x + $clip->width));
