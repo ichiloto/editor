@@ -303,3 +303,101 @@ it('draws the field\'s text layers where a subject has no art, over the tiles be
         // The Terminal picture is the field's own camera picture, unchanged.
         ->and(TerminalText::stripAnsi($whole->terminal->cells[1][2]))->toBe('@');
 });
+
+/** Finds the renderer the tests name, as the installed-renderer resolver finds the installed one. */
+function reviewRenderers(string $executable): Ichiloto\Engine\Rendering\Launch\RendererExecutableResolverInterface
+{
+    return new class($executable) implements Ichiloto\Engine\Rendering\Launch\RendererExecutableResolverInterface {
+        public function __construct(private readonly string $executable)
+        {
+        }
+
+        public function resolve(string $rendererId): string
+        {
+            return $this->executable;
+        }
+    };
+}
+
+/** An executable that runs the synthetic label renderer ({@see tests/Support/fake-label-renderer.php}). */
+function fakeLabelRenderer(): string
+{
+    $path = sys_get_temp_dir() . '/' . uniqid('ichiloto-fake-label-renderer-', true);
+    file_put_contents($path, '#!' . PHP_BINARY . "\n<?php require " . var_export(dirname(__DIR__, 2) . '/Support/fake-label-renderer.php', true) . ";\n");
+    chmod($path, 0o755);
+    rememberTemporaryProject($path);
+
+    return $path;
+}
+
+/** The bed project ({@see mapReviewBedProject()}) with a wooden sign reading Inn at (4, 3). */
+function mapReviewSignProject(): string
+{
+    $root = mapReviewBedProject();
+    $map = $root . '/assets/Maps/test-map';
+    $data = require $map . '/test-map.data.php';
+    $data['worldObjects'][] = ['id' => 'inn-sign', 'resource' => 'wood-sign', 'anchor' => ['x' => 4, 'y' => 3],
+        'label' => ['message' => 'signs.inn-sign', 'default' => 'Inn']];
+    file_put_contents($map . '/test-map.data.php', "<?php\n\nreturn " . var_export($data, true) . ";\n");
+    $field = require $root . '/assets/Data/Presentation/field.php';
+    $field['resources']['wood-sign'] = ['name' => 'Synthetic sign', 'pivot' => ['x' => 0.5, 'y' => 1.0],
+        'sign' => ['asset' => 'Graphics/Objects/Board.png', 'fontRole' => 'sign', 'left' => 4, 'right' => 4, 'density' => 1,
+            'padding' => [2, 2, 2, 2], 'minimumWidth' => 20, 'maximumWidth' => 100, 'repeatWidth' => 4]];
+    file_put_contents($root . '/assets/Data/Presentation/field.php', "<?php\nreturn " . var_export($field, true) . ";\n");
+    file_put_contents($root . '/assets/Data/Presentation/text.php', '<?php return ' . var_export(['schema' => 'ichiloto.text/1',
+        'roles' => ['sign' => ['fonts' => [['asset' => 'Fonts/replaceable.ttf']], 'fontSize' => 12,
+            'foreground' => ['kind' => 'rgb', 'r' => 20, 'g' => 30, 'b' => 40]]]], true) . ';');
+    writeReviewPng($root . '/assets/Graphics/Objects/Board.png', 32, 20, [90, 60, 30]);
+
+    return $root;
+}
+
+/** The pixel of a still at the centre of a world canvas's first label, in still pixels. */
+function readReviewLabelCentre(GdImage $image, Ichiloto\Engine\Rendering\Presentation\PresentationWorldCanvas $sign): array
+{
+    $paint = $sign->canvas->labels[0]->paintBounds;
+    $left = ($sign->x + 0.5) * 48 - $sign->pivot->x * $sign->canvas->width;
+    $top = ($sign->y + 1) * 48 - $sign->pivot->y * $sign->canvas->height;
+
+    return readReviewPixel($image, (int) round($left + $paint->x + $paint->width / 2), (int) round($top + $paint->y + $paint->height / 2));
+}
+
+it('draws a bed with its sleeper, a sign with its label, and field text in one still, as the game composes them', function () {
+    $root = mapReviewSignProject();
+    $rendering = new Ichiloto\Editor\Review\MapRenderer(Ichiloto\Editor\ProjectWorkspace::fromProject($root),
+        reviewRenderers(fakeLabelRenderer()))->render(new MapRenderView('test-map'));
+    $raster = new FieldStillRaster($root . '/assets');
+    $image = $raster->rasterize($rendering->still);
+    $canvases = array_column(array_map(static fn($canvas): array => [$canvas->id, $canvas], $rendering->still->worldCanvases), 1, 0);
+    $sign = $canvases['world-object:test-map:inn-sign'] ?? null;
+
+    expect(array_keys($canvases))->toEqualCanonicalizing(['world-object:test-map:cot', 'world-object:test-map:inn-sign'])
+        ->and($sign->canvas->labels)->toHaveCount(1)
+        ->and($rendering->still->labelRasters)->toHaveKey($sign->canvas->labels[0]->measurement->layoutId)
+        // The label shows the renderer's raster of it, over the board.
+        ->and(readReviewLabelCentre($image, $sign))->toBe([200, 40, 120])
+        ->and(readReviewPixel($image, 6 * 48 + 24, 2 * 48 + 24))->toBe([230, 0, 0])
+        ->and(readReviewPixel($image, 2 * 48 + 2, 48 + 2))->toBe([0x11, 0x18, 0x20])
+        ->and([...$rendering->diagnostics, ...$raster->diagnostics])->toBe([]);
+});
+
+it('names each sign it leaves out when the installed renderer cannot prepare labels, and still draws the rest', function () {
+    $root = mapReviewSignProject();
+    $workspace = Ichiloto\Editor\ProjectWorkspace::fromProject($root);
+    $missing = new Ichiloto\Editor\Review\MapRenderer($workspace, reviewRenderers('/nonexistent/gpui-renderer'))->render(new MapRenderView('test-map'));
+    // A renderer without the label mode answers the check with something else and is never sent a hello.
+    $older = sys_get_temp_dir() . '/' . uniqid('ichiloto-older-renderer-', true);
+    file_put_contents($older, '#!' . PHP_BINARY . "\n<?php echo 'not a label mode', \"\\n\";\n");
+    chmod($older, 0o755);
+    rememberTemporaryProject($older);
+    $outdated = new Ichiloto\Editor\Review\MapRenderer($workspace, reviewRenderers($older))->render(new MapRenderView('test-map'));
+    $outside = new Ichiloto\Editor\Review\MapRenderer($workspace, reviewRenderers($older))
+        ->render(new MapRenderView('test-map', ['x' => 6, 'y' => 0, 'width' => 6, 'height' => 5]));
+
+    expect($missing->diagnostics)->toBe(['Sign inn-sign at x 4, y 3 is left out of the graphical still: The installed GPUI renderer cannot be launched.'])
+        ->and($outdated->diagnostics)->toBe(['Sign inn-sign at x 4, y 3 is left out of the graphical still: The installed GPUI renderer '
+            . 'has no windowless label mode; update it with `ichiloto renderer:update`.'])
+        ->and(array_column($outdated->still->worldCanvases, 'id'))->toBe(['world-object:test-map:cot'])
+        // A sign outside the view is not in it to leave out.
+        ->and($outside->diagnostics)->toBe([]);
+});
