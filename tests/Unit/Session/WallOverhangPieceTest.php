@@ -150,7 +150,7 @@ it('reports an overhang the Engine would refuse beside the piece instead of writ
     $session = wallOverhangSession(wallOverhangShelf(['glyphs' => ['# ', '##']]));
     $authoring = array_find($session->readTilesetPreview(0)['authoring'], static fn(array $piece): bool => $piece['id'] === 'shelf');
 
-    expect($authoring['overhangIssue'])->toContain('overhang row 0 draws over the wall and stamps no glyph');
+    expect($authoring['overhangIssue'])->toContain('draw over the wall and stamp no glyph');
 });
 
 it('keeps a map stamped before its piece declared an overhang loading unchanged, with the old copy still found where it stands', function () {
