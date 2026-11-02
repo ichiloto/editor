@@ -26,6 +26,7 @@ use Ichiloto\Editor\Events\ScriptReferenceSource;
 use Ichiloto\Editor\Field\MapAreaAuthoring;
 use Ichiloto\Editor\Field\MapAreaRefusal;
 use Ichiloto\Editor\Field\MapEncounters;
+use Ichiloto\Editor\Field\NpcPlacementLifecycle;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\Database\ProjectCatalogs;
@@ -107,6 +108,9 @@ class ProjectValidator
   /** @var array<string, array<int, mixed>> Common Event payloads for this validation run. */
   protected array $commonEventScripts = [];
 
+  /** Where each NPC can stand at rest, read once per validation run from every authored run. */
+  protected ?NpcPlacementLifecycle $placementLifecycle = null;
+
   /** @var array<string, true> Common Events reached from a first-class cinematic. */
   protected array $cinematicCommonEventIds = [];
 
@@ -168,6 +172,7 @@ class ProjectValidator
     $this->troopHabitats = $this->readTroopHabitats($workspace);
     $this->knowledgeCatalogData = null;
     $this->commonEventScripts = $this->eventScriptsById($workspace);
+    $this->placementLifecycle = null;
     $this->skitMaps = $this->readSkitMaps($workspace);
     $this->cinematicCommonEventIds = [];
     $this->legacyCommonEventIds = [];
@@ -2479,7 +2484,7 @@ class ProjectValidator
    * @param string $where Where it lives.
    * @param int $width The map width.
    * @param int $height The map height.
-   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>}> $anchors Anchors seen so far, appended to.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>, entry: array<string, mixed>}> $anchors Anchors seen so far, appended to.
    * @param string $name The NPC's name.
    * @param int|string $index The entry index.
    * @return Issue[] The issues found.
@@ -2525,6 +2530,7 @@ class ProjectValidator
       'wanders' => strval($entry['movement'] ?? 'fixed') === 'wander',
       'width' => ProjectNpc::glyphWidth($sprite),
       'conditions' => is_array($entry['conditions'] ?? null) ? $entry['conditions'] : [],
+      'entry' => $entry,
     ];
 
     if ($x < 0 || $y < 0 || $x >= $width || $y >= $height) {
@@ -2945,14 +2951,21 @@ class ProjectValidator
    * tile of an event's area is fine while the area has another tile to step
    * onto (a shopkeeper behind the counter of a shop area, a guest inside a
    * celebration area). Only when fixed NPCs cover every tile of the area can
-   * the event never fire; a wanderer only blocks it while there. Two NPCs on
-   * one tile: `npcAt` finds the first, so the second can never be spoken to
-   * while both stand still, unless their visibility conditions exclude each
-   * other, as phases of one presence do.
+   * the event never fire; a wanderer, or an NPC its scenes move between
+   * placements, only blocks it while there. Two NPCs on one tile: `npcAt`
+   * finds the first, so the second can never be spoken to while both stand
+   * still, unless they are never there together.
+   *
+   * Each NPC is judged on every placement its scenes can leave it on, with
+   * what is true whenever it stands there ({@see NpcPlacementLifecycle}):
+   * its default while no scene has moved it, each committed placement after.
+   * Two placements share a tile only when their conditions together can
+   * hold, as phases of one presence exclude each other, and as an arrival
+   * whose scene walks it to another placement never rests on its default.
    *
    * @param ProjectMap $map The map.
    * @param ProjectWorkspace $workspace The project.
-   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>}> $anchors The NPC anchors.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>, entry: array<string, mixed>}> $anchors The NPC anchors.
    * @return Issue[] The issues found.
    */
   protected function checkNpcCollisions(ProjectMap $map, ProjectWorkspace $workspace, array $anchors): array
@@ -2960,85 +2973,119 @@ class ProjectValidator
     $issues = [];
     $definitions = (array) ($map->getEditableData()['events'] ?? []);
     $spawns = $this->spawnTilesOn($map, $workspace);
+    // Exclusion follows the project's current world abilities, never a catalogue installed for another project.
+    $worldAbilities = $workspace->getWorldAbilities();
+    $this->placementLifecycle ??= NpcPlacementLifecycle::read($workspace);
+    $stances = [];
+
+    foreach ($anchors as $index => $anchor) {
+      $stances[$index] = $this->placementLifecycle->listVisibleStances($map->mapId, $anchor['entry'], $anchor, $worldAbilities->proveExclusive(...));
+    }
+
     $occupiedBy = ['fixed' => [], 'any' => []];
 
-    foreach ($anchors as $anchor) {
-      $cell = $anchor['x'] . ',' . $anchor['y'];
-      $occupiedBy['any'][$cell] = true;
+    foreach ($stances as $index => $own) {
+      foreach ($own as $stance) {
+        $cell = $stance['x'] . ',' . $stance['y'];
+        $occupiedBy['any'][$cell] = true;
 
-      if (! $anchor['wanders']) {
-        $occupiedBy['fixed'][$cell] = true;
+        // An NPC its scenes move between placements blocks a tile only while there, as a wanderer does.
+        if (! $anchors[$index]['wanders'] && count(array_unique(array_column($own, 'placement'))) === 1) {
+          $occupiedBy['fixed'][$cell] = true;
+        }
       }
     }
 
     $areaCells = $this->eventAreaCells($map);
-    // Exclusion follows the project's current world abilities, never a catalogue installed for another project.
-    $worldAbilities = $workspace->getWorldAbilities();
+    // One placement stood on in several stories is reported once.
+    $report = static function (Issue $issue) use (&$issues): void {
+      $issues[$issue->where . "\0" . $issue->message] = $issue;
+    };
+    $describe = static fn(array $stance, string $subject): string => $stance['placement'] === NpcPlacementSet::DEFAULT
+      ? $subject : sprintf('%s at its %s placement', $subject, $stance['placement']);
 
     foreach ($anchors as $index => $anchor) {
       foreach ($anchors as $otherIndex => $other) {
-        // Phases whose visibility conditions exclude each other are never
-        // on the field together, so they may share or overlap a tile.
-        if ($otherIndex <= $index || $worldAbilities->proveExclusive($anchor['conditions'], $other['conditions'])) {
+        if ($otherIndex <= $index) {
           continue;
         }
 
-        if ($anchor['x'] === $other['x'] && $anchor['y'] === $other['y']) {
-          $issues[] = $anchor['wanders'] || $other['wanders']
+        foreach ($stances[$index] ?? [] as $stance) {
+          foreach ($stances[$otherIndex] ?? [] as $otherStance) {
+            // Stances whose conditions exclude each other are never on the
+            // field together, so they may share or overlap a tile.
+            if ($worldAbilities->proveExclusive($stance['conditions'], $otherStance['conditions'])) {
+              continue;
+            }
+
+            $it = $stance['placement'] === NpcPlacementSet::DEFAULT ? 'It' : sprintf('At its %s placement it', $stance['placement']);
+            $neighbour = $describe($otherStance, 'NPC ' . $other['name']);
+
+            if ($stance['x'] === $otherStance['x'] && $stance['y'] === $otherStance['y']) {
+              $report($anchor['wanders'] || $other['wanders']
+                ? Issue::warning(
+                  $anchor['where'],
+                  sprintf('%s starts on the same tile (%d, %d) as %s.', $it, $stance['x'], $stance['y'], $neighbour),
+                  'Only one can be spoken to until the wanderer moves off.'
+                )
+                : Issue::error(
+                  $anchor['where'],
+                  sprintf('%s shares tile (%d, %d) with %s.', $it, $stance['x'], $stance['y'], $neighbour),
+                  'The game finds the first NPC on a tile; the other can never be spoken to. Move one.'
+                ));
+            } elseif (
+              $anchor['width'] > 1
+              && $stance['y'] === $otherStance['y']
+              && $otherStance['x'] > $stance['x']
+              && $otherStance['x'] < $stance['x'] + $anchor['width']
+            ) {
+              $report(Issue::warning(
+                $anchor['where'],
+                sprintf('%s %d-column sprite covers the tile of %s at (%d, %d).',
+                  $stance['placement'] === NpcPlacementSet::DEFAULT ? 'Its' : sprintf('At its %s placement its', $stance['placement']),
+                  $anchor['width'], $neighbour, $otherStance['x'], $otherStance['y']),
+                'The wide glyph is drawn over the neighbour. Leave a column between them.'
+              ));
+            }
+          }
+        }
+      }
+
+      foreach ($stances[$index] ?? [] as $stance) {
+        $it = $stance['placement'] === NpcPlacementSet::DEFAULT ? 'It' : sprintf('At its %s placement it', $stance['placement']);
+        $marker = $map->getEventSymbol($stance['x'], $stance['y']);
+
+        $isAreaCovered = static fn(array $occupied): bool => array_diff_key($areaCells[$marker] ?? [], $occupied) === [];
+
+        if (trim($marker) !== '' && isset($definitions[$marker]) && $isAreaCovered($occupiedBy['any'])) {
+          $class = is_array($definitions[$marker]) ? strval($definitions[$marker]['class'] ?? '') : '';
+          $classLabel = $class !== '' ? sprintf(' (%s)', basename(str_replace('\\', '/', $class))) : '';
+          $report(! $isAreaCovered($occupiedBy['fixed'])
             ? Issue::warning(
               $anchor['where'],
-              sprintf('It starts on the same tile (%d, %d) as NPC %s.', $anchor['x'], $anchor['y'], $other['name']),
-              'Only one can be spoken to until the wanderer moves off.'
+              sprintf('%s starts on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $it, $marker, $classLabel, $stance['x'], $stance['y']),
+              'The player cannot step onto the event while they stand there, so it cannot fire until a wanderer moves off.'
             )
             : Issue::error(
               $anchor['where'],
-              sprintf('It shares tile (%d, %d) with NPC %s.', $anchor['x'], $anchor['y'], $other['name']),
-              'The game finds the first NPC on a tile; the other can never be spoken to. Move one.'
-            );
-        } elseif (
-          $anchor['width'] > 1
-          && $anchor['y'] === $other['y']
-          && $other['x'] > $anchor['x']
-          && $other['x'] < $anchor['x'] + $anchor['width']
-        ) {
-          $issues[] = Issue::warning(
-            $anchor['where'],
-            sprintf('Its %d-column sprite covers the tile of NPC %s at (%d, %d).', $anchor['width'], $other['name'], $other['x'], $other['y']),
-            'The wide glyph is drawn over the neighbour. Leave a column between them.'
-          );
+              sprintf('%s stands on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $it, $marker, $classLabel, $stance['x'], $stance['y']),
+              'The player can never step onto the event, so it never fires. Move the NPC, or give the event a free tile.'
+            ));
         }
-      }
 
-      $marker = $map->getEventSymbol($anchor['x'], $anchor['y']);
-
-      $isAreaCovered = static fn(array $occupied): bool => array_diff_key($areaCells[$marker] ?? [], $occupied) === [];
-
-      if (trim($marker) !== '' && isset($definitions[$marker]) && $isAreaCovered($occupiedBy['any'])) {
-        $class = is_array($definitions[$marker]) ? strval($definitions[$marker]['class'] ?? '') : '';
-        $classLabel = $class !== '' ? sprintf(' (%s)', basename(str_replace('\\', '/', $class))) : '';
-        $issues[] = ! $isAreaCovered($occupiedBy['fixed'])
-          ? Issue::warning(
-            $anchor['where'],
-            sprintf('It starts on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $marker, $classLabel, $anchor['x'], $anchor['y']),
-            'The player cannot step onto the event while they stand there, so it cannot fire until a wanderer moves off.'
-          )
-          : Issue::error(
-            $anchor['where'],
-            sprintf('It stands on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $marker, $classLabel, $anchor['x'], $anchor['y']),
-            'The player can never step onto the event, so it never fires. Move the NPC, or give the event a free tile.'
-          );
-      }
-
-      foreach ($spawns as $spawn) {
-        if ($spawn['x'] === $anchor['x'] && $spawn['y'] === $anchor['y']) {
-          $issues[] = Issue::warning(
-            $anchor['where'],
-            sprintf('It stands on %s at (%d, %d).', $spawn['label'], $anchor['x'], $anchor['y']),
-            'The player arrives on top of it and cannot speak to it until stepping off. Move one of them.'
-          );
+        foreach ($spawns as $spawn) {
+          if ($spawn['x'] === $stance['x'] && $spawn['y'] === $stance['y']) {
+            $report(Issue::warning(
+              $anchor['where'],
+              sprintf('%s stands on %s at (%d, %d).', $it, $spawn['label'], $stance['x'], $stance['y']),
+              'The player arrives on top of it and cannot speak to it until stepping off. Move one of them.'
+            ));
+          }
         }
       }
     }
+
+    $issues = array_values($issues);
 
     // An NPC on a solid tile is not reported: the game refuses the tile
     // because the NPC stands there, and the player speaks to it from a
@@ -4139,12 +4186,8 @@ class ProjectValidator
   }
 
   /**
-   * Walks a parallel command's lanes as the Engine runs them: together, on
-   * the one current map, which a transfer in any lane changes for every lane.
-   * Each lane starts on the incoming map or any map a sibling lane transfers
-   * to, and its own transfers can be overtaken by a sibling's. The block ends
-   * where its transferring lanes can finish, or where it started when no
-   * lane transfers.
+   * Walks a parallel command's lanes as the Engine runs them
+   * ({@see ScriptMapState::walkParallelLanes()}), gathering each lane's issues.
    *
    * @param array<string, mixed> $command The parallel command.
    * @param array<string, string[]> $npcIdsByMap Each known map's NPCs.
@@ -4160,30 +4203,21 @@ class ProjectValidator
     callable $walkLane,
   ): array
   {
-    $lanes = CommandMapContext::getLanes($command);
-    $findCommonEvent = fn(string $id): ?array => $this->commonEventScripts[$id] ?? null;
-    $destinations = array_map(
-      static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, array_values($commonEventStack)),
-      $lanes,
-    );
     $issues = [];
-    $ends = [];
+    $end = $start->walkParallelLanes(
+      $command,
+      $npcIdsByMap,
+      fn(string $id): ?array => $this->commonEventScripts[$id] ?? null,
+      array_values($commonEventStack),
+      static function (array $lane, ScriptMapState $laneStart) use ($walkLane, &$issues): ScriptMapState {
+        [$laneIssues, $laneEnd] = $walkLane($lane['commands'], $laneStart);
+        $issues = [...$issues, ...$laneIssues];
 
-    foreach ($lanes as $index => $lane) {
-      $siblings = array_values(array_unique(array_merge([], ...array_values(array_diff_key($destinations, [$index => true])))));
-      $laneStart = ScriptMapState::mergeStates([
-        $start,
-        ...array_map(static fn(string $map): ScriptMapState => $start->arriveOn($map, $npcIdsByMap), $siblings),
-      ])->setConcurrentMaps([...$start->concurrentMaps, ...$siblings]);
-      [$laneIssues, $end] = $walkLane($lane['commands'], $laneStart);
-      $issues = [...$issues, ...$laneIssues];
+        return $laneEnd;
+      },
+    );
 
-      if ($destinations[$index] !== []) {
-        $ends[] = $end;
-      }
-    }
-
-    return [$issues, $ends !== [] ? ScriptMapState::mergeStates($ends)->setConcurrentMaps($start->concurrentMaps) : $start];
+    return [$issues, $end];
   }
 
   /**

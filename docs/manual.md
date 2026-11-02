@@ -1067,6 +1067,15 @@ character says is read in the pane rather than in the edit buffer.
   placement a `commit_npc_placement` command names is not removed or
   renamed while it does; the refusal lists the scripts. Validation runs the
   same rule over hand-written placements (`npc.placement`).
+  Two NPCs may share a tile when they are never there together. Each is
+  judged on every placement its scenes can leave it on: its `default`
+  until a commit runs, each committed placement after. A placement carries
+  the story events its scene records, so an arrival whose scene first
+  commits another NPC away and then walks the arrival on to its own
+  placement may start on that NPC's tile. Validation, moves and visibility
+  edits all apply this rule. A story event written anywhere else (another
+  script, an NPC's `sets`) or a placement written as a variable proves
+  nothing, and the shared tile is refused again.
 - **Map-owned appearance.** For a fixed interaction already drawn on a map
   layer (such as a mounted notice on `fixtures`), clear the `Sprite` text
   completely and press `Enter`. This stores `'sprite' => ''`, not a missing
