@@ -11,6 +11,12 @@
 
 ### Fixed
 
+- NPC tile sharing follows each NPC's named-placement lifecycle. Validation, moves and visibility edits judge
+  every placement a scene can leave an NPC on, with the story events that scene records, instead of the default
+  cell alone. Two NPCs whose scene walks one away before the other arrives may share a default tile; a tile both
+  can show on is still an error, now including committed placements. Event-marker and arrival-tile warnings
+  follow the same placements.
+
 - NPC Inspector writes retain every unchanged authored dialogue representation, including explicit empty
   fields and single-page wrappers on other residents. Only edited interaction pages are unfolded.
   Unrelated NPC edits, save and undo preserve the original source values and comments.

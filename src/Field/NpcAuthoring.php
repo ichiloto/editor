@@ -10,6 +10,7 @@ use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\Slug;
 use Ichiloto\Engine\Core\WorldConditionExclusion;
+use Ichiloto\Engine\Field\NpcPlacementSet;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
@@ -472,12 +473,14 @@ final readonly class NpcAuthoring
     }
 
     /**
-     * Refuses a tile outside the map, or one another NPC anchors to while
-     * both can be visible.
+     * Refuses a tile outside the map, or one another NPC can stand on while
+     * this one shows there.
      *
      * The game shows an NPC only while its visibility conditions hold, so
      * two NPCs may share a tile as phases of one presence when their
      * conditions provably exclude each other ({@see WorldConditionExclusion}).
+     * Each is judged where its scenes can leave it ({@see NpcPlacementLifecycle}):
+     * an NPC its scenes walk away before another arrives never meets it.
      * Any other pair would be two bodies on one tile.
      *
      * @param int|null $ownIndex The NPC being placed, when it is already on the map.
@@ -490,20 +493,29 @@ final readonly class NpcAuthoring
         $y = $npc->getY();
         $this->assertInsideMap($map, $x, $y);
         // Phases are judged with the project's current world abilities, never another project's catalogue.
-        $worldAbilities = $this->workspace->getWorldAbilities();
+        $prove = $this->workspace->getWorldAbilities()->proveExclusive(...);
+        $lifecycle = NpcPlacementLifecycle::read($this->workspace);
+        $own = array_filter($lifecycle->listVisibleStances($map->mapId, $npc->toArray(), ['x' => $x, 'y' => $y], $prove),
+            static fn(array $stance): bool => $stance['placement'] === NpcPlacementSet::DEFAULT);
 
-        foreach ($npcs->indicesAt($x, $y) as $occupant) {
-            $other = $npcs->get($occupant);
-
-            if ($occupant === $ownIndex || $other === null
-                || $worldAbilities->proveExclusive($npc->getConditions(), $other->getConditions())) {
+        foreach ($npcs->all() as $occupant => $other) {
+            if ($occupant === $ownIndex) {
                 continue;
             }
 
-            throw new NpcRefusal(sprintf(
-                '%s already stands at %d,%d while both can be visible. Give one a condition the other negates, such as event:x and !event:x, to share the tile.',
-                $other->getName(), $x, $y,
-            ));
+            foreach ($lifecycle->listVisibleStances($map->mapId, $other->toArray(), ['x' => $other->getX(), 'y' => $other->getY()], $prove) as $theirs) {
+                foreach ($own as $stance) {
+                    if ($theirs['x'] !== $x || $theirs['y'] !== $y || $prove($stance['conditions'], $theirs['conditions'])) {
+                        continue;
+                    }
+
+                    throw new NpcRefusal(sprintf(
+                        '%s already stands at %d,%d%s while both can be visible. Give one a condition the other negates, such as event:x and !event:x, to share the tile.',
+                        $other->getName(), $x, $y,
+                        $theirs['placement'] === NpcPlacementSet::DEFAULT ? '' : sprintf(' at its %s placement', $theirs['placement']),
+                    ));
+                }
+            }
         }
     }
 

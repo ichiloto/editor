@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Events\CommandMapContext;
+
 /**
  * Where an event script can be while validation walks it: the maps it can
  * be on, the NPCs present on every one of them, and the maps a concurrent
@@ -100,5 +102,45 @@ final class ScriptMapState
     public function setConcurrentMaps(array $maps): self
     {
         return new self($this->mapIds, $this->npcIds, array_values(array_unique($maps)));
+    }
+
+    /**
+     * Walks a parallel command's lanes from this state as the Engine runs
+     * them: together, on the one current map, which a transfer in any lane
+     * changes for every lane. Each lane starts here or on any map a sibling
+     * lane transfers to, and its own transfers can be overtaken by a
+     * sibling's. The block ends where its transferring lanes can finish, or
+     * here when no lane transfers.
+     *
+     * @param array<string, mixed> $command The parallel command.
+     * @param array<string, string[]> $npcIdsByMap Each known map's NPCs.
+     * @param callable(string): ?array<int, mixed> $findCommonEvent The commands of a reusable event script, or null when it is unknown.
+     * @param list<string> $commonEventStack Reusable event scripts being followed.
+     * @param callable(array{path: list<int|string>, commands: array<int, mixed>}, self): self $walkLane Walks one lane from its start state, returning its end state.
+     * @return self The state after the block.
+     */
+    public function walkParallelLanes(array $command, array $npcIdsByMap, callable $findCommonEvent, array $commonEventStack, callable $walkLane): self
+    {
+        $lanes = CommandMapContext::getLanes($command);
+        $destinations = array_map(
+            static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, $commonEventStack),
+            $lanes,
+        );
+        $ends = [];
+
+        foreach ($lanes as $index => $lane) {
+            $siblings = array_values(array_unique(array_merge([], ...array_values(array_diff_key($destinations, [$index => true])))));
+            $laneStart = self::mergeStates([
+                $this,
+                ...array_map(fn(string $map): self => $this->arriveOn($map, $npcIdsByMap), $siblings),
+            ])->setConcurrentMaps([...$this->concurrentMaps, ...$siblings]);
+            $end = $walkLane($lane, $laneStart);
+
+            if ($destinations[$index] !== []) {
+                $ends[] = $end;
+            }
+        }
+
+        return $ends !== [] ? self::mergeStates($ends)->setConcurrentMaps($this->concurrentMaps) : $this;
     }
 }
