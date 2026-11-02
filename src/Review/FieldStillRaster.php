@@ -5,20 +5,30 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Review;
 
 use GdImage;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSprite;
+use Ichiloto\Engine\Rendering\Presentation\PresentationSubjectOrder;
+use Ichiloto\Engine\Rendering\Presentation\PresentationTextLayer;
+use Ichiloto\Engine\Rendering\Presentation\PresentationWorldCanvas;
 use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 use InvalidArgumentException;
 use RuntimeException;
 
 /**
  * Draws a still of the graphical field into an image, as a renderer of the
- * Engine's retained world draws it: the world's layers and the sprites in one
- * paint order by layer, a world layer before a sprite of the same layer; each
+ * Engine's retained world draws it: the world's layers, the field's text
+ * layers, the sprites and the world canvases in one paint order by layer, a
+ * world layer first, then text, then sprites and canvases in their shared
+ * subject order ({@see PresentationSubjectOrder}); each
  * tile one field cell tall at its own width and offset, composed from its
  * sheet pieces; each glyph cell its background and glyph unless a tile that
  * covers its layer stands on it; each sprite's image pivot on its cell's
  * ground anchor, raised by its lift and turned by its quarter turns, a crop
- * filling its size and a whole image contained in it. Glyphs are drawn in a
+ * filling its size and a whole image contained in it; each text cell its
+ * background, the field's own when it names none, and glyph; each world
+ * canvas's pivot on its cell's ground anchor, its images in their layer
+ * order, each cropped, mirrored and brightened, stretched to its destination
+ * and clipped to its clip and to the canvas. Glyphs are drawn in a
  * monospaced system font fitted to the cell.
  *
  * It reads only the presentation the Engine composed, never a map's source,
@@ -32,7 +42,7 @@ final class FieldStillRaster
     public const array CAPABILITIES = [
         RendererSessionConfig::FRAME_VIEWPORT, RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::SPRITE_PIVOT,
         RendererSessionConfig::SPRITE_LIFT, RendererSessionConfig::SPRITE_QUARTER_TURNS, RendererSessionConfig::TILE_COVERS,
-        RendererSessionConfig::TILE_SHADOWS,
+        RendererSessionConfig::TILE_SHADOWS, RendererSessionConfig::WORLD_CANVAS,
     ];
 
     /** The most pixels one native-size image holds; a larger view is drawn scaled down, a block of cells at a time. */
@@ -189,12 +199,12 @@ final class FieldStillRaster
      */
     private function drawInto(GdImage $image, FieldStill $still, int $left, int $top, int $width, int $height): void
     {
-        $sprites = $still->sprites;
+        $plan = self::orderPlan($still);
         $next = 0;
         foreach ($this->layers as $layer) {
-            // A world layer paints before a sprite of the same layer.
-            for (; $next < count($sprites) && $sprites[$next]->layer < $layer['layer']; $next++) {
-                $this->drawSprite($image, $sprites[$next], $left, $top);
+            // A world layer paints before any field item of the same layer.
+            for (; $next < count($plan) && $plan[$next]->layer < $layer['layer']; $next++) {
+                $this->drawPlanItem($image, $plan[$next], $left, $top, $width, $height);
             }
             if ($layer['kind'] === 'tiles' || $layer['kind'] === 'shadows') {
                 $this->drawTileLayer($image, $layer['id'], $still->tileFrame, $left, $top, $width, $height);
@@ -202,9 +212,160 @@ final class FieldStillRaster
                 $this->drawGlyphLayer($image, $layer['id'], $left, $top, $width, $height);
             }
         }
-        for (; $next < count($sprites); $next++) {
-            $this->drawSprite($image, $sprites[$next], $left, $top);
+        for (; $next < count($plan); $next++) {
+            $this->drawPlanItem($image, $plan[$next], $left, $top, $width, $height);
         }
+    }
+
+    /**
+     * The field's items in paint order, as a graphical renderer plans its
+     * frame: by layer, a text layer before a sprite or canvas of the same
+     * layer, text in the frame's order and sprites and canvases in their
+     * shared subject order.
+     *
+     * @return list<PresentationTextLayer|PresentationSprite|PresentationWorldCanvas>
+     */
+    private static function orderPlan(FieldStill $still): array
+    {
+        $items = [];
+        foreach ($still->textLayers as $index => $layer) {
+            $items[] = [$layer->layer, 0, $index, $layer];
+        }
+        foreach (PresentationSubjectOrder::getOrderedSubjects($still->sprites, $still->worldCanvases) as $index => $subject) {
+            $items[] = [$subject->layer, 1, $index, $subject];
+        }
+        usort($items, static fn(array $a, array $b): int => array_slice($a, 0, 3) <=> array_slice($b, 0, 3));
+
+        return array_column($items, 3);
+    }
+
+    private function drawPlanItem(GdImage $image, PresentationTextLayer|PresentationSprite|PresentationWorldCanvas $item,
+        int $left, int $top, int $width, int $height): void
+    {
+        match (true) {
+            $item instanceof PresentationTextLayer => $this->drawTextLayer($image, $item, $left, $top, $width, $height),
+            $item instanceof PresentationSprite => $this->drawSprite($image, $item, $left, $top),
+            default => $this->drawWorldCanvas($image, $item, $left, $top, $width, $height),
+        };
+    }
+
+    /**
+     * Paints a field text layer one cell per character, as a graphical
+     * renderer paints one: every cell its background, the field's own when
+     * the run names none, and every glyph but a space.
+     */
+    private function drawTextLayer(GdImage $image, PresentationTextLayer $layer, int $left, int $top, int $width, int $height): void
+    {
+        [$firstColumn, $lastColumn, $firstRow, $lastRow] = $this->findCellRange($left, $top, $width, $height, 0);
+        foreach ($layer->runs as $run) {
+            if ($run->row < $firstRow || $run->row > $lastRow) {
+                continue;
+            }
+            foreach (mb_str_split($run->text, 1, 'UTF-8') as $offset => $glyph) {
+                $column = $run->column + $offset;
+                if ($column < $firstColumn || $column > $lastColumn) {
+                    continue;
+                }
+                $cellLeft = $column * $this->cell - $left;
+                $cellTop = $run->row * $this->cell - $top;
+                imagefilledrectangle($image, $cellLeft, $cellTop, $cellLeft + $this->cell - 1, $cellTop + $this->cell - 1,
+                    self::allocate($image, TerminalPalette::resolveRgb($run->background, TerminalPalette::DEFAULT_BACKGROUND)));
+                if ($glyph !== ' ') {
+                    $this->drawGlyph($image, $glyph, TerminalPalette::resolveRgb($run->foreground, TerminalPalette::DEFAULT_FOREGROUND),
+                        $cellLeft, $cellTop);
+                }
+            }
+        }
+    }
+
+    /**
+     * Paints a world canvas with its pivot on its cell's ground anchor, its
+     * images clipped to the canvas. A canvas child the still cannot draw yet
+     * (an indicator, text, label or composite) is named in {@see $diagnostics}.
+     */
+    private function drawWorldCanvas(GdImage $image, PresentationWorldCanvas $group, int $left, int $top, int $width, int $height): void
+    {
+        $canvas = $group->canvas;
+        $canvasLeft = (int) round(($group->x + 0.5) * $this->cell - $group->pivot->x * $canvas->width) - $left;
+        $canvasTop = (int) round(($group->y + 1) * $this->cell - $group->pivot->y * $canvas->height) - $top;
+        foreach (['indicators' => $canvas->indicators, 'text layers' => $canvas->textLayers, 'labels' => $canvas->labels,
+            'composites' => $canvas->composites] as $kind => $children) {
+            if ($children !== []) {
+                $this->diagnose(sprintf('World canvas %s draws %s, which a still does not draw; it shows the canvas\'s images alone.',
+                    $group->id, $kind));
+            }
+        }
+        if ($canvasLeft >= $width || $canvasTop >= $height || $canvasLeft + $canvas->width <= 0 || $canvasTop + $canvas->height <= 0) {
+            return;
+        }
+        $surface = self::createCanvas($canvas->width, $canvas->height, transparent: true);
+        // Images of equal layer paint in the order listed.
+        $images = $canvas->images;
+        usort($images, static fn(CanvasImage $a, CanvasImage $b): int => $a->layer <=> $b->layer);
+        foreach ($images as $part) {
+            $this->drawCanvasImage($surface, $part, $group->id);
+        }
+        imagecopy($image, $surface, $canvasLeft, $canvasTop, 0, 0, $canvas->width, $canvas->height);
+    }
+
+    /** Draws one canvas image into its canvas's surface: cropped, mirrored, brightened, stretched to its destination and clipped. */
+    private function drawCanvasImage(GdImage $surface, CanvasImage $part, string $canvasId): void
+    {
+        $source = $this->loadImage($part->asset, 'canvas image');
+        if ($source === null) {
+            return;
+        }
+        $rect = $part->sourceRect;
+        [$sourceX, $sourceY, $sourceWidth, $sourceHeight] = $rect === null
+            ? [0, 0, imagesx($source), imagesy($source)] : [$rect->x, $rect->y, $rect->width, $rect->height];
+        if ($sourceX + $sourceWidth > imagesx($source) || $sourceY + $sourceHeight > imagesy($source)) {
+            $this->diagnose(sprintf('%s is smaller than the crop image %s of world canvas %s draws from it; the image is left out.',
+                $part->asset, $part->id, $canvasId));
+
+            return;
+        }
+        $destination = $part->destination;
+        $drawLeft = (int) round($destination->x);
+        $drawTop = (int) round($destination->y);
+        $drawWidth = max(1, (int) round($destination->x + $destination->width) - $drawLeft);
+        $drawHeight = max(1, (int) round($destination->y + $destination->height) - $drawTop);
+        $stretched = self::createCanvas($drawWidth, $drawHeight, transparent: true);
+        imagealphablending($stretched, false);
+        imagecopyresampled($stretched, $source, 0, 0, $sourceX, $sourceY, $drawWidth, $drawHeight, $sourceWidth, $sourceHeight);
+        if ($part->flipX && $part->flipY) {
+            imageflip($stretched, IMG_FLIP_BOTH);
+        } elseif ($part->flipX || $part->flipY) {
+            imageflip($stretched, $part->flipX ? IMG_FLIP_HORIZONTAL : IMG_FLIP_VERTICAL);
+        }
+        if ($part->brightness < 1 || $part->opacity < 1) {
+            self::adjustPixels($stretched, $part->brightness, $part->opacity);
+        }
+        // The clip masks the stretched image; the surface masks it to the canvas.
+        $clip = $part->clipRect;
+        $maskLeft = $clip === null ? $drawLeft : max($drawLeft, (int) round($clip->x));
+        $maskTop = $clip === null ? $drawTop : max($drawTop, (int) round($clip->y));
+        $maskRight = $clip === null ? $drawLeft + $drawWidth : min($drawLeft + $drawWidth, (int) round($clip->x + $clip->width));
+        $maskBottom = $clip === null ? $drawTop + $drawHeight : min($drawTop + $drawHeight, (int) round($clip->y + $clip->height));
+        if ($maskRight > $maskLeft && $maskBottom > $maskTop) {
+            imagecopy($surface, $stretched, $maskLeft, $maskTop, $maskLeft - $drawLeft, $maskTop - $drawTop,
+                $maskRight - $maskLeft, $maskBottom - $maskTop);
+        }
+    }
+
+    /** Scales an image's colour by a brightness and its coverage by an opacity, each in [0, 1], as the renderer prepares them. */
+    private static function adjustPixels(GdImage $image, float $brightness, float $opacity): void
+    {
+        imagealphablending($image, false);
+        for ($y = 0, $height = imagesy($image); $y < $height; $y++) {
+            for ($x = 0, $width = imagesx($image); $x < $width; $x++) {
+                $pixel = imagecolorat($image, $x, $y);
+                $alpha = ($pixel >> 24) & 127;
+                imagesetpixel($image, $x, $y, (int) imagecolorallocatealpha($image,
+                    (int) round((($pixel >> 16) & 255) * $brightness), (int) round((($pixel >> 8) & 255) * $brightness),
+                    (int) round(($pixel & 255) * $brightness), 127 - (int) round((127 - $alpha) * $opacity)));
+            }
+        }
+        imagealphablending($image, true);
     }
 
     private function drawTileLayer(GdImage $image, string $layerId, int $tileFrame, int $left, int $top, int $width, int $height): void
