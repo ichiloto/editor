@@ -859,6 +859,8 @@ final class EditorSession
                 'connected' => $piece->connects !== null,
                 'width' => $piece->width,
                 'height' => $piece->height,
+                // Its top rows drawn over the wall behind it; it stands on the rows below.
+                'overhang' => $piece->overhang,
                 'tileLayers' => $tileset->getPieceTileLayers($piece),
                 'picture' => PiecePlacer::buildPicture($piece),
                 'operations' => $world?->operations,
@@ -1328,8 +1330,9 @@ final class EditorSession
      * The pieces of the map's tileset an author places ({@see PiecePlacer}),
      * in authored order: each with the gameplay layer its glyphs go on and
      * whether the map has it, whether it is drawn as connected cells rather
-     * than stamped whole, its size, a picture of what it draws, its physical
-     * recipe and the doors its art paints. A map
+     * than stamped whole, its size, the rows of it that overhang what stands
+     * behind it ({@see PiecePlacer::getOriginAt()}), a picture of what it
+     * draws, its physical recipe and the doors its art paints. A map
      * whose tileset offers none says why in `issue`.
      *
      * @return array{map: string, pieces: list<array<string, mixed>>, issue: ?string}
@@ -1362,6 +1365,7 @@ final class EditorSession
                 'connected' => $piece->connects !== null,
                 'width' => $piece->width,
                 'height' => $piece->height,
+                'overhang' => $piece->overhang,
                 'tileLayers' => $tileset?->getPieceTileLayers($piece) ?? [],
                 'picture' => PiecePlacer::buildPicture($piece),
                 'occupancy' => PhysicalOccupancyEditor::exportRecipe($piece),
@@ -1450,9 +1454,10 @@ final class EditorSession
     }
 
     /**
-     * Stamps whole copies of a piece with their top-left cells at the listed
-     * origins, as one undo step: scattered copies, such as the peaks of a
-     * range, placed by a script in one request rather than one per copy.
+     * Stamps whole copies of a piece standing on the listed cells
+     * ({@see PiecePlacer::getOriginAt()}), as one undo step: scattered copies,
+     * such as the peaks of a range, placed by a script in one request rather
+     * than one per copy.
      * Copies follow the rules of {@see placePiece()}; a connected piece is
      * drawn, not stamped, and is refused.
      *
@@ -1468,7 +1473,7 @@ final class EditorSession
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
         }
         $piece = $this->requirePiece($map, $pieceId);
-        $origins = array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1]], $origins);
+        $origins = array_map(static fn(array $cell): array => PiecePlacer::getOriginAt($piece, $cell[0], $cell[1]), $origins);
         $stamped = 0;
         try {
             $command = PiecePlacer::stampOrigins($map, $piece, $origins, $color);
@@ -2097,6 +2102,7 @@ final class EditorSession
         $map = $this->requireCurrentMap($mapId, $revision);
         $piece = $this->requireOccupancyPiece($map, $tilesetId, $pieceId, $expected);
         try {
+            ['x' => $x, 'y' => $y] = PiecePlacer::getOriginAt($piece, $x, $y);
             $writes = PhysicalOccupancyEditor::getPieceWrites($map, $piece, $x, $y);
         } catch (MapSourceRefusal | InvalidArgumentException $error) {
             throw new SessionRefusal($error->getMessage(), previous: $error);
@@ -2111,6 +2117,7 @@ final class EditorSession
         $map = $this->requireCurrentMap($mapId, $revision);
         $piece = $this->requireOccupancyPiece($map, $tilesetId, $pieceId, $expected);
         try {
+            ['x' => $x, 'y' => $y] = PiecePlacer::getOriginAt($piece, $x, $y);
             $applied = PhysicalOccupancyEditor::applyPiece($map, $piece, $x, $y);
         } catch (MapSourceRefusal | InvalidArgumentException $error) {
             throw new SessionRefusal($error->getMessage(), previous: $error);
