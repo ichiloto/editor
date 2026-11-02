@@ -2100,6 +2100,9 @@ final class RecordSchemaCatalog
                         // Where its art paints doors, which each map's entrances must meet: graphical authoring, so the GUI editor's.
                         ...($graphical ? [new RecordField('doorway', 'Painted Doors', codec: RecordFieldCodec::PIECE_DOORWAY,
                             removeWhenEmpty: true, displayDefault: '(none)')] : []),
+                        // Its top rows drawn over the wall behind it, as RPG Maker furniture backs onto a wall: graphical authoring too.
+                        ...($graphical ? [new RecordField('overhang', 'Overhang Rows', InputControlType::INTEGER,
+                            removeWhenEmpty: true, displayDefault: '(none)')] : []),
                     ],
                     TilesetPiece::LINES => [
                         new RecordField('glyphs.horizontal', 'Across Glyph'),

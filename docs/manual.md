@@ -264,6 +264,23 @@ standing whole on a map to meet an entrance at each door, and leaves those cells
 to the doorway rule rather than judging their look against passage. The pieces
 list reports each piece's doors. The TUI preserves them through record edits.
 
+Furniture that backs onto a wall, such as a bookcase, wardrobe or cabinet,
+names its **Overhang Rows**: how many of its top rows draw over the wall face
+behind it, as RPG Maker furniture does, so it takes one floor row and leaves
+the row in front of it free to walk. Those rows stamp tiles only, never a glyph
+or collision; the rows below them are its ground footprint and carry its
+glyphs and its Physical Footprint. In the GUI tileset view's Collision mode
+choose **On the floor**, **Top row over wall** or more, and the piece's art
+shows the wall line. Wherever a piece is placed, the cell the author points at
+is the one it stands on, the top-left of its ground rows, and its overhang
+rises from there: the TUI cursor, a GUI click or drag, a scripted copy and a
+moved piece all stand the same way. A piece without overhang stands with its
+top-left on that cell, as before. Maps keep the glyphs and tiles a stamp left,
+so declaring an overhang never changes a map already drawn; the Engine refuses
+an overhang row with a glyph or collision, and validation reports a copy whose
+overhang lies over walkable floor. The TUI preserves the row through record
+edits.
+
 The GUI tileset view lays each upper sheet (B to E) out as its image is,
 sixteen cells across, so a piece as wide as the sheet is one selection; the A
 tab keeps RPG Maker's palette layout. Its **Add art** mode copies another
@@ -424,7 +441,9 @@ be loaded, it says so and nothing opens. Placing a piece never chooses a map's
 tileset: it comes from the map's kind, set in the Inspector.
 
 Choosing a piece starts placing it, in Map mode. The canvas previews the
-piece's glyphs in reverse video with its top-left cell at the cursor, and the
+piece's glyphs in reverse video standing on the cursor's cell (its top-left
+cell, or for a piece with overhang rows the top-left of the rows below them),
+and the
 canvas border shows `PIECE <name>  Enter:Stamp  Esc:Done`. The arrows move the
 piece; a Normal-mode click moves the cursor, and the piece with it, to the
 clicked cell. `Enter` stamps the piece and keeps it for the next stamp; `Esc`

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Tileset pieces that back onto a wall declare **Overhang Rows**, authored in the GUI
+  tileset view and kept by the TUI. Every placement path stands a piece on the cell
+  the author points at, with its overhang drawn over the wall face behind it, so
+  wall furniture takes one floor row. Pieces without overhang place as before.
+
 ### Fixed
 
 - NPC Inspector writes retain every unchanged authored dialogue representation, including explicit empty

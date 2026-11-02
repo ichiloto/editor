@@ -81,9 +81,24 @@ final class PiecePlacer
     }
 
     /**
+     * The top-left cell of a copy standing on a cell: the cell an author
+     * points at is where the piece stands, the top-left of its ground
+     * footprint, and its overhang rises from there over what stands behind
+     * it, such as a bookcase's top over the wall face. A piece without an
+     * overhang stands with its top-left on the cell.
+     *
+     * @return array{x: int, y: int}
+     */
+    public static function getOriginAt(TilesetPiece $piece, int $x, int $y): array
+    {
+        return ['x' => $x, 'y' => $y - $piece->overhang];
+    }
+
+    /**
      * The top-left cells an item piece is stamped at across the area from one
-     * corner to the other: whole copies only, so an area smaller than the
-     * piece holds one copy, at its top-left.
+     * corner to the other, the area being where the copies stand
+     * ({@see getOriginAt()}): whole copies only, so an area smaller than the
+     * piece holds one copy, standing at its top-left.
      *
      * @param array{x: int, y: int} $from
      * @param array{x: int, y: int} $to
@@ -102,7 +117,7 @@ final class PiecePlacer
         $origins = [];
         foreach ($span($from['y'], $to['y'], $piece->height) as $y) {
             foreach ($span($from['x'], $to['x'], $piece->width) as $x) {
-                $origins[] = ['x' => $x, 'y' => $y];
+                $origins[] = self::getOriginAt($piece, $x, $y);
             }
         }
 
@@ -253,7 +268,7 @@ final class PiecePlacer
                 foreach (array_keys($symbols) as $column) {
                     if (! $map->hasLayerCell($layer, $x + $column, $y + $row)) {
                         throw new MapSourceRefusal(sprintf('%s (%d x %d) does not fit at (%d, %d): the map has no cell at (%d, %d). Nothing was changed.',
-                            $piece->name, $piece->width, $piece->height, $x, $y, $x + $column, $y + $row));
+                            $piece->name, $piece->width, $piece->height, $x, $y + $piece->overhang, $x + $column, $y + $row));
                     }
                 }
             }
