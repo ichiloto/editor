@@ -128,3 +128,29 @@ it('keeps inline appearance undoable and transfers presentation ownership when c
     expect($session->readMap('test-map')['worldObjects'][0])->toBe($inline)
         ->and((string) file_get_contents($file))->toBe($source);
 });
+
+
+it('previews and round trips a backdrop resource through the shared picker without stamping occupancy', function () {
+    [$root, $file] = createResourcePlacementProject();
+    $catalogFile = $root . '/assets/Data/Presentation/field.php';
+    $catalog = (string) file_get_contents($catalogFile);
+    file_put_contents($catalogFile, str_replace("'asset' => 'Graphics/Props/Conifer.png'",
+        "'asset' => 'Graphics/Props/Conifer.png', 'cells' => ['width' => 40, 'height' => 9], 'layer' => "
+            . \Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy::FIELD_BACKDROP, $catalog));
+    $session = EditorSession::open($root);
+    $before = $session->readMap('test-map');
+    $row = findPlacementRow($session, 'resource');
+    $session->applyWorldObject('test-map', $session->readWorldObject('test-map', 'grove-001')['revision'], 'grove-001', $row['key'], 'conifer');
+    $preview = drawAuthoringCanvas($session, 'test-map');
+    $sprite = array_find($preview['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite');
+    expect($preview['diagnostics'])->toBe([])
+        ->and($sprite['value']['layer'])->toBe(\Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy::FIELD_BACKDROP)
+        ->and($session->readMap('test-map')['occupancy'])->toBe($before['occupancy']);
+    $session->saveMap('test-map');
+    expect(EditorSession::open($root)->readMap('test-map')['worldObjects'][0]['resource'])->toBe('conifer')
+        ->and((string) file_get_contents($file))->toContain("'preserved' => abs(7)");
+    $session->undo();
+    expect($session->readMap('test-map')['worldObjects'][0]['resource'])->toBe('broadleaf');
+    $session->redo();
+    expect($session->readMap('test-map')['worldObjects'][0]['resource'])->toBe('conifer');
+});
