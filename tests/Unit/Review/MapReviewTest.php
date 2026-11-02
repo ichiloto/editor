@@ -219,3 +219,87 @@ it('reviews newly authored and revised field resources before saving, with undo 
     expect($asset())->toBe('Graphics/Props/ReviewBlue.png')
         ->and(sourceHashTree($root . '/assets'))->toBe($before);
 });
+
+/** A PNG of one solid colour, clear across its top rows when asked. */
+function writeReviewPng(string $path, int $width, int $height, array $rgb, int $clearRows = 0): void
+{
+    if (! is_dir(dirname($path))) {
+        mkdir(dirname($path), 0o777, true);
+    }
+    $image = imagecreatetruecolor($width, $height);
+    imagealphablending($image, false);
+    imagesavealpha($image, true);
+    imagefill($image, 0, 0, (int) imagecolorallocatealpha($image, 0, 0, 0, 127));
+    imagefilledrectangle($image, 0, $clearRows, $width - 1, $height - 1,
+        (int) imagecolorallocate($image, ...$rgb));
+    imagepng($image, $path);
+}
+
+/**
+ * The review map with a floor tile under the keeper and beside them, and a
+ * bed at (6, 2) whose sleeper lies in it: a green base, a red sleeper below
+ * its top third and a blue cover across its bottom quarter. The keeper has no graphical art, so the
+ * field shows them by their terminal layer.
+ */
+function mapReviewBedProject(): string
+{
+    $root = mapReviewProject();
+    $map = $root . '/assets/Maps/test-map';
+    writeTestTileset($root);
+    writeTileLayer($map, '01.floor.tiles.php', "0 0 0 0 0 0 0 0 0 0 0 0\n0 0 2816 2816 0 0 0 0 0 0 0 0\n"
+        . implode("\n", array_fill(0, 3, trim(str_repeat('0 ', 12)))));
+    $data = require $map . '/test-map.data.php';
+    $data['tileset'] = 'home';
+    $data['worldObjects'] = [['id' => 'cot', 'resource' => 'guest-bed', 'anchor' => ['x' => 6, 'y' => 2]]];
+    $data['npcs'][] = ['id' => 'sleeper', 'name' => 'Sleeper', 'sprite' => 'S', 'x' => 7, 'y' => 2,
+        'bed' => ['object' => 'cot', 'attachment' => 'occupant', 'poses2d' => ['lying' => ['asset' => 'Graphics/Characters/Sleeper-Lying.png']]]];
+    file_put_contents($map . '/test-map.data.php', "<?php\n\nreturn " . var_export($data, true) . ";\n");
+    @mkdir($root . '/assets/Data/Presentation', 0o777, true);
+    file_put_contents($root . '/assets/Data/Presentation/field.php', "<?php\nreturn " . var_export(['resources' => ['guest-bed' => [
+        'name' => 'Synthetic bed', 'pivot' => ['x' => 0.5, 'y' => 1.0], 'sprites2d' => ['asset' => 'Graphics/Objects/Bed.png'],
+        'bedCover2d' => ['asset' => 'Graphics/Objects/Bed-Cover.png'],
+        'attachments' => [['id' => 'occupant', 'cell' => ['x' => 0, 'y' => 0], 'point' => ['x' => 0.5, 'y' => 0.5]]],
+    ]]], true) . ";\n");
+    writeReviewPng($root . '/assets/Graphics/Objects/Bed.png', 48, 48, [0, 200, 0]);
+    writeReviewPng($root . '/assets/Graphics/Objects/Bed-Cover.png', 48, 48, [0, 0, 220], clearRows: 36);
+    writeReviewPng($root . '/assets/Graphics/Characters/Sleeper-Lying.png', 48, 48, [230, 0, 0], clearRows: 16);
+
+    return $root;
+}
+
+it('draws a bed\'s world canvas with its sleeper between base and cover, as the game composes it', function () {
+    $root = mapReviewBedProject();
+    $rendering = EditorSession::open($root)->renderMapReview(new MapRenderView('test-map'));
+    $raster = new FieldStillRaster($root . '/assets');
+    $image = $raster->rasterize($rendering->still);
+    $cell = static fn(int $x, int $y, int $left, int $top): array => readReviewPixel($image, $x * 48 + $left, $y * 48 + $top);
+
+    expect(array_column($rendering->still->worldCanvases, 'id'))->toHaveCount(1)
+        ->and([$rendering->still->worldCanvases[0]->x, $rendering->still->worldCanvases[0]->y])->toBe([6, 2])
+        // The base shows above the sleeper, the sleeper over the base, the cover over the sleeper.
+        ->and($cell(6, 2, 4, 4))->toBe([0, 200, 0])
+        ->and($cell(6, 2, 24, 24))->toBe([230, 0, 0])
+        ->and($cell(6, 2, 24, 42))->toBe([0, 0, 220])
+        ->and($raster->diagnostics)->toBe([]);
+});
+
+it('draws the field\'s text layers where a subject has no art, over the tiles beneath it, on map cells', function () {
+    $root = mapReviewBedProject();
+    $session = EditorSession::open($root);
+    $whole = $session->renderMapReview(new MapRenderView('test-map'));
+    $region = $session->renderMapReview(new MapRenderView('test-map', ['x' => 2, 'y' => 1, 'width' => 2, 'height' => 1]));
+    $raster = new FieldStillRaster($root . '/assets');
+    $keeper = static fn($still): array => array_merge(...array_map(
+        static fn($layer): array => array_map(static fn($run): array => [$run->column, $run->row, $run->text], $layer->runs),
+        array_values(array_filter($still->textLayers, static fn($layer): bool => str_contains($layer->id, 'keeper')))));
+    $image = $raster->rasterize($whole->still);
+
+    expect($keeper($whole->still))->toBe([[2, 1, '@']])
+        ->and($keeper($region->still))->toBe([[2, 1, '@']])
+        // The keeper's cell paints its terminal cell over the floor tile, as the graphical renderer paints it; the tile beside shows.
+        ->and(readReviewPixel($image, 2 * 48 + 2, 48 + 2))->toBe([0x11, 0x18, 0x20])
+        ->and(readReviewPixel($image, 3 * 48 + 2, 48 + 2))->toBe([0x70, 0x90, 0xB0])
+        ->and(readReviewPixel($raster->rasterize($region->still), 2, 2))->toBe([0x11, 0x18, 0x20])
+        // The Terminal picture is the field's own camera picture, unchanged.
+        ->and(TerminalText::stripAnsi($whole->terminal->cells[1][2]))->toBe('@');
+});

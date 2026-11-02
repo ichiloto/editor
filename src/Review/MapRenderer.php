@@ -13,8 +13,14 @@ use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Field\PlayerGraphicalSubject;
 use Ichiloto\Engine\Field\PlayerPresentationConfig;
 use Ichiloto\Engine\IO\Console\NormalizedRow;
+use Ichiloto\Engine\IO\Console\ConsolePresentationSnapshot;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSprite;
+use Ichiloto\Engine\Rendering\Presentation\PresentationTextLayer;
+use Ichiloto\Engine\Rendering\Presentation\PresentationTextRun;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
+use Ichiloto\Engine\Rendering\Presentation\PresentationWorldCanvas;
+use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposition;
+use LogicException;
 use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
 use InvalidArgumentException;
 use RuntimeException;
@@ -26,7 +32,8 @@ use RuntimeException;
  * new game's world state, with the player or an actor standing on a cell when
  * asked. The field's camera draws the Terminal picture through the Engine's
  * Console, and the Engine's frame composer composes the graphical field a
- * graphical renderer would be sent, for {@see FieldStillRaster} to draw.
+ * graphical renderer would be sent: the retained world, sprites, world
+ * canvases and the field's text layers, for {@see FieldStillRaster} to draw.
  *
  * A large view is taken a block of the screen at a time, as the camera pans,
  * within the renderer grid's limits; every block is the same field.
@@ -92,6 +99,10 @@ final class MapRenderer
         $tileFrame = 0;
         /** @var array<string, PresentationSprite> $sprites */
         $sprites = [];
+        /** @var array<string, PresentationWorldCanvas> $canvases */
+        $canvases = [];
+        /** @var array<string, array{layer: int, runs: list<PresentationTextRun>}> $text Each field text layer, by id, in the order first seen. */
+        $text = [];
         for ($top = $region['y']; $top < $region['y'] + $region['height']; $top += $rows) {
             for ($left = $region['x']; $left < $region['x'] + $region['width']; $left += $columns) {
                 $field->holdCameraAt($left, $top);
@@ -105,9 +116,18 @@ final class MapRenderer
                 $composition = $field->composeStill(FieldStillRaster::supports(...));
                 $world ??= $composition->world;
                 $tileFrame = $composition->viewport?->tileFrame ?? $tileFrame;
-                // The composer places sprites on screen cells; the camera's origin puts them back on the map's.
+                // The composer places sprites, canvases and text on screen cells; the camera's origin puts them back on the map's.
                 foreach ($composition->sprites as $sprite) {
                     $sprites[$sprite->id] ??= self::placeOnMap($sprite, $origin['x'], $origin['y']);
+                }
+                foreach ($composition->worldCanvases as $canvas) {
+                    $canvases[$canvas->id] ??= $canvas->createProjected(-$origin['x'], -$origin['y']);
+                }
+                $block = ['x' => $left, 'y' => $top, 'right' => min($left + $columns, $region['x'] + $region['width']),
+                    'bottom' => min($top + $rows, $region['y'] + $region['height'])];
+                foreach (self::findFieldTextLayers($composition) as $layer) {
+                    $text[$layer->id] ??= ['layer' => $layer->layer, 'runs' => []];
+                    array_push($text[$layer->id]['runs'], ...self::placeRunsOnMap($layer, $origin, $block));
                 }
             }
         }
@@ -123,7 +143,9 @@ final class MapRenderer
         unset($row);
 
         return new MapRendering($view, $region, new TerminalPicture($region['width'], $region['height'], $cells),
-            new FieldStill($world, PresentationSprite::orderedList(array_values($sprites)), $region, $tileFrame),
+            new FieldStill($world, PresentationSprite::orderedList(array_values($sprites)), $region, $tileFrame,
+                array_map(static fn(string $id, array $layer): PresentationTextLayer => new PresentationTextLayer($id, $layer['layer'],
+                    $layer['runs']), array_keys($text), array_values($text)), array_values($canvases)),
             [...$diagnostics, ...$field->getDiagnostics()]);
     }
 
@@ -174,6 +196,54 @@ final class MapRenderer
 
             return $sheet;
         });
+    }
+
+    /**
+     * The frame's field text layers, as a graphical renderer draws them in
+     * the field: the viewport's text members, less the map layers the
+     * retained world already draws.
+     *
+     * @return list<PresentationTextLayer>
+     */
+    private static function findFieldTextLayers(SceneFrameComposition $composition): array
+    {
+        $snapshot = $composition->snapshot;
+        if (! $snapshot instanceof ConsolePresentationSnapshot) {
+            throw new LogicException('A still is composed from a complete text snapshot.');
+        }
+        $members = array_flip($composition->viewport->textLayerIds ?? []);
+        $retained = array_flip($composition->world->textLayerIds ?? []);
+
+        return array_values(array_filter($snapshot->textLayers,
+            static fn(PresentationTextLayer $layer): bool => isset($members[$layer->id]) && ! isset($retained[$layer->id])));
+    }
+
+    /**
+     * A text layer's runs on map cells, kept to the block of the map this
+     * camera position takes, so blocks that overlap at the map's edges draw
+     * each cell once. A run takes one cell per character, as a graphical
+     * renderer lays it.
+     *
+     * @param array{x: int, y: int} $origin
+     * @param array{x: int, y: int, right: int, bottom: int} $block
+     * @return list<PresentationTextRun>
+     */
+    private static function placeRunsOnMap(PresentationTextLayer $layer, array $origin, array $block): array
+    {
+        $runs = [];
+        foreach ($layer->runs as $run) {
+            $row = $run->row + $origin['y'];
+            $column = $run->column + $origin['x'];
+            $first = max($column, $block['x']);
+            $last = min($column + mb_strlen($run->text, 'UTF-8'), $block['right']);
+            if ($row < $block['y'] || $row >= $block['bottom'] || $first >= $last) {
+                continue;
+            }
+            $runs[] = new PresentationTextRun($row, $first, mb_substr($run->text, $first - $column, $last - $first, 'UTF-8'),
+                $run->foreground, $run->background);
+        }
+
+        return $runs;
     }
 
     private static function placeOnMap(PresentationSprite $sprite, int $originX, int $originY): PresentationSprite
