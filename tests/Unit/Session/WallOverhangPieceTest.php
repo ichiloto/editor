@@ -170,3 +170,25 @@ it('keeps a map stamped before its piece declared an overhang loading unchanged,
         ->and(array_map(static fn(array $copy): array => [$copy['id'], $copy['x'], $copy['y']],
             $reopened->findPlacedPieces('test-map', 0, 1)['pieces']))->toBe([['shelf', 0, 0]]);
 });
+
+it('checks a placed overhang against the collision the map resolves, legacy or declared', function () {
+    $root = wallOverhangProject();
+    $session = EditorSession::open($root);
+    $session->placePiece('test-map', $session->readMap('test-map')['revision'], 'shelf', [0, 1], [0, 1]);
+    $session->saveMap('test-map');
+    $overhangIssues = static fn(): array => array_values(array_filter(
+        \Ichiloto\Editor\Validation\MapCompletenessCheck::validate(loadLayeredMap($root), null),
+        static fn(\Ichiloto\Editor\Validation\Issue $issue): bool => $issue->code === 'piece.overhang'));
+
+    // The legacy map resolves its top row solid from its glyphs, so the shelf's top has a wall behind it.
+    expect($overhangIssues())->toBe([]);
+
+    // Declared walkable floor under the top is reported, naming the cells.
+    $solid = CollisionType::SOLID;
+    $none = CollisionType::NONE;
+    editTestMapData($root, static fn(string $source): string => str_replace("'events' => [],",
+        "'events' => [], 'occupancy' => " . var_export([[$none, $none, $solid, $solid], [$solid, $solid, $solid, $solid]], true) . ',', $source));
+    $issues = $overhangIssues();
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->cells)->toBe([[0, 0], [1, 0]]);
+});

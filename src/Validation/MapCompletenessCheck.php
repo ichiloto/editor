@@ -9,6 +9,7 @@ use Ichiloto\Editor\Field\NpcBedFields;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Editor\Field\NpcPlacementFields;
+use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Field\Validation\MapCompletenessValidator;
 use Ichiloto\Engine\Field\Validation\MapTerrainKindRule;
 use Ichiloto\Engine\Field\Validation\MapValidationIssue;
@@ -48,19 +49,21 @@ final class MapCompletenessCheck
             ? new ChestRewardValidator($inventory)->resolveInventoryReference(...)
             : static fn(string $reference): ?string => null;
         try {
+            $graphics = MapGraphicsValidator::readGraphics($map);
             $found = MapCompletenessValidator::validate(
                 $map->mapId,
                 $map->getEditableData(),
                 $map->getEventLayerCells(),
                 $map->getLayerSet(),
-                MapGraphicsValidator::readGraphics($map),
+                $graphics,
                 $map->getAssetRoot(),
                 $resolve,
                 // The resources as this session holds them: one added in the same change set resolves.
                 self::readFieldCatalog($map),
                 requiresGraphics: $map->listTilesetIds() !== [],
-                // The physical grid the field resolves, which beds and named NPC placements are checked against: declared or legacy alike.
-                occupancy: self::declaresPhysicalNpcCells($map) ? $map->getPhysicalOccupancy() : null,
+                // The physical grid the field resolves, which beds, named NPC placements and the wall behind a piece's
+                // overhang are checked against: declared or legacy alike.
+                occupancy: self::declaresPhysicalNpcCells($map) || self::offersOverhangPieces($graphics) ? $map->getPhysicalOccupancy() : null,
             );
             if (array_any($map->getEditableData()['events'] ?? [], static fn($event): bool => is_array($event)
                 && is_a($event['class'] ?? '', \Ichiloto\Engine\Events\Triggers\PassageEventTrigger::class, true))) {
@@ -90,6 +93,12 @@ final class MapCompletenessCheck
 
         return is_array($npcs) && array_any($npcs, static fn(mixed $npc): bool => is_array($npc)
             && (array_key_exists(NpcBedFields::BED, $npc) || array_key_exists(NpcPlacementFields::PLACEMENTS, $npc)));
+    }
+
+    /** Whether the map's tileset has a piece whose top rows overhang the wall behind it, which the check reads collision under. */
+    private static function offersOverhangPieces(?MapGraphics $graphics): bool
+    {
+        return $graphics !== null && array_any($graphics->tileset->pieces, static fn($piece): bool => $piece->overhang > 0);
     }
 
     /**
