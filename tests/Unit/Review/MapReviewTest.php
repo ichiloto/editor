@@ -319,15 +319,22 @@ function reviewRenderers(string $executable): Ichiloto\Engine\Rendering\Launch\R
     };
 }
 
+/** An executable PHP script in a throwaway directory of its own, removed after the test. */
+function writeReviewExecutable(string $name, string $php): string
+{
+    $directory = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('ichiloto-review-renderer-', true));
+    mkdir($directory);
+    $path = $directory . '/' . $name;
+    file_put_contents($path, '#!' . PHP_BINARY . "\n<?php " . $php . "\n");
+    chmod($path, 0o755);
+
+    return $path;
+}
+
 /** An executable that runs the synthetic label renderer ({@see tests/Support/fake-label-renderer.php}). */
 function fakeLabelRenderer(): string
 {
-    $path = sys_get_temp_dir() . '/' . uniqid('ichiloto-fake-label-renderer-', true);
-    file_put_contents($path, '#!' . PHP_BINARY . "\n<?php require " . var_export(dirname(__DIR__, 2) . '/Support/fake-label-renderer.php', true) . ";\n");
-    chmod($path, 0o755);
-    rememberTemporaryProject($path);
-
-    return $path;
+    return writeReviewExecutable('gpui-renderer', 'require ' . var_export(dirname(__DIR__, 2) . '/Support/fake-label-renderer.php', true) . ';');
 }
 
 /** The bed project ({@see mapReviewBedProject()}) with a wooden sign reading Inn at (4, 3). */
@@ -386,10 +393,7 @@ it('names each sign it leaves out when the installed renderer cannot prepare lab
     $workspace = Ichiloto\Editor\ProjectWorkspace::fromProject($root);
     $missing = new Ichiloto\Editor\Review\MapRenderer($workspace, reviewRenderers('/nonexistent/gpui-renderer'))->render(new MapRenderView('test-map'));
     // A renderer without the label mode answers the check with something else and is never sent a hello.
-    $older = sys_get_temp_dir() . '/' . uniqid('ichiloto-older-renderer-', true);
-    file_put_contents($older, '#!' . PHP_BINARY . "\n<?php echo 'not a label mode', \"\\n\";\n");
-    chmod($older, 0o755);
-    rememberTemporaryProject($older);
+    $older = writeReviewExecutable('gpui-renderer', "echo 'not a label mode', PHP_EOL;");
     $outdated = new Ichiloto\Editor\Review\MapRenderer($workspace, reviewRenderers($older))->render(new MapRenderView('test-map'));
     $outside = new Ichiloto\Editor\Review\MapRenderer($workspace, reviewRenderers($older))
         ->render(new MapRenderView('test-map', ['x' => 6, 'y' => 0, 'width' => 6, 'height' => 5]));
