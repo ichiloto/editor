@@ -11,6 +11,10 @@
   own source, with undo and redo byte for byte; a reference the source computes is refused before anything is
   written. Validation reports a `play_storybook` naming no storybook, a missing one or one the Engine refuses, each
   storybook the Engine refuses, and a page picture the game cannot read.
+- A review raster for whole graphical canvases (`Review\CanvasStillRaster`): menus, dialogue, storybooks and
+  modals over a scene, drawn from the canvas the Engine composed in the renderer's paint order (images, indicators,
+  text layers and label rasters by layer). The map still's world canvases now use it, so their text layers and
+  indicators are drawn too; composites are left out and named.
 - Tileset pieces that back onto a wall declare **Overhang Rows**, authored in the GUI
   tileset view and kept by the TUI. Every placement path stands a piece on the cell
   the author points at, with its overhang drawn over the wall face behind it, so
