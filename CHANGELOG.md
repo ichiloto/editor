@@ -4,6 +4,13 @@
 
 ### Added
 
+- Storybook playback, as Engine 78f1f12 plays it through `CinematicCommandSchema::export()['storybookPlayback']`: a
+  `play_storybook` command in event scripts, battle event pages and cinematics chooses its storybook in a
+  `Storybook` picker over the books the Engine's `StorybookLibrary` discovers under `assets/Data/Storybooks`,
+  listed as `Title (id)` and stored by stable id, in the Terminal and GUI editors. Edits are made in the script's
+  own source, with undo and redo byte for byte; a reference the source computes is refused before anything is
+  written. Validation reports a `play_storybook` naming no storybook, a missing one or one the Engine refuses, each
+  storybook the Engine refuses, and a page picture the game cannot read.
 - Tileset pieces that back onto a wall declare **Overhang Rows**, authored in the GUI
   tileset view and kept by the TUI. Every placement path stands a piece on the cell
   the author points at, with its overhang drawn over the wall face behind it, so

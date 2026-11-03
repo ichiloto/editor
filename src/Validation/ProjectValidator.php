@@ -18,6 +18,7 @@ use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
+use Ichiloto\Editor\Database\StorybookPlaybackFields;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Events\CommandMapContext;
@@ -156,6 +157,9 @@ class ProjectValidator
   /** @var array<string, string> The map each Skit that names one plays on, by Skit id, read once per validation. */
   protected array $skitMaps = [];
 
+  /** The project's storybooks as the Engine reads them, read once per validation. */
+  protected StorybookValidator $storybooks;
+
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
   protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
 
@@ -174,6 +178,7 @@ class ProjectValidator
     $this->commonEventScripts = $this->eventScriptsById($workspace);
     $this->placementLifecycle = null;
     $this->skitMaps = $this->readSkitMaps($workspace);
+    $this->storybooks = new StorybookValidator($workspace);
     $this->cinematicCommonEventIds = [];
     $this->legacyCommonEventIds = [];
 
@@ -216,6 +221,7 @@ class ProjectValidator
       ...new ActorReferenceValidator()->validate($workspace),
       ...new DialoguePresentationValidator()->validate($workspace),
       ...new SkitBackdropValidator()->validate($workspace),
+      ...$this->storybooks->validate(),
       ...new RecordReferenceValidator()->validate($workspace),
       ...$this->checkKnowledgeCatalog($workspace),
       ...$this->checkSpecialProperties($workspace),
@@ -4080,6 +4086,10 @@ class ProjectValidator
 
       if ($type === SkitPlaybackFields::getCommandType()) {
         $issues = [...$issues, ...$this->checkSkitPlayback($command, $where, $known, $context['map'])];
+      }
+
+      if ($type === StorybookPlaybackFields::getCommandType()) {
+        $issues = [...$issues, ...$this->storybooks->checkPlayback($command, $where)];
       }
 
       if ($type === 'field_animation') {
