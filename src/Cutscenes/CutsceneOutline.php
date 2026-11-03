@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Cutscenes;
 
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
+use Ichiloto\Editor\Database\StorybookPlaybackFields;
 
 /**
  * The command tree of a cinematic, or the track and cue list of a summon,
@@ -468,6 +469,7 @@ final class CutsceneOutline
             'play_sound' => strval($command['sound'] ?? ''),
             'play_music' => strval($command['music'] ?? ''),
             SkitPlaybackFields::getCommandType() => strval($command[SkitPlaybackFields::getReferenceField()] ?? ''),
+            StorybookPlaybackFields::getCommandType() => strval($command[StorybookPlaybackFields::getReferenceField()] ?? ''),
             'accept_quest', 'common_event' => strval($command['id'] ?? ''),
             'knowledge' => strval($command['operation'] ?? '') . ' ' . strval($command['subject'] ?? ''),
             'move_player' => sprintf('→ %s, %s', strval($command['x'] ?? '?'), strval($command['y'] ?? '?')),

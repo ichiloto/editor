@@ -2696,6 +2696,24 @@ change its source cannot hold, before anything is written.
 
 `Shift+A` creates a new skit as its own file, named after its generated id.
 
+### Storybooks
+
+A storybook is an illustrated book a character reads to the player, one file
+per book under `assets/Data/Storybooks/<id>.php`, holding its `id`, `title`,
+`narrator` and ordered `pages`. A page has an `id`, its `text` and an optional
+`picture`: a PNG path relative to `assets`. The Engine discovers storybooks by
+file name, and a book's `id` must match it.
+
+A `play_storybook` command in an event script, battle event page or cinematic
+plays one storybook, chosen in its `Storybook` picker among the project's
+storybooks, listed as `Title (id)` and stored by id. A book the game refuses is
+listed by its id alone. When the reader closes, the script carries on; reading
+writes no flag, reward or progress. Validation reports a `play_storybook` that
+names no storybook, one the project does not have and one the game refuses, a
+storybook the game refuses with its reason, and a page picture the game cannot
+read (that page shows its narration alone). A storybook reference the source
+computes, such as a function call, is refused before anything is written.
+
 Current behavior: a skit plays at most once per save file, and the engine
 announces availability rather than interrupting - the player presses `T`.
 
@@ -2773,6 +2791,7 @@ Supported command types, matching the engine's interpreter:
 | `play_sound` | Sound |
 | `play_music` | Music |
 | `play_skit` | Skit (picked from Skits) |
+| `play_storybook` | Storybook (picked from the project's storybooks) |
 | `accept_quest` | Quest Id |
 | `common_event` | Event Script |
 | `knowledge` | Operation, Subject, Report, Replacement Report, Observation, Outcome, Source, Confidence |

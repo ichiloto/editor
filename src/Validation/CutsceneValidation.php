@@ -11,6 +11,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\ConversationFields;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
+use Ichiloto\Editor\Database\StorybookPlaybackFields;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
@@ -339,6 +340,10 @@ trait CutsceneValidation
 
             if ($type === SkitPlaybackFields::getCommandType()) {
                 $issues = [...$issues, ...$this->checkSkitPlayback($command, $where, $known, $context['map'])];
+            }
+
+            if ($type === StorybookPlaybackFields::getCommandType()) {
+                $issues = [...$issues, ...$this->storybooks->checkPlayback($command, $where)];
             }
 
             if ($type === 'checkpoint') {

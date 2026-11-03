@@ -124,6 +124,7 @@ final class ReferenceCatalog
         'animations',
         'animation_ids',
         'skits',
+        StorybookPlaybackFields::REFERENCE_CATEGORY,
         'common_events',
         'inventory',
         'bgm',
@@ -396,6 +397,8 @@ final class ReferenceCatalog
             'dialogue_identities' => array_column($this->listDialogueIdentities(), 'id'),
             // play_skit names a Skit by the stable id the Engine keys Skits by, never its title.
             SkitPlaybackFields::REFERENCE_CATEGORY => array_keys($this->listSkitTitles()),
+            // play_storybook names a storybook by the stable id the Engine's library discovers it under.
+            StorybookPlaybackFields::REFERENCE_CATEGORY => $this->workspace->catalogs->listStorybookIds(),
             default => $this->recordValues($category),
         };
     }
@@ -1154,6 +1157,10 @@ final class ReferenceCatalog
             return $labels;
         }
 
+        if ($category === StorybookPlaybackFields::REFERENCE_CATEGORY) {
+            return $this->listStorybookLabels();
+        }
+
         if ($category === 'dialogue_identities') {
             $labels = [];
             foreach ($this->listDialogueIdentities() as $identity) {
@@ -1831,6 +1838,28 @@ final class ReferenceCatalog
         }
 
         return $titles;
+    }
+
+    /**
+     * The project's storybooks, labelled `Title (id)` by the title the Engine
+     * reads. A storybook the Engine refuses is listed by its id alone, as it
+     * stays selectable; project validation reports why it cannot play.
+     *
+     * @return array<string, string>
+     */
+    private function listStorybookLabels(): array
+    {
+        $labels = [];
+        foreach ($this->workspace->catalogs->listStorybookIds() as $id) {
+            try {
+                $title = trim($this->workspace->catalogs->loadStorybook($id)->title);
+            } catch (Throwable) {
+                $title = '';
+            }
+            $labels[$id] = $title !== '' && $title !== $id ? sprintf('%s (%s)', $title, $id) : $id;
+        }
+
+        return $labels;
     }
 
     private function recordValues(string $category): array

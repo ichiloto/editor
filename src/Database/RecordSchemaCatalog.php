@@ -2924,6 +2924,8 @@ final class RecordSchemaCatalog
             ],
             // A story conversation, chosen among the project's current Skits by stable id.
             SkitPlaybackFields::getCommandType() => SkitPlaybackFields::getCommandFields(),
+            // An illustrated read-only book, chosen among the project's storybooks by stable id.
+            StorybookPlaybackFields::getCommandType() => StorybookPlaybackFields::getCommandFields(),
             'accept_quest' => [
                 RecordField::reference('id', 'Quest', 'quests'),
             ],
