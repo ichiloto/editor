@@ -11,6 +11,7 @@ use Ichiloto\Engine\Events\Triggers\CinematicEventTrigger;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
+use Ichiloto\Engine\Events\Triggers\PassageEventTrigger;
 use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
 use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 
@@ -140,6 +141,15 @@ final class EventTypeCatalog
                     'lootType' => 'item',
                 ],
                 defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
+            ),
+            new EventTypeDefinition(
+                label: 'Opening Passage',
+                className: PassageEventTrigger::class,
+                description: 'Action reveals and permanently opens a passage from the adjacent facing cell.',
+                defaultData: ['mode' => ScriptEventTrigger::MODE_ACTION, 'reusable' => false],
+                defaultDefinitionFields: ['engagement' => 'facing',
+                    'cue' => ['symbol' => '!', 'color' => 'bright-yellow', 'maxDistance' => 2]],
+                optionalData: ['scriptId' => ''],
             ),
         ];
 

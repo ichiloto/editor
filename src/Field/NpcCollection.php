@@ -30,6 +30,8 @@ final class NpcCollection
      * author put in the list survives rather than being silently dropped.
      */
     private array $raw = [];
+    /** Whether the source explicitly declared its NPC collection, including an empty one. */
+    private bool $declared = true;
 
     /**
      * Reads a map's `npcs` array.
@@ -37,9 +39,10 @@ final class NpcCollection
      * @param mixed $entries The array as authored, or anything else.
      * @return self The collection.
      */
-    public static function fromMapData(mixed $entries): self
+    public static function fromMapData(mixed $entries, bool $declared = true): self
     {
         $collection = new self();
+        $collection->declared = $declared;
 
         if (! is_array($entries)) {
             return $collection;
@@ -70,6 +73,12 @@ final class NpcCollection
         }
 
         return $entries;
+    }
+
+    /** Preserve source-field presence when a history snapshot restores an empty collection. */
+    public function hasDeclaration(): bool
+    {
+        return $this->declared || $this->raw !== [];
     }
 
     /**

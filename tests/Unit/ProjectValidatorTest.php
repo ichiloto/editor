@@ -144,7 +144,6 @@ function writeValidatorActor(string $root, string $fileId, string $name, string 
 
 it('passes a project with nothing wrong with it', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -154,7 +153,6 @@ it('passes a project with nothing wrong with it', function () {
 
 it('accepts conditional event cues from the shared runtime contract', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -172,7 +170,6 @@ it('accepts conditional event cues from the shared runtime contract', function (
 
 it('validates conditional event cues with the shared condition vocabulary', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -266,7 +263,6 @@ it('reports an unknown condition type with its content context', function () {
 
 it('validates generic summon availability, policies, identities, and linked actions', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -294,7 +290,6 @@ it('validates generic summon availability, policies, identities, and linked acti
 
 it('rejects invalid summon starting assignments and duplicate exclusive holders', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -322,7 +317,6 @@ it('rejects invalid summon starting assignments and duplicate exclusive holders'
 
 it('reports malformed availability and actor assignment payloads', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -343,7 +337,6 @@ it('reports malformed availability and actor assignment payloads', function () {
 
 it('reports malformed declared summon policy and condition fields without coercing them', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -365,7 +358,6 @@ it('reports malformed declared summon policy and condition fields without coerci
 
 it('matches actor summon assignments to definition ids case-insensitively like runtime', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -382,7 +374,6 @@ it('matches actor summon assignments to definition ids case-insensitively like r
 
 it('rejects non-list and duplicate actor summon assignments', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -569,7 +560,6 @@ it('catches a block written twice in the same file', function () {
 
 it('does not mistake a repeated value for a repeated key', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
 
     // Two different keys that happen to share a value.
@@ -632,7 +622,6 @@ it('catches a quest waiting on a quest that does not exist', function () {
 
 it('sorts what will crash the game above what is merely dead', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
 
     editTestMapData($root, static fn(string $source): string => str_replace(
@@ -648,7 +637,6 @@ it('sorts what will crash the game above what is merely dead', function () {
 
 it('accepts a complete sequential compatibility manifest with catalog-backed targets', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -825,7 +813,6 @@ function writeSpreadSkillCatalog(string $root, Ichiloto\Engine\Entities\Skills\S
 
 it('checks ability and spell alias targets against their own kind across every skill file', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -864,7 +851,6 @@ it('checks ability and spell alias targets against their own kind across every s
 
 it('reports a skill name the catalogue defines twice', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -909,7 +895,6 @@ function writeTransitionCatalog(string $root, string $asset, string $battle = 's
 
 it('accepts transitions the Engine can play', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -969,7 +954,6 @@ function reachabilityIssueLines(string $root): array
 
 it('reports an event the player can never reach, not where content stands', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -991,7 +975,6 @@ it('reports an event the player can never reach, not where content stands', func
 
 it('notes a map nothing reaches yet as a warning, and checks edge trigger destinations', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -1015,7 +998,6 @@ it('notes a map nothing reaches yet as a warning, and checks edge trigger destin
 
 it('reports floor the player can reach that no tile covers as an error, and is satisfied once it is painted', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -1061,7 +1043,6 @@ function effectIssueLines(string $root): array
 
 it('checks every effect a consumer uses, as that consumer plays it, in both presentations', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -1103,7 +1084,6 @@ it('reports map field effects it cannot read', function () {
 
 it('reports a record list entry that names nothing, or a definition the project lacks', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -1124,7 +1104,6 @@ it('reports a record list entry that names nothing, or a definition the project 
 
 it('checks a summon alias against the summons the project defines', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
@@ -1164,7 +1143,6 @@ it('checks a summon alias against the summons the project defines', function () 
 
 it('checks a knowledge subject alias against the subjects the project declares', function () {
     $root = makeTemporaryProject();
-    writeLoadableSampleMap($root);
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);

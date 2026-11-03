@@ -392,9 +392,9 @@ final readonly class RecordAuthoring
     }
 
     /**
-     * Duplicates a record below itself, under a fresh identity: the one given
-     * (made unique), else one made from the original's. The copy's index is
-     * the change's.
+     * Duplicates a record below itself under a fresh identity. An explicit file
+     * identity must be unused; payload identities and omitted identities are
+     * made unique. The copy's index is the change's.
      *
      * @throws RecordRefusal When the category or record is read-only or gone, or the record cannot be duplicated.
      */

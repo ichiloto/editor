@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Session;
 
 use Ichiloto\Editor\Assets\AssetImport;
+use Ichiloto\Editor\Assets\AssetKind;
 use Ichiloto\Editor\Assets\PngPixels;
 use Ichiloto\Editor\Assets\TilesetSheetCells;
 use Ichiloto\Editor\Database\RecordChange;
@@ -17,41 +18,17 @@ use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use InvalidArgumentException;
-use RuntimeException;
 
 /**
- * Bringing a building's art into a project and defining its piece over that
- * art, as a graphical editor does it: an image brought into the assets for
- * any picker, cells copied into a tileset sheet's free cells, a new piece
- * from a selection of sheet cells, and the glyph and painted door of one of
- * its cells at a time. Each is one undo step. Image files are written at
+ * Defining a building's piece over art brought into a project
+ * ({@see AssetImportSession}), as a graphical editor does it: cells copied
+ * into a tileset sheet's free cells, a new piece from a selection of sheet
+ * cells, and the glyph and painted door of one of its cells at a time. Each is one undo step. Sheet files are written at
  * once ({@see AssetFileCommand}); piece edits go through the tileset record's
  * own rows, so they are saved, validated and preserved like any record edit.
  */
 trait TilesetArtSession
 {
-    /**
-     * Brings an image into the project's assets ({@see AssetImport}) as one
-     * undo step: written at once, not on Save, and removed again by Undo.
-     *
-     * @param string $destination Where it goes, under the assets: relative to them or absolute.
-     * @return array{path: string, width: int, height: int, changed: bool} Its asset path, which a picker row then takes.
-     * @throws SessionRefusal When the image cannot be brought in, saying why.
-     */
-    public function importAsset(string $source, string $destination, bool $replace = false): array
-    {
-        try {
-            $import = AssetImport::plan($this->workspace->projectRoot, $source, $destination, $replace);
-        } catch (InvalidArgumentException $error) {
-            throw new SessionRefusal($error->getMessage(), previous: $error);
-        }
-        if ($import['plan'] !== null) {
-            $this->writeAssetPlan(new AssetFileCommand(sprintf('Import %s', $import['path']), $import['plan']));
-        }
-
-        return ['path' => $import['path'], 'width' => $import['width'], 'height' => $import['height'], 'changed' => $import['plan'] !== null];
-    }
-
     /**
      * The cells of a tileset record's plain sheets that hold no art yet,
      * unsaved sheet choices included, by tile identity: where copied cells
@@ -97,7 +74,7 @@ trait TilesetArtSession
         $tileSize = $tileset->getUsableSheets($assets)['tileSize']
             ?? throw new SessionRefusal(sprintf('Tileset %s has no sheet that can be read yet, so its cells have no size. Choose its sheets first.', $tileset->name));
         try {
-            AssetImport::resolveDestination($assets, $source);
+            AssetImport::resolveDestination($assets, $source, AssetKind::Image);
             $bytes = is_file($assets . '/' . $source) ? file_get_contents($assets . '/' . $source) : false;
             $image = PngPixels::decode($bytes === false ? '' : $bytes, $source);
         } catch (InvalidArgumentException $error) {
@@ -298,16 +275,5 @@ trait TilesetArtSession
         }
 
         return [$pieces[$pieceId], 'piece' . $position];
-    }
-
-    /** Writes an artwork file at once and keeps the write in history, or refuses having written nothing. */
-    private function writeAssetPlan(AssetFileCommand $command): void
-    {
-        try {
-            $command->execute();
-        } catch (RuntimeException $failure) {
-            throw new SessionRefusal($failure->getMessage(), previous: $failure);
-        }
-        $this->history->record($command);
     }
 }

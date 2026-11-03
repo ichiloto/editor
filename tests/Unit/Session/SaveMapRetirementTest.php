@@ -294,3 +294,36 @@ it('serves map retirement and save aliases over the session protocol', function 
         ->and($request('saveCompatibility.alias', ['category' => 'one_shot_events', 'from' => 'old-road:A', 'to' => 'field:E'])['result']['added'])->toBeTrue()
         ->and($request('saveCompatibility.alias', ['category' => 'one_shot_events', 'from' => 'old-road:A'])['error']['kind'])->toBe('request');
 });
+
+it('plans no relocations for a map its change set retires into itself, since the retirement moves every save on it', function () {
+    $root = retirementProject();
+    $session = EditorSession::open($root);
+    $redraw = static function () use ($session): void {
+        $map = $session->readMap('field');
+        // The redrawn layout walls floor the player stands on today.
+        $session->paint('field', $map['revision'], $map['baseLayer'], [[2, 1], [3, 1]], '#');
+    };
+
+    // Without the retirement the redraw moves the saves on the walled cells.
+    $session->beginChanges();
+    $redraw();
+    expect($session->commitChanges(checkOnly: true)['relocated'])->not->toBe([]);
+
+    // A retirement undone inside the change set no longer covers the map.
+    $session->beginChanges();
+    $redraw();
+    $session->retireMap('field', 'field', [1, 4]);
+    $session->undo();
+    expect($session->commitChanges(checkOnly: true)['relocated'])->not->toBe([]);
+
+    $session->beginChanges();
+    $redraw();
+    $session->retireMap('field', 'field', [1, 4]);
+    $saved = $session->commitChanges(relocateSaves: true);
+
+    expect($saved['status'])->toBe('saved')
+        ->and($saved['relocated'])->toBe([])
+        ->and(readRetirementManifest($root)['contentVersion'])->toBe(1)
+        ->and(array_map(static fn(array $step): array => array_keys($step), readRetirementManifest($root)['migrations']))
+        ->toBe([['from', 'to', 'mapRetirements']]);
+});

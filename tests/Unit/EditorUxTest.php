@@ -232,7 +232,10 @@ it('defaults the unsaved-changes guard to Cancel: Enter does not discard', funct
 it('steps integer inspector fields with the Left/Right idiom and records undo', function () {
   $editor = uxEditor();
   setEditorProperty($editor, 'focusedPane', 'inspector');
-  setEditorProperty($editor, 'selectedInspectorFieldIndex', 5); // Size X (width)
+  // Found by what it edits: the rows above it change as map authoring grows.
+  $width = array_find_key(callEditorMethod($editor, 'getInspectorFields'),
+    static fn(array $field): bool => ($field['target'] ?? null) === 'map-size' && ($field['field'] ?? null) === 'width');
+  setEditorProperty($editor, 'selectedInspectorFieldIndex', $width);
 
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
@@ -300,6 +303,7 @@ it('scrolls the inspector so a deep selection stays visible', function () {
   $fields = callEditorMethod($editor, 'getInspectorFields');
   $visibleRows = callEditorMethod($editor, 'resolveLayout')['contentHeight'] - 2;
   $last = count($fields) - 1;
+  $description = array_find_key($fields, static fn(array $field): bool => ($field['field'] ?? null) === 'description');
   setEditorProperty($editor, 'selectedInspectorFieldIndex', $last);
   $layout = callEditorMethod($editor, 'inspectorPaneLayout');
 
@@ -309,7 +313,7 @@ it('scrolls the inspector so a deep selection stays visible', function () {
   $selectedHeight = $layout->spans[$last][1];
 
   expect(count($layout->lines))->toBeGreaterThan($visibleRows)
-    ->and($layout->spans[3][1])->toBeGreaterThan(5)
+    ->and($layout->spans[$description][1])->toBeGreaterThan(5)
     ->and($layout->rowOfField($last) + $selectedHeight - 1)->toBe($visibleRows - 1)
     ->and($layout->offset)->toBe($layout->spans[$last][0] + $selectedHeight - $visibleRows)
     ->and(callEditorMethod($editor, 'getInspectorLines')[0])->not->toContain('Name: Test Map');

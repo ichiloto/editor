@@ -31,6 +31,53 @@ function skillRecordsProject(): string
     return $root;
 }
 
+it('authors a guaranteed state application through the shared effect fields', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $field = static fn(string $name): string => ProjectRecordDatabase::subFieldId('effect', 0, $name);
+    $skills->setField(1, $field('type'), 'add_state');
+    $skills->setField(1, $field('stateId'), 'stun');
+    $skills->setField(1, $field('guaranteed'), 'true');
+    $skills->save();
+    $effect = SkillCatalog::load($root . '/assets')->findSkill('Lunge')->effects[0];
+    expect($effect->guaranteed)->toBeTrue()->and($effect->stateId)->toBe('stun');
+    expect(array_find(loadRecordDatabase($root, 'skills')->getSettingsFields(1),
+        static fn(array $row): bool => ($row['field'] ?? '') === $field('guaranteed'))['value'])->toBe('true');
+});
+
+it('round trips a prepared response through skill and state pickers', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $skills->setField(1, 'occasion', \Ichiloto\Engine\Entities\Enumerations\Occasion::BATTLE_SCREEN->value);
+    $field = static fn(string $name): string => ProjectRecordDatabase::subFieldId('effect', 0, $name);
+    $skills->setField(1, $field('type'), 'prepare_counter');
+    $skills->setField(1, $field('skill'), 'Lunge');
+    $skills->setField(1, $field('stateId'), 'stance');
+    $skills->save();
+    $effect = SkillCatalog::load($root . '/assets')->findSkill('Lunge')->effects[0];
+    expect($effect)->toBeInstanceOf(\Ichiloto\Engine\Entities\Effects\SkillEffects\PrepareCounterSkillEffect::class)
+        ->and($effect->skill)->toBe('Lunge')->and($effect->stateId)->toBe('stance');
+    $fields = loadRecordDatabase($root, 'skills')->getSettingsFields(1);
+    expect(array_find($fields, static fn(array $row): bool => ($row['field'] ?? '') === $field('skill'))['reference'])
+        ->toBe('counter_skills')
+        ->and(array_find($fields, static fn(array $row): bool => ($row['field'] ?? '') === $field('stateId'))['reference'])
+        ->toBe('states');
+});
+
+it('authors ATB reset effects and state-owned pace through shared records', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $skills->setField(1, ProjectRecordDatabase::subFieldId('effect', 0, 'type'), 'reset_atb');
+    $skills->save();
+    expect(SkillCatalog::load($root . '/assets')->findSkill('Lunge')->effects[0])
+        ->toBeInstanceOf(\Ichiloto\Engine\Entities\Effects\SkillEffects\ResetAtbSkillEffect::class);
+    file_put_contents($root . '/assets/Data/states.php', "<?php return [['id'=>'slow','name'=>'Slow']];");
+    $states = loadRecordDatabase($root, 'states');
+    $states->setField(0, 'atbRate', '0.5');
+    $states->save();
+    expect(\Ichiloto\Engine\Entities\States\State::fromArray((require $root . '/assets/Data/states.php')[0])->atbRate)->toBe(.5);
+});
+
 it('lists every skill record in file order, numbered, with its kind and effects as data', function () {
     $skills = loadRecordDatabase(skillRecordsProject(), 'skills');
 
@@ -136,4 +183,64 @@ it('authors a treatment chance on a cure and the Engine reads it back', function
     expect($skills->getRecordByIndex(1)?->get('effects'))->toBe([['type' => 'remove_state', 'stateIds' => ['poison'], 'chancePercent' => 75]])
         ->and(SkillCatalog::load($root . '/assets')->findSkill('Lunge')?->effects[0]?->chancePercent)->toBe(75)
         ->and(SkillCatalog::load($root . '/assets')->getProblems())->toBe([]);
+});
+
+
+it('authors battle geometry atomically and refuses conflicting field scope before writing', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $before = sourceHashTree($root . '/assets/Data/Skills');
+    $skills->setField(1, 'battleTargeting.shape', 'line');
+    expect(fn() => $skills->save())->toThrow(\Ichiloto\Editor\Database\RecordRefusal::class);
+    expect(sourceHashTree($root . '/assets/Data/Skills'))->toBe($before);
+    $skills->setField(1, 'occasion', \Ichiloto\Engine\Entities\Enumerations\Occasion::BATTLE_SCREEN->value);
+    $skills->setField(1, 'battleTargeting.shape', 'line');
+    $skills->setField(1, 'battleTargeting.ignoreCover', 'true');
+    $skills->save();
+    $line = SkillCatalog::load($root . '/assets')->findSkill('Lunge');
+    expect($line->battleTargeting->toArray())->toBe(['shape' => 'line', 'ignoreCover' => true]);
+    $skills = loadRecordDatabase($root, 'skills');
+    $skills->setField(1, 'battleTargeting.shape', 'back_row');
+    $skills->save();
+    $row = SkillCatalog::load($root . '/assets')->findSkill('Lunge');
+    expect($row->scope->number)->toBe(\Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber::ALL)
+        ->and($row->battleTargeting->shape)->toBe(\Ichiloto\Engine\Battle\Formation\BattleTargetShape::BACK_ROW);
+    $skills->setField(1, 'battleTargeting.shape', 'line');
+    expect($skills->getRecordByIndex(1)->get('scope.number'))->toBe('One');
+    $before = sourceHashTree($root . '/assets/Data/Skills');
+    $skills->setField(1, 'occasion', \Ichiloto\Engine\Entities\Enumerations\Occasion::ALWAYS->value);
+    expect(fn() => $skills->save())->toThrow(\Ichiloto\Editor\Database\RecordRefusal::class);
+    expect(sourceHashTree($root . '/assets/Data/Skills'))->toBe($before);
+    $fields = $skills->getSettingsFields(1);
+    expect(array_find($fields, static fn(array $row): bool => ($row['field'] ?? '') === 'battleTargeting.shape')['options'])
+        ->toBe(['scope', 'line', 'front_row', 'back_row']);
+});
+
+
+it('authors one command-level formation change through a constrained operation field', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $skills->setField(1, 'occasion', \Ichiloto\Engine\Entities\Enumerations\Occasion::BATTLE_SCREEN->value);
+    $type = ProjectRecordDatabase::subFieldId('effect', 0, 'type');
+    $operation = ProjectRecordDatabase::subFieldId('effect', 0, 'operation');
+    $skills->setField(1, $type, 'change_formation');
+    $skills->setField(1, $operation, 'move_to_front');
+    $skills->save();
+    $effect = SkillCatalog::load($root . '/assets')->findSkill('Lunge')->effects[0];
+    expect($effect->operation)->toBe(\Ichiloto\Engine\Battle\Formation\BattleFormationChange::MOVE_TO_FRONT);
+    expect(array_find(loadRecordDatabase($root, 'skills')->getSettingsFields(1),
+        static fn(array $row): bool => ($row['field'] ?? '') === $operation)['options'])->toBe(['shuffle', 'move_to_front']);
+});
+
+
+it('authors optional protection piercing only for HP damage effects', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $field = ProjectRecordDatabase::subFieldId('effect', 0, 'ignoresProtection');
+    $skills->setField(1, $field, 'true');
+    $skills->save();
+    expect(SkillCatalog::load($root . '/assets')->findSkill('Lunge')->effects[0]->ignoresProtection)->toBeTrue();
+    $skills->setField(1, ProjectRecordDatabase::subFieldId('effect', 0, 'type'), 'hp_recover');
+    $skills->save();
+    expect(\Ichiloto\Engine\Entities\Skills\SkillRecord::writeSkill(SkillCatalog::load($root . '/assets')->findSkill('Lunge'))['effects'][0])->not->toHaveKey('ignoresProtection');
 });

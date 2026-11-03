@@ -5,6 +5,31 @@ declare(strict_types=1);
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 
+it('authors logical positions independently of graphical and terminal placement and refuses overlapping positions', function () {
+    $root = troopFormationProject();
+    $path = $root . '/assets/Data/troops.php';
+    $before = require $path;
+    $session = EditorSession::open($root);
+    $read = $session->readDatabaseRecord('troops', 0);
+    $first = array_find($read['rows'], static fn($row) => ($row['key']['field'] ?? null) === 'member0BattlePosition');
+    $second = array_find($read['rows'], static fn($row) => ($row['key']['field'] ?? null) === 'member1BattlePosition');
+    expect($first)->not->toBeNull()->and($second)->not->toBeNull();
+    $session->applyDatabaseRecord('troops', 0, $first['key'], 'back, 0');
+    expect(fn() => $session->applyDatabaseRecord('troops', 0, $first['key'], 'rear, 0'))->toThrow(SessionRefusal::class);
+    $session->saveDatabase('troops');
+    $saved = require $path;
+    expect($saved[0]['enemies'][0]['battlePosition'])->toBe(['row' => 'back', 'lane' => 0])
+        ->and($saved[0]['enemies'][0]['position'])->toBe($before[0]['enemies'][0]['position'])
+        ->and($saved[0]['enemies'][0]['graphicalPlacement'])->toBe($before[0]['enemies'][0]['graphicalPlacement']);
+    $session->applyDatabaseRecord('troops', 0, $second['key'], 'back, 0');
+    expect(fn() => $session->saveDatabase('troops'))->toThrow(SessionRefusal::class, 'same logical battle position')
+        ->and(require $path)->toBe($saved);
+    $session->undo();
+    $session->applyDatabaseRecord('troops', 0, $first['key'], '');
+    $session->saveDatabase('troops');
+    expect((require $path)[0]['enemies'][0])->not->toHaveKey('battlePosition');
+});
+
 it('reads a troop formation as the Engine composes it over a previewed arena, the party in its slots', function () {
     $session = EditorSession::open(troopFormationProject());
     $formation = $session->readTroopFormation(0);

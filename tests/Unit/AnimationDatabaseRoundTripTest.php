@@ -44,7 +44,7 @@ it('keeps every field it does not edit, comments and the header, and numbers a n
     // An older record shows its own frames and cues read-only; a current one has none.
     expect($legacy['Legacy Frames'])->toMatchArray(['value' => '(1)', 'editable' => false])
         ->and($legacy['Legacy Position']['value'])->toBe('center')
-        ->and($current)->toBe(['Id', 'Name', 'Caster Effect', 'Target Effect', 'Roles']);
+        ->and($current)->toBe(['Id', 'Name', 'Movement', 'Caster Effect', 'Target Effect', 'Roles']);
 
     $database->setField(0, 'name', 'Blade Slash');
     $database->save();

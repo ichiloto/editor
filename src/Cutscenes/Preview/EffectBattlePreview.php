@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Engine\Animations\ActionAnimationResolver;
 use Ichiloto\Engine\Animations\AnimationLibrary;
+use Ichiloto\Engine\Animations\SourceEffectAnchor;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Battle\BattleCommandCatalog;
@@ -43,6 +44,7 @@ final class EffectBattlePreview
      * @param int $binding Which of them is shown.
      * @param list<string> $targets
      * @param array<string, array{start: int, length: int}> $phases
+     * @param int $laneFrames How many frames the effect itself has, in the lane it plays in.
      */
     private function __construct(
         private readonly BattleCommandPreview $preview,
@@ -53,6 +55,8 @@ final class EffectBattlePreview
         public readonly string $caster,
         public readonly array $targets,
         public readonly array $phases,
+        public readonly SourceEffectAnchor $sourceEffectAnchor,
+        private readonly int $laneFrames,
     ) {
     }
 
@@ -73,6 +77,7 @@ final class EffectBattlePreview
         EffectPresentation $presentation,
         callable $compile,
         int $binding = 0,
+        bool $reducedMotion = false,
     ): self {
         $state = new GameState();
         $found = [];
@@ -105,17 +110,34 @@ final class EffectBattlePreview
         $target = $animation->targetEffect === null ? null : $compile($animation->targetEffect, $presentation);
         $terminalTarget = $presentation === EffectPresentation::GRAPHICAL && $target !== null && ! $target->hasTerminalContent
             ? $compile($animation->targetEffect, EffectPresentation::TERMINAL) : null;
-        // The action's own binding sizes the target effect, so each grade previews at its authored scale.
-        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
-            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action));
+        // The action's own binding sizes the target effect, so each grade previews at its authored scale. A graphical
+        // battle starts the caster effect where the animation anchors it, as the battle does; the terminal keeps its
+        // own source phase. The command's own target boundary then drives the pose's impact entry too.
+        $anchor = $presentation === EffectPresentation::GRAPHICAL ? $animation->sourceEffectAnchor : SourceEffectAnchor::SOURCE;
+        $role = BattlePoseRole::getForAction($action);
+        // The same stable actor binding used by production supplies the complete post-impact recovery.
+        $poses = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null && $catalog->getArenaFor($battle) !== null
+            ? ($catalog->actorPoses[$caster->actorId] ?? null) : null;
+        $pose = $poses?->getPose($role);
         $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $battle->partyRoster->battlers, $battle->troop->members->toArray());
         if ($targets === []) {
             throw new InvalidArgumentException(sprintf('%s has no one to act on in the battle test.', $action->name));
         }
 
+        $graphical = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null
+            ? \Ichiloto\Engine\Battle\Presentation\GraphicalBattlePresentation::prepare($battle, $catalog, $assetRoot) : null;
+        $travel = !$reducedMotion && $animation->movement === \Ichiloto\Engine\Animations\ActionMovement::RUN_TO_TARGET
+            ? $graphical?->planActionTravel($caster, $targets, $action) : null;
+        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
+            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor, actionPose: $pose,
+            movementPoses: !$reducedMotion && ($poses?->getPose(BattlePoseRole::MOVE) !== null
+                || $poses?->getPose(BattlePoseRole::RETURNING) !== null), travel: $travel,
+            movePose: $reducedMotion ? null : $poses?->getPose(BattlePoseRole::MOVE),
+            returnPose: $reducedMotion ? null : $poses?->getPose(BattlePoseRole::RETURNING));
+
         return new self(
-            new BattleCommandPreview($battle, $plan, $caster, $targets, BattlePoseRole::getForAction($action),
-                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation),
+            new BattleCommandPreview($battle, $plan, $caster, $targets, $role,
+                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation, $graphical),
             $plan,
             $lane,
             array_map(static fn(array $context): array => ['caster' => $context['caster']->name, 'action' => $context['action']->name, 'lane' => $context['lane']], $found),
@@ -123,6 +145,8 @@ final class EffectBattlePreview
             $caster->name,
             array_map(static fn($target): string => $target->name, $targets),
             $plan->phases,
+            $anchor,
+            intval(($lane === 'source' ? $source : $target)?->defaults['lengthFrames'] ?? 0),
         );
     }
 
@@ -138,14 +162,19 @@ final class EffectBattlePreview
     }
 
     /**
-     * The command frame that draws one of the effect's own frames, in the lane it plays in; a frame
-     * before it maps to its first, one after it to its last.
+     * The command frame that draws one of the effect's own frames, in the lane it plays in, wherever the
+     * command anchors that lane; a frame before it maps to its first, one after it to its last.
      */
     public function findCommandFrame(int $authoredFrame): int
     {
-        $phase = $this->phases[$this->lane];
-        $frame = $this->plan->getCommandFrameForAuthoredFrame($this->lane, max(0, $authoredFrame));
+        // A frame the battle's pacing leaves no time for is drawn where the nearest earlier one is.
+        for ($frame = max(0, min($authoredFrame, $this->laneFrames - 1)); $frame >= 0; $frame--) {
+            $command = $this->plan->getCommandFrameForAuthoredFrame($this->lane, $frame);
+            if ($command !== null) {
+                return $command;
+            }
+        }
 
-        return $frame ?? ($authoredFrame <= 0 ? $phase['start'] : $phase['start'] + $phase['length'] - 1);
+        throw new InvalidArgumentException(sprintf('The %s effect draws no frame in this command.', $this->lane));
     }
 }

@@ -131,6 +131,24 @@ it('reports what committing would find without writing anything when only checki
         ->and($session->listUnsavedChanges())->toBe([]);
 });
 
+it('restores NPC declaration presence after check-only rollback so another change set can begin', function (bool $declared) {
+    $root = changeSetProject();
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    $data = require $path;
+    unset($data['npcs']);
+    if ($declared) { $data['npcs'] = []; }
+    file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
+    $before = sourceHashTree($root . '/assets');
+    $session = EditorSession::open($root);
+    $session->beginChanges();
+    $session->createNpc('test-map', $session->readMap('test-map')['revision'], 0, 1, 'Visitor', 'visitor');
+    $outcome = $session->commitChanges(checkOnly: true);
+    expect($outcome['saved'])->toBe([])->and(sourceHashTree($root . '/assets'))->toBe($before)
+        ->and($session->listUnsavedChanges())->toBe([]);
+    expect($session->beginChanges()['status'])->toBe('open');
+    $session->cancelChanges();
+})->with(['absent collection' => false, 'authored empty collection' => true]);
+
 it('holds a change set to itself: no saves inside it, no undo past its start, and edits pending before it refuse it', function () {
     $session = EditorSession::open(changeSetProject());
     changeSetPaint($session, 'buildings', 1, 0, ' ');

@@ -42,6 +42,22 @@ it('offers only the skills the Engine accepts for a counter', function () {
         ->and(new CounterAttackRule('Riposte')->resolveSkill($catalog)->name)->toBe('Riposte');
 });
 
+it('validates prepared response references and refuses persistent stance states', function () {
+    $root = counterAttackProject();
+    $prepare = new BasicSkill('Feint', '', '', 0, 0,
+        occasion: \Ichiloto\Engine\Entities\Enumerations\Occasion::BATTLE_SCREEN,
+        effects: [new \Ichiloto\Engine\Entities\Effects\SkillEffects\PrepareCounterSkillEffect('Riposte', 'decoy')]);
+    writeSkillRecords($root, new BasicSkill('Riposte', '', '', 0, 0), $prepare);
+    file_put_contents($root . '/assets/Data/states.php', "<?php return [['id'=>'decoy', 'name'=>'Decoy']];");
+    expect(new CounterAttackValidator()->validate(ProjectWorkspace::fromProject($root)))->toBe([]);
+    file_put_contents($root . '/assets/Data/states.php', "<?php return [['id'=>'decoy', 'name'=>'Decoy', 'persistsAfterBattle'=>true]];");
+    $issues = new CounterAttackValidator()->validate(ProjectWorkspace::fromProject($root));
+    expect($issues)->toHaveCount(1)->and($issues[0]->message)->toContain('clear after battle');
+    unlink($root . '/assets/Data/states.php');
+    expect(new CounterAttackValidator()->validate(ProjectWorkspace::fromProject($root))[0]->message)
+        ->toContain('Unknown prepared counter stance');
+});
+
 it('grants an enemy a counter attack and takes it away, leaving no empty grant behind', function () {
     $root = counterAttackProject();
     $session = EditorSession::open($root);

@@ -92,6 +92,7 @@ final class CutsceneSchemas
                 RecordField::reference('startMap', 'Start Map', 'maps', allowsNone: true, noneLabel: '(not declared)'),
                 new RecordField('presentation.initial', 'Initial Presentation', options: ['visible', 'hidden', 'black'], removeWhenEmpty: true, displayDefault: 'visible'),
                 new RecordField('presentation.reducedMotion', 'Reduced Motion', options: ['final-state'], removeWhenEmpty: true, displayDefault: '(engine default)'),
+                ...ConversationFields::getFields(),
                 new RecordField('skip.policy', 'Skip Policy', options: CinematicCommandSchema::SKIP_POLICIES),
                 new RecordField('checkpoints', 'Checkpoints', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
                 new RecordField('authoring', 'Authoring Metadata', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
@@ -109,9 +110,11 @@ final class CutsceneSchemas
             ],
             subList: self::castList($graphical),
             commandLists: [
-                CutsceneAsset::COMMANDS_KEY => self::cinematicCommandList(CutsceneAsset::COMMANDS_KEY, $graphical),
+                CutsceneAsset::COMMANDS_KEY => self::cinematicCommandList(CutsceneAsset::COMMANDS_KEY, $graphical, conversation: true),
                 self::FINALIZER_KEY => self::finalizerCommandList(),
             ],
+            // The conversation's speakers, addressees and phase groups, beside the cast.
+            subLists: ConversationFields::getLists(),
         );
     }
 
@@ -408,8 +411,12 @@ final class CutsceneSchemas
      * Returns the command list a cinematic script is edited as: every type
      * the interpreter understands, each with its fields, nested blocks as
      * frames, and routes, lanes and camera points as nested lists.
+     *
+     * @param bool $conversation Whether the list is a cinematic's own script, whose text lines select the speakers
+     *   and addressees its conversation binds; a reusable script cannot know which cinematic runs it.
      */
-    public static function cinematicCommandList(string $key, bool $graphical = false, array $blank = ['type' => 'wait', 'seconds' => 0.5]): RecordSubList
+    public static function cinematicCommandList(string $key, bool $graphical = false, array $blank = ['type' => 'wait', 'seconds' => 0.5],
+        bool $conversation = false): RecordSubList
     {
         return new RecordSubList(
             key: $key,
@@ -419,7 +426,7 @@ final class CutsceneSchemas
                 new RecordField('type', 'Type', options: [...CinematicCommandSchema::COMMAND_TYPES, ...RecordSchemaCatalog::getRegisteredCommandTypes()]),
             ],
             blank: $blank,
-            variants: self::cinematicCommandVariants($graphical),
+            variants: self::cinematicCommandVariants($graphical, $conversation),
             variantKey: 'type',
             nestedLists: [
                 'move_route' => static fn(array $entry): ?RecordSubList => MovementRouteFields::getPointList($entry, cinematic: true, graphical: $graphical),
@@ -491,9 +498,12 @@ final class CutsceneSchemas
      *
      * @return array<string, RecordField[]|\Closure(array<string, mixed>): RecordField[]>
      */
-    public static function cinematicCommandVariants(bool $graphical = false): array
+    public static function cinematicCommandVariants(bool $graphical = false, bool $conversation = false): array
     {
         $base = RecordSchemaCatalog::eventCommandVariants($graphical);
+        if ($conversation) {
+            $base['text'] = [...$base['text'], ...ConversationFields::getLineFields()];
+        }
         $subject = static fn(string $prefix, string $label, bool $screen = false, array $entry = []): array => [
             new RecordField(
                 $prefix . '.kind',

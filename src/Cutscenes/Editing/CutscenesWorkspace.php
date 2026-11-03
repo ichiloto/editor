@@ -10,6 +10,7 @@ use Ichiloto\Editor\ListNavigation;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\ConversationFields;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
@@ -879,6 +880,7 @@ trait CutscenesWorkspace
             CutsceneType::CINEMATIC => [
                 'Identity' => ['id', 'name', 'description', 'version'],
                 'Staging' => ['startMap', 'presentation.initial', 'presentation.reducedMotion'],
+                'Conversation' => [ConversationFields::INITIAL_GROUP_KEY],
                 'Script' => ['commandListCommands'],
                 'Skip' => ['skip.policy', 'checkpoints', 'commandListFinalizer'],
                 'Metadata' => ['authoring'],
@@ -912,6 +914,11 @@ trait CutscenesWorkspace
         foreach ($fields as $field) {
             $id = (string) ($field['field'] ?? '');
             $placed = false;
+
+            if ($asset->type === CutsceneType::CINEMATIC && self::isConversationRow($id)) {
+                // The conversation's list rows join its section, in the order the lists give them.
+                $sections['Conversation'][] = $id;
+            }
 
             foreach ($sections as $ids) {
                 if (in_array($id, $ids, true)) {
@@ -992,6 +999,13 @@ trait CutscenesWorkspace
         }
 
         return $grouped;
+    }
+
+    /** Whether a cinematic row belongs to one of its conversation's lists. */
+    private static function isConversationRow(string $id): bool
+    {
+        return array_any([ConversationFields::SPEAKER_PREFIX, ConversationFields::ADDRESSEE_PREFIX, ConversationFields::GROUP_PREFIX],
+            static fn(string $prefix): bool => str_starts_with($id, $prefix));
     }
 
     /**

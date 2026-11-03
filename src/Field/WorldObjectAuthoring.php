@@ -100,10 +100,41 @@ final readonly class WorldObjectAuthoring
                     $role->release();
                 }
             }
-            $coverage = array_replace_recursive($coverage, $object->coverage);
+            $coverage = array_replace_recursive($coverage, self::readOwnedCoverage($object));
         }
 
         return $coverage;
+    }
+
+    /**
+     * The coverage an object applies while it draws, as the field's projection applies it: an object presented by
+     * its tiles alone keeps its covered glyphs to the terminal and removes only the source tiles it owns.
+     *
+     * @return array<string, array<string, array<int, array<int, true>>>>
+     */
+    public static function readOwnedCoverage(WorldObjectDefinition $object): array
+    {
+        $coverage = $object->coverage;
+        if ($object->tilePresentation !== [] && $object->sprites === null) { unset($coverage['glyphs']); }
+        return $coverage;
+    }
+
+    /**
+     * The graphical tiles the map's world objects present, by tile layer, row and column, merged as the field
+     * merges available objects' contributions before shaping and shadows.
+     *
+     * @param list<WorldObjectDefinition> $objects
+     * @return array<string, array<int, array<int, int>>>
+     */
+    public static function mergeTilePresentation(array $objects): array
+    {
+        $tiles = [];
+        foreach ($objects as $object) {
+            foreach ($object->tilePresentation as $name => $rows) {
+                foreach ($rows as $y => $cells) { $tiles[$name][$y] = ($tiles[$name][$y] ?? []) + $cells; }
+            }
+        }
+        return $tiles;
     }
 
     public static function validateEntries(ProjectMap $map, array $entries, bool $complete = true): array
@@ -184,6 +215,8 @@ final readonly class WorldObjectAuthoring
         $cells = new RecordSubList(key: 'covers.cells', prefix: 'cell', singular: 'covered cell',
             fields: [new RecordField('x', 'X', InputControlType::INTEGER), new RecordField('y', 'Y', InputControlType::INTEGER)],
             blank: ['x' => 0, 'y' => 0], heading: 'Covered Cells');
+        $tiles = new RecordSubList(key: WorldObjectTileFields::DATA_KEY, prefix: 'objectTile', singular: 'graphical tile',
+            fields: WorldObjectTileFields::getFields($this->map), blank: [], heading: 'Graphical Tiles', removeWhenEmpty: true);
         $signs = self::readSignResources($this->map);
         $schema = new RecordSchema(key: 'world_objects', entryNoun: 'world object', storage: RecordStorage::MAP_OWNED,
             relativePath: '', fields: [], labelKey: 'id',
@@ -199,6 +232,7 @@ final readonly class WorldObjectAuthoring
                         ...(isset($signs[$entry['resource']]) ? [new RecordField('label.default', 'Sign Text'),
                             new RecordField('label.message', 'Sign Text Translation Key')] : [])]
                     : [$resource,
+                        FieldResourceFields::getAppearanceField(),
                         new RecordField('pivot.x', 'Image Pivot X (0..1)', InputControlType::FLOAT),
                         new RecordField('pivot.y', 'Image Pivot Y (0..1)', InputControlType::FLOAT),
                         ...FieldSpriteFields::getFields($entry, true)];
@@ -219,9 +253,10 @@ final readonly class WorldObjectAuthoring
                 }
                 return $fields;
             },
-            subLists: [$variants, $cells],
+            subLists: [$variants, $cells, $tiles],
+            // Any placement, inline or of a resource, may present map-owned tiles on the cells it owns.
             subListsFor: static fn(array $entry): array => [...(array_key_exists('resource', $entry) ? [] : ['variants']),
-                ...(isset($entry['covers']) ? ['covers.cells'] : [])],
+                ...(isset($entry['covers']) ? ['covers.cells'] : []), WorldObjectTileFields::DATA_KEY],
             prepareEdit: function (array $entry, string $field) use ($signs): array {
                 if ($field === 'resource') {
                     // A sign placement needs its label and only a sign accepts one; the board's name starts it.
@@ -230,7 +265,7 @@ final readonly class WorldObjectAuthoring
                     else { $entry['label'] ??= self::makeLabel((string) $entry['id'], $sign); }
                     // A placement's art and pivot are its resource's; without one, the object holds its own, as a new one does.
                     if (array_key_exists('resource', $entry)) {
-                        unset($entry['pivot'], $entry['sprites2d'], $entry['variants']);
+                        unset($entry['pivot'], $entry['sprites2d'], $entry['variants'], $entry['appearance']);
                     } else {
                         $entry['pivot'] ??= ['x' => .5, 'y' => 1.0];
                         $entry['sprites2d'] ??= null;
@@ -249,6 +284,7 @@ final readonly class WorldObjectAuthoring
             if (isset($entry['covers'])) {
                 $entry['covers']['cells'] = array_map(static fn($cell): array => ['x' => $cell[0], 'y' => $cell[1]], $entry['covers']['cells']);
             }
+            $entry = WorldObjectTileFields::readEntry($entry);
             $entry = self::readTerminalChoice($entry, false);
             foreach ($entry['variants'] ?? [] as $index => $variant) { $entry['variants'][$index] = self::readTerminalChoice($variant, true); }
         }
@@ -465,6 +501,12 @@ final readonly class WorldObjectAuthoring
             }
             throw new InvalidArgumentException('No unclaimed cell remains on the covered gameplay layer.');
         }
+        if (!$remove && $item?->listKey === WorldObjectTileFields::DATA_KEY) {
+            $entries = self::readEntries($this->map);
+            [$name, $x, $y, $tile] = WorldObjectTileFields::findUnclaimedTile($this->map, $entries, $index);
+            $entries[$index][WorldObjectTileFields::DATA_KEY][$name][] = ['x' => $x, 'y' => $y, 'tile' => $tile];
+            return $this->writeEntries($entries, 'Add world-object tile');
+        }
         $authoring = new RecordAuthoring();
         $remove ? $authoring->removeItem($records, $index, [], $field) : $authoring->addItem($records, $index, [], $field);
         return $this->writeRecords($records, $remove ? 'Remove world-object item' : 'Add world-object item');
@@ -501,6 +543,35 @@ final readonly class WorldObjectAuthoring
     }
 
     /**
+     * Sets the graphical tiles an object presents on a tile layer of the map, each `[x, y, tile]` on a cell the object
+     * owns; `0` shows no tile there. A cell it already presents is changed in place, a new one is added, as one undo
+     * step. The Engine's own declaration rules decide what is accepted, before anything changes.
+     *
+     * @param list<array{0: int, 1: int, 2: int}> $cells
+     */
+    public function setTiles(string $id, string $layer, array $cells): ?Command
+    {
+        $entries = self::readEntries($this->map);
+        $index = $this->getIndex($id);
+        $entries[$index] = WorldObjectTileFields::setTiles($this->map, $entries[$index], $layer, $cells);
+        return $this->writeEntries($entries, 'Set world-object tiles');
+    }
+
+    /**
+     * Stops an object presenting tiles on cells of a tile layer, each `[x, y]`, so the layer's own tiles show there
+     * again, as one undo step.
+     *
+     * @param list<array{0: int, 1: int}> $cells
+     */
+    public function unsetTiles(string $id, string $layer, array $cells): ?Command
+    {
+        $entries = self::readEntries($this->map);
+        $index = $this->getIndex($id);
+        $entries[$index] = WorldObjectTileFields::unsetTiles($entries[$index], $layer, $cells);
+        return $this->writeEntries($entries, 'Remove world-object tiles');
+    }
+
+    /**
      * Moves an object's anchor and the cells it covers by a step, keeping its
      * shape. The glyphs on those cells are the map's to move with it
      * ({@see EditorSession::moveWorldObject()}).
@@ -528,6 +599,8 @@ final readonly class WorldObjectAuthoring
             }
             $entries[$index]['covers']['cells'] = $cells;
         }
+        // The tiles it presents stand on the cells it owns, so they move with them.
+        $entries[$index] = WorldObjectTileFields::moveTiles($entries[$index], $dx, $dy);
         foreach ([$entries[$index]['anchor'], ...array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1]],
             $entries[$index]['covers']['cells'] ?? [])] as $cell) {
             if ($cell['x'] < 0 || $cell['y'] < 0 || $cell['x'] >= $this->map->getWidth() || $cell['y'] >= $this->map->getHeight()) {
@@ -543,6 +616,7 @@ final readonly class WorldObjectAuthoring
         $entries = array_map(static fn($record): array => (array) $record->toArray(), $records->getRecords());
         foreach ($entries as &$entry) {
             if (isset($entry['covers'])) { $entry['covers']['cells'] = array_map(static fn($cell): array => [$cell['x'], $cell['y']], $entry['covers']['cells']); }
+            $entry = WorldObjectTileFields::writeEntry($entry);
             $entry = self::writeTerminalChoice($entry, false);
             foreach ($entry['variants'] ?? [] as $index => $variant) { $entry['variants'][$index] = self::writeTerminalChoice($variant, true); }
         }
@@ -558,6 +632,7 @@ final readonly class WorldObjectAuthoring
     private function writeEntries(array $entries, string $label): ?Command
     {
         $before = $this->map->getMapDataField([WorldObjectDefinition::DATA_KEY]);
+        $entries = array_map(WorldObjectTileFields::keepPresentation(...), $entries);
         if ($before === $entries) { return null; }
         self::validateEntries($this->map, $entries, false);
         if (($issue = $this->getSourceIssue()) !== null) { throw new MapSourceRefusal($issue); }

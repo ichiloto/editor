@@ -132,36 +132,37 @@ final class ArraySourceWriter
         }
 
         $writer = new self($document);
-        $writer->diff($document->root(), $old, $new, []);
+        $writer->diff($document->root(), null, $old, $new, []);
         $writer->flushAppends();
 
         return $document->withEdits($writer->edits);
     }
 
     /**
-     * @param array<int, int|string> $path
+     * @param SourceEntry|null $holder The entry whose value the node is; null for the returned array.
+     * @param array<int, int|string> $path The value's path in what the file evaluates to, for diagnostics.
      */
-    private function diff(SourceNode $node, mixed $old, mixed $new, array $path): void
+    private function diff(SourceNode $node, ?SourceEntry $holder, mixed $old, mixed $new, array $path): void
     {
         if ($old === $new) {
             return;
         }
 
         if ($node->kind === SourceNode::VARIABLE) {
-            $this->diffVariable($node, $old, $new, $path);
+            $this->diffVariable($node, $holder, $old, $new, $path);
 
             return;
         }
 
         if (is_array($new) && $this->outgrowsItsLine($node, $new, $path)) {
             // Plain data written on one line that would grow past the width is written an entry per line instead.
-            $this->edits[] = $this->document->replaceValueEdit($path, $this->literalFor($new, $path, true, true));
+            $this->edits[] = $this->planValueReplacement($holder, $path, $this->literalFor($new, $path, true, true));
 
             return;
         }
 
         if (is_array($new)) {
-            $this->diffArray($node, is_array($old) ? $old : null, $new, $path);
+            $this->diffArray($node, $holder, is_array($old) ? $old : null, $new, $path);
 
             return;
         }
@@ -175,7 +176,7 @@ final class ArraySourceWriter
         // An enum case's value, written as `Enum::CASE->value`, stays written
         // that way: the new value is the matching case of the same enum.
         if ($node->kind === SourceNode::EXPRESSION && ($literal = $this->findEnumValueExpression($node, $new)) !== null) {
-            $this->edits[] = $this->document->replaceValueEdit($path, $literal);
+            $this->edits[] = $this->planValueReplacement($holder, $path, $literal);
 
             return;
         }
@@ -183,9 +184,9 @@ final class ArraySourceWriter
         // A scalar or null now sits here. An array written as plain data (literals only, no comments) holds nothing
         // authored beyond its values, so the new value takes its place; anything more stays refused below.
         match ($node->kind) {
-            SourceNode::SCALAR => $this->edits[] = $this->replacementFor($node, $path, $new),
+            SourceNode::SCALAR => $this->edits[] = $this->replacementFor($holder, $path, $new),
             SourceNode::ARRAY => $this->isPlainData($node)
-                ? $this->edits[] = $this->replacementFor($node, $path, $new)
+                ? $this->edits[] = $this->replacementFor($holder, $path, $new)
                 : throw new SourcePreservationRefusal(sprintf(
                     'The value at %s is an array in the file and cannot be replaced by a single value without rewriting it.',
                     PhpArraySourceDocument::describePath($path),
@@ -259,30 +260,45 @@ final class ArraySourceWriter
      * @param array<array-key, mixed> $new
      * @param array<int, int|string> $path
      */
-    private function diffArray(SourceNode $node, ?array $old, array $new, array $path): void
+    private function diffArray(SourceNode $node, ?SourceEntry $holder, ?array $old, array $new, array $path): void
     {
         if ($node->kind !== SourceNode::ARRAY) {
             if ($node->kind === SourceNode::EXPRESSION) {
-                throw new SourcePreservationRefusal(sprintf(
-                    'The value at %s is written as an expression the editor cannot rewrite.',
-                    PhpArraySourceDocument::describePath($path),
-                ));
+                $this->extendExpression($node, $holder, $old, $new, $path);
+
+                return;
             }
 
             // A scalar holding what is now an array: the literal takes its place.
-            $this->edits[] = $this->replacementFor($node, $path, $new);
+            $this->edits[] = $this->replacementFor($holder, $path, $new);
 
             return;
         }
 
         if ($node->hasOpaqueKey) {
-            throw new SourcePreservationRefusal(sprintf(
-                'The array at %s has a key or spread the editor cannot read, so it will not rewrite the array.',
-                PhpArraySourceDocument::describePath($path),
-            ));
+            if (! $node->canAddressAroundSpreads()) {
+                throw new SourcePreservationRefusal(sprintf(
+                    'The array at %s has a key or spread the editor cannot read, so it will not rewrite the array.',
+                    PhpArraySourceDocument::describePath($path),
+                ));
+            }
+
+            $node->isList
+                ? $this->diffListAroundSpread($node, $old ?? [], $new, $path)
+                : $this->diffKeysAroundSpreads($node, $old ?? [], $new, $path);
+
+            return;
         }
 
         $old ??= [];
+
+        if ($new === [] && $path !== [] && $node->entries !== [] && $this->isPlainData($node)) {
+            // Plain data emptied of every entry holds nothing authored beyond them, so it is written
+            // as the empty array, as it was before an entry was added, not as brackets around blank lines.
+            $this->edits[] = $this->replacementFor($holder, $path, $new);
+
+            return;
+        }
 
         if ($node->isList && $node->entries !== []) {
             if (! array_is_list($new)) {
@@ -292,14 +308,14 @@ final class ArraySourceWriter
                 ));
             }
 
-            $this->diffList($node, array_values($old), $new, $path);
+            $this->diffList($node, array_values($old), $new, $path, 0, count($node->entries), 0, 0);
 
             return;
         }
 
         if ($node->entries === [] && array_is_list($new)) {
             // An empty array in the file gaining list entries.
-            $this->diffList($node, [], $new, $path);
+            $this->diffList($node, [], $new, $path, 0, 0, 0, 0);
 
             return;
         }
@@ -313,7 +329,7 @@ final class ArraySourceWriter
             $entry = $node->entryFor($key);
 
             if ($entry !== null && array_key_exists($key, $old)) {
-                $this->diff($entry->value, $old[$key], $value, [...$path, $key]);
+                $this->diff($entry->value, $entry, $old[$key], $value, [...$path, $key]);
 
                 continue;
             }
@@ -334,9 +350,201 @@ final class ArraySourceWriter
 
         foreach ($node->entries as $index => $entry) {
             if ($entry->key !== null && ! array_key_exists($entry->key, $new)) {
-                $this->queueRemoval($node, $index, [...$path, $entry->key]);
+                $this->queueRemoval($node, $index);
             }
         }
+    }
+
+    /**
+     * Diffs a list that splices in the entries of one spread.
+     *
+     * Every other entry the list writes is one item of what it evaluates to,
+     * so the spread's items are the run left between them: their count is
+     * what the list evaluates to less the entries written around it. Those
+     * items are PHP's, built where the spread names them, and stay exactly
+     * as they are; the entries written before and after the spread are
+     * aligned with what the new value holds there, as any list's entries are.
+     * A list with two or more spreads gives no count to each without
+     * evaluating them, so it is refused.
+     *
+     * @param array<array-key, mixed> $old
+     * @param array<array-key, mixed> $new
+     * @param array<int, int|string> $path
+     */
+    private function diffListAroundSpread(SourceNode $node, array $old, array $new, array $path): void
+    {
+        $spreads = $node->findSpreadPositions();
+
+        if (count($spreads) !== 1) {
+            throw new SourcePreservationRefusal(sprintf(
+                'The list at %s splices in %d spreads, and which entries each adds is known only by evaluating them, so the editor will not rewrite the list.',
+                PhpArraySourceDocument::describePath($path),
+                count($spreads),
+            ));
+        }
+
+        $at = $spreads[0];
+        $written = count($node->entries) - 1;
+        $spliced = count($old) - $written;
+
+        if (! array_is_list($old) || ! array_is_list($new) || $spliced < 0) {
+            throw new SourcePreservationRefusal(sprintf(
+                'The list at %s does not evaluate to a list its spread and entries account for, so the editor will not rewrite it.',
+                PhpArraySourceDocument::describePath($path),
+            ));
+        }
+
+        $items = array_slice($old, $at, $spliced);
+        $start = $this->findSplicedRun($new, $items, $at);
+
+        if ($start === null) {
+            throw new SourcePreservationRefusal(sprintf(
+                'The entries the spread at %s adds would change; they are built where the spread names them, so change them there.',
+                PhpArraySourceDocument::describePath([...$path, $at]),
+            ));
+        }
+
+        $this->diffList($node, array_slice($old, 0, $at), array_slice($new, 0, $start), $path, 0, $at, 0, 0);
+        $this->diffList(
+            $node,
+            array_slice($old, $at + $spliced),
+            array_slice($new, $start + $spliced),
+            $path,
+            $at + 1,
+            count($node->entries),
+            $at + $spliced,
+            $start + $spliced,
+        );
+    }
+
+    /**
+     * Returns where the new value holds a spread's items unchanged: where
+     * they stood when nothing before them was added or removed, otherwise
+     * the first place they appear. Any place evaluates to the same list, so
+     * the one that keeps the entries around the spread where they are wins.
+     *
+     * @param list<mixed> $new
+     * @param list<mixed> $items
+     */
+    private function findSplicedRun(array $new, array $items, int $preferred): ?int
+    {
+        $length = count($items);
+        $last = count($new) - $length;
+
+        if ($preferred <= $last && array_slice($new, $preferred, $length) === $items) {
+            return $preferred;
+        }
+
+        for ($start = 0; $start <= $last; $start++) {
+            if (array_slice($new, $start, $length) === $items) {
+                return $start;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Diffs a keyed array that merges in spreads.
+     *
+     * A key written after every spread holds what the file writes there,
+     * whatever a spread adds, so its value is edited in place, and a key the
+     * array does not hold yet is added after its last entry, where it is
+     * equally the file's. A key written before a spread, or added by one, may
+     * hold what the spread brings, and a key cut could still arrive with it:
+     * those changes are known only by evaluating the spread, so they are
+     * refused.
+     *
+     * @param array<array-key, mixed> $old
+     * @param array<array-key, mixed> $new
+     * @param array<int, int|string> $path
+     */
+    private function diffKeysAroundSpreads(SourceNode $node, array $old, array $new, array $path): void
+    {
+        $spreads = $node->findSpreadPositions();
+        $lastSpread = $spreads[count($spreads) - 1];
+        $added = array_slice($new, count($old), null, true);
+
+        if (array_keys(array_slice($new, 0, count($old), true)) !== array_keys($old)) {
+            throw new SourcePreservationRefusal(sprintf(
+                'The array at %s merges in a spread, so the editor only changes keys written after it and adds keys at its end; removing or reordering keys would rewrite what the spread brings.',
+                PhpArraySourceDocument::describePath($path),
+            ));
+        }
+
+        foreach ($old as $key => $value) {
+            if ($value === $new[$key]) {
+                continue;
+            }
+
+            $entry = null;
+
+            foreach ($node->entries as $index => $candidate) {
+                if ($index > $lastSpread && $candidate->key === $key) {
+                    $entry = $candidate;
+                }
+            }
+
+            if ($entry === null) {
+                throw new SourcePreservationRefusal(sprintf(
+                    'The value at %s comes from a spread, or is written before one that may replace it, so the editor will not rewrite it.',
+                    PhpArraySourceDocument::describePath([...$path, $key]),
+                ));
+            }
+
+            $this->diff($entry->value, $entry, $value, $new[$key], [...$path, $key]);
+        }
+
+        foreach ($added as $key => $value) {
+            $this->queueAppend($node, $key, $this->literalFor($value, [...$path, $key], $this->sharesEntryLines($node)));
+        }
+    }
+
+    /**
+     * Gives a record written as an expression the fields the new value adds.
+     *
+     * The expression stays exactly as written and is spread into an array
+     * that writes the added fields after it: `$line('Kaelion', 'What?')`
+     * taking an emotion becomes
+     * `[...$line('Kaelion', 'What?'), 'emotion' => 'Sad']`. That holds for a
+     * record -- named fields, at least one -- whose every field keeps its
+     * value and order. Changing or removing what the expression returns
+     * would rewrite the expression, and a list or empty value it returns is
+     * the code's to grow, so those are refused.
+     *
+     * @param array<array-key, mixed>|null $old
+     * @param array<array-key, mixed> $new
+     * @param array<int, int|string> $path
+     */
+    private function extendExpression(SourceNode $node, ?SourceEntry $holder, ?array $old, array $new, array $path): void
+    {
+        $kept = $old === null ? null : array_slice($new, 0, count($old), true);
+        $added = $old === null ? [] : array_slice($new, count($old), null, true);
+
+        $isRecord = static fn(array $value): bool => array_all(array_keys($value), static fn(int|string $key): bool => is_string($key));
+
+        if ($old === null || $old === [] || $holder === null || $node->kind !== SourceNode::EXPRESSION
+            || ! $isRecord($old) || ! $isRecord($added) || $kept !== $old || $added === []
+            || str_starts_with($this->readNodeSource($node), '...')) {
+            throw new SourcePreservationRefusal(sprintf(
+                'The value at %s is written as an expression the editor cannot rewrite.',
+                PhpArraySourceDocument::describePath($path),
+            ));
+        }
+
+        $parts = ['...' . $this->readNodeSource($node)];
+
+        foreach ($added as $key => $value) {
+            $parts[] = var_export($key, true) . ' => ' . $this->literalFor($value, [...$path, $key], true, true);
+        }
+
+        $this->edits[] = $this->planValueReplacement($holder, $path, '[' . implode(', ', $parts) . ']');
+    }
+
+    /** The bytes a node occupies. */
+    private function readNodeSource(SourceNode $node): string
+    {
+        return substr($this->document->source, $node->start, $node->end - $node->start);
     }
 
     /**
@@ -348,11 +556,18 @@ final class ArraySourceWriter
      * and any that no longer sit in order are moved with their bytes,
      * patches included. What remains is inserted or removed.
      *
-     * @param array<int, mixed> $old
-     * @param array<int, mixed> $new
+     * The list may be one run of a list's entries -- those written before
+     * or after a spread -- which the old items stand for one to one.
+     *
+     * @param array<int, mixed> $old The run's items as the file evaluates them.
+     * @param array<int, mixed> $new The items the run should now hold.
      * @param array<int, int|string> $path
+     * @param int $first The source position of the run's first entry.
+     * @param int $end The source position just past the run: where an item after all of its entries goes.
+     * @param int $oldBase The position of the run's first old item in what the list evaluates to.
+     * @param int $newBase The position of its first new item in the new value.
      */
-    private function diffList(SourceNode $node, array $old, array $new, array $path): void
+    private function diffList(SourceNode $node, array $old, array $new, array $path, int $first, int $end, int $oldBase, int $newBase): void
     {
         $oldCount = count($old);
         $newCount = count($new);
@@ -477,11 +692,22 @@ final class ArraySourceWriter
             $previousNew = $anchorNew;
         }
 
-        $this->emitListMatches($node, $old, $new, $path, $matchedOld, $matchedNew);
+        $this->emitListMatches($node, $old, $new, $path, $matchedOld, $matchedNew, $first, $end, $oldBase, $newBase);
     }
 
     /** Emit aligned entries through the same source/comment ownership rules for every list. */
-    private function emitListMatches(SourceNode $node, array $old, array $new, array $path, array $matchedOld, array $matchedNew): void
+    private function emitListMatches(
+        SourceNode $node,
+        array $old,
+        array $new,
+        array $path,
+        array $matchedOld,
+        array $matchedNew,
+        int $first,
+        int $end,
+        int $oldBase,
+        int $newBase,
+    ): void
     {
         // 6. Which matched entries stay in place: the longest run of them
         //    whose old order agrees with their new order. The rest move.
@@ -506,12 +732,13 @@ final class ArraySourceWriter
         //    gone; then, in new order, insertions and moves ahead of the
         //    next kept entry, or after everything.
         foreach ($kept as $j => $i) {
-            $this->diff($node->entries[$i]->value, $old[$i], $new[$j], [...$path, $i]);
+            $entry = $node->entries[$first + $i];
+            $this->diff($entry->value, $entry, $old[$i], $new[$j], [...$path, $oldBase + $i]);
         }
 
         foreach ($old as $i => $entry) {
             if (! isset($matchedOld[$i])) {
-                $this->queueRemoval($node, $i, [...$path, $i]);
+                $this->queueRemoval($node, $first + $i);
             }
         }
 
@@ -519,7 +746,7 @@ final class ArraySourceWriter
         $anchors = [];
         for ($j = count($new) - 1; $j >= 0; $j--) {
             $anchors[$j] = $anchor;
-            if (isset($kept[$j])) { $anchor = $kept[$j]; }
+            if (isset($kept[$j])) { $anchor = $first + $kept[$j]; }
         }
         $inline = $this->prefersInline($node);
         foreach ($new as $j => $item) {
@@ -527,25 +754,25 @@ final class ArraySourceWriter
                 continue;
             }
 
-            $position = $anchors[$j] ?? count($node->entries);
+            $position = $anchors[$j] ?? $end;
 
             if (isset($moved[$j])) {
-                $this->emitMove($node, $moved[$j], $old[$moved[$j]], $item, $path, $position);
+                $this->emitMove($node, $first + $moved[$j], $old[$moved[$j]], $item, [...$path, $oldBase + $moved[$j]], $position);
 
                 continue;
             }
 
             if ($position >= count($node->entries)) {
-                $this->queueAppend($node, null, $this->literalFor($item, [...$path, $j], $inline));
+                $this->queueAppend($node, null, $this->literalFor($item, [...$path, $newBase + $j], $inline));
 
                 continue;
             }
 
-            $this->edits[] = $this->document->insertEntryEdit(
-                $path,
+            $this->edits[] = $this->document->insertEntryIntoEdit(
+                $node,
                 $position,
                 null,
-                $this->literalFor($item, [...$path, $j], $inline),
+                $this->literalFor($item, [...$path, $newBase + $j], $inline),
             );
         }
     }
@@ -576,15 +803,16 @@ final class ArraySourceWriter
      * written a line per entry; at flush time, with the separators that
      * joined it, from one whose entries share their lines.
      *
-     * @param array<int, int|string> $path The entry's path.
+     * @param int $index The entry's source position.
      */
-    private function queueRemoval(SourceNode $node, int $index, array $path): void
+    private function queueRemoval(SourceNode $node, int $index): void
     {
         $id = spl_object_id($node);
         $this->removedEntries[$id][$index] = true;
 
         if (! $this->document->sharesLines($node)) {
-            $this->edits[] = $this->document->removeEntryEdit($path);
+            [$start, $end] = $this->document->blockSpan($node->entries[$index]);
+            $this->edits[] = [$start, $end, ''];
 
             return;
         }
@@ -682,15 +910,18 @@ final class ArraySourceWriter
      * Returns whether a list writes each entry on one line -- a keyframe
      * list in the game's own timelines does -- so a new entry reads like its
      * neighbours. A list whose entries span several lines each (a states
-     * file) gets new entries written the same way.
+     * file) gets new entries written the same way. A spread writes no entry
+     * of its own here, so it leaves the choice to the entries around it.
      */
     private function prefersInline(SourceNode $list): bool
     {
-        if ($list->entries === []) {
+        $entries = array_filter($list->entries, static fn(SourceEntry $entry): bool => ! $entry->isSpread);
+
+        if ($entries === []) {
             return false;
         }
 
-        foreach ($list->entries as $entry) {
+        foreach ($entries as $entry) {
             if ($entry->value->kind !== SourceNode::ARRAY
                 || str_contains(substr($this->document->source, $entry->value->start, $entry->value->end - $entry->value->start), "\n")) {
                 return false;
@@ -712,12 +943,12 @@ final class ArraySourceWriter
      * @param array<int, int|string> $path The value's path.
      * @return list<array{0: int, 1: int, 2: string}>
      */
-    private function planPatchesWithin(SourceNode $value, mixed $oldValue, mixed $newValue, array $path, int $start, int $end): array
+    private function planPatchesWithin(SourceEntry $holder, mixed $oldValue, mixed $newValue, array $path, int $start, int $end): array
     {
         $deferred = [$this->appends, $this->inserts, $this->sharedLineRemovals];
         [$this->appends, $this->inserts, $this->sharedLineRemovals] = [[], [], []];
         $before = count($this->edits);
-        $this->diff($value, $oldValue, $newValue, $path);
+        $this->diff($holder->value, $holder, $oldValue, $newValue, $path);
         $this->flushAppends();
         [$this->appends, $this->inserts, $this->sharedLineRemovals] = $deferred;
         $inner = [];
@@ -740,7 +971,9 @@ final class ArraySourceWriter
      * patches its new value needs applied inside them -- ahead of another
      * position.
      *
-     * @param array<int, int|string> $path The list's path.
+     * @param int $from The entry's source position.
+     * @param array<int, int|string> $path The moving value's path.
+     * @param int $position The source position it goes ahead of.
      */
     private function emitMove(SourceNode $list, int $from, mixed $oldValue, mixed $newValue, array $path, int $position): void
     {
@@ -751,7 +984,7 @@ final class ArraySourceWriter
         // to its own bytes from the end forward.
         $block = substr($this->document->source, $start, $end - $start);
 
-        foreach ($this->planPatchesWithin($entry->value, $oldValue, $newValue, [...$path, $from], $start, $end) as [$editStart, $editEnd, $text]) {
+        foreach ($this->planPatchesWithin($entry, $oldValue, $newValue, $path, $start, $end) as [$editStart, $editEnd, $text]) {
             $block = substr($block, 0, $editStart - $start) . $text . substr($block, $editEnd - $start);
         }
 
@@ -1032,18 +1265,33 @@ final class ArraySourceWriter
     }
 
     /**
-     * Plans replacing a node with the literal for a value.
+     * Plans replacing an entry's value with the literal for a value.
      *
      * @param array<int, int|string> $path
      * @return array{0: int, 1: int, 2: string}
      */
-    private function replacementFor(SourceNode $node, array $path, mixed $value): array
+    private function replacementFor(?SourceEntry $holder, array $path, mixed $value): array
     {
         // An entry sharing its line with its neighbours keeps a value that fits there on that line.
-        $entry = $this->document->entryAt($path);
-        $inline = $entry !== null && $this->document->lineIndentBefore($entry->start) === null && $this->fitsOnOneLine($value);
+        $inline = $holder !== null && $this->document->lineIndentBefore($holder->start) === null && $this->fitsOnOneLine($value);
 
-        return $this->document->replaceValueEdit($path, $this->literalFor($value, $path, $inline));
+        return $this->planValueReplacement($holder, $path, $this->literalFor($value, $path, $inline));
+    }
+
+    /**
+     * Plans replacing the value an entry holds with a literal. The returned
+     * array itself is no entry's value, so it is never replaced whole.
+     *
+     * @param array<int, int|string> $path
+     * @return array{0: int, 1: int, 2: string}
+     */
+    private function planValueReplacement(?SourceEntry $holder, array $path, string $literal): array
+    {
+        if ($holder === null) {
+            throw new \RuntimeException(sprintf('No entry at %s to replace.', PhpArraySourceDocument::describePath($path)));
+        }
+
+        return $this->document->replaceEntryValueEdit($holder, $literal);
     }
 
     /**
@@ -1057,7 +1305,7 @@ final class ArraySourceWriter
      *
      * @param array<int, int|string> $path
      */
-    private function diffVariable(SourceNode $node, mixed $old, mixed $new, array $path): void
+    private function diffVariable(SourceNode $node, ?SourceEntry $holder, mixed $old, mixed $new, array $path): void
     {
         $name = $node->variable ?? '';
 
@@ -1075,7 +1323,7 @@ final class ArraySourceWriter
             $this->hosts[] = $name;
 
             try {
-                $this->diff($written, $old, $new, $path);
+                $this->diff($written, $holder, $old, $new, $path);
             } finally {
                 array_pop($this->hosts);
             }
@@ -1094,7 +1342,7 @@ final class ArraySourceWriter
             ));
         }
 
-        $this->retargetVariable($node, $path, $new);
+        $this->retargetVariable($node, $holder, $path, $new);
     }
 
     /**
@@ -1107,7 +1355,7 @@ final class ArraySourceWriter
      *
      * @param array<int, int|string> $path
      */
-    private function retargetVariable(SourceNode $node, array $path, mixed $new): void
+    private function retargetVariable(SourceNode $node, ?SourceEntry $holder, array $path, mixed $new): void
     {
         $name = $node->variable ?? '';
         $variable = $this->document->variable($name);
@@ -1125,12 +1373,12 @@ final class ArraySourceWriter
 
             $fresh = $this->claimVariable($name);
             $this->edits[] = $this->document->defineVariableEdit($fresh, $new, $this->findHost());
-            $this->edits[] = $this->document->replaceValueEdit($path, '$' . $fresh);
+            $this->edits[] = $this->planValueReplacement($holder, $path, '$' . $fresh);
 
             return;
         }
 
-        $this->edits[] = $this->replacementFor($node, $path, $new);
+        $this->edits[] = $this->replacementFor($holder, $path, $new);
     }
 
     /**

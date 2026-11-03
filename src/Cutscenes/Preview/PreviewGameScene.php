@@ -23,6 +23,7 @@ use Ichiloto\Engine\Field\NpcManager;
 use Ichiloto\Engine\Progress\Bestiary;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeCatalog;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeProgressService;
+use Ichiloto\Engine\Rendering\Presentation\ScenePresentationContext;
 use Ichiloto\Engine\Scenes\Game\GameScene;
 
 /**
@@ -90,6 +91,17 @@ final class PreviewGameScene extends GameScene
         if ($this->shownEffect !== null) {
             $this->showFieldEffect(...$this->shownEffect);
         }
+    }
+
+    /**
+     * Gives the scene back a presentation a graphical one replaced, with the
+     * field effects that presentation draws: sprites for a graphical view,
+     * glyphs for the Terminal screen.
+     */
+    public function restorePresentation(?ScenePresentationContext $context): void
+    {
+        $this->setPresentationContext($context);
+        $this->installFieldEffects($context?->graphical === true ? EffectPresentation::GRAPHICAL : EffectPresentation::TERMINAL);
     }
 
     /**

@@ -10,6 +10,7 @@ use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Editor\Progression\ProjectWorldAbilities;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Storage\SourceSetPlan;
@@ -72,6 +73,18 @@ final class MapLinePlanner
         $removal = new LineRemoval($mapId, $axis, $at, $count, $landing);
 
         return ProjectDirectoryContext::run($projectRoot, static fn(string $root): MapLinePlan => self::buildPlan($root, $removal));
+    }
+
+    /**
+     * Where the player can reach in the project as saved, with the project's current world abilities installed.
+     *
+     * @throws RuntimeException When the project's world abilities cannot be read.
+     */
+    private static function analyzeReachability(string $root): ProjectReachability
+    {
+        ProjectWorldAbilities::installFromProject($root)->assertReadable();
+
+        return ProjectReachability::analyze($root . '/assets');
     }
 
     private static function buildPlan(string $root, MapLineEdit $edit): MapLinePlan
@@ -174,7 +187,7 @@ final class MapLinePlanner
 
         $notes = [];
         $manifestPath = $root . '/' . self::MANIFEST;
-        $report = array_key_exists($manifestPath, $payloads) ? ProjectReachability::analyze($root . '/assets')->reports[$edit->mapId] ?? null : null;
+        $report = array_key_exists($manifestPath, $payloads) ? self::analyzeReachability($root)->reports[$edit->mapId] ?? null : null;
         if (! array_key_exists($manifestPath, $payloads)) {
             $notes[] = sprintf('Existing saves are not migrated: the project has no %s.', self::MANIFEST);
         } elseif (! ($report?->isAnyReachable(new Rect(0, 0, max(1, $width), max(1, $height))) ?? false)) {

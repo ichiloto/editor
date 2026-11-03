@@ -85,8 +85,10 @@ final class PhysicalOccupancyEditor
             throw new MapSourceRefusal('Physical occupancy must be explicitly migrated before stamping. Nothing was changed.');
         }
         $rows = $map->getResolvedCollisionMap();
-        if (! isset($rows[$y][$x])) {
-            throw new MapSourceRefusal("Physical origin {$x}, {$y} is outside the map. Nothing was changed.");
+        // A piece stands on its ground rows; its overhang above them holds no collision.
+        $ground = $y + $piece->overhang;
+        if (! isset($rows[$ground][$x])) {
+            throw new MapSourceRefusal("Physical origin {$x}, {$ground} is outside the map. Nothing was changed.");
         }
         $writes = [];
         foreach ($piece->occupancy as $dy => $row) {

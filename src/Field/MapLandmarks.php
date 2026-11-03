@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Field;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
+use Ichiloto\Engine\Events\Triggers\PassageEventTrigger;
 use Ichiloto\Engine\Field\MapCategoryCatalog;
 use Ichiloto\Engine\Field\MapLandmarkAnchors;
 use Ichiloto\Engine\Field\Validation\MapEventResolver;
@@ -147,7 +148,7 @@ final readonly class MapLandmarks
      * Every anchor on the map with what an author reads for it, whether it is a transfer, and the landmark already
      * describing it, if any.
      *
-     * @return list<array{anchor: array<string, string>, value: string, label: string, transfer: bool, landmark: ?string}>
+     * @return list<array{anchor: array<string, string>, value: string, label: string, transfer: bool, route: bool, landmark: ?string}>
      */
     public function describeAnchors(): array
     {
@@ -165,7 +166,7 @@ final readonly class MapLandmarks
                 $reference = [$kind => (string) $id];
                 $value = self::encodeAnchor($reference);
                 $described[] = ['anchor' => $reference, 'value' => $value, 'label' => $this->describeAnchor($reference),
-                    'transfer' => $anchor->isTransfer, 'landmark' => $claimed[$value] ?? null];
+                    'transfer' => $anchor->isTransfer, 'route' => $anchor->isRoute, 'landmark' => $claimed[$value] ?? null];
             }
         }
         return $described;
@@ -203,7 +204,8 @@ final readonly class MapLandmarks
         if ($kind === 'trigger') { return true; }
         if ($kind === 'object' || $kind === MapAreaAuthoring::ANCHOR_KIND) { return false; }
         $definition = $this->map->getEventDefinition((string) $anchor[$kind]);
-        return is_array($definition) && self::isTransfer($definition);
+        return is_array($definition) && (self::isTransfer($definition)
+            || is_a($definition['class'] ?? '', PassageEventTrigger::class, true));
     }
 
     /**

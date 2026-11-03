@@ -82,7 +82,13 @@ final class ProjectRecordDatabase
         return ($this->recordReferences === null ? null : ($this->recordReferences)($record)) ?? $this->authoringReferences;
     }
 
-    private function coerceReferenceField(ProjectRecord $record, RecordField $field, string $rawValue, array $ownerPath = []): mixed
+    /**
+     * @param list<int|string> $ownerPath Where the field is in the record, its own key included.
+     * @param array<array-key, mixed>|null $entry The list entry the field belongs to, as the list reads it; a keyed
+     *   list's entry is not where its path reads in the record, so its choices read the entry itself.
+     */
+    private function coerceReferenceField(ProjectRecord $record, RecordField $field, string $rawValue, array $ownerPath = [],
+        ?array $entry = null): mixed
     {
         $authored = (array) $record->toArray();
         foreach ($ownerPath === [] ? explode('.', $field->key) : $ownerPath as $segment) {
@@ -93,14 +99,25 @@ final class ProjectRecordDatabase
         }
         $value = self::coerce($field, $rawValue);
         $references = $this->findRecordReferences($record);
+        // What the field lives in, as its row reads it: its entry, or where its path reads in the record.
+        $parent = implode('.', array_slice(explode('.', $field->key), 0, -1));
+        $holder = $entry !== null ? ($parent === '' ? $entry : self::readNested($entry, $parent))
+            : self::readNested((array) $record->toArray(), implode('.', array_slice($ownerPath === [] ? explode('.', $field->key) : $ownerPath, 0, -1)));
         if ($references !== null && $field->entryChoices !== null && $value !== null) {
-            // The choices read what the field lives in, as its row does.
-            $holder = self::readNested((array) $record->toArray(), implode('.', array_slice($ownerPath === [] ? explode('.', $field->key) : $ownerPath, 0, -1)));
-            if (! in_array($value, $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], (array) $record->toArray()), true)) {
+            if (! in_array($value, $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], (array) $record->toArray(),
+                $field->entryChoicesSelector), true)) {
                 throw new \InvalidArgumentException(sprintf('%s "%s" is not one this entry offers; choose one of its own.', $field->label, strval($value)));
             }
         }
-        if ($references !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects'], true) && $value !== null) {
+        if ($field->codec === RecordFieldCodec::POSE_IMPACT_ENTRY && $value !== null) {
+            // An impact names one of the pose's own playback entries, and only while it plays once.
+            if (! array_key_exists($value, PoseImpactEntries::listEntries(is_array($holder) ? $holder : []))) {
+                throw new \InvalidArgumentException(sprintf('%s must be one of the pose\'s own playback entries, and the pose must play once (Loops false). Nothing was changed.',
+                    $field->label));
+            }
+        }
+        if ($references !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects',
+            \Ichiloto\Editor\Field\NpcBedFields::BED_OBJECTS], true) && $value !== null) {
             $choices = $field->reference === 'cinematic_movement_routes'
                 ? $references->getMovementRouteIds($record, $ownerPath)
                 : $references->valuesFor($field->reference);
@@ -108,6 +125,14 @@ final class ProjectRecordDatabase
                 if (! in_array($selected, $choices, true)) {
                     throw new \InvalidArgumentException(sprintf('Unknown %s "%s"; choose a project resource.', $field->reference, strval($selected)));
                 }
+            }
+        }
+        $scoped = $references !== null && $field->reference !== null && $value !== null ? $references->listScopedChoices($field->reference) : null;
+        foreach ($scoped === null ? [] : (is_array($value) ? $value : [$value]) as $selected) {
+            if (! in_array($selected, $scoped, true)) {
+                // Choices that depend on where the script runs: refused only where that is known.
+                throw new \InvalidArgumentException(sprintf('%s "%s" is not one this script can name here; choose one from the picker.',
+                    $field->label, is_scalar($selected) ? strval($selected) : get_debug_type($selected)));
             }
         }
         return $value;
@@ -150,13 +175,19 @@ final class ProjectRecordDatabase
     /**
      * @param (\Closure(int): ?int)|null $indexMap How entries' indexes moved, for a list whose entries the
      *   record names by index; null when none moved.
+     * @param array{0: string, 1: ?string}|null $keyChange For a keyed list the record names entries of by key, the
+     *   key that changed and what it became, null for a removed entry; null when no key changed.
      */
-    private function writeRecordEntries(ProjectRecord $record, RecordSubList $list, array $entries, ?\Closure $indexMap = null): void
+    private function writeRecordEntries(ProjectRecord $record, RecordSubList $list, array $entries, ?\Closure $indexMap = null,
+        ?array $keyChange = null): void
     {
         $draft = clone $record;
         $draft->setEntries($list, $entries);
         if ($indexMap !== null && $list->remapIndexReferences !== null) {
             $draft->restorePayload(($list->remapIndexReferences)((array) $draft->toArray(), $indexMap));
+        }
+        if ($keyChange !== null && $list->remapKeyReferences !== null && $keyChange[0] !== $keyChange[1]) {
+            $draft->restorePayload(($list->remapKeyReferences)((array) $draft->toArray(), $keyChange[0], $keyChange[1]));
         }
         $this->assertProposedRecord($record, $draft);
         $record->restorePayload($draft->toArray());
@@ -616,26 +647,50 @@ final class ProjectRecordDatabase
             $row['options'] = $field->allowsNone ? ['None', ...$labels] : $labels;
             $row['value'] = is_int($current) ? ($labels[$current] ?? sprintf('Member %d (not in this troop)', $current + 1)) : 'None';
         }
+        if ($field->codec === RecordFieldCodec::POSE_IMPACT_ENTRY && ($row['editable'] ?? true) !== false) {
+            // Chosen among the pose's own playback entries, each with the cell it plays.
+            $current = self::readNested($entry, $field->key);
+            unset($row['control']);
+            $row['options'] = ['', ...array_values(PoseImpactEntries::listEntries($entry))];
+            $row['value'] = is_int($current) ? PoseImpactEntries::describeValue($current, $entry) : $field->noneLabel();
+        }
         if ($field->referenceMapKey !== null) {
             // A map-local reference reads the map its own entry names.
             $map = self::readNested($entry, $field->referenceMapKey);
             $row['referenceMap'] = is_string($map) ? $map : '';
         }
-        if ($field->entryChoices !== null && $references !== null && ($row['editable'] ?? true) !== false) {
-            // A field of the entry itself lives in the entry.
-            $holderPath = implode('.', array_slice(explode('.', $field->key), 0, -1));
-            $holder = $holderPath === '' ? $entry : self::readNested($entry, $holderPath);
-            $values = $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], $owner);
-            $row['options'] = ['', ...$values];
-            $row['choices'] = [['value' => '', 'label' => $field->noneLabel()],
-                ...array_map(static fn(string $value): array => ['value' => $value, 'label' => $value], $values)];
-        }
+        $row = self::describeEntryChoices($field, $row, $entry, $owner, $references);
         if ($field->dialogueSpeaker === null || $this->authoringReferences === null) {
             return [$row];
         }
 
         return DialogueEmotionFields::describeRows($row, self::readNested($entry, $field->key),
             $this->authoringReferences->describeDialogueEmotions($field->dialogueSpeaker, $entry, $owner));
+    }
+
+    /**
+     * A row chosen among the values its own entry decides, with those values
+     * as its options ({@see RecordField::$entryChoices}); any other row as it is.
+     *
+     * @param array<string, mixed> $row
+     * @param array<string, mixed> $entry What the field belongs to: a list entry, or the record itself.
+     * @param array<string, mixed> $owner The record.
+     * @return array<string, mixed>
+     */
+    private static function describeEntryChoices(RecordField $field, array $row, array $entry, array $owner, ?ReferenceCatalog $references): array
+    {
+        if ($field->entryChoices === null || $references === null || ($row['editable'] ?? true) === false) {
+            return $row;
+        }
+        // A field of the entry itself lives in the entry.
+        $holderPath = implode('.', array_slice(explode('.', $field->key), 0, -1));
+        $holder = $holderPath === '' ? $entry : self::readNested($entry, $holderPath);
+        $values = $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : [], $owner, $field->entryChoicesSelector);
+        $row['options'] = ['', ...$values];
+        $row['choices'] = [['value' => '', 'label' => $field->noneLabel()],
+            ...array_map(static fn(string $value): array => ['value' => $value, 'label' => $value], $values)];
+
+        return $row;
     }
 
     /**
@@ -662,8 +717,9 @@ final class ProjectRecordDatabase
         $fields = [];
 
         foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
-            $fields[] = self::describeField($field, self::displayValue($field, $record->get($field->key)), $field->key, $isEditable,
-                authored: $record->get($field->key));
+            $fields[] = self::describeEntryChoices($field, self::describeField($field, self::displayValue($field, $record->get($field->key)),
+                $field->key, $isEditable, authored: $record->get($field->key)), (array) $record->toArray(), (array) $record->toArray(),
+                $this->findRecordReferences($record));
         }
         if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
             $fields = PlayerPresentationFields::describeFields($fields, (array) $record->toArray(), $this->authoringReferences?->getAssetRoot());
@@ -978,7 +1034,7 @@ final class ProjectRecordDatabase
                 $draft->set($field->key, $value);
             }
             if ($this->schema->prepareEdit !== null) {
-                $draft->restorePayload(($this->schema->prepareEdit)((array) $draft->toArray(), $field->key));
+                $draft->restorePayload(($this->schema->prepareEdit)((array) $draft->toArray(), $field->key, is_array($before) ? $before : (array) $before));
             }
             $this->dropStaleShapeFields($draft, $before);
             $this->assertProposedRecord($record, $draft);
@@ -1319,16 +1375,17 @@ final class ProjectRecordDatabase
                 throw new RecordRefusal(sprintf('A new %s could not be made: %s', $this->schema->entryNoun, $failure->getMessage()), previous: $failure);
             }
 
-            // A data record's blank is its data, whether it has a file of its own or is a row of a projected file;
-            // a constructor list's, the object.
-            $dataRecords = $this->schema->recordClass !== null || $this->schema->projection !== null;
-            if ($dataRecords ? ! is_array($payload) : ! is_object($payload)) {
+            // A data record's blank is its data, whether it has a file of its own, is a row of a projected
+            // file or an entry of a plain data list; only a list of authored constructor calls takes the object.
+            $constructorList = $this->schema->recordClass === null && $this->schema->projection === null
+                && $this->isConstructorAuthored();
+            if ($constructorList ? ! is_object($payload) : ! is_array($payload)) {
                 throw new RecordRefusal($cannot);
             }
         }
 
         if ($identity !== null && $this->isNamedByFile()) {
-            // An event script's name is its file's: scripts and triggers name it by that.
+            // A file-identified record keeps its identity in its filename, independently of its display name.
             $recordId = $this->requireNewFileName($identity);
         } elseif ($identity !== null) {
             if ($identityKey === null || ! is_array($payload)) {
@@ -1340,7 +1397,7 @@ final class ProjectRecordDatabase
             $payload[$identityKey] = $identity;
             $recordId = $identity;
         } elseif (is_array($payload) && $identityKey !== null && array_key_exists($identityKey, $payload)) {
-            $payload[$identityKey] = $this->makeUniqueIdentity($identity ?? $payload[$identityKey]);
+            $payload[$identityKey] = $this->makeUniqueIdentity($payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }
         if (is_array($payload)) {
@@ -1531,7 +1588,8 @@ final class ProjectRecordDatabase
 
     /**
      * Duplicates a record below itself, with a fresh unique identity: the
-     * one given, made unique, else one made from the original's. A per-file
+     * one given, else one made from the original's. An explicit filename
+     * identity must be unused; other identities are made unique. A per-file
      * copy's file is named after that identity.
      *
      * List-file and per-file categories duplicate; a per-file copy gets a
@@ -1558,7 +1616,9 @@ final class ProjectRecordDatabase
         $identityKey = $this->schema->identityKey;
         $recordId = '';
 
-        if ($identityKey !== null && array_key_exists($identityKey, $payload)) {
+        if ($identity !== null && $this->isNamedByFile()) {
+            $recordId = $this->requireNewFileName($identity);
+        } elseif ($identityKey !== null && array_key_exists($identityKey, $payload)) {
             $payload[$identityKey] = $this->makeUniqueIdentity($identity ?? $payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }
@@ -1610,7 +1670,7 @@ final class ProjectRecordDatabase
 
         $entries = $record->getEntries($subList);
         $position = $at === null ? count($entries) : max(0, min(count($entries), $at));
-        array_splice($entries, $position, 0, [self::withUniqueKey($subList, $entries, $entry ?? $subList->blank)]);
+        array_splice($entries, $position, 0, [self::withUniqueKey($subList, $entries, $entry ?? $subList->getBlank((array) $record->toArray()))]);
         $this->writeRecordEntries($record, $subList, $entries, static fn(int $old): int => $old >= $position ? $old + 1 : $old);
         $this->touchState();
 
@@ -1644,7 +1704,7 @@ final class ProjectRecordDatabase
             $old === $entryIndex => null,
             $old > $entryIndex => $old - 1,
             default => $old,
-        });
+        }, $subList->keyField !== null && is_array($removed) ? [strval($removed[$subList->keyField] ?? ''), null] : null);
         $this->touchState();
 
         return $removed;
@@ -3228,7 +3288,7 @@ final class ProjectRecordDatabase
 
             $before = $entries[$entryIndex];
             $value = $this->coerceReferenceField($record, $field, $rawValue,
-                [...explode('.', $subList->key), $entryIndex, ...explode('.', $field->key)]);
+                [...explode('.', $subList->key), $entryIndex, ...explode('.', $field->key)], $entries[$entryIndex]);
             self::assertKeyAvailable($subList, $entries, $entryIndex, $field, $value);
             $entries[$entryIndex] = self::writeNested(
                 $entries[$entryIndex],
@@ -3242,7 +3302,8 @@ final class ProjectRecordDatabase
                 $entries[$entryIndex] = self::withoutStaleVariantFields($subList, $before, $entries[$entryIndex]);
             }
 
-            $this->writeRecordEntries($record, $subList, $entries);
+            $this->writeRecordEntries($record, $subList, $entries, keyChange: $field->key === $subList->keyField
+                ? [strval($before[$field->key] ?? ''), strval($value)] : null);
             $this->touchState();
 
             return;
@@ -3323,7 +3384,7 @@ final class ProjectRecordDatabase
             }
 
             $value = $this->coerceReferenceField($record, $field, $rawValue,
-                [...$ownerPath, ...explode('.', $nestedList->key), $nestedIndex, ...explode('.', $field->key)]);
+                [...$ownerPath, ...explode('.', $nestedList->key), $nestedIndex, ...explode('.', $field->key)], $nestedEntries[$nestedIndex]);
             self::assertKeyAvailable($nestedList, $nestedEntries, $nestedIndex, $field, $value);
             $before = $nestedEntries[$nestedIndex];
             $nestedEntries[$nestedIndex] = self::writeNested(
@@ -3828,6 +3889,19 @@ final class ProjectRecordDatabase
             return intval($match[1]) - 1;
         }
 
+        if ($field->codec === RecordFieldCodec::POSE_IMPACT_ENTRY) {
+            if ($trimmed === '' || ($field->displayDefault !== null && $trimmed === $field->displayDefault)) {
+                return null;
+            }
+
+            return PoseImpactEntries::parse($trimmed)
+                ?? throw new \InvalidArgumentException(sprintf('%s names one of the pose\'s playback entries, as Entry 3 · cell 2.', $field->label));
+        }
+
+        if ($field->codec === RecordFieldCodec::LAYER_OFFSET) {
+            return LayerOffsetCodec::decode($trimmed, $field->label);
+        }
+
         if ($field->codec === RecordFieldCodec::POINT) {
             if ($trimmed === '' && $field->removeWhenEmpty) {
                 return null;
@@ -3857,6 +3931,18 @@ final class ProjectRecordDatabase
             $test = ProjectBattleTest::fromArray($decoded)->toArray();
 
             return $test === [] && $field->removeWhenEmpty ? null : $test;
+        }
+
+        if ($field->codec === RecordFieldCodec::BATTLE_POSITION) {
+            if ($trimmed === '' && $field->removeWhenEmpty) { return null; }
+            $parts = array_map(trim(...), explode(',', $trimmed));
+            if (count($parts) !== 2 || preg_match('/\A[0-9]+\z/', $parts[1]) !== 1
+                || filter_var($parts[1], FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) === false) {
+                throw new \InvalidArgumentException('Logical position requires front or back, followed by a nonnegative integer lane.');
+            }
+            return \Ichiloto\Engine\Battle\Formation\BattlePosition::fromArray([
+                'row' => $parts[0], 'lane' => (int) $parts[1],
+            ], $field->label)->toArray();
         }
 
         if ($field->codec === RecordFieldCodec::STAGE_SLOT) {
@@ -4081,12 +4167,17 @@ final class ProjectRecordDatabase
             RecordFieldCodec::POINT => is_array($value)
                 ? implode(', ', array_map(strval(...), array_values($value)))
                 : ProjectRecord::stringify($value),
+            RecordFieldCodec::LAYER_OFFSET => LayerOffsetCodec::encode($value),
             RecordFieldCodec::TROOP_MEMBER => is_int($value) ? sprintf('Member %d', $value + 1) : 'None',
+            RecordFieldCodec::POSE_IMPACT_ENTRY => is_int($value) ? sprintf('Entry %d', $value) : $field->noneLabel(),
             RecordFieldCodec::BATTLE_TEST => is_array($value)
                 ? (string) json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::SOURCE_RECT => is_array($value)
                 ? implode(', ', array_map(static fn(string $key): string => ProjectRecord::stringify($value[$key] ?? ''), ['x', 'y', 'width', 'height']))
+                : ProjectRecord::stringify($value),
+            RecordFieldCodec::BATTLE_POSITION => is_array($value)
+                ? sprintf('%s, %s', ProjectRecord::stringify($value['row'] ?? ''), ProjectRecord::stringify($value['lane'] ?? ''))
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::STAGE_SLOT => is_array($value)
                 ? implode(', ', array_map(static fn(string $key): string => ProjectRecord::stringify($value[$key] ?? ''),
@@ -4141,7 +4232,9 @@ final class ProjectRecordDatabase
 
     /**
      * Casts a boolean field, dropping the key when false and the schema
-     * treats false as "unset" (which is how the engine's defaults work).
+     * treats false as "unset": its absence reads as false. Where absence
+     * means something else (a pose that loops, a shadow the battler decides),
+     * false is a value of its own and is kept, as zero is for an integer.
      *
      * @param RecordField $field The field schema.
      * @param string $value The trimmed value.
@@ -4151,7 +4244,7 @@ final class ProjectRecordDatabase
     {
         $flag = InputControl::parseBoolean($value);
 
-        return $flag === false && $field->removeWhenEmpty ? null : $flag;
+        return $flag === false && $field->removeWhenEmpty && ($field->displayDefault ?? 'false') === 'false' ? null : $flag;
     }
 
     /**
@@ -4926,7 +5019,7 @@ final class ProjectRecordDatabase
             }
 
             $written = self::writeNested($entry, explode('.', $field->key), $this->coerceReferenceField($record, $field, $rawValue,
-                [...$ownerPath, ...explode('.', $field->key)]));
+                [...$ownerPath, ...explode('.', $field->key)], $entry));
             $written = $subList->removeConflictingFields($written, $field->key);
 
             if ($field->key === $subList->variantKey && $written !== null) {
@@ -5136,8 +5229,7 @@ final class ProjectRecordDatabase
     /** Whether a record's name is the stem of its own file, as an event script's is. */
     private function isNamedByFile(): bool
     {
-        return $this->schema->storage === RecordStorage::DIRECTORY && $this->schema->identityKey === null
-            && $this->schema->listPayloadKey !== null;
+        return $this->schema->storage === RecordStorage::DIRECTORY && $this->schema->identityKey === null;
     }
 
     /**
@@ -5218,7 +5310,8 @@ final class ProjectRecordDatabase
         $candidate = $preferred;
         $suffix = 2;
 
-        while (is_file($this->path . DIRECTORY_SEPARATOR . $candidate . '.php')) {
+        while (is_file($this->path . DIRECTORY_SEPARATOR . $candidate . '.php')
+            || array_any($this->getRecords(), static fn(ProjectRecord $record): bool => $record->recordId === $candidate)) {
             $candidate = $preferred . '-' . $suffix;
             $suffix++;
         }

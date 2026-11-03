@@ -194,6 +194,10 @@ final class SessionHost
             'worldObjects.place' => $session->placeWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
                 is_bool($params['coverage'] ?? false) ? ($params['coverage'] ?? false) : throw new InvalidRequest('"coverage" must be a boolean.')),
+            'worldObjects.setTiles' => $session->setWorldObjectTiles(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireString($params, 'layer'), self::requireArray($params, 'cells')),
+            'worldObjects.unsetTiles' => $session->unsetWorldObjectTiles(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireString($params, 'layer'), self::requireArray($params, 'cells')),
             'worldObjects.move' => $session->moveWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireInt($params, 'dx'), self::requireInt($params, 'dy'), self::readChoices($params)),
             'worldObjects.moveVariant' => $session->moveWorldObjectVariant(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
@@ -293,7 +297,8 @@ final class SessionHost
             ),
             'pieces.place' => array_key_exists('origins', $params)
                 ? $session->placePieceCopies(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
-                    self::requireString($params, 'piece'), self::requireCells(['cells' => $params['origins']]), self::readOptionalString($params, 'color'))
+                    self::requireString($params, 'piece'), self::requireCells(['cells' => $params['origins']]), self::readOptionalString($params, 'color'),
+                    self::readOptionalBool($params, 'footprint'))
                 : $session->placePiece(
                     self::requireString($params, 'map'),
                     self::requireInt($params, 'revision'),
@@ -461,9 +466,9 @@ final class SessionHost
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
                 self::requireString($params, 'name'),
-                is_array($params['offset'] ?? null) && array_is_list($params['offset']) && count($params['offset']) === 2
-                    && array_all($params['offset'], static fn(mixed $value): bool => is_int($value) || is_float($value))
-                    ? $params['offset'] : throw new InvalidRequest('"offset" must be two numbers, across and down.'),
+                array_key_exists('offset', $params) && ($params['offset'] === null || (is_array($params['offset']) && array_is_list($params['offset'])
+                    && count($params['offset']) === 2 && array_all($params['offset'], static fn(mixed $value): bool => is_int($value) || is_float($value))))
+                    ? $params['offset'] : throw new InvalidRequest('"offset" must be two numbers, across and down, or null to inherit the tileset\'s.'),
                 array_key_exists('movesWith', $params) && (is_string($params['movesWith']) || $params['movesWith'] === null)
                     ? $params['movesWith'] : throw new InvalidRequest('"movesWith" must be a gameplay layer name or null.'),
             ),

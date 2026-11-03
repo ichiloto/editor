@@ -15,6 +15,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneRecordCategory;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
+use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewContext;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Database\EnemySprites;
 use Ichiloto\Editor\Canvas\PieceRole;
@@ -69,6 +70,7 @@ use Ichiloto\Editor\Field\NpcAuthoring;
 use Ichiloto\Editor\Field\MapAreaAuthoring;
 use Ichiloto\Editor\Field\MapAreaRefusal;
 use Ichiloto\Editor\Field\WorldObjectAuthoring;
+use Ichiloto\Editor\Field\WorldObjectTileFields;
 use Ichiloto\Editor\Field\FieldSpriteFields;
 use Ichiloto\Editor\Field\CharacterSheetPreview;
 use Ichiloto\Editor\Field\NpcChange;
@@ -199,6 +201,7 @@ use WeakReference;
 final class EditorSession
 {
     use MapPlacementSession;
+    use AssetImportSession;
     use TilesetArtSession;
     use PlacedPieceSession;
 
@@ -856,6 +859,8 @@ final class EditorSession
                 'connected' => $piece->connects !== null,
                 'width' => $piece->width,
                 'height' => $piece->height,
+                // Its top rows drawn over the wall behind it; it stands on the rows below.
+                'overhang' => $piece->overhang,
                 'tileLayers' => $tileset->getPieceTileLayers($piece),
                 'picture' => PiecePlacer::buildPicture($piece),
                 'operations' => $world?->operations,
@@ -1325,8 +1330,9 @@ final class EditorSession
      * The pieces of the map's tileset an author places ({@see PiecePlacer}),
      * in authored order: each with the gameplay layer its glyphs go on and
      * whether the map has it, whether it is drawn as connected cells rather
-     * than stamped whole, its size, a picture of what it draws, its physical
-     * recipe and the doors its art paints. A map
+     * than stamped whole, its size, the rows of it that overhang what stands
+     * behind it ({@see PiecePlacer::getOriginAt()}), a picture of what it
+     * draws, its physical recipe and the doors its art paints. A map
      * whose tileset offers none says why in `issue`.
      *
      * @return array{map: string, pieces: list<array<string, mixed>>, issue: ?string}
@@ -1359,6 +1365,7 @@ final class EditorSession
                 'connected' => $piece->connects !== null,
                 'width' => $piece->width,
                 'height' => $piece->height,
+                'overhang' => $piece->overhang,
                 'tileLayers' => $tileset?->getPieceTileLayers($piece) ?? [],
                 'picture' => PiecePlacer::buildPicture($piece),
                 'occupancy' => PhysicalOccupancyEditor::exportRecipe($piece),
@@ -1447,25 +1454,33 @@ final class EditorSession
     }
 
     /**
-     * Stamps whole copies of a piece with their top-left cells at the listed
-     * origins, as one undo step: scattered copies, such as the peaks of a
-     * range, placed by a script in one request rather than one per copy.
+     * Stamps whole copies of a piece standing on the listed cells
+     * ({@see PiecePlacer::getOriginAt()}), as one undo step: scattered copies,
+     * such as the peaks of a range, placed by a script in one request rather
+     * than one per copy.
      * Copies follow the rules of {@see placePiece()}; a connected piece is
      * drawn, not stamped, and is refused.
      *
      * @param list<array{0: int, 1: int}> $origins
-     * @return array{status: 'applied', changed: bool, copies: int, cells: int, revision: int}
+     * @return array{status: 'applied', changed: bool, copies: int, cells: int, footprint: int, revision: int}
      * @throws SessionRefusal When the map is unknown, stale or read-only, the piece is unknown or connected, or a copy falls off the map.
      */
-    public function placePieceCopies(string $mapId, int $revision, string $pieceId, array $origins, ?string $color = null): array
+    public function placePieceCopies(string $mapId, int $revision, string $pieceId, array $origins, ?string $color = null,
+        bool $footprint = false): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
         }
         $piece = $this->requirePiece($map, $pieceId);
+        $origins = array_map(static fn(array $cell): array => PiecePlacer::getOriginAt($piece, $cell[0], $cell[1]), $origins);
+        $stamped = 0;
         try {
-            $command = PiecePlacer::stampOrigins($map, $piece, array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1]], $origins), $color);
+            $command = PiecePlacer::stampOrigins($map, $piece, $origins, $color);
+            if ($footprint) {
+                ['command' => $command, 'cells' => $stamped] = PlacedPieces::addFootprint($map, $piece, $command, $origins,
+                    sprintf('Place %s', $piece->name));
+            }
         } catch (MapSourceRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
@@ -1473,7 +1488,8 @@ final class EditorSession
             $this->history->record($command);
         }
 
-        return ['status' => 'applied', 'changed' => $command !== null, 'copies' => count($origins), 'cells' => 0, 'revision' => $this->getMapRevision($map)];
+        return ['status' => 'applied', 'changed' => $command !== null, 'copies' => count($origins), 'cells' => 0, 'footprint' => $stamped,
+            'revision' => $this->getMapRevision($map)];
     }
 
     /** @throws SessionRefusal When the map's tileset has no piece with the id. */
@@ -2086,6 +2102,7 @@ final class EditorSession
         $map = $this->requireCurrentMap($mapId, $revision);
         $piece = $this->requireOccupancyPiece($map, $tilesetId, $pieceId, $expected);
         try {
+            ['x' => $x, 'y' => $y] = PiecePlacer::getOriginAt($piece, $x, $y);
             $writes = PhysicalOccupancyEditor::getPieceWrites($map, $piece, $x, $y);
         } catch (MapSourceRefusal | InvalidArgumentException $error) {
             throw new SessionRefusal($error->getMessage(), previous: $error);
@@ -2100,6 +2117,7 @@ final class EditorSession
         $map = $this->requireCurrentMap($mapId, $revision);
         $piece = $this->requireOccupancyPiece($map, $tilesetId, $pieceId, $expected);
         try {
+            ['x' => $x, 'y' => $y] = PiecePlacer::getOriginAt($piece, $x, $y);
             $applied = PhysicalOccupancyEditor::applyPiece($map, $piece, $x, $y);
         } catch (MapSourceRefusal | InvalidArgumentException $error) {
             throw new SessionRefusal($error->getMessage(), previous: $error);
@@ -2231,15 +2249,17 @@ final class EditorSession
     }
 
     /**
-     * Sets a tile layer's offset across and down in field cells (each -0.5,
-     * 0 or 0.5) and the gameplay layer its tiles move with, or none, as one
-     * undo step, validated as the Engine reads them.
+     * Sets a tile layer's offset across and down in field cells (any
+     * fraction within the Engine's limit), or null to inherit the one its
+     * tileset gives it, and the gameplay layer its tiles move with, or none,
+     * as one undo step, validated as the Engine reads them. The map holds an
+     * offset only where it differs from the inherited one.
      *
-     * @param array<int, mixed> $offset
+     * @param array<int, mixed>|null $offset
      * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
      * @throws SessionRefusal When the map is unknown, stale or the Engine would refuse the settings.
      */
-    public function setTileLayerSettings(string $mapId, int $revision, string $name, array $offset, ?string $movesWith): array
+    public function setTileLayerSettings(string $mapId, int $revision, string $name, ?array $offset, ?string $movesWith): array
     {
         return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
             LayerEditor::setTileLayerSettings($map, $name, $offset, $movesWith));
@@ -3073,6 +3093,7 @@ final class EditorSession
         }
         unset($track);
         $payload = $asset->payload();
+        $stageContext = $this->findStageContext($asset);
 
         return [
             // An effect or summon with separate terminal and graphical sequences names the one shown; others name none.
@@ -3085,8 +3106,10 @@ final class EditorSession
                     'pivotDefaults' => self::getTimelinePivotDefaults($asset->type, $payload['tracks'][$position] ?? []),
                 ]] : [])], $payload['tracks'][$position] ?? null), $tracks, array_keys($tracks))),
             'cues' => array_values($cues),
-            // Stage ownership survives switching to an independent Terminal sequence.
-            'ownedStage' => $asset->isOwnedStageEffect(),
+            // A declared stage's consumer survives switching to an independent Terminal sequence:
+            // battle when an action animation binds the effect, else the caller that owns the stage.
+            'ownedStage' => $stageContext?->isOwnedStage() ?? false,
+            'stageContext' => $stageContext?->value,
             'canHaveStage' => $asset->getPresentationView() !== EffectPresentation::TERMINAL
                 && ($asset->type === CutsceneType::EFFECT || $asset->hasPresentations()),
             'stage' => is_array($payload['stage'] ?? null) ? $this->describeCutsceneStage($category, $index) : null,
@@ -3155,7 +3178,7 @@ final class EditorSession
     }
 
     /**
-     * A summon sequence's stage as a timeline editor lays it out: its canvas
+     * A summon or effect sequence's stage as a timeline editor lays it out: its canvas
      * and the frames it is shown between, each subject with its named points
      * (where they are in its box), and its camera and cover keys on the
      * clock, each value with the row key that edits it.
@@ -3211,8 +3234,21 @@ final class EditorSession
     }
 
     /**
+     * The consumer a declared effect stage is previewed in, by the shared
+     * Editor rule: battle when an action animation binds the effect as its
+     * source or target, else its owning caller. None without a stage.
+     */
+    private function findStageContext(CutsceneAsset $asset): ?EffectPreviewContext
+    {
+        return $asset->type === CutsceneType::EFFECT && $asset->hasStage()
+            ? EffectPreviewContext::findDefault($asset, $this->workspace) : null;
+    }
+
+    /**
      * One authored frame, with independent Terminal output and, for an
-     * owned graphical effect stage, the Engine's shared presentation canvas.
+     * effect declaring a graphical stage, the Engine's shared stage canvas
+     * compiled with its consumer's admission (its owning caller, or battle
+     * for an action's staged cut-in or impact).
      *
      * @return array{frame: int, totalFrames: int, fps: int, lines: list<string>, terminalCanvas: array<string, mixed>, cues: list<array<string, mixed>>}
      * @throws SessionRefusal When the record is not a summon or effect, or its timeline does not compile.
@@ -3220,9 +3256,10 @@ final class EditorSession
     public function readCutscenePreview(string $category, int $index, int $frame, int $width, int $height): array
     {
         $asset = $this->requireTimelineCutscene($category, $index);
+        $stageContext = $this->findStageContext($asset);
         try {
             $compiled = $asset->type === CutsceneType::EFFECT
-                ? $asset->compileEffect(EffectPresentation::TERMINAL, false, forStage: $asset->isOwnedStageEffect())
+                ? ($stageContext ?? EffectPreviewContext::FIELD)->compile($asset, EffectPresentation::TERMINAL)
                 : $asset->compiledSummon();
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
@@ -3231,18 +3268,17 @@ final class EditorSession
         $requestedFrame = $frame;
         $frame = max(0, min($frame, $preview->totalFrames() - 1));
 
-        $lines = array_values($asset->isOwnedStageEffect()
-            ? new \Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage(EffectPresentation::TERMINAL, false, forStage: true)
-                ->drawFrame($preview->activeSegments($frame), max(1, $width), max(1, $height))
+        $lines = array_values($stageContext?->isOwnedStage()
+            ? $stageContext->createStage(EffectPresentation::TERMINAL)->drawFrame($preview->activeSegments($frame), max(1, $width), max(1, $height))
             : $preview->frame(max(1, $width), max(1, $height), $frame));
         $stageCanvas = null;
         $stageCanvasError = null;
-        if ($asset->isOwnedStageEffect() && $asset->getPresentationView() !== EffectPresentation::TERMINAL) {
+        if ($stageContext !== null && $asset->getPresentationView() !== EffectPresentation::TERMINAL) {
             try {
-                $graphical = $asset->compileEffect(EffectPresentation::GRAPHICAL, false, forStage: true);
+                $graphical = $stageContext->compile($asset, EffectPresentation::GRAPHICAL);
                 $preview = new TimelinePreviewSession($graphical);
                 $frame = max(0, min($requestedFrame, $preview->totalFrames() - 1));
-                $stageCanvas = new \Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage(EffectPresentation::GRAPHICAL, false, forStage: true)
+                $stageCanvas = $stageContext->createStage(EffectPresentation::GRAPHICAL)
                     ->renderCanvas($graphical, $this->workspace->projectRoot . '/assets', $frame,
                         (int) $graphical->defaults['stage']['canvas']['width'], (int) $graphical->defaults['stage']['canvas']['height'])?->toArray();
             } catch (Throwable $failure) {
@@ -3648,12 +3684,12 @@ final class EditorSession
         $battleUi = is_array($config) ? $config : [];
         $graphic = $presentation === EffectPresentation::GRAPHICAL;
         $key = hash('xxh128', serialize([$asset->id, array_map(static fn(CutsceneAsset $effect): array => $effect->payload(), $effects), $animations,
-            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $binding, $graphic ? $this->readProposedBattlerBindings() : null]));
+            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $binding, $reducedMotion, $graphic ? $this->readProposedBattlerBindings() : null]));
         if (($this->effectBattlePreviews[$presentation->value]['key'] ?? null) !== $key) {
             $catalog = $graphic ? $this->requireBattleLayoutCatalog('preview effects on') : null;
             $this->effectBattlePreviews[$presentation->value] = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
                 fn(): EffectBattlePreview => $this->createEffectBattlePreview($asset->id, $animations, $entry, $troop,
-                    BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation, $binding))];
+                    BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation, $binding, $reducedMotion))];
         }
         $preview = $this->effectBattlePreviews[$presentation->value]['preview'];
         $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame);
@@ -3665,7 +3701,7 @@ final class EditorSession
 
         return [...$read, 'totalFrames' => $preview->totalFrames, 'fps' => BattleCommandTimeline::FPS,
             'assetRoot' => $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', 'lane' => $preview->lane,
-            'contexts' => $preview->contexts, 'binding' => $preview->binding,
+            'sourceEffectAnchor' => $preview->sourceEffectAnchor->value, 'contexts' => $preview->contexts, 'binding' => $preview->binding,
             'caster' => $preview->caster, 'targets' => $preview->targets, 'troop' => $troop['name'], 'phases' => $preview->phases];
     }
 
@@ -3678,7 +3714,7 @@ final class EditorSession
      * @throws SessionRefusal When the battle cannot be set up or no action of it plays the effect.
      */
     private function createEffectBattlePreview(string $effectId, array $animations, array $entry, array $troop, BattlePacing $pacing,
-        ?BattlePresentationCatalog $catalog, EffectPresentation $presentation, int $binding): EffectBattlePreview
+        ?BattlePresentationCatalog $catalog, EffectPresentation $presentation, int $binding, bool $reducedMotion): EffectBattlePreview
     {
         // The animations as authored now; an entry the Engine would not read plays nothing, as in battle.
         $library = AnimationLibrary::createFromAnimations(array_values(array_filter(array_map(static function (mixed $data): ?Animation {
@@ -3698,7 +3734,7 @@ final class EditorSession
             [$battle, $skills] = $this->createPreviewBattle($entry, $troop);
 
             return EffectBattlePreview::create($effectId, $battle, $skills, $library, $pacing, $catalog,
-                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation, $compile, $binding);
+                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation, $compile, $binding, $reducedMotion);
         } catch (SessionRefusal $refusal) {
             throw $refusal;
         } catch (Throwable $failure) {
@@ -3718,7 +3754,7 @@ final class EditorSession
     {
         $actors = $this->workspace->actorDatabase->createActorStore();
         $skills = $this->workspace->loadSkillCatalog();
-        $setup = ProjectBattleTest::fromArray($entry)->createSetup($actors, $this->readStartingPartyReferences());
+        $setup = ProjectBattleTest::fromArray($entry)->createSetup($actors, $this->readStartingPartyReferences(), $this->workspace->getSystemField('battle.partySize') ?? \Ichiloto\Engine\Entities\Party::BATTLE_SIZE);
         $party = $setup->createParty($actors, $this->loadItemStore(), $skills);
         $previousEnemies = ConfigStore::has(EnemyStore::class) ? ConfigStore::get(EnemyStore::class) : null;
         try {
@@ -3891,7 +3927,8 @@ final class EditorSession
             $cutscene = ($id === null ? null : $this->workspace->cutscenes?->find($type, $id))
                 ?? throw new SessionRefusal(sprintf('There is no %s %s.', $type->noun(), strval($record['index'] ?? '')));
         }
-        $catalog = new ReferenceCatalog($this->workspace, $mapId === null ? null : $this->requireMap($mapId), $cutscene);
+        // A cinematic names its own maps; the map selected beside it is not where its commands run.
+        $catalog = new ReferenceCatalog($this->workspace, $mapId === null || $cutscene?->type === CutsceneType::CINEMATIC ? null : $this->requireMap($mapId), $cutscene);
         if ($category === 'world_object_tile_layers') {
             if ($mapId === null || !is_string($record['id'] ?? null)) { throw new SessionRefusal('A covered tile-layer picker needs its map-local object owner.'); }
             $map = $this->requireMap($mapId);
@@ -4987,8 +5024,8 @@ final class EditorSession
 
     /**
      * Duplicates a record below itself under a fresh identity, as one undo
-     * step: the one given (made unique) when the copy is to be something of
-     * its own, so its file is named for it.
+     * step. A file-identified record requires an unused filename identity; a
+     * payload identity is made unique. Without one, the copy gets a unique identity.
      *
      * @return array{index: int, records: list<string>} The copy's index, and the labels afterwards.
      * @throws SessionRefusal When the category or record is unknown or read-only, or the record cannot be duplicated.
@@ -5357,12 +5394,15 @@ final class EditorSession
             $owner = isset($field['entry'][0]) && str_starts_with($field['field'] ?? '', 'variant')
                 ? $object['variants'][$field['entry'][0]] : $object;
             $field = FieldSpriteFields::describeFields([$field], $owner, $map->getAssetRoot())[0];
+            // A presented tile is a tile identity of the map's tileset, picked from its palette (`tiles.palette`).
+            if (str_starts_with($field['field'] ?? '', 'objectTile') && ($field['sourceKey'] ?? null) === 'tile') { $field['tilePicker'] = true; }
             if ($issue !== null) { $field['editable'] = false; }
         }
         unset($field);
         return ['map' => $mapId, 'revision' => $this->getMapRevision($map), 'event' => null,
             'worldObject' => ['id' => $id, 'variants' => array_column($object['variants'] ?? [], 'id'),
-                'anchor' => $object['anchor'], 'covers' => $object['covers'] ?? null, 'issue' => $issue],
+                'anchor' => $object['anchor'], 'covers' => $object['covers'] ?? null,
+                WorldObjectTileFields::DATA_KEY => $object[WorldObjectTileFields::DATA_KEY] ?? null, 'issue' => $issue],
             'issue' => $issue,
             'rows' => [...array_map(static fn($field): array => self::describeRecordRow($records, $index, [], $field, 'world-object'), $fields),
                 // What the object is on the minimap: a map landmark row, applied through the map's inspector.
@@ -5397,6 +5437,32 @@ final class EditorSession
     public function placeWorldObject(string $mapId, int $revision, string $id, int $x, int $y, bool $coverage = false): array
     {
         return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->placeObject($id, $x, $y, $coverage));
+    }
+
+    /**
+     * Sets the graphical tiles a world object presents on one of the map's tile layers, as one undo step: each cell
+     * `[x, y, tile]` on a cell the object owns, `0` showing no tile. The terminal, collision and the layer's own
+     * tiles are unchanged.
+     *
+     * @param list<mixed> $cells
+     * @return array{changed: bool, revision: int}
+     * @throws SessionRefusal When the map is stale or read-only, or the Engine refuses the declaration.
+     */
+    public function setWorldObjectTiles(string $mapId, int $revision, string $id, string $layer, array $cells): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->setTiles($id, $layer, $cells));
+    }
+
+    /**
+     * Stops a world object presenting tiles on cells `[x, y]` of a tile layer, as one undo step.
+     *
+     * @param list<mixed> $cells
+     * @return array{changed: bool, revision: int}
+     * @throws SessionRefusal When the map is stale or read-only, or a cell presents no tile of the object.
+     */
+    public function unsetWorldObjectTiles(string $mapId, int $revision, string $id, string $layer, array $cells): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->unsetTiles($id, $layer, $cells));
     }
 
     /**
@@ -6260,7 +6326,7 @@ final class EditorSession
             $summons = new SummonCutsceneLibrary($this->workspace->projectRoot . '/assets/Cutscenes/Summons');
             $view = [...$view, 'troop' => $test->troop, 'source' => $test->setup === null ? 'starting party' : 'battle test'];
             try {
-                $setup = $test->createSetup($actors, $this->readStartingPartyReferences());
+                $setup = $test->createSetup($actors, $this->readStartingPartyReferences(), $this->workspace->getSystemField('battle.partySize') ?? \Ichiloto\Engine\Entities\Party::BATTLE_SIZE);
             } catch (InvalidArgumentException $invalid) {
                 return [...$view, 'arena' => $test->arena, 'issue' => $invalid->getMessage()];
             }
@@ -6281,7 +6347,7 @@ final class EditorSession
                 $members[] = $described;
             }
 
-            return [...$view, 'arena' => $setup->arena, 'members' => $members,
+            return [...$view, 'arena' => $setup->arena, 'battleSize' => $setup->battleSize, 'members' => $members,
                 'problems' => $setup->getProblems($actors, $items, $skills, $summons)];
         });
     }
@@ -6804,6 +6870,40 @@ final class EditorSession
     }
 
     /**
+     * The maps a change set retires, by the retirements it wrote that the
+     * manifest still declares (an undone one is gone). A retirement moves
+     * every save made on its map before the step, a map retired into itself
+     * included, onto landings {@see findRetirementRefusal()} judges on the
+     * maps the change set leaves, so those maps need no relocations of their
+     * own: a later relocation step would plan cells of the old layout for
+     * saves that already stand on the landings.
+     *
+     * @param array{retirements?: list<array{from: int, map: string}>} $changes
+     * @return list<string>
+     */
+    private function listRetiredMaps(array $changes): array
+    {
+        $retirements = $changes['retirements'] ?? [];
+        if ($retirements === []) {
+            return [];
+        }
+        try {
+            $manifest = PhpDataFile::evaluateIsolated($this->workspace->projectRoot . '/' . SaveManifestStep::PATH, $this->workspace->projectRoot);
+            $retired = [];
+            foreach ($retirements as ['from' => $from, 'map' => $map]) {
+                if (SaveMapRetirement::findRetirement(is_array($manifest) ? $manifest : [], $from, $map) !== null) {
+                    $retired[] = $map;
+                }
+            }
+        } catch (Throwable) {
+            // An unreadable manifest refuses the change set through findRetirementRefusal(); its maps plan as any other.
+            return [];
+        }
+
+        return $retired;
+    }
+
+    /**
      * Why the map retirements a change set wrote no longer land on open
      * floor, once its edits and the steps written after them have moved the
      * maps under them; null when every landing may still be stood on.
@@ -6883,7 +6983,8 @@ final class EditorSession
      * nowhere). Warnings never refuse it.
      * A map retirement the change set wrote is checked again: each landing,
      * moved by the save steps written after it, must still be a cell a save
-     * can stand on in the maps the change set leaves.
+     * can stand on in the maps the change set leaves. A map it retires, into
+     * itself or another map, plans no relocations ({@see listRetiredMaps()}).
      *
      * Everything it left unsaved -- databases, cutscenes, maps and the save
      * relocations its maps need -- is then written as one transaction: every
@@ -6917,10 +7018,12 @@ final class EditorSession
         $outcome = ['maps' => $changed, 'saved' => [], 'written' => [], 'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $reported),
             'blocking' => count($blocking), 'relocated' => [], 'backupFailures' => []];
 
-        // A map the change set made holds no save, though its blank files were written when it was made.
+        // A map the change set made holds no save, though its blank files were written when it was made, and a map it
+        // retires has every save moved off it by the retirement, onto landings checked again below.
         $made = array_values(array_diff(array_keys($this->getMapsById()), array_keys($changes['revisions'])));
+        $unrelocated = [...$made, ...$this->listRetiredMaps($changes)];
         $changedMaps = array_values(array_filter(array_map(fn(string $mapId): ?ProjectMap => $this->getMapsById()[$mapId] ?? null, $changed),
-            static fn(?ProjectMap $map): bool => $map?->isDirty() === true && ! in_array($map->mapId, $made, true)));
+            static fn(?ProjectMap $map): bool => $map?->isDirty() === true && ! in_array($map->mapId, $unrelocated, true)));
         // The change set writes one manifest step for every map that moves saves.
         $relocations = SaveRelocationPlanner::planAll($changedMaps, $this->workspace->projectRoot)?->describeMoves() ?? [];
         $retirementRefusal = $blocking === [] ? $this->findRetirementRefusal($changes) : null;
@@ -6949,7 +7052,7 @@ final class EditorSession
         };
 
         try {
-            $saves = WorkspaceSave::prepareAll($this->workspace, $relocateSaves ? fn(Command $step) => $this->history->record($step) : null, $made);
+            $saves = WorkspaceSave::prepareAll($this->workspace, $relocateSaves ? fn(Command $step) => $this->history->record($step) : null, $unrelocated);
             $written = SaveSet::commit($this->workspace->projectRoot, $saves, $backup);
         } catch (SaveSetAdoptionFailure $partial) {
             // The files are written: the change set is, though the editor's view of it is not current.
@@ -7210,6 +7313,8 @@ final class EditorSession
             // How the choice of nothing reads, where the row says (the Engine's own attack).
             'noneLabel' => $kind === 'reference' && is_string($field['noneLabel'] ?? null) ? $field['noneLabel'] : null,
             'action' => $kind === 'action' ? $field['action'] : null,
+            // A tile identity of the map's tileset, picked from its palette.
+            'tilePicker' => ($field['tilePicker'] ?? false) === true ? true : null,
             // A list picked a member at a time: each pick toggles one member.
             'multi' => $kind === 'reference' && ($field['multi'] ?? false) === true ? true : null,
             'list' => is_array($list) && $target !== null ? ['index' => (int) ($list['index'] ?? 0)] : null,

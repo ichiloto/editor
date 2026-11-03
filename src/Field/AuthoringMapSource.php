@@ -26,7 +26,8 @@ use InvalidArgumentException;
  * The editing canvas's frame source: a map as it stands in memory, unsaved
  * edits included, as the field draws it. It supplies the map's world, its
  * world objects' sprites at the chosen variant and preview time, and its
- * signs' boards and labels, to the Engine's own frame composer, so the canvas
+ * signs' boards and labels, and the tiles objects present on its tile layers,
+ * to the Engine's own frame composer, so the canvas
  * shares one composition path with the game. It is not a running scene: it
  * owns no game, clock or input, and the whole map is in view.
  */
@@ -97,7 +98,7 @@ final class AuthoringMapSource implements FramePresentationSourceInterface, Reta
                 if ($presentation !== null) {
                     $groups[] = new PresentationWorldCanvas($id, $object->x, $object->y, $presentation[1], $presentation[0],
                         $object->resource->sign->layer);
-                    $coverage = array_replace_recursive($coverage, $object->coverage);
+                    $coverage = array_replace_recursive($coverage, WorldObjectAuthoring::readOwnedCoverage($object));
                 }
                 continue;
             }
@@ -116,7 +117,7 @@ final class AuthoringMapSource implements FramePresentationSourceInterface, Reta
                 $role?->advance($seconds);
                 $frame = $role?->getFrame($object->pivot);
                 if ($definition === null || $frame !== null) {
-                    $coverage = array_replace_recursive($coverage, $object->coverage);
+                    $coverage = array_replace_recursive($coverage, WorldObjectAuthoring::readOwnedCoverage($object));
                 } else {
                     $diagnostics[] = $object->id . ': the current selected role cannot be drawn; covered glyphs and tiles remain.';
                 }
@@ -130,7 +131,9 @@ final class AuthoringMapSource implements FramePresentationSourceInterface, Reta
             }
         }
         $signs->retain($placed);
-        $world = PresentationWorld::getFromLayers($map->getLayerSet(), self::WORLD_ID, $graphics, $map->getAssetRoot(), $coverage);
+        // Objects' own tiles join their layers before shaping and shadows, as the field composes them.
+        $world = PresentationWorld::getFromLayers($map->getLayerSet(), self::WORLD_ID, $graphics, $map->getAssetRoot(), $coverage,
+            tileCells: WorldObjectAuthoring::mergeTilePresentation($definitions));
         if ($previous !== null && $previous->world == $world) {
             $world = $previous->world;
         }

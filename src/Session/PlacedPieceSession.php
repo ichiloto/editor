@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Session;
 
+use Ichiloto\Editor\Canvas\PiecePlacer;
 use Ichiloto\Editor\Canvas\PlacedPieces;
 use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\MapSourceRefusal;
@@ -59,8 +60,9 @@ trait PlacedPieceSession
     }
 
     /**
-     * Moves a placed piece so its top-left stands on another cell, as one
-     * undo step, with its footprint when asked and the entrances at its doors.
+     * Moves a placed piece, found by its top-left, to stand on another cell
+     * ({@see PiecePlacer::getOriginAt()}), as one undo step, with its
+     * footprint when asked and the entrances at its doors.
      *
      * @return array{revision: int, entrances: list<string>}
      * @throws SessionRefusal When the map is stale or read-only, or the piece cannot be moved whole there.
@@ -70,7 +72,8 @@ trait PlacedPieceSession
         $map = $this->requireEditablePieceMap($mapId, $revision);
         $piece = $this->requirePiece($map, $pieceId);
         try {
-            $moved = PlacedPieces::move($map, $piece, $from[0], $from[1], $to[0], $to[1], $footprint, $color);
+            ['x' => $toX, 'y' => $toY] = PiecePlacer::getOriginAt($piece, $to[0], $to[1]);
+            $moved = PlacedPieces::move($map, $piece, $from[0], $from[1], $toX, $toY, $footprint, $color);
         } catch (MapSourceRefusal|EventRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }

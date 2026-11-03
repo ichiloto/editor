@@ -156,12 +156,23 @@ for you:
   refused with their role keys. Answer as the editors do, in the change's
   params: `"choices": {"x": "crate:0:0"}`, or `null` for no tiles.
 
+For records identified by filename, such as tilesets and event scripts,
+`database.create` and `database.duplicate` accept an explicit `identity` in
+lowercase hyphenated form. It becomes the stable filename, independently of
+the display name. An unsafe or occupied identity refuses the change; omitting
+it generates a unique identity, including against unsaved records.
+
 Edits are made in order and held in memory, and every later change reads
 them: a field resource, tileset piece, place category, skill, effect timeline,
 database record or world object made earlier in the batch is usable by the
-changes after it, before anything is written. Painting, piece lists, pickers,
+changes after it, before anything is written. Reachability and safe-save
+relocation planning also read the current tileset catalogue for every map; a
+new tileset and its map can be checked and saved in one transaction. An invalid
+current dependency still refuses the transaction. Painting, piece lists, pickers,
 the map world the GUI draws and the validation `changes.commit` runs all read
-these current records. Battle previews and the cinematic preview field still
+these current records. Map reviews also resolve world-object resources from
+the current catalogue, including resources created earlier in an unsaved batch.
+Battle previews and the cinematic preview field still
 read the saved items, enemies, summons and maps until the Engine can take them
 from the Editor; commit or save first when one of those must show an edit.
 Inserting or removing rows, and creating or duplicating a map, write their
@@ -199,7 +210,7 @@ or with the GUI editor open, these reads give every id a change needs:
 | `maps.list` | Map ids and revisions. |
 | `map.read {map}` | Layers (`id`, `name`), `baseLayer`, events, NPCs and world objects, unsaved changes included. |
 | `inspector.read {map, event?}` | The map's rows, and an event's rows when `event` names its marker. Each row's `key` goes back unchanged to `inspector.apply`, `inspector.add` or `inspector.remove`. |
-| `worldObjects.read {map, id}` | A world object's rows, for `worldObjects.apply`. |
+| `worldObjects.read {map, id}` | A world object's rows, for `worldObjects.apply`, and the tiles it presents (`tiles2d`) as declared. |
 | `npc.read {map, index, frame?}` | An NPC's rows, for `npc.apply`. |
 | `pieces.list {map}` | The pieces the map's tileset can stamp. |
 | `kinds.list {map}` | The terrain kinds of the map's tileset, and whether the map is painted in them (`painted`, with an `issue` saying how to convert it when not). |
@@ -354,7 +365,9 @@ retirement written in its batch again: each landing, moved by the steps
 written after it (rows inserted in the same batch move it), must still be a
 cell a save can stand on in the maps the batch leaves, or the batch is
 refused. Relocations `changes.commit` writes for the batch's maps go in a
-later step, so they move landed saves as they move any other save.
+later step, so they move landed saves as they move any other save. A map the
+batch retires, into itself or onto another map, gets no relocations of its
+own: its retirement already moves every save made on it.
 
 The Engine reads a step as a migration class or as declared position edits,
 never both. So a batch that registers a class and also changes a map in a
@@ -369,7 +382,7 @@ batches.
 | Paint glyphs | `map.paint {map, layer, cells, symbol, color?}`; a whole block of rows at once with `map.paintRegion {map, layer, x, y, rows}` |
 | Draw the tiles a layer's glyphs need | `layer.drawTiles {map, layer}` |
 | Paint or stamp tiles | `tiles.paint`, `tiles.stamp` |
-| Stamp a tileset piece | `pieces.place {map, piece, from, to, color?}`; `{map, piece, origins}` stamps one copy at each listed top-left `[x, y]` in one undo step, such as the peaks of a range |
+| Stamp a tileset piece | `pieces.place {map, piece, from, to, color?, footprint?}`; `{map, piece, origins, color?, footprint?}` stamps one copy at each listed top-left `[x, y]` in one undo step. With `footprint: true`, every copy also applies its authored physical recipe to a map with its own collision. Omitted or false leaves collision unchanged |
 | Paint a terrain kind | `kinds.paint {map, kind, from, to}` on a map painted in kinds; its glyph, its tiles and, under declared occupancy, its collision. `{map, kind, cells}` paints listed `[x, y]` cells instead, for terrain no rectangle fits |
 | Convert a map to terrain kinds | `kinds.convert {map, mapping}`, such as `{";": "grassland", "~": "water"}`; or `ichiloto map:convert-kinds` |
 | Layers | `layer.create`, `layer.rename`, `layer.remove`, `layer.reorder`, `layer.decoration`; tile layers `tileLayer.*` |
@@ -389,6 +402,7 @@ batches.
 | Which way a waypoint or staged actor faces once there | the same entry's Facing row (north, east, south, west), or its Face Toward row (the same subject kinds) and then its Face Toward id row; choosing one clears the other |
 | A map's region-map cell | `inspector.apply` with `{target: map-station, field: station}`, value `x, y`, empty removes it |
 | World objects | `worldObjects.create`, `worldObjects.move {map, id, dx, dy}`, `worldObjects.place`, `worldObjects.apply`, `worldObjects.add`, `worldObjects.remove`, `worldObjects.delete` |
+| Tiles a world object presents while shown (a concealed wall drawn as the wall beside it) | `worldObjects.setTiles {map, id, layer, cells}`, each cell `[x, y, tile]` on a cell the object owns, `0` showing no tile; `worldObjects.unsetTiles {map, id, layer, cells}`, each cell `[x, y]`, gives the layer's own tile back |
 | NPCs | `npc.create`, `npc.move`, `npc.apply`, `npc.add`, `npc.reorder`, `npc.remove`, `npc.duplicate`, `npc.delete` |
 | Move a character's own skills onto their Mastery Map | `mastery.adopt {actor}` (asks; answer `write` with its `confirm`): each skill the actor file says they know gets terms known from the start (cost 0, level 1), each learnable terms costing its EXP requirement, for the tree node that teaches it (a skill the tree does not place yet joins the first region's trunk), skills their role teaches stay with the role, and the actor's learned lists and learnables are emptied; then edit the terms in the Mastery Maps category |
 | Place or link Mastery Map nodes | `mastery.page {index}` reads the regions and each node the map gives terms for, with the tree's `name`, `skill`, `region`, `branch` and `kind` and its place (`x`, `y` as fractions of the map; `placed` false where the Engine places it in its region); `mastery.placeNode {index, node, x, y}` places a node; `mastery.toggleRequirement {index, node, requires}` makes `node` build on `requires`, or stops it, refusing a loop. Each is one undo step |

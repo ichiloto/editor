@@ -73,7 +73,7 @@ final class MapLayers
                 'id' => $set->legacy ? self::BASE : 'map:' . $layer->order,
                 'name' => $layer->name, 'order' => $layer->order, 'decoration' => $layer->decoration,
                 'path' => $path,
-                'grid' => new EditableGrid($layer->text, (string) file_get_contents($path), $set->legacy),
+                'grid' => new EditableGrid($layer->text, (string) file_get_contents($path)),
             ];
         }
         $events = new EditableGrid($eventText, (string) file_get_contents($eventPath));

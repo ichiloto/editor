@@ -19,7 +19,7 @@ final class EditableGrid
     /** Whether rows were removed: the rows left can equal the authored ones while the grid does not. */
     private bool $rowsRemoved = false;
 
-    public function __construct(private string $text, private ?string $source = null, private bool $legacyTags = false)
+    public function __construct(private string $text, private ?string $source = null)
     {
         $parts = preg_split('/(\r\n|\n|\r)/', rtrim($text, "\r\n"), -1, PREG_SPLIT_DELIM_CAPTURE) ?: [''];
         $this->lines = $this->separators = [];
@@ -30,38 +30,41 @@ final class EditableGrid
                 $this->separators[] = $part;
             }
         }
-        $this->cells = self::parseLines($this->lines, $legacyTags);
+        $this->cells = self::parseLines($this->lines);
         $this->originalCells = $this->cells;
     }
 
-    public static function parseLines(array $lines, bool $legacyTags = false): array
+    /**
+     * Reads rows into cells exactly as the Engine's source parser does
+     * ({@see TerminalText::parseSourceCells()}): one grammar for formatter
+     * tags, escapes, ANSI and literal delimiters, so the Editor never reads a
+     * row the Engine reads differently or would refuse.
+     *
+     * @param list<string> $lines
+     * @return list<list<array{symbol: string, prefix: string, suffix: string}>>
+     * @throws MapSourceRefusal When the Engine cannot split a row into independent cells; nothing is read or written.
+     */
+    public static function parseLines(array $lines): array
     {
         // Equal cells share PHP copy-on-write values, not mutable references.
         // Keep the pool local to this parse so closed maps retain no cache.
         $cellValues = [];
-        return array_map(static function (string $line) use ($legacyTags, &$cellValues): array {
-            preg_match_all('/<[^>]+>|[^<]+|</u', $line, $matches);
-            $cells = $tags = [];
-            foreach ($matches[0] as $segment) {
-                if (preg_match('/^<[^\/][^>]*>$/u', $segment) === 1
-                    && ($legacyTags || TerminalText::stripAnsi($segment . 'x</>') === 'x')) {
-                    $tags[] = $segment;
-                } elseif (preg_match('/^<\/[^>]*>$/u', $segment) === 1 && ($legacyTags || $tags !== [])) {
-                    array_pop($tags);
-                } else {
-                    foreach (TerminalText::visibleSymbols($segment) as $symbol) {
-                        preg_match('/\A((?:\x1b\[[0-9;]*m)*)(.*?)((?:\x1b\[[0-9;]*m)*)\z/us', $symbol, $styled);
-                        $glyph = $styled[2] ?? $symbol;
-                        $prefix = implode('', $tags) . ($styled[1] ?? '');
-                        $suffix = ($styled[3] ?? '') . str_repeat('</>', count($tags));
-                        $cells[] = $cellValues[$prefix][$suffix][$glyph] ??= [
-                            'symbol' => $glyph, 'prefix' => $prefix, 'suffix' => $suffix,
-                        ];
-                    }
-                }
+        $rows = [];
+        foreach (array_values($lines) as $index => $line) {
+            try {
+                $cells = TerminalText::parseSourceCells($line);
+            } catch (\InvalidArgumentException $error) {
+                throw new MapSourceRefusal(sprintf('Row %d cannot be read as independent cells: %s Nothing was written.',
+                    $index, $error->getMessage()), previous: $error);
             }
-            return $cells;
-        }, $lines);
+            $row = [];
+            foreach ($cells as ['symbol' => $symbol, 'prefix' => $prefix, 'suffix' => $suffix]) {
+                $row[] = $cellValues[$prefix][$suffix][$symbol] ??= ['symbol' => $symbol, 'prefix' => $prefix, 'suffix' => $suffix];
+            }
+            $rows[] = $row;
+        }
+
+        return $rows;
     }
 
     public function getSymbols(): array
@@ -71,16 +74,27 @@ final class EditableGrid
 
     public function captureSnapshot(): array
     {
-        return ['text' => $this->text, 'source' => $this->source, 'cells' => $this->cells, 'legacyTags' => $this->legacyTags];
+        return ['text' => $this->text, 'source' => $this->source, 'cells' => $this->cells];
     }
 
     public static function createFromSnapshot(array $snapshot): self
     {
-        $grid = new self($snapshot['text'], $snapshot['source'], $snapshot['legacyTags']);
+        $grid = new self($snapshot['text'], $snapshot['source']);
         $grid->cells = $snapshot['cells'];
         return $grid;
     }
 
+    /**
+     * The grid's rows as source. Unchanged rows keep their authored bytes.
+     * A changed row shares one style run between neighbours of equal style;
+     * a formatter delimiter or backslash is composed alone by the Engine
+     * ({@see TerminalText::composeSourceCell()}), so it can never escape a
+     * closing tag or join its neighbours into markup.
+     *
+     * @return list<string>
+     * @throws MapSourceRefusal When a literal delimiter's style cannot be composed, or a changed row would not
+     *   read back through the Engine's parser as its cells; nothing is written.
+     */
     public function getLines(): array
     {
         $lines = [];
@@ -92,6 +106,16 @@ final class EditableGrid
             $line = '';
             $open = null;
             foreach ($cells as $cell) {
+                if (strpbrk($cell['symbol'], '<>\\') !== false) {
+                    try {
+                        $line .= ($open[1] ?? '') . TerminalText::composeSourceCell($cell['symbol'], $cell['prefix'], $cell['suffix']);
+                    } catch (\InvalidArgumentException $error) {
+                        throw new MapSourceRefusal(sprintf('Row %d cannot hold %s in its style: %s Nothing was written.',
+                            $index, $cell['symbol'], $error->getMessage()), previous: $error);
+                    }
+                    $open = null;
+                    continue;
+                }
                 $style = [$cell['prefix'], $cell['suffix']];
                 if ($style !== $open) {
                     $line .= ($open[1] ?? '') . $style[0];
@@ -99,7 +123,19 @@ final class EditableGrid
                 }
                 $line .= $cell['symbol'];
             }
-            $lines[] = $line . ($open[1] ?? '');
+            $line .= $open[1] ?? '';
+            // The written row is read back by the same Engine parser that reads it at load, so a cell
+            // whose style would change the row's glyphs is refused here rather than written.
+            try {
+                $read = array_column(TerminalText::parseSourceCells($line), 'symbol');
+            } catch (\InvalidArgumentException $error) {
+                throw new MapSourceRefusal(sprintf('Row %d cannot be written as independent cells: %s Nothing was written.',
+                    $index, $error->getMessage()), previous: $error);
+            }
+            if ($read !== array_column($cells, 'symbol')) {
+                throw new MapSourceRefusal(sprintf('Row %d would not read back as the cells painted: a cell\'s style changes its glyphs. Nothing was written.', $index));
+            }
+            $lines[] = $line;
         }
         return $lines;
     }

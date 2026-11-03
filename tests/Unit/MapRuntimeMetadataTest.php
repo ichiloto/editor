@@ -494,8 +494,8 @@ it('reads what the engine will make of a block without changing it', function ()
 
     $authored = MapEncounters::of(['troops' => ['Bat x 2' => 3, 'Lone Rat' => 1], 'rate' => 22, 'tiles' => 'any']);
     expect($authored->rows())->toBe([
-        ['name' => 'Bat x 2', 'weight' => 3, 'arena' => null, 'areas' => [], 'entry' => null],
-        ['name' => 'Lone Rat', 'weight' => 1, 'arena' => null, 'areas' => [], 'entry' => null],
+        ['name' => 'Bat x 2', 'weight' => 3, 'arena' => null, 'areas' => [], 'terrains' => [], 'entry' => null],
+        ['name' => 'Lone Rat', 'weight' => 1, 'arena' => null, 'areas' => [], 'terrains' => [], 'entry' => null],
     ])
         ->and($authored->rate())->toBe(22)
         ->and($authored->authoredRate())->toBe(22)

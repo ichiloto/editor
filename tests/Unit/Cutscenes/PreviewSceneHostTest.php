@@ -65,3 +65,36 @@ it('follows the playhead: what the cinematic shows next arrives as the next gene
         $preview->dispose();
     }
 });
+
+it('keeps camera pans at the paused or stepped playhead even when the window offers wall-clock motion', function () {
+    $root = cutsceneProject();
+    $definition = \Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition::fromArrays([
+        'id' => 'preview-pan', 'name' => 'Preview pan', 'startMap' => 'harbour',
+    ], [
+        ['type' => 'wait', 'seconds' => .1],
+        ['type' => 'camera', 'operation' => 'pan', 'target' => ['kind' => 'position', 'x' => 17, 'y' => 7], 'seconds' => 2],
+        ['type' => 'wait', 'seconds' => 1],
+    ]);
+    $preview = CinematicPreviewSession::start($root, $definition, ['x' => 2, 'y' => 3, 'width' => 40, 'height' => 12]);
+    try {
+        $ready = json_decode(previewWindowReady(), true, flags: JSON_THROW_ON_ERROR);
+        $ready['capabilities'][] = \Ichiloto\Engine\Rendering\Transport\RendererSessionConfig::CAMERA_MOTION;
+        $initial = $preview->exchangeScene([json_encode($ready, JSON_THROW_ON_ERROR)], $preview->getSceneSessionId());
+        $generation = max(previewFrameGenerations($initial));
+        $preview->play(); $preview->tick(.1); $preview->tick(.5); $preview->pause();
+        $at = $preview->snapshot()->values['camera'];
+        $sent = $preview->exchangeScene([json_encode(['protocol' => 2, 'type' => 'frame_ack',
+            'generation' => $generation, 'frame' => 1, 'presented' => true])], $preview->getSceneSessionId());
+        $frames = array_values(array_filter($sent, fn($message) => $message['type'] === 'frame'));
+        expect($frames)->not->toBe([]);
+        foreach ($frames as $frame) {
+            expect($frame['payload']['viewport'] ?? [])->not->toHaveKey('cameraMotion');
+        }
+        $preview->tick(10.0);
+        expect($preview->snapshot()->values['camera'])->toBe($at);
+        $preview->step(.5);
+        expect($preview->snapshot()->values['camera'])->not->toBe($at);
+        $preview->runToCompletion(5.0);
+        expect($preview->failure())->toBeNull();
+    } finally { $preview->dispose(); }
+});

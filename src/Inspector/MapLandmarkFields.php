@@ -107,8 +107,8 @@ final readonly class MapLandmarkFields
             return [['label' => 'Minimap', 'value' => '! ' . $error->getMessage(), 'editable' => false]];
         }
         $index = $landmarks->findAnchorIndex($anchor);
-        $route = $landmarks->isRouteAnchor($anchor);
-        $choices = [['label' => $route ? 'Unnamed route marker' : 'Not on the minimap', 'value' => self::UNDESCRIBED, 'description' => $route
+        $automatic = isset($anchor['event']) && MapLandmarks::isTransfer($map->getEventDefinition($anchor['event']) ?? []);
+        $choices = [['label' => $automatic ? 'Unnamed route marker' : 'Not on the minimap', 'value' => self::UNDESCRIBED, 'description' => $automatic
             ? 'Every transfer is marked at once; describe it to name it or keep it secret.'
             : 'Only described places are marked.']];
         foreach ($landmarks->findKindsFor($anchor) as $kind) {
@@ -308,7 +308,7 @@ final readonly class MapLandmarkFields
     }
 
     /**
-     * @param list<array{anchor: array<string, string>, value: string, label: string, transfer: bool, landmark: ?string}> $anchors
+     * @param list<array{anchor: array<string, string>, value: string, label: string, transfer: bool, route: bool, landmark: ?string}> $anchors
      * @return list<array<string, mixed>>
      */
     private function describeEntryFields(MapLandmarks $landmarks, array $anchors, int $index, array $entry): array
@@ -318,7 +318,7 @@ final readonly class MapLandmarkFields
         $anchor = MapLandmarks::readAnchor($entry);
         $anchorValue = $anchor === null ? '' : MapLandmarks::encodeAnchor($anchor);
         $anchorChoices = array_map(static fn(array $choice): array => ['label' => $choice['label'], 'value' => $choice['value'],
-            'description' => $choice['transfer'] ? 'A route: a passage, entrance or exit.' : 'A building or a landmark.'],
+            'description' => $choice['route'] ? 'A route: a passage, entrance or exit.' : 'A building or a landmark.'],
             array_values(array_filter($anchors, static fn(array $choice): bool => $choice['landmark'] === null || $choice['value'] === $anchorValue)));
         $kinds = $anchor === null ? [] : $landmarks->findKindsFor($anchor);
         $secret = ($entry['secret'] ?? false) === true;
