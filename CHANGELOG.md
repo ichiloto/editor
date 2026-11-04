@@ -19,6 +19,12 @@
   tileset view and kept by the TUI. Every placement path stands a piece on the cell
   the author points at, with its overhang drawn over the wall face behind it, so
   wall furniture takes one floor row. Pieces without overhang place as before.
+- A graphical placement mode for pieces (`pieces.place` with `ownership: "graphical"`, for `map:apply`, the edit
+  host and the GUI editor): a piece's art is laid over the footprint the map already has, so new art can replace old
+  without touching the glyphs, their colours or collision, which stay byte for byte through save, reload and undo.
+  It is refused before anything is written when the map's collision under the piece's ground is not the piece's own
+  (its declared occupancy, or its glyph's collision), when its art would rise over walkable floor, with a footprint,
+  or for a connected piece.
 
 ### Fixed
 

@@ -1293,6 +1293,23 @@ final class ProjectMap
     }
 
     /**
+     * The collision one glyph gives on a gameplay layer through the project's
+     * collision dictionary, as the Engine reads it at map load: the layer's
+     * own section first, then the plain entries, then solid
+     * ({@see MapCollisionResolver::lookUp()}).
+     *
+     * @throws MapSourceRefusal When the dictionary cannot be read.
+     */
+    public function lookUpGlyphCollision(string $layerName, string $glyph): CollisionType
+    {
+        $dictionary = $this->loadCollisionDictionary();
+        $section = $dictionary[$layerName] ?? [];
+        $plain = array_filter($dictionary, static fn(mixed $value): bool => $value instanceof CollisionType);
+
+        return MapCollisionResolver::lookUp((is_array($section) ? $section : []) + $plain, $glyph);
+    }
+
+    /**
      * How many cells would resolve to another collision if the layer were
      * renamed: collision lookup uses the layer name ({@see MapCollisionResolver}).
      *

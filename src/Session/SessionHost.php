@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Session;
 
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
+use Ichiloto\Editor\Canvas\PieceOwnership;
 use Ichiloto\Editor\Console\ConsoleBinary;
 use Ichiloto\Editor\Console\ProjectCreator;
 use Ichiloto\Editor\Playtest\PlaytestStart;
@@ -298,7 +299,7 @@ final class SessionHost
             'pieces.place' => array_key_exists('origins', $params)
                 ? $session->placePieceCopies(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                     self::requireString($params, 'piece'), self::requireCells(['cells' => $params['origins']]), self::readOptionalString($params, 'color'),
-                    self::readOptionalBool($params, 'footprint'))
+                    self::readOptionalBool($params, 'footprint'), self::readPieceOwnership($params))
                 : $session->placePiece(
                     self::requireString($params, 'map'),
                     self::requireInt($params, 'revision'),
@@ -307,6 +308,7 @@ final class SessionHost
                     self::requireCell($params, 'to'),
                     self::readOptionalString($params, 'color'),
                     self::readOptionalBool($params, 'footprint'),
+                    self::readPieceOwnership($params),
                 ),
             'map.review' => $session->writeMapReview(self::requireString($params, 'map'), self::requireString($params, 'directory'),
                 self::readOptionalRegion($params), array_key_exists('player', $params) && $params['player'] !== null ? self::requireCell($params, 'player') : null,
@@ -915,6 +917,21 @@ final class SessionHost
         $value = $params[$key] ?? $default;
 
         return is_bool($value) ? $value : throw new InvalidRequest(sprintf('"%s" must be a boolean when given.', $key));
+    }
+
+    /**
+     * What a piece placement authors: `gameplay` (the default) for the whole
+     * piece, `graphical` for its art alone over the footprint the map has.
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function readPieceOwnership(array $params): PieceOwnership
+    {
+        $value = $params['ownership'] ?? PieceOwnership::GAMEPLAY->value;
+
+        return is_string($value) ? PieceOwnership::tryFrom($value) ?? throw new InvalidRequest(sprintf('"ownership" must be one of %s.',
+            implode(', ', array_map(static fn(PieceOwnership $case): string => $case->value, PieceOwnership::cases()))))
+            : throw new InvalidRequest('"ownership" must be a string when given.');
     }
 
     /**
