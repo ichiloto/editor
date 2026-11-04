@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Canvas;
 
 use Closure;
 use Ichiloto\Editor\History\Command;
+use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\ProjectMap;
@@ -223,24 +224,29 @@ final class PiecePlacer
      * @throws MapSourceRefusal When the piece is connected, its layer is missing or a copy falls off the map.
      */
     public static function stampArea(ProjectMap $map, TilesetPiece $piece, array $from, array $to, ?string $fallbackColor,
-        string $label = 'Piece stamp'): array
+        string $label = 'Piece stamp', PieceOwnership $ownership = PieceOwnership::GAMEPLAY): array
     {
         $origins = self::getAreaOrigins($piece, $from, $to);
 
-        return ['command' => self::stampOrigins($map, $piece, $origins, $fallbackColor, $label), 'origins' => $origins];
+        return ['command' => self::stampOrigins($map, $piece, $origins, $fallbackColor, $label, $ownership), 'origins' => $origins];
     }
 
     /**
      * Stamps whole copies of an item piece with their top-left cells at the
      * given origins, as one undo step, by the rules of {@see stampArea()}.
+     * A graphical stamp lays the copies' art alone ({@see layArt()}).
      *
      * @param list<array{x: int, y: int}> $origins
      * @return ?Command The applied, unrecorded edit, or null when it changed nothing.
-     * @throws MapSourceRefusal When the piece is connected, its layer is missing or a copy falls off the map.
+     * @throws MapSourceRefusal When the piece is connected, its layer is missing, a copy falls off the map, or a
+     *     graphical copy's art does not fit the footprint the map has.
      */
     public static function stampOrigins(ProjectMap $map, TilesetPiece $piece, array $origins, ?string $fallbackColor,
-        string $label = 'Piece stamp'): ?Command
+        string $label = 'Piece stamp', PieceOwnership $ownership = PieceOwnership::GAMEPLAY): ?Command
     {
+        if ($ownership === PieceOwnership::GRAPHICAL) {
+            return self::layArt($map, $piece, $origins, $label);
+        }
         if ($piece->connects !== null) {
             throw new MapSourceRefusal(sprintf('%s is drawn as connected cells, not stamped. Nothing was changed.', $piece->name));
         }
@@ -292,6 +298,46 @@ final class PiecePlacer
         return $stroke->hasChanges() || $tilesAfter !== $tilesBefore
             ? CanvasEditor::combineStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter)
             : null;
+    }
+
+    /**
+     * Lays the art of an item piece's copies and nothing else, as one undo
+     * step: its tiles on its tile layers, as its stack orders them when it has
+     * one, `0` entries leaving their cells as they are. Every glyph, its colour
+     * and the map's collision stay exactly as authored, so the piece's art may
+     * replace another's over a footprint the author drew in their own glyphs.
+     * The art must fit that footprint first ({@see PieceArtFootprint}).
+     *
+     * @param list<array{x: int, y: int}> $origins
+     * @return ?Command The applied, unrecorded edit, or null when it changed nothing.
+     * @throws MapSourceRefusal When the art does not fit the map's footprint or a tile layer cannot take it; nothing is changed.
+     */
+    private static function layArt(ProjectMap $map, TilesetPiece $piece, array $origins, string $label): ?Command
+    {
+        PieceArtFootprint::assertFits($map, $piece, $origins);
+        $before = $map->getTileLayerSources();
+        try {
+            $stack = self::findStack($map, $piece);
+            if ($stack !== null) {
+                $map->writeTileCells(self::layStacked($map, $piece, $stack, $origins));
+            } else {
+                foreach ($origins as ['x' => $x, 'y' => $y]) {
+                    $map->writeTileEntries($piece->tiles, $x, $y);
+                }
+            }
+        } catch (MapSourceRefusal $refusal) {
+            $map->restoreTileLayerSources($before);
+            throw $refusal;
+        }
+        $after = $map->getTileLayerSources();
+        if ($after === $before) {
+            return null;
+        }
+
+        return new GenericCommand($label,
+            static fn() => $map->restoreTileLayerSources($after),
+            static fn() => $map->restoreTileLayerSources($before),
+        );
     }
 
     /** The stack the piece is laid on in the map's tileset, or null when it is stamped as authored. */

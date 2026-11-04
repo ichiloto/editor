@@ -18,6 +18,7 @@ use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewContext;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Database\EnemySprites;
+use Ichiloto\Editor\Canvas\PieceOwnership;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Canvas\PiecePlacer;
 use Ichiloto\Editor\Canvas\PlacedPieces;
@@ -1411,7 +1412,10 @@ final class EditorSession
      * changes nothing. With `$footprint`, each stamped copy also sets the
      * collision its physical footprint gives, in the same step, on a map with
      * its own collision ({@see PlacedPieces::addFootprint()}); without it, or
-     * for a piece with no footprint, collision is left as it is.
+     * for a piece with no footprint, collision is left as it is. A graphical
+     * placement lays an item piece's art alone over the footprint the map
+     * already has, its glyphs, colours and collision left exactly as they are
+     * ({@see PieceOwnership::GRAPHICAL}); it never stamps a footprint.
      *
      * @param array{0: int, 1: int} $from
      * @param array{0: int, 1: int} $to
@@ -1420,18 +1424,20 @@ final class EditorSession
      * @throws SessionRefusal When the map is unknown, stale or read-only, the piece is unknown, or the placement is refused.
      */
     public function placePiece(string $mapId, int $revision, string $pieceId, array $from, array $to, ?string $color = null,
-        bool $footprint = false): array
+        bool $footprint = false, PieceOwnership $ownership = PieceOwnership::GAMEPLAY): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
         }
         $piece = $this->requirePiece($map, $pieceId);
+        self::assertOwnershipAgrees($piece, $footprint, $ownership);
         [$from, $to] = [['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]]];
         try {
             $stamped = 0;
             if ($piece->connects === null) {
-                ['command' => $command, 'origins' => $origins] = PiecePlacer::stampArea($map, $piece, $from, $to, $color);
+                ['command' => $command, 'origins' => $origins] = PiecePlacer::stampArea($map, $piece, $from, $to, $color,
+                    ownership: $ownership);
                 [$copies, $cells] = [count($origins), 0];
                 if ($footprint) {
                     ['command' => $command, 'cells' => $stamped] = PlacedPieces::addFootprint($map, $piece, $command, $origins,
@@ -1458,25 +1464,26 @@ final class EditorSession
      * ({@see PiecePlacer::getOriginAt()}), as one undo step: scattered copies,
      * such as the peaks of a range, placed by a script in one request rather
      * than one per copy.
-     * Copies follow the rules of {@see placePiece()}; a connected piece is
-     * drawn, not stamped, and is refused.
+     * Copies follow the rules of {@see placePiece()}, a graphical placement
+     * included; a connected piece is drawn, not stamped, and is refused.
      *
      * @param list<array{0: int, 1: int}> $origins
      * @return array{status: 'applied', changed: bool, copies: int, cells: int, footprint: int, revision: int}
      * @throws SessionRefusal When the map is unknown, stale or read-only, the piece is unknown or connected, or a copy falls off the map.
      */
     public function placePieceCopies(string $mapId, int $revision, string $pieceId, array $origins, ?string $color = null,
-        bool $footprint = false): array
+        bool $footprint = false, PieceOwnership $ownership = PieceOwnership::GAMEPLAY): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
         }
         $piece = $this->requirePiece($map, $pieceId);
+        self::assertOwnershipAgrees($piece, $footprint, $ownership);
         $origins = array_map(static fn(array $cell): array => PiecePlacer::getOriginAt($piece, $cell[0], $cell[1]), $origins);
         $stamped = 0;
         try {
-            $command = PiecePlacer::stampOrigins($map, $piece, $origins, $color);
+            $command = PiecePlacer::stampOrigins($map, $piece, $origins, $color, ownership: $ownership);
             if ($footprint) {
                 ['command' => $command, 'cells' => $stamped] = PlacedPieces::addFootprint($map, $piece, $command, $origins,
                     sprintf('Place %s', $piece->name));
@@ -1490,6 +1497,26 @@ final class EditorSession
 
         return ['status' => 'applied', 'changed' => $command !== null, 'copies' => count($origins), 'cells' => 0, 'footprint' => $stamped,
             'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * A graphical placement lays art over the footprint the map has, so it
+     * never stamps one, and a connected piece's art follows its glyphs.
+     *
+     * @throws SessionRefusal When the placement asks for both, or for a connected piece's art alone.
+     */
+    private static function assertOwnershipAgrees(TilesetPiece $piece, bool $footprint, PieceOwnership $ownership): void
+    {
+        if ($ownership !== PieceOwnership::GRAPHICAL) {
+            return;
+        }
+        if ($footprint) {
+            throw new SessionRefusal(sprintf('A graphical placement of %s leaves collision as it is; it cannot also stamp a footprint. Nothing was changed.',
+                $piece->name));
+        }
+        if ($piece->connects !== null) {
+            throw new SessionRefusal(sprintf('%s is drawn as connected cells; its art cannot be laid alone. Nothing was changed.', $piece->name));
+        }
     }
 
     /** @throws SessionRefusal When the map's tileset has no piece with the id. */
