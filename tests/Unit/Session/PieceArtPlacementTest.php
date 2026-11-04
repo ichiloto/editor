@@ -7,6 +7,8 @@ use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\MapGridSource;
+use Ichiloto\Editor\Validation\Issue;
+use Ichiloto\Editor\Validation\MapGraphicsValidator;
 
 /**
  * A piece's art laid alone over a footprint the author drew in their own
@@ -38,6 +40,9 @@ function pieceArtProject(?array $occupancy = null): string
         'shelf' => ['name' => 'Shelf', 'layer' => 'buildings', 'overhang' => 1, 'glyphs' => ['  ', '##'],
             'tiles' => ['decor' => ['7 8', '9 10']], 'occupancy' => [[null, null], [$solid, $solid]]],
         'crate' => ['name' => 'Crate', 'layer' => 'buildings', 'glyphs' => ['#'], 'tiles' => ['decor' => ['11']]],
+        // Its art goes on a tile layer the map does not have yet.
+        'cabinet' => ['name' => 'Cabinet', 'layer' => 'buildings', 'overhang' => 1, 'glyphs' => ['  ', '##'],
+            'tiles' => ['cabinet' => ['13 14', '15 16']], 'occupancy' => [[null, null], [$solid, $solid]]],
         'wall' => ['name' => 'Wall', 'layer' => 'buildings', 'connects' => 'lines',
             'glyphs' => ['horizontal' => '-', 'vertical' => '|', 'corner' => '+'], 'tiles' => ['decor' => '12']],
     ]);
@@ -148,4 +153,116 @@ it('takes the graphical mode as a session request, as map:apply and the GUI edit
     $buildings = array_find($request('map.read', ['map' => 'test-map'])['result']['layers'], static fn(array $layer): bool => $layer['id'] === 'map:4');
     expect($placed)->toMatchArray(['changed' => true, 'copies' => 1])
         ->and(array_map(static fn(array $row): string => implode('', $row), $buildings['rows']))->toBe(['####', ' %% ', '    ']);
+});
+
+/** The map's warnings for piece art that is not placed where it stands, as validation judges the session's map. */
+function readStalePieceArtWarnings(EditorSession $session): array
+{
+    return array_values(array_filter(array_map(static fn(Issue $issue): string => $issue->message,
+        MapGraphicsValidator::validateCoverage(getPhysicalOccupancyMap($session))),
+        static fn(string $message): bool => str_contains($message, 'is not placed there')));
+}
+
+/** @return list<array<string, mixed>> The world operations a newly opened canvas sends for the map. */
+function readPieceArtWorld(EditorSession $session, ?array $pieceArt = null): array
+{
+    return array_values(array_filter(drawAuthoringCanvas($session, 'test-map', pieceArt: $pieceArt)['operations'],
+        static fn(array $operation): bool => in_array($operation['op'] ?? null, ['put', 'worldRows', 'worldTiles', 'worldRowRuns', 'worldTileRuns'], true)
+            && (($operation['kind'] ?? 'world') === 'world')));
+}
+
+it('places a piece whole as before when the placement is gameplay, its preview naming the glyphs it writes', function () {
+    $root = pieceArtProject();
+    $session = EditorSession::open($root);
+    $revision = $session->readMap('test-map')['revision'];
+
+    expect($session->previewPiece('test-map', 'shelf', [1, 1], [1, 1]))
+        ->toBe(['cells' => [[1, 1, '#', null], [2, 1, '#', null]]]);
+    $session->placePiece('test-map', $revision, 'shelf', [1, 1], [1, 1]);
+    $buildings = array_find($session->readMap('test-map')['layers'], static fn(array $layer): bool => $layer['id'] === 'map:4');
+    expect(array_map(static fn(array $row): string => implode('', $row), $buildings['rows']))->toBe(['####', ' ## ', '    '])
+        ->and(readPieceArtDecor($session))->toBe([[0, 7, 8, 0], [0, 9, 10, 0], [0, 0, 0, 0]])
+        ->and(readStalePieceArtWarnings($session))->toBe([]);
+});
+
+it('previews a graphical placement as the art it lays and why it would be refused, changing nothing', function () {
+    $root = pieceArtProject();
+    $before = readPieceArtSources($root);
+    $session = EditorSession::open($root);
+    $revision = $session->readMap('test-map')['revision'];
+
+    expect($session->previewPiece('test-map', 'shelf', [1, 1], [1, 1], ownership: PieceOwnership::GRAPHICAL))
+        ->toBe(['cells' => [], 'art' => [[1, 0], [2, 0], [1, 1], [2, 1]], 'refusal' => null]);
+    try {
+        $session->placePiece('test-map', $revision, 'shelf', [0, 1], [0, 1], ownership: PieceOwnership::GRAPHICAL);
+        $refusal = null;
+    } catch (SessionRefusal $error) {
+        $refusal = $error->getMessage();
+    }
+    // The preview gives the reason placing it gives, from the same plan.
+    expect($refusal)->toContain('needs solid collision at (0, 1)')
+        ->and($session->previewPiece('test-map', 'shelf', [0, 1], [0, 1], ownership: PieceOwnership::GRAPHICAL))
+        ->toBe(['cells' => [], 'art' => [[0, 0], [1, 0], [0, 1], [1, 1]], 'refusal' => $refusal])
+        ->and($session->previewPiece('test-map', 'wall', [0, 2], [3, 2], ownership: PieceOwnership::GRAPHICAL)['refusal'])
+        ->toBe('Wall is drawn as connected cells; its art cannot be laid alone. Nothing was changed.')
+        ->and($session->readMap('test-map')['revision'])->toBe($revision);
+
+    $session->saveAll();
+    expect(readPieceArtSources($root))->toBe($before);
+});
+
+it('takes the graphical preview as a session request, as the GUI editor sends it', function () {
+    $request = createPhysicalOccupancyRpc(pieceArtProject());
+
+    expect($request('pieces.preview', ['map' => 'test-map', 'piece' => 'shelf', 'from' => [1, 1], 'to' => [1, 1], 'ownership' => 'graphical'])['result'])
+        ->toBe(['cells' => [], 'art' => [[1, 0], [2, 0], [1, 1], [2, 1]], 'refusal' => null])
+        ->and($request('pieces.preview', ['map' => 'test-map', 'piece' => 'shelf', 'from' => [1, 1], 'to' => [1, 1]])['result'])
+        ->toBe(['cells' => [[1, 1, '#', null], [2, 1, '#', null]]])
+        ->and($request('canvas.exchange', ['map' => 'test-map', 'events' => [], 'pieceArt' => ['piece' => 'shelf', 'from' => [1]]])['error']['message'])
+        ->toBe('"from" must be an [x, y] integer pair.');
+});
+
+it('draws a graphical placement\'s art in the map\'s canvas before it is applied exactly as applying it draws, and undo draws the map as it was', function (string $piece) {
+    $session = EditorSession::open(pieceArtProject());
+    $art = ['piece' => $piece, 'from' => [1, 1], 'to' => [1, 1]];
+    $unchanged = readPieceArtWorld($session);
+    $revision = $session->readMap('test-map')['revision'];
+    $previewed = readPieceArtWorld($session, $art);
+
+    expect($previewed)->not->toBe($unchanged)
+        ->and($session->readMap('test-map')['revision'])->toBe($revision)
+        // Art that would be refused is not drawn: the canvas shows the map as it is.
+        ->and(readPieceArtWorld($session, ['piece' => $piece, 'from' => [0, 1], 'to' => [0, 1]]))->toBe($unchanged);
+    $session->placePiece('test-map', $revision, $piece, [1, 1], [1, 1], ownership: PieceOwnership::GRAPHICAL);
+    expect(readPieceArtWorld($session))->toBe($previewed);
+
+    $session->undo();
+    expect(readPieceArtWorld($session))->toBe($unchanged);
+})->with(['on a tile layer the map has' => 'shelf', 'on a tile layer it creates' => 'cabinet']);
+
+it('never warns that a graphical placement\'s art over an authored glyph is not placed, through save, reload and undo', function () {
+    $root = pieceArtProject();
+    $session = EditorSession::open($root);
+    $session->placePiece('test-map', $session->readMap('test-map')['revision'], 'shelf', [1, 1], [1, 1], ownership: PieceOwnership::GRAPHICAL);
+
+    // The shelf's art stands whole over the authored `%%`, whose collision holds its ground row.
+    expect(readStalePieceArtWarnings($session))->toBe([]);
+    $session->saveAll();
+    expect(readStalePieceArtWarnings(EditorSession::open($root)))->toBe([]);
+    $session->undo();
+    expect(readStalePieceArtWarnings($session))->toBe([]);
+});
+
+it('still warns for a piece\'s art whose footprint went with its glyph, and for a copy partly painted over', function () {
+    $root = pieceArtProject();
+    $directory = $root . '/assets/Maps/test-map';
+    // A whole shelf standing on open floor at (0, 2), where nothing holds its ground row.
+    writeTileLayer($directory, '02.decor.tiles.php', "0 0 0 0\n7 8 0 0\n9 10 0 0");
+    expect(readStalePieceArtWarnings(EditorSession::open($root)))
+        ->toBe(['4 tiles on the decor tile layer are art of a tileset piece that is not placed there: no glyph of the piece accounts for them, and they are in no whole copy of its art over ground with its collision: (0, 1), (1, 1), (0, 2) and 1 more.']);
+
+    // A shelf over the authored footprint missing one of its tiles is no longer a copy of it.
+    writeTileLayer($directory, '02.decor.tiles.php', "0 7 8 0\n0 9 0 0\n0 0 0 0");
+    expect(readStalePieceArtWarnings(EditorSession::open($root)))
+        ->toBe(['3 tiles on the decor tile layer are art of a tileset piece that is not placed there: no glyph of the piece accounts for them, and they are in no whole copy of its art over ground with its collision: (1, 0), (2, 0), (1, 1).']);
 });

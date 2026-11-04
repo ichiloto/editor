@@ -1383,16 +1383,38 @@ final class EditorSession
      * ({@see PiecePlacer::getPreviewCells()}): each cell the piece writes, as
      * [x, y, glyph, colour], cells off the map left out.
      *
+     * A graphical placement writes no glyph, so its `cells` are empty: `art`
+     * lists the cells its art covers on the map, as [x, y], and `refusal`
+     * says why placing it would be refused, or is null when it would be laid
+     * ({@see PiecePlacer::planArt()}, the plan {@see placePiece()} writes).
+     * The map's canvas draws that art laid ({@see exchangeAuthoringCanvas()}).
+     *
      * @param array{0: int, 1: int} $from
      * @param array{0: int, 1: int} $to
      * @param string|null $color The colour of cells the piece leaves unstyled.
-     * @return array{cells: list<array{0: int, 1: int, 2: string, 3: ?string}>}
+     * @return array{cells: list<array{0: int, 1: int, 2: string, 3: ?string}>}|array{cells: list<never>, art: list<array{0: int, 1: int}>, refusal: ?string}
      * @throws SessionRefusal When the map or the piece is unknown.
      */
-    public function previewPiece(string $mapId, string $pieceId, array $from, array $to, ?string $color = null): array
+    public function previewPiece(string $mapId, string $pieceId, array $from, array $to, ?string $color = null,
+        PieceOwnership $ownership = PieceOwnership::GAMEPLAY): array
     {
         $map = $this->requireMap($mapId);
         $piece = $this->requirePiece($map, $pieceId);
+        if ($ownership === PieceOwnership::GRAPHICAL) {
+            $origins = PiecePlacer::getAreaOrigins($piece, ['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]]);
+            try {
+                self::assertOwnershipAgrees($piece, false, $ownership);
+                PiecePlacer::planArt($map, $piece, $origins);
+                $refusal = null;
+            } catch (SessionRefusal|MapSourceRefusal $error) {
+                $refusal = $error->getMessage();
+            }
+            $art = array_filter(PiecePlacer::getArtCells($piece, $origins), static fn(array $cell): bool => $cell['x'] >= 0 && $cell['y'] >= 0
+                && $cell['x'] < $map->getWidth() && $cell['y'] < $map->getHeight());
+
+            return ['cells' => [], 'art' => array_map(static fn(array $cell): array => [$cell['x'], $cell['y']], array_values($art)),
+                'refusal' => $refusal];
+        }
         $cells = [];
         foreach (PiecePlacer::getPreviewCells($map, $piece, ['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]], $color) as $y => $row) {
             foreach ($row as $x => $cell) {
@@ -5604,21 +5626,28 @@ final class EditorSession
      * file set written at once reloads the project, starts a new one, whose new session id tells the window to start
      * again, and answers meant for an earlier canvas are not applied to it.
      *
+     * With `$pieceArt`, the canvas draws a graphical placement's art laid between two corners, before it is applied:
+     * the plan placing it writes ({@see PiecePlacer::planArt()}), its glyphs and collision as they are. Art that would
+     * be refused draws nothing; {@see previewPiece()} says why.
+     *
      * @param list<string> $events The window's answers, as renderer event lines.
      * @param array<string, string> $variants
+     * @param array{piece: string, from: array{0: int, 1: int}, to: array{0: int, 1: int}}|null $pieceArt
      * @return array<string, mixed>
-     * @throws SessionRefusal When the map is unknown or cannot be composed, or the window reports an error.
+     * @throws SessionRefusal When the map or the piece is unknown, the map cannot be composed, or the window reports an error.
      */
-    public function exchangeAuthoringCanvas(string $mapId, array $events, array $variants = [], float $seconds = 0, ?string $sessionId = null): array
+    public function exchangeAuthoringCanvas(string $mapId, array $events, array $variants = [], float $seconds = 0, ?string $sessionId = null,
+        ?array $pieceArt = null): array
     {
         $map = $this->requireMap($mapId);
+        $laid = $pieceArt === null ? [] : $this->planLaidArt($map, $pieceArt);
         $host = $this->authoringCanvases[$mapId] ?? null;
         if ($host === null || ! $host->drawsMap($map)) {
             $host?->dispose();
             $host = $this->authoringCanvases[$mapId] = new \Ichiloto\Editor\Field\AuthoringCanvasHost($map, uniqid('canvas-', true));
         }
         try {
-            $messages = $host->exchange($sessionId === $host->sessionId ? $events : [], $variants, $seconds);
+            $messages = $host->exchange($sessionId === $host->sessionId ? $events : [], $variants, $seconds, $laid);
         } catch (InvalidArgumentException|MapSourceRefusal|\Ichiloto\Engine\Rendering\Transport\Exceptions\RendererTransportException $error) {
             throw new SessionRefusal($error->getMessage(), previous: $error);
         }
@@ -5630,6 +5659,26 @@ final class EditorSession
                 'cellWidth' => $host->grid->cellWidth, 'cellHeight' => $host->grid->cellHeight],
             'messages' => $messages, 'assetPaths' => $source?->assetPaths ?? [], 'diagnostics' => $source?->diagnostics ?? [],
             'graphicsIssue' => $source?->graphicsIssue];
+    }
+
+    /**
+     * A graphical placement's planned art, the entries applying it writes, as the canvas lays it
+     * ({@see \Ichiloto\Editor\Field\AuthoringMapSource::compose()}); none when placing it would be refused.
+     *
+     * @param array{piece: string, from: array{0: int, 1: int}, to: array{0: int, 1: int}} $pieceArt
+     * @return array<string, list<array{x: int, y: int, entry: string}>>
+     * @throws SessionRefusal When the piece is unknown.
+     */
+    private function planLaidArt(ProjectMap $map, array $pieceArt): array
+    {
+        $piece = $this->requirePiece($map, $pieceArt['piece']);
+        [$from, $to] = [$pieceArt['from'], $pieceArt['to']];
+        try {
+            self::assertOwnershipAgrees($piece, false, PieceOwnership::GRAPHICAL);
+            return PiecePlacer::planArt($map, $piece, PiecePlacer::getAreaOrigins($piece, ['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]]));
+        } catch (SessionRefusal|MapSourceRefusal) {
+            return [];
+        }
     }
 
     /**

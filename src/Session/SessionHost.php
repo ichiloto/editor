@@ -205,7 +205,7 @@ final class SessionHost
                 self::requireString($params, 'id'), self::requireString($params, 'variant'), self::requireInt($params, 'offset')),
             'canvas.exchange' => $session->exchangeAuthoringCanvas(self::requireString($params, 'map'), self::requireLines($params, 'events'),
                 isset($params['variants']) ? self::requireArray($params, 'variants') : [], isset($params['seconds']) ? self::requireNumber($params, 'seconds') : 0,
-                self::readOptionalString($params, 'sessionId')),
+                self::readOptionalString($params, 'sessionId'), self::readPieceArt($params)),
             'canvas.close' => $session->closeAuthoringCanvas(self::requireString($params, 'map')),
             'map.world' => $session->readWorld(self::requireString($params, 'map'),
                 is_bool($params['tileShadows'] ?? false) ? ($params['tileShadows'] ?? false) : throw new InvalidRequest('"tileShadows" must be a boolean.')),
@@ -295,6 +295,7 @@ final class SessionHost
                 self::requireCell($params, 'from'),
                 self::requireCell($params, 'to'),
                 self::readOptionalString($params, 'color'),
+                self::readPieceOwnership($params),
             ),
             'pieces.place' => array_key_exists('origins', $params)
                 ? $session->placePieceCopies(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
@@ -917,6 +918,23 @@ final class SessionHost
         $value = $params[$key] ?? $default;
 
         return is_bool($value) ? $value : throw new InvalidRequest(sprintf('"%s" must be a boolean when given.', $key));
+    }
+
+    /**
+     * A graphical placement's art the map's canvas lays before it is applied, when given:
+     * `{piece, from: [x, y], to: [x, y]}`, as `pieces.preview` names it.
+     *
+     * @param array<string, mixed> $params
+     * @return array{piece: string, from: array{0: int, 1: int}, to: array{0: int, 1: int}}|null
+     */
+    private static function readPieceArt(array $params): ?array
+    {
+        if (($params['pieceArt'] ?? null) === null) {
+            return null;
+        }
+        $art = self::requireArray($params, 'pieceArt');
+
+        return ['piece' => self::requireString($art, 'piece'), 'from' => self::requireCell($art, 'from'), 'to' => self::requireCell($art, 'to')];
     }
 
     /**

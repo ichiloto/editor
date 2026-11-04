@@ -29,16 +29,17 @@ function acknowledgeCanvasFrames(array $answer): array
 
 /**
  * A map's whole picture, as a newly opened editing canvas first draws it: the exchange's answer, with every
- * operation of the frames it sent.
+ * operation of the frames it sent; with `$pieceArt`, a graphical placement's art laid before it is applied.
  *
  * @param array<string, string> $variants
+ * @param array{piece: string, from: array{0: int, 1: int}, to: array{0: int, 1: int}}|null $pieceArt
  * @return array<string, mixed>
  */
-function drawAuthoringCanvas(EditorSession $session, string $mapId, array $variants = [], float $seconds = 0): array
+function drawAuthoringCanvas(EditorSession $session, string $mapId, array $variants = [], float $seconds = 0, ?array $pieceArt = null): array
 {
     $session->closeAuthoringCanvas($mapId);
-    $opened = $session->exchangeAuthoringCanvas($mapId, [], $variants, $seconds);
-    $drawn = $session->exchangeAuthoringCanvas($mapId, [canvasWindowReady()], $variants, $seconds, $opened['sessionId']);
+    $opened = $session->exchangeAuthoringCanvas($mapId, [], $variants, $seconds, pieceArt: $pieceArt);
+    $drawn = $session->exchangeAuthoringCanvas($mapId, [canvasWindowReady()], $variants, $seconds, $opened['sessionId'], $pieceArt);
     $session->closeAuthoringCanvas($mapId);
 
     return [...$drawn, 'operations' => array_merge(...array_map(static fn(array $frame): array => $frame['payload']['operations'],

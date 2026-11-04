@@ -24,12 +24,12 @@ function planKeepsTestChanges(array $pieces, array $changes, array $glyphs, arra
         $choices, assigned: $assigned);
 }
 
-/** Reports only stale piece tiles, apart from unrelated synthetic fixture coverage. */
+/** Reports only piece art that is not placed where it stands, apart from unrelated synthetic fixture coverage. */
 function getKeepsTestStaleIssues(string $root): array
 {
     return array_values(array_map(static fn($issue): string => $issue->message,
         array_filter(MapGraphicsValidator::validateCoverage(loadLayeredMap($root)),
-            static fn($issue): bool => str_contains($issue->message, 'no longer there'))));
+            static fn($issue): bool => str_contains($issue->message, 'is not placed there'))));
 }
 
 it('gives kept cells to the same glyph roles as blank attachments, even for zero tiles', function () {
@@ -190,6 +190,7 @@ it('stamps multi-cell keeps through PiecePlacer with byte-preserving undo and sa
 
 it('explains arbitrary kept underlay only at matching role cells, not stale tiles elsewhere', function () {
     $root = mapGraphicsProject();
+    writeWalkableFloorCollisions($root);
     $directory = $root . '/assets/Maps/test-map';
     file_put_contents($directory . '/layers/04.buildings.map.php', MapGridSource::buildSource("w   \n    ", 'AUTHORED'));
     writeTestTileset($root, pieces: [
@@ -199,19 +200,23 @@ it('explains arbitrary kept underlay only at matching role cells, not stale tile
     ]);
     writeTileLayer($directory, '02.decor.tiles.php', "5 6 0 0\n0 0 0 0");
     writeTileLayer($directory, '03.walls.tiles.php', "10 11 10 0\n0 0 11 10");
+    // The wall tiles at (2, 0), (2, 1) and (3, 1) stand on walkable floor, where no wall is placed.
     expect(getKeepsTestStaleIssues($root))->toBe([
-        '3 tiles on the walls tile layer are drawn by a tileset piece whose glyph is no longer there: (2, 0), (2, 1), (3, 1).',
+        '3 tiles on the walls tile layer are art of a tileset piece that is not placed there: no glyph of the piece accounts for them, and they are in no whole copy of its art over ground with its collision: (2, 0), (2, 1), (3, 1).',
     ]);
 
-    // The glyph alone must not excuse another role's underlay when its identifying art contradicts it.
+    // The glyph alone must not excuse another role's underlay when its identifying art contradicts it: the window's
+    // keeps no longer explain (1, 0), on walkable floor. The wall tile at (0, 0) is a whole wall's art on the
+    // window's solid cell, ground with a wall's collision, so it stands placed as art alone.
     writeTileLayer($directory, '02.decor.tiles.php', "9 0 0 0\n0 0 0 0");
     expect(getKeepsTestStaleIssues($root))->toBe([
-        '5 tiles on the walls tile layer are drawn by a tileset piece whose glyph is no longer there: (0, 0), (1, 0), (2, 0) and 2 more.',
+        '4 tiles on the walls tile layer are art of a tileset piece that is not placed there: no glyph of the piece accounts for them, and they are in no whole copy of its art over ground with its collision: (1, 0), (2, 0), (2, 1) and 1 more.',
     ]);
 });
 
 it('does not extend a surviving role\'s keeps into a missing sibling glyph\'s cells', function () {
     $root = mapGraphicsProject();
+    writeWalkableFloorCollisions($root);
     $directory = $root . '/assets/Maps/test-map';
     file_put_contents($directory . '/layers/04.buildings.map.php', MapGridSource::buildSource("a   \n    ", 'AUTHORED'));
     writeTestTileset($root, pieces: [
@@ -221,13 +226,15 @@ it('does not extend a surviving role\'s keeps into a missing sibling glyph\'s ce
     ]);
     writeTileLayer($directory, '02.decor.tiles.php', "5 0 0 0\n0 0 0 0");
     writeTileLayer($directory, '03.walls.tiles.php', "10 10 10 0\n0 0 0 0");
+    // The missing b's cell at (2, 0) is walkable floor, so its wall tile is not placed there.
     expect(getKeepsTestStaleIssues($root))->toBe([
-        '1 tile on the walls tile layer is drawn by a tileset piece whose glyph is no longer there: (2, 0).',
+        '1 tile on the walls tile layer is art of a tileset piece that is not placed there: no glyph of the piece accounts for it, and it is in no whole copy of its art over ground with its collision: (2, 0).',
     ]);
 });
 
 it('allows glyph-only keeping roles without claiming an entire layer', function () {
     $root = mapGraphicsProject();
+    writeWalkableFloorCollisions($root);
     $directory = $root . '/assets/Maps/test-map';
     file_put_contents($directory . '/layers/04.buildings.map.php', MapGridSource::buildSource("g   \n    ", 'AUTHORED'));
     writeTestTileset($root, pieces: [
@@ -235,8 +242,9 @@ it('allows glyph-only keeping roles without claiming an entire layer', function 
         'mounted' => ['name' => 'Mounted', 'layer' => 'buildings', 'glyphs' => ['g '], 'keeps' => ['walls']],
     ]);
     writeTileLayer($directory, '03.walls.tiles.php', "10 10 10 0\n0 0 0 0");
+    // The g keeps the walls under it and beside it; the wall tile at (2, 0) stands on walkable floor.
     expect(getKeepsTestStaleIssues($root))->toBe([
-        '1 tile on the walls tile layer is drawn by a tileset piece whose glyph is no longer there: (2, 0).',
+        '1 tile on the walls tile layer is art of a tileset piece that is not placed there: no glyph of the piece accounts for it, and it is in no whole copy of its art over ground with its collision: (2, 0).',
     ]);
 });
 

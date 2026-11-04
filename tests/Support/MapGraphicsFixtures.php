@@ -45,6 +45,17 @@ function writeTestTileset(string $root, string $id = 'home', ?array $sheets = nu
     file_put_contents($root . "/assets/Data/Tilesets/{$id}.php", "<?php\n\nreturn " . var_export($data, true) . ";\n");
 }
 
+/**
+ * Gives the layered test map's floor (`.`) walkable collision, as a project's
+ * collision dictionary does; every other glyph stays solid, the dictionary's
+ * default.
+ */
+function writeWalkableFloorCollisions(string $root): void
+{
+    file_put_contents($root . '/assets/Maps/collisions.php', "<?php\n\nuse Ichiloto\\Engine\\Events\\Enumerations\\CollisionType;\n\n"
+        . "return ['.' => CollisionType::NONE];\n");
+}
+
 /** Writes one tile layer in graphics/ as an authored literal nowdoc. */
 function writeTileLayer(string $mapDirectory, string $file, string $body, string $leadingComment = ''): string
 {

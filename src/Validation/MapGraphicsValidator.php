@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Canvas\GlyphTilePlanner;
+use Ichiloto\Editor\Canvas\PieceArtFootprint;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Canvas\TileGlyphBinding;
 use Ichiloto\Editor\Field\WorldObjectAuthoring;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\TileLayerSource;
+use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Field\MapLayerSet;
@@ -21,6 +23,7 @@ use Ichiloto\Engine\Rendering\Tilesets\CornerSheet;
 use Ichiloto\Engine\Rendering\Tilesets\TileCoverage;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
 use InvalidArgumentException;
 use RuntimeException;
@@ -83,8 +86,8 @@ final class MapGraphicsValidator
 
     /**
      * Warns for what a map's art still lacks, judged by the Editor's own
-     * authoring knowledge of its tileset: tiles a tileset piece draws whose
-     * glyph is no longer there, cells showing the missing-art placeholder the
+     * authoring knowledge of its tileset: tiles of a tileset piece that is not
+     * placed where they stand, cells showing the missing-art placeholder the
      * author chose, and ground that can show the background through
      * see-through edges. The game plays the same, so these never fail
      * validation.
@@ -103,9 +106,9 @@ final class MapGraphicsValidator
         if ($coverage === null) {
             return [];
         }
-        [$tileset, $layers] = $coverage;
+        [$tileset, $layers, , $graphics] = $coverage;
 
-        return [...self::checkStalePieceTiles($map, $tileset, $layers), ...self::checkMissingArtTiles($map, $tileset, $layers),
+        return [...self::checkUnplacedPieceTiles($map, $graphics), ...self::checkMissingArtTiles($map, $tileset, $layers),
             ...self::checkSeeThroughGround($map, $tileset, $layers)];
     }
 
@@ -123,10 +126,10 @@ final class MapGraphicsValidator
     }
 
     /**
-     * The map's tileset, its readable tile layers and the cells whose glyph
-     * still shows; null when they cannot be read.
+     * The map's tileset, its readable tile layers, the cells whose glyph
+     * still shows and the graphics they make; null when they cannot be read.
      *
-     * @return array{0: Tileset, 1: list<MapTileLayer>, 2: list<array{x: int, y: int, glyph: string, layer: string}>}|null
+     * @return array{0: Tileset, 1: list<MapTileLayer>, 2: list<array{x: int, y: int, glyph: string, layer: string}>, 3: MapGraphics}|null
      */
     private static function readCoverage(ProjectMap $map): ?array
     {
@@ -140,7 +143,7 @@ final class MapGraphicsValidator
         $shown = array_values(array_filter($graphics->getShownGlyphCells($map->getLayerSet(), $map->getAssetRoot()),
             static fn(array $cell): bool => ! isset($covered[$cell['layer']][$cell['y']][$cell['x']])));
 
-        return [$graphics->tileset, $graphics->layers, $shown];
+        return [$graphics->tileset, $graphics->layers, $shown, $graphics];
     }
 
     /**
@@ -172,18 +175,28 @@ final class MapGraphicsValidator
     }
 
     /**
-     * Warns for tiles a tileset piece draws that no glyph on the map accounts
-     * for, left behind when their glyph went without them (an edit outside the
-     * editor, or before the tileset had the piece). The graphical field then
-     * shows what the terminal no longer does. Tiles no piece draws, such as a
-     * house's walls over blank cells, are not judged.
+     * Warns for tiles of a tileset piece that is not placed where they stand,
+     * so the graphical field shows art the map's physical ground does not
+     * have. Shared collision is the physical map; glyphs and art present it
+     * independently. A piece's tile is placed when a glyph role of the piece
+     * on the map accounts for it (a gameplay placement), or when it belongs to
+     * a copy of an item piece's art standing whole on the tile layers, by the
+     * Engine's rule ({@see MapGraphics::findPieceStampsCovering()}), over
+     * ground whose collision is the piece's, by the rule placing art alone
+     * follows ({@see PieceArtFootprint}) (a graphical placement). Art on
+     * ground with another collision, such as a wall's tile on walkable floor
+     * after its glyph went, and a copy partly painted over, are reported.
+     * Tiles no piece draws, such as a house's walls over blank cells, are not
+     * judged.
      *
-     * @param list<MapTileLayer> $layers The readable tile layers.
      * @return list<Issue>
      */
-    private static function checkStalePieceTiles(ProjectMap $map, Tileset $tileset, array $layers): array
+    private static function checkUnplacedPieceTiles(ProjectMap $map, MapGraphics $graphics): array
     {
+        [$tileset, $layers] = [$graphics->tileset, $graphics->layers];
         $drawn = [];
+        // The item pieces that draw each tile, whose art may be laid alone.
+        $artists = [];
         $placements = $tileset->getPlacements($map->isPaintedInKinds());
         // A stack lays its pieces' tiles itself, so no glyph carries them and none is left behind by one.
         $stackLayers = $tileset->getStackLayers();
@@ -193,6 +206,9 @@ final class MapGraphicsValidator
                     foreach ($role->tiles as $tileLayer => $cells) {
                         foreach ($cells as $cell) {
                             $drawn[$tileLayer][(int) $cell['entry']] = true;
+                            if ($piece->connects === null) {
+                                $artists[$tileLayer][(int) $cell['entry']][$piece->id] = $piece;
+                            }
                         }
                     }
                 }
@@ -248,12 +264,14 @@ final class MapGraphicsValidator
         }
 
         $issues = [];
+        $laid = [];
         foreach ($layers as $layer) {
             $stale = [];
             for ($y = 0; $y < $layer->height; $y++) {
                 foreach ($layer->getRowTiles($y) as $x => $id) {
                     if (isset($drawn[$layer->name][$id]) && ! isset($explained[$layer->name][$y][$x][$id])
-                        && ! isset($kept[$layer->name][$y][$x])) {
+                        && ! isset($kept[$layer->name][$y][$x])
+                        && ! self::isLaidArt($map, $graphics, $artists[$layer->name][$id] ?? [], $layer->name, $id, $x, $y, $laid)) {
                         $stale[] = "({$x}, {$y})";
                     }
                 }
@@ -262,14 +280,46 @@ final class MapGraphicsValidator
                 $named = array_slice($stale, 0, self::CELLS_NAMED);
                 $rest = count($stale) - count($named);
                 $issues[] = Issue::warning($map->mapId,
-                    sprintf('%d %s on the %s tile layer %s drawn by a tileset piece whose glyph is no longer there: %s%s.',
+                    sprintf('%d %s on the %s tile layer %s art of a tileset piece that is not placed there: no glyph of the piece accounts for %s, and %s no whole copy of its art over ground with its collision: %s%s.',
                         count($stale), count($stale) === 1 ? 'tile' : 'tiles', $layer->name, count($stale) === 1 ? 'is' : 'are',
+                        count($stale) === 1 ? 'it' : 'them', count($stale) === 1 ? 'it is in' : 'they are in',
                         implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''),
-                    'Paint the piece\'s glyph back and erase it, so its tiles go with it, or remove the tiles in the GUI editor.');
+                    'Place the piece there, lay its art whole over ground with its collision (Art only in the GUI editor), or remove the tiles in the GUI editor.');
             }
         }
 
         return $issues;
+    }
+
+    /**
+     * Whether a tile on a cell is part of a graphical placement: a copy of one
+     * of the pieces that draw it, standing whole on the tile layers with this
+     * tile on this cell, over a footprint that holds its art.
+     *
+     * @param array<string, TilesetPiece> $pieces The item pieces that draw the tile on its layer.
+     * @param array<string, bool> $laid Whether each copy found so far fits, by piece and top-left.
+     */
+    private static function isLaidArt(ProjectMap $map, MapGraphics $graphics, array $pieces, string $tileLayer, int $id, int $x, int $y,
+        array &$laid): bool
+    {
+        foreach ($pieces as $piece) {
+            foreach ($graphics->findPieceStampsCovering($piece, $x, $y) as [$left, $top]) {
+                if (($piece->tiles[$tileLayer][$y - $top][$x - $left] ?? null) !== (string) $id) {
+                    continue;
+                }
+                try {
+                    $laid["{$piece->id}:{$left},{$top}"] ??= PieceArtFootprint::findMisfits($map, $piece, [['x' => $left, 'y' => $top]]) === [];
+                } catch (MapSourceRefusal) {
+                    // The tileset's own checks report why it cannot be read.
+                    return false;
+                }
+                if ($laid["{$piece->id}:{$left},{$top}"]) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
