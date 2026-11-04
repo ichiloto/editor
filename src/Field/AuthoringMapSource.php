@@ -62,17 +62,23 @@ final class AuthoringMapSource implements FramePresentationSourceInterface, Reta
      * picture's world is kept while the map composes to the same one: the renderer retains a world by identity, so
      * an unchanged map sends nothing and the window's exchanges settle.
      *
+     * Tile entries laid on the map's tile layers, such as a graphical
+     * placement's art before it is applied ({@see \Ichiloto\Editor\Canvas\PiecePlacer::planArt()}),
+     * are drawn as the layers would hold them once written
+     * ({@see ProjectMap::loadGraphicsWith()}), the map itself unchanged.
+     *
      * @param array<string, string> $variants The variant shown for each object, by id; none is the object's own.
+     * @param array<string, list<array{x: int, y: int, entry: string}>> $laidCells The entry for each cell, keyed by tile layer name.
      */
     public static function compose(ProjectMap $map, array $variants, float $seconds, AuthoringSignPlaybacks $signs,
-        ?TextPreparationProviderInterface $provider, int $columns, int $rows, ?self $previous = null): self
+        ?TextPreparationProviderInterface $provider, int $columns, int $rows, ?self $previous = null, array $laidCells = []): self
     {
         if (! is_finite($seconds) || $seconds < 0 || $seconds > 3600) {
             throw new InvalidArgumentException('Preview time requires finite seconds in 0..3600.');
         }
         $issue = null;
         try {
-            $graphics = $map->loadGraphics();
+            $graphics = $laidCells === [] ? $map->loadGraphics() : $map->loadGraphicsWith($laidCells);
         } catch (InvalidArgumentException|\RuntimeException $error) {
             $graphics = null;
             $issue = $error->getMessage();

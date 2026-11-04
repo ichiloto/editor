@@ -743,9 +743,16 @@ which glyphs:
   NPC with an empty sprite draws nothing and is not counted;
 - a copy of an NPC's own glyph in the map, which shows under its sprite;
   remove the copy when the NPC is always there.
-- tiles a tileset piece draws whose glyph is no longer there, such as a
-  window's tile left after its `x` was removed outside the editor. Tiles no
-  piece draws, such as a house's walls over blank cells, are not judged;
+- piece art that is not placed where it stands: tiles of a tileset piece that
+  no glyph of the piece accounts for and that are not a whole copy of its art
+  over ground with its collision (and blocking cells behind its overhang).
+  Collision is the physical map, and glyphs and art present it independently,
+  so a whole copy of a piece's art over matching ground is a placement of its
+  art alone, such as shelving laid over the author's own `%` glyphs, or a wall
+  tile on a solid cell. A window's tile left on walkable floor after its `x`
+  was removed outside the editor is reported, and so is a copy partly painted
+  over. Tiles no piece draws, such as a house's walls over blank cells, are
+  not judged;
 - cells showing the tileset's missing-art placeholder (its `missingArt`
   tile), which mark art nobody could yet infer.
 - cells whose ground tiles (the A1 to A5 sheets) can show the background

@@ -306,7 +306,8 @@ final class PiecePlacer
      * one, `0` entries leaving their cells as they are. Every glyph, its colour
      * and the map's collision stay exactly as authored, so the piece's art may
      * replace another's over a footprint the author drew in their own glyphs.
-     * The art must fit that footprint first ({@see PieceArtFootprint}).
+     * The art must fit that footprint first ({@see PieceArtFootprint}); what
+     * it writes is {@see planArt()}'s plan, which its preview shows.
      *
      * @param list<array{x: int, y: int}> $origins
      * @return ?Command The applied, unrecorded edit, or null when it changed nothing.
@@ -314,21 +315,9 @@ final class PiecePlacer
      */
     private static function layArt(ProjectMap $map, TilesetPiece $piece, array $origins, string $label): ?Command
     {
-        PieceArtFootprint::assertFits($map, $piece, $origins);
         $before = $map->getTileLayerSources();
-        try {
-            $stack = self::findStack($map, $piece);
-            if ($stack !== null) {
-                $map->writeTileCells(self::layStacked($map, $piece, $stack, $origins));
-            } else {
-                foreach ($origins as ['x' => $x, 'y' => $y]) {
-                    $map->writeTileEntries($piece->tiles, $x, $y);
-                }
-            }
-        } catch (MapSourceRefusal $refusal) {
-            $map->restoreTileLayerSources($before);
-            throw $refusal;
-        }
+        // Every layer is written before anything changes, so a refusal leaves the map as it was.
+        $map->writeTileCells(self::planArt($map, $piece, $origins));
         $after = $map->getTileLayerSources();
         if ($after === $before) {
             return null;
@@ -338,6 +327,68 @@ final class PiecePlacer
             static fn() => $map->restoreTileLayerSources($after),
             static fn() => $map->restoreTileLayerSources($before),
         );
+    }
+
+    /**
+     * What laying the art of an item piece's copies writes, changing nothing:
+     * each cell's entry on each tile layer, as its stack orders them when it
+     * has one, cells its `0` entries leave as they are left out. A graphical
+     * placement writes exactly this ({@see layArt()}), and its preview shows
+     * exactly this, so the two never disagree.
+     *
+     * @param list<array{x: int, y: int}> $origins Each copy's top-left, overhang included ({@see getOriginAt()}).
+     * @return array<string, list<array{x: int, y: int, entry: string}>> The entries by tile layer name, in copy order.
+     * @throws MapSourceRefusal When the art does not fit the footprint the map has ({@see PieceArtFootprint}) or its
+     *     stack cannot order it.
+     */
+    public static function planArt(ProjectMap $map, TilesetPiece $piece, array $origins): array
+    {
+        PieceArtFootprint::assertFits($map, $piece, $origins);
+        $stack = self::findStack($map, $piece);
+        if ($stack !== null) {
+            return self::layStacked($map, $piece, $stack, $origins);
+        }
+        $cells = [];
+        foreach ($origins as ['x' => $x, 'y' => $y]) {
+            foreach ($piece->tiles as $layer => $rows) {
+                foreach ($rows as $row => $entries) {
+                    foreach ($entries as $column => $entry) {
+                        if ($entry !== (string) TileId::EMPTY) {
+                            $cells[$layer][] = ['x' => $x + $column, 'y' => $y + $row, 'entry' => $entry];
+                        }
+                    }
+                }
+            }
+        }
+
+        return $cells;
+    }
+
+    /**
+     * The cells the art of an item piece's copies covers: each cell where one
+     * of its tile layers has a tile, in row order, whether or not the art
+     * fits there. A preview outlines them.
+     *
+     * @param list<array{x: int, y: int}> $origins Each copy's top-left, overhang included ({@see getOriginAt()}).
+     * @return list<array{x: int, y: int}>
+     */
+    public static function getArtCells(TilesetPiece $piece, array $origins): array
+    {
+        $cells = [];
+        foreach ($origins as ['x' => $x, 'y' => $y]) {
+            foreach ($piece->tiles as $rows) {
+                foreach ($rows as $row => $entries) {
+                    foreach ($entries as $column => $entry) {
+                        if ($entry !== (string) TileId::EMPTY) {
+                            $cells[($y + $row) . ',' . ($x + $column)] = ['x' => $x + $column, 'y' => $y + $row];
+                        }
+                    }
+                }
+            }
+        }
+        uasort($cells, static fn(array $a, array $b): int => [$a['y'], $a['x']] <=> [$b['y'], $b['x']]);
+
+        return array_values($cells);
     }
 
     /** The stack the piece is laid on in the map's tileset, or null when it is stamped as authored. */

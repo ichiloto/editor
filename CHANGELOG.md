@@ -25,6 +25,22 @@
   It is refused before anything is written when the map's collision under the piece's ground is not the piece's own
   (its declared occupancy, or its glyph's collision), when its art would rise over walkable floor, with a footprint,
   or for a connected piece.
+- A graphical placement previews as it lays: `pieces.preview` takes the same `ownership` and answers with the cells
+  the art covers and, before anything is applied, why it would be refused, and `canvas.exchange` takes
+  `pieceArt: {piece, from, to}` to draw that art in the map's canvas exactly as applying it draws. Preview, apply,
+  reload and undo share one plan (`PiecePlacer::planArt()`). The GUI editor's piece options choose **Whole piece**
+  or **Art only**.
+
+### Changed
+
+- The warning for tiles a piece draws whose glyph is no longer there now reports piece art that is not placed where
+  it stands: tiles no glyph of the piece accounts for that are not a whole copy of its art over ground with its
+  collision, by the rule art laid alone follows. Collision is the physical map and glyphs and art present it
+  independently, so a graphical placement's art (such as shelving over green `%`) is not reported. Art on ground
+  with another collision, such as a window's tile on walkable floor, and a copy partly painted over, still are.
+  This narrows the warning: a whole copy of a piece's art over ground with its collision is no longer reported,
+  including a lone one-cell piece's tile. For example, a wall tile on a window glyph's solid cell, left after the
+  window's own art changed, was reported and is not any more.
 
 ### Fixed
 

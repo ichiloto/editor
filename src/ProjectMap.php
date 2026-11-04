@@ -1061,9 +1061,36 @@ final class ProjectMap
      */
     public function loadGraphics(): ?MapGraphics
     {
+        return $this->readGraphicsFrom($this->getTileLayerSources());
+    }
+
+    /**
+     * The map's graphics as they would be with tile entries set cell by cell,
+     * as {@see writeTileCells()} sets them, a tile layer it would create
+     * included, changing nothing: what a preview draws before an edit is
+     * applied.
+     *
+     * @param array<string, list<array{x: int, y: int, entry: string}>> $cells The entry for each cell, keyed by tile layer name.
+     * @throws MapSourceRefusal When a layer cannot take the entries.
+     * @throws InvalidArgumentException When the game would refuse the graphics.
+     */
+    public function loadGraphicsWith(array $cells): ?MapGraphics
+    {
+        $layers = clone $this->layers;
+        $layers->writeTileCells($cells, $this->findNewTileLayerPlace(...));
+
+        return $this->readGraphicsFrom($layers->getTileSources());
+    }
+
+    /**
+     * @param array<string, string> $sources Tile layer source bytes by path.
+     * @throws InvalidArgumentException When the game would refuse them.
+     */
+    private function readGraphicsFrom(array $sources): ?MapGraphics
+    {
         $tilesetId = $this->getMapDataField(['tileset']);
 
-        return MapGraphics::fromSources($this->getTileLayerSources(), $this->mapId, $tilesetId,
+        return MapGraphics::fromSources($sources, $this->mapId, $tilesetId,
             $this->getLayerSet(), $this->getAssetRoot(), $this->getMapDataField([MapGraphics::SETTINGS_KEY]),
             is_string($tilesetId) ? $this->loadTileset() : null, $this->isPaintedInKinds());
     }

@@ -71,14 +71,16 @@ final class AuthoringCanvasHost
     }
 
     /**
-     * One exchange with the window, presenting the map at a variant selection and preview time.
+     * One exchange with the window, presenting the map at a variant selection and preview time, with any tile entries
+     * laid on its tile layers for a preview ({@see AuthoringMapSource::compose()}).
      *
      * @param list<string> $events The window's answers, as renderer event lines.
      * @param array<string, string> $variants
+     * @param array<string, list<array{x: int, y: int, entry: string}>> $laidCells
      * @return list<array{type: string, payload: array<string, mixed>}>
      * @throws RendererTransportException When the window reports an error.
      */
-    public function exchange(array $events, array $variants, float $seconds): array
+    public function exchange(array $events, array $variants, float $seconds, array $laidCells = []): array
     {
         $this->relay->receive($events);
         $this->client->pump();
@@ -104,7 +106,7 @@ final class AuthoringCanvasHost
         }
         if ($this->ready) {
             $this->source = AuthoringMapSource::compose($this->map, $variants, $seconds, $this->signs, $this->client,
-                $this->grid->columns, $this->grid->rows, $this->source);
+                $this->grid->columns, $this->grid->rows, $this->source, $laidCells);
             // The canvas draws its glyphs itself; the composer's Terminal text is the empty picture of the grid.
             $composition = $this->composer->composeFrame($this->source, $this->grid, $this->client->supports(...),
                 fn(array $excluded, array $worldLayers) => Console::capturePresentation($this->grid->columns, $this->grid->rows,
