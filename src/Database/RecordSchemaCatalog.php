@@ -2313,6 +2313,28 @@ final class RecordSchemaCatalog
     private static function battlerArt(string $side): RecordSchema
     {
         $actors = $side === 'actors';
+        $poseFields = [
+            RecordField::reference('image', 'Image', 'png_assets'),
+            new RecordField('pivot', 'Ground Point', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 1 (bottom centre)'),
+            new RecordField('reach', 'Reach (forward, down)', codec: RecordFieldCodec::COORDINATES, removeWhenEmpty: true,
+                displayDefault: '(standing body edge)'),
+            new RecordField('columns', 'Columns', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+            new RecordField('rows', 'Rows', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+            new RecordField('frames', 'Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true, displayDefault: '0'),
+            new RecordField('entryFrames', 'Movement Entry Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
+            new RecordField('exitFrames', 'Movement Exit Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
+            new RecordField('fps', 'Frames per Second', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '8'),
+            new RecordField('loop', 'Loops', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'true'),
+            new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+            new RecordField('scaleSpan', 'Body Span', InputControlType::FLOAT, removeWhenEmpty: true),
+            // Whether this pose's art paints its own shadow, where the battler's other art does not.
+            new RecordField('bakedShadow', 'Art Paints Its Shadow', InputControlType::BOOLEAN, removeWhenEmpty: true,
+                displayDefault: '(the battler\'s)'),
+            // The playback entry, repeats included, a battle shows at the action's impact: the start of
+            // its target phase. Chosen among the frames of a pose that plays once.
+            new RecordField('impactFrame', 'Impact Entry', InputControlType::INTEGER, removeWhenEmpty: true,
+                codec: RecordFieldCodec::POSE_IMPACT_ENTRY, displayDefault: '(none: its own clock)'),
+        ];
 
         return new RecordSchema(
             key: $actors ? 'battler_actors' : 'battler_enemies',
@@ -2355,31 +2377,25 @@ final class RecordSchemaCatalog
                     singular: 'pose',
                     fields: [
                         new RecordField('role', 'Role', options: array_map(static fn(BattlePoseRole $role): string => $role->value, BattlePoseRole::cases())),
-                        RecordField::reference('image', 'Image', 'png_assets'),
-                        new RecordField('pivot', 'Ground Point', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 1 (bottom centre)'),
-                        new RecordField('reach', 'Reach (forward, down)', codec: RecordFieldCodec::COORDINATES, removeWhenEmpty: true,
-                            displayDefault: '(standing body edge)'),
-                        new RecordField('columns', 'Columns', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
-                        new RecordField('rows', 'Rows', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
-                        new RecordField('frames', 'Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true, displayDefault: '0'),
-                        new RecordField('entryFrames', 'Movement Entry Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
-                        new RecordField('exitFrames', 'Movement Exit Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
-                        new RecordField('fps', 'Frames per Second', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '8'),
-                        new RecordField('loop', 'Loops', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'true'),
-                        new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
-                        new RecordField('scaleSpan', 'Body Span', InputControlType::FLOAT, removeWhenEmpty: true),
-                        // Whether this pose's art paints its own shadow, where the battler's other art does not.
-                        new RecordField('bakedShadow', 'Art Paints Its Shadow', InputControlType::BOOLEAN, removeWhenEmpty: true,
-                            displayDefault: '(the battler\'s)'),
-                        // The playback entry, repeats included, a battle shows at the action's impact: the start of
-                        // its target phase. Chosen among the frames of a pose that plays once.
-                        new RecordField('impactFrame', 'Impact Entry', InputControlType::INTEGER, removeWhenEmpty: true,
-                            codec: RecordFieldCodec::POSE_IMPACT_ENTRY, displayDefault: '(none: its own clock)'),
+                        ...$poseFields,
                     ],
                     blank: ['role' => BattlePoseRole::IDLE->value, 'image' => ''],
                     heading: 'Poses',
                     removeWhenEmpty: true,
                     keyField: 'role',
+                ),
+                new RecordSubList(
+                    key: 'actionPoses',
+                    prefix: 'actionPose',
+                    singular: 'action pose',
+                    fields: [
+                        RecordField::reference('animationId', 'Animation', 'animation_ids'),
+                        ...array_filter($poseFields, static fn(RecordField $field): bool => !in_array($field->key, ['loop', 'entryFrames', 'exitFrames'], true)),
+                    ],
+                    blank: ['animationId' => '', 'image' => '', 'loop' => false, 'impactFrame' => 0],
+                    heading: 'Action Poses',
+                    removeWhenEmpty: true,
+                    keyField: 'animationId',
                 ),
             ],
             saveCheck: self::checkBattlerBindings(...),

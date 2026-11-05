@@ -103,6 +103,32 @@ it('offers a looping pose no impact, refuses one outside its entries, and refuse
         ->and((string) file_get_contents($path))->toBe($before);
 });
 
+it('chooses the action animation and its pose image in the battler editor and previews that binding', function () {
+    $root = actionImpactProject();
+    $path = $root . '/assets/' . BattlerBindings::FILE;
+    $before = require $path;
+    $session = EditorSession::open($root);
+    $category = 'battler_actors';
+    $session->addDatabaseItem($category, 0, readAttackPoseRow($session, 'actionPoseList')['key']);
+    $animation = readAttackPoseRow($session, 'actionPose0AnimationId');
+    expect($animation['reference'])->toBe('animation_ids')
+        ->and(array_column($session->listReferences(null, 'animation_ids'), 'value'))->toContain('1');
+    $session->applyDatabaseRecord($category, 0, $animation['key'], '1');
+    $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0Image')['key'], 'Graphics/Actors/KaelionAttack.png');
+    $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0Columns')['key'], '4');
+    $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0Frames')['key'], '2, 3');
+    $session->undo();
+    $session->redo();
+    $session->saveDatabase($category);
+    $data = require $path;
+    expect($data['actors']['Kaelion']['poses'])->toBe($before['actors']['Kaelion']['poses'])
+        ->and($data['actors']['Kaelion']['actionPoses'][1])->toMatchArray(['impactFrame' => 0, 'loop' => false, 'frames' => [2, 3]])
+        ->and(BattlerBindings::load($root . '/assets')->actorPoses['Kaelion']->getAnimationPose(1)?->frames)->toBe([2, 3]);
+    $effect = findEffectIndex($session, 'dusk-slash');
+    $impact = $session->readEffectBattlePreview($effect, 0, authoredFrame: 0);
+    expect(readAttackCell($session, $effect, $impact['frame']))->toBe(2);
+});
+
 it('anchors an animation\'s caster effect to the target phase as the Engine names it, and omits the default', function () {
     $root = actionImpactProject();
     $session = EditorSession::open($root);

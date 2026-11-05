@@ -1784,6 +1784,9 @@ final class ReferenceCatalog
                 foreach ($set->roles as $role => $pose) {
                     foreach ($pose->getAttachmentPointNames() as $name) { $owners[$name][] = "$id $role"; }
                 }
+                foreach ($set->actionPoses as $animation => $pose) {
+                    foreach ($pose->getAttachmentPointNames() as $name) { $owners[$name][] = "$id animation $animation"; }
+                }
             }
         }
         ksort($owners);
