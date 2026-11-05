@@ -148,7 +148,8 @@ final class EffectBattlePreview
             movementPoses: !$reducedMotion && ($poses?->getPose(BattlePoseRole::MOVE) !== null
                 || $poses?->getPose(BattlePoseRole::RETURNING) !== null), travel: $travel,
             movePose: $reducedMotion ? null : $poses?->getPose(BattlePoseRole::MOVE),
-            returnPose: $reducedMotion ? null : $poses?->getPose(BattlePoseRole::RETURNING));
+            returnPose: $reducedMotion ? null : $poses?->getPose(BattlePoseRole::RETURNING),
+            projectedRange: isset($target->defaults['rangeTiming']) ? $graphical?->measureActionRange($caster, $targets) : null);
 
         return new self(
             new BattleCommandPreview($battle, $plan, $caster, $targets, $role,

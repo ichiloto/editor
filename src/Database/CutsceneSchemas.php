@@ -70,6 +70,8 @@ final class CutsceneSchemas
     /** The payload key a summon stage's cover keys are edited under. */
     public const string STAGE_COVERS_KEY = 'stage.covers';
 
+    public const string RANGE_TIMING_KEYS = 'rangeTiming.keys';
+
     /** Where a summon image track is placed: on a battler, the screen, or the graphical stage. */
     public const array SUMMON_IMAGE_ANCHORS = ['target', 'caster', 'screen', 'stage'];
 
@@ -658,7 +660,10 @@ final class CutsceneSchemas
             new RecordField('effectTiming.mode', 'Impact Timing', options: ['end', 'frame', 'cue'], removeWhenEmpty: true, displayDefault: '(omitted)'),
             new RecordField('effectTiming.frame', 'Impact Frame', InputControlType::INTEGER, removeWhenEmpty: true),
             RecordField::reference('effectTiming.cueId', 'Impact Cue', 'effect_cues', allowsNone: true, noneLabel: '(none)'),
-            ...($graphical ? [new RecordField('poseSyncFrame', 'Pose Sync Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)')] : []),
+            ...($graphical ? [
+                new RecordField('poseSyncFrame', 'Pose Sync Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
+                new RecordField('rangeTiming.minDistance', 'Far Range Threshold', InputControlType::FLOAT, removeWhenEmpty: true),
+            ] : []),
         ];
 
         return new RecordSchema(
@@ -686,13 +691,23 @@ final class CutsceneSchemas
                     self::STAGE_SUBJECTS_KEY => self::stageSubjectList(),
                     self::STAGE_CAMERA_KEY => self::stageCameraList(),
                     self::STAGE_COVERS_KEY => self::stageCoverList(),
+                    self::RANGE_TIMING_KEYS => new RecordSubList(
+                        key: self::RANGE_TIMING_KEYS, prefix: 'rangeKey', singular: 'range timing key',
+                        fields: [
+                            new RecordField('frame', 'Authored Frame', InputControlType::INTEGER),
+                            new RecordField('at', 'Far Frame', InputControlType::INTEGER),
+                        ],
+                        blank: ['frame' => 1, 'at' => 1],
+                        heading: 'Far Range Timing Keys',
+                        removeWhenEmpty: true,
+                    ),
                 ] : []),
             ],
             fieldsFor: static fn(array $payload): array => $graphical && is_array($payload['stage'] ?? null)
                 ? [...$fields, ...self::stageFields()] : $fields,
             commandListsFor: static fn(array $payload): array => $graphical && is_array($payload['stage'] ?? null)
                 ? [self::TRACKS_KEY, self::CUES_KEY, self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY]
-                : [self::TRACKS_KEY, self::CUES_KEY],
+                : [self::TRACKS_KEY, self::CUES_KEY, ...($graphical ? [self::RANGE_TIMING_KEYS] : [])],
         );
     }
 
@@ -781,6 +796,10 @@ final class CutsceneSchemas
                 new RecordField('flight.curve.launchOffsetY', 'Curve Launch Control Y Offset', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('flight.curve.arrivalProgress', 'Curve Arrival Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('flight.curve.arrivalOffsetY', 'Curve Arrival Control Y Offset', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('flight.farCurve.launchProgress', 'Far Curve Launch Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('flight.farCurve.launchOffsetY', 'Far Curve Launch Control Y Offset', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('flight.farCurve.arrivalProgress', 'Far Curve Arrival Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('flight.farCurve.arrivalOffsetY', 'Far Curve Arrival Control Y Offset', InputControlType::FLOAT, removeWhenEmpty: true),
             ]),
         ];
     }

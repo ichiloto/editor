@@ -88,6 +88,40 @@ it('round-trips graphical flight authoring through the shared rows and previews 
         ->and($rotating['diagnostics'])->toBe([]);
 })->with([false, true]);
 
+it('round-trips range timing keys and uses projected distance in the graphical battle preview', function () {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $source = require $path;
+    $source['presentations']['graphical']['lengthFrames'] = 4;
+    $source['presentations']['graphical']['restFrame'] = 2;
+    $source['presentations']['graphical']['tracks'][0]['keyframes'][1] = ['frame' => 2, 'duration' => 2, 'sourceFrame' => 1];
+    file_put_contents($path, '<?php return ' . var_export($source, true) . ';');
+    $session = EditorSession::open($root);
+    $category = 'cutscenes/effect';
+    $index = findEffectIndex($session, 'dusk-slash');
+    $session->selectCutscenePresentation($category, $index, 'graphical');
+    $field = static fn(array $frame, string $label): array =>
+        array_find($session->readDatabaseRecord($category, $index, $frame)['rows'],
+            static fn(array $entry): bool => trim($entry['label']) === $label)['key'];
+    $apply = static fn(array $frame, string $label, string $value): array =>
+        $session->applyDatabaseRecord($category, $index, $field($frame, $label), $value);
+    $normal = $session->readEffectBattlePreview($index, 0, authoredFrame: 2);
+    expect($apply([], 'Far Range Threshold', '.001')['changed'])->toBeTrue();
+    $keys = ['rangeTiming.keys'];
+    expect($session->addDatabaseItem($category, $index, ['frame' => $keys])['changed'])->toBeTrue()
+        ->and($apply($keys, 'Range timing key 1 Authored Frame', '2')['changed'])->toBeTrue();
+    $session->undo();
+    $session->redo();
+    expect($session->saveAll()['failures'])->toBe([]);
+    $saved = require $path;
+    expect($saved['presentations']['terminal'])->toBe($source['presentations']['terminal'])
+        ->and($saved['presentations']['graphical']['rangeTiming'])->toBe(['minDistance' => .001, 'keys' => [['frame' => 2, 'at' => 1]]]);
+    $far = $session->readEffectBattlePreview($index, 0, authoredFrame: 2);
+    expect($far['frame'])->toBe($normal['frame'] - 10)
+        ->and($far['authoredFrames']['target'])->toBe(2)
+        ->and($far['diagnostics'])->toBe([]);
+});
+
 it('says so when no action of the battle test party plays an effect, inventing none', function () {
     $session = EditorSession::open(effectBattlePreviewProject());
 
