@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Review;
 use GdImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImagePreflight;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicator;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicatorKind;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasLabel;
@@ -14,6 +15,7 @@ use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasTextLayer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
+use InvalidArgumentException;
 use RuntimeException;
 
 /**
@@ -21,7 +23,7 @@ use RuntimeException;
  * or modal over a scene, as the graphical renderer paints it: every image,
  * indicator, text layer and label in one order by layer, and at a tie in the
  * renderer's own order (images, composites, indicators, text, labels), each
- * in the order the canvas lists it. Images are cropped, mirrored, brightened,
+ * in the order the canvas lists it. Images are cropped, mirrored, rotated, brightened,
  * faded, stretched to their destination and clipped. Text layers paint each
  * cell's background and glyph, centred in the cell, in a monospaced system
  * font fitted to the layer's cell; labels show the graphical renderer's own
@@ -41,6 +43,7 @@ final class CanvasStillRaster
         RendererSessionConfig::GRAPHICAL_CANVAS, RendererSessionConfig::CANVAS_OVERLAY, RendererSessionConfig::CANVAS_CLIP_OPACITY,
         RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::CANVAS_IMAGE_TONE, RendererSessionConfig::CANVAS_IMAGE_FLIP,
         RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
+        RendererSessionConfig::CANVAS_IMAGE_ROTATION,
     ];
 
     /** Fonts tried, in order, when none is given: the graphical renderer's own text font first. */
@@ -197,8 +200,35 @@ final class CanvasStillRaster
 
             return;
         }
-        $this->drawPicture($surface, $source, [$sourceX, $sourceY, $sourceWidth, $sourceHeight], $part->destination,
-            $part->clipRect, $part->opacity, $part->brightness, $part->flipX, $part->flipY);
+        $rotation = $part->rotation ?? 0;
+        if ($rotation === 0) {
+            $this->drawPicture($surface, $source, [$sourceX, $sourceY, $sourceWidth, $sourceHeight], $part->destination,
+                $part->clipRect, $part->opacity, $part->brightness, $part->flipX, $part->flipY);
+            return;
+        }
+        if (CanvasImage::getRotatedRegionBytes($sourceWidth, $sourceHeight, $rotation) > CanvasImagePreflight::MAX_BYTES) {
+            $this->diagnose(sprintf('Rotated image %s of the %s exceeds the renderer region budget.', $part->id, $context));
+            return;
+        }
+        try {
+            $destination = $part->getPreparedDestination(imagesx($source), imagesy($source));
+        } catch (InvalidArgumentException $failure) {
+            $this->diagnose(sprintf('Image %s of the %s cannot be rotated: %s', $part->id, $context, $failure->getMessage()));
+            return;
+        }
+        $crop = self::createCanvas($sourceWidth, $sourceHeight);
+        imagealphablending($crop, false);
+        imagecopy($crop, $source, 0, 0, $sourceX, $sourceY, $sourceWidth, $sourceHeight);
+        if ($part->flipX || $part->flipY) {
+            imageflip($crop, $part->flipX && $part->flipY ? IMG_FLIP_BOTH
+                : ($part->flipX ? IMG_FLIP_HORIZONTAL : IMG_FLIP_VERTICAL));
+        }
+        if ($part->brightness < 1) {
+            self::adjustPixels($crop, $part->brightness, 1);
+        }
+        $rotated = CanvasStillRotation::rotate($crop, $rotation);
+        $this->drawPicture($surface, $rotated, [0, 0, imagesx($rotated), imagesy($rotated)], $destination,
+            $part->clipRect, $part->opacity, 1, false, false);
     }
 
     /**

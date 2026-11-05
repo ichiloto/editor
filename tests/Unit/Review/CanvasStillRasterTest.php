@@ -12,6 +12,7 @@ use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasTextLayer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Presentation\PresentationColor;
+use Ichiloto\Engine\Rendering\Presentation\PresentationSpritePivot;
 use Ichiloto\Engine\Rendering\Presentation\PresentationTextRun;
 use Ichiloto\Engine\Rendering\Presentation\SpriteSourceRect;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
@@ -127,4 +128,38 @@ it('keeps strongest dab coverage, preserves first ties and clips the retained su
         ->and(canvasStillPixel($image, 5, 5)[2])->toBeBetween(125, 130)
         ->and(canvasStillPixel($image, 7, 5))->toBe([0, 0, 0])
         ->and($raster->diagnostics)->toBe([]);
+});
+
+it('rotates around the authored pivot clockwise, with mirror before rotation and clip after it', function () {
+    $raster = new CanvasStillRaster(canvasStillAssets());
+    $part = new CanvasImage('turned', 'Art/halves.png', new CanvasRectangle(20, 10, 20, 10),
+        clipRect: new CanvasRectangle(12, 10, 8, 16), flipX: true, rotation: 90,
+        pivot: new PresentationSpritePivot(0, 0));
+    $image = $raster->rasterize(new PresentationCanvas(50, 50, [$part]), 0x000000);
+    expect(canvasStillPixel($image, 15, 15))->toBe([0, 0, 255])
+        ->and(canvasStillPixel($image, 15, 24))->toBe([255, 0, 0])
+        ->and(canvasStillPixel($image, 11, 15))->toBe([0, 0, 0])
+        ->and(canvasStillPixel($image, 15, 26))->toBe([0, 0, 0])
+        ->and(canvasStillPixel($image, 23, 15))->toBe([0, 0, 0])
+        ->and($raster->diagnostics)->toBe([]);
+});
+
+it('resamples a rotated atlas crop without leaking neighbouring colour', function () {
+    $raster = new CanvasStillRaster(canvasStillAssets());
+    $part = new CanvasImage('diagonal', 'Art/halves.png', new CanvasRectangle(15, 15, 10, 10),
+        sourceRect: new SpriteSourceRect(0, 0, 10, 10), brightness: .5, rotation: 45,
+        pivot: new PresentationSpritePivot(.5, .5));
+    $image = $raster->rasterize(new PresentationCanvas(40, 40, [$part]), 0x000000);
+    expect(canvasStillPixel($image, 20, 20))->toBe([128, 0, 0])
+        ->and(canvasStillPixel($image, 13, 13))->toBe([0, 0, 0])
+        ->and($raster->diagnostics)->toBe([]);
+    $edge = 0;
+    for ($y = 12; $y < 28; $y++) {
+        for ($x = 12; $x < 28; $x++) {
+            [$red, $green, $blue] = canvasStillPixel($image, $x, $y);
+            expect($green | $blue)->toBe(0);
+            $edge += (int) ($red > 0 && $red < 128);
+        }
+    }
+    expect($edge)->toBeGreaterThan(0);
 });
