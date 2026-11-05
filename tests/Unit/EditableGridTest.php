@@ -8,6 +8,8 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayer;
 use Ichiloto\Engine\IO\Console\TerminalText;
+use Symfony\Component\Console\Output\AnsiColorMode;
+use Symfony\Component\Console\Terminal;
 
 it('keys repeated cells by the exact glyph prefix and suffix without merging styled identities', function () {
     $text = "<fg=red>00</><fg=blue>0</><fg=red>x</>\n\033[31m00\033[0m<fg=red>0</>\n<fg=red><options=bold>0</></>";
@@ -216,18 +218,19 @@ function zeroWidthJunkRow(int $runs): string
 }
 
 /**
- * The glyphs the Engine reads from a row, each in the truecolour style it
- * shows, resolved by the Engine on its own formatter for every cell.
+ * The glyphs a row shows, each with the colour it shows in, in truecolour.
  *
  * @return list<string>
  */
 function shownRowCells(string $row): array
 {
-    return array_map(static function (array $cell): string {
-        $style = TerminalText::resolveSourceStyle($cell['prefix'], $cell['suffix']);
-
-        return $style['prefix'] . $cell['symbol'] . $style['suffix'];
-    }, TerminalText::parseSourceCells($row));
+    $mode = Terminal::getColorMode();
+    Terminal::setColorMode(AnsiColorMode::Ansi24);
+    try {
+        return TerminalText::visibleSymbols($row);
+    } finally {
+        Terminal::setColorMode($mode);
+    }
 }
 
 it('writes a painted junk-bearing row with each cell\'s effective style, and saving it again leaves it as written', function () {
