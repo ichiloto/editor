@@ -268,6 +268,27 @@ it('previews an independent Terminal sequence of a paired cut-in with battle adm
         ->and(array_column($preview['cues'], 'id'))->toBe(['tap']);
 });
 
+it('previews a battle-bound cut-in on its stage when the battle test party has no matching action', function () {
+    $root = battleStageProject(true);
+    $animationsPath = $root . '/assets/Data/animations.php';
+    $animations = require $animationsPath;
+    $animations[0]['id'] = 77;
+    $animations[0]['roles'] = ['attack-bow'];
+    file_put_contents($animationsPath, '<?php return ' . var_export($animations, true) . ';');
+
+    $session = EditorSession::open($root);
+    $index = battleStageIndex($session);
+    $session->selectCutscenePresentation('cutscenes/effect', $index, 'graphical');
+    expect($session->describeCutsceneTimeline('cutscenes/effect', $index))
+        ->toMatchArray(['stageContext' => 'battle', 'ownedStage' => false, 'canHaveStage' => true])
+        ->and(fn() => $session->readEffectBattlePreview($index, 0))
+        ->toThrow(SessionRefusal::class, 'No action of the battle test party plays striking-cut-in');
+
+    $preview = $session->readCutscenePreview('cutscenes/effect', $index, 6, 24, 3);
+    expect($preview)->toMatchArray(['frame' => 6, 'totalFrames' => 12, 'fps' => 12, 'stageCanvasError' => null])
+        ->and(array_column($preview['stageCanvas']['images'], 'asset'))->toContain('Graphics/Effects/striker.png');
+});
+
 it('refuses source edits on a read-only staged cut-in before writing, while still previewing it', function () {
     $root = battleStageProject(true, true);
     $before = sourceHashTree($root);
