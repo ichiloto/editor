@@ -655,7 +655,8 @@ final class SessionHost
                 EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
                     ?? throw new InvalidRequest('"presentation" must be terminal or graphical.'),
                 is_int($params['authoredFrame'] ?? null) ? $params['authoredFrame'] : null,
-                is_int($params['binding'] ?? null) ? $params['binding'] : 0),
+                is_int($params['binding'] ?? null) ? $params['binding'] : 0,
+                ($params['imageRotation'] ?? false) === true),
             'cutscenes.battlePreview' => $session->readSummonBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
                 ($params['reducedMotion'] ?? false) === true,
                 EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')

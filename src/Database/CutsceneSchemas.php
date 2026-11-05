@@ -9,6 +9,7 @@ use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
+use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
 use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageFit;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
@@ -656,6 +657,7 @@ final class CutsceneSchemas
             new RecordField('effectTiming.mode', 'Impact Timing', options: ['end', 'frame', 'cue'], removeWhenEmpty: true, displayDefault: '(omitted)'),
             new RecordField('effectTiming.frame', 'Impact Frame', InputControlType::INTEGER, removeWhenEmpty: true),
             RecordField::reference('effectTiming.cueId', 'Impact Cue', 'effect_cues', allowsNone: true, noneLabel: '(none)'),
+            ...($graphical ? [new RecordField('poseSyncFrame', 'Pose Sync Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)')] : []),
         ];
 
         return new RecordSchema(
@@ -727,7 +729,8 @@ final class CutsceneSchemas
                 'image' => static fn(array $entry): array => $graphical && self::isOnStage($entry)
                     ? self::stageImageTrackFields()
                     : [new RecordField('anchor', 'Anchor', options: $graphical ? self::SUMMON_IMAGE_ANCHORS : ['target', 'caster', 'screen'],
-                        removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], $anchors[2], ...self::imageTrackFields(sharedWithField: true)],
+                        removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], $anchors[2], ...self::imageTrackFields(sharedWithField: true),
+                        ...($graphical ? self::battleFlightFields(is_string($entry['anchor'] ?? null) ? $entry['anchor'] : 'target') : [])],
                 'glyph' => $anchors,
                 'text' => $anchors,
                 'flash' => $anchors,
@@ -743,6 +746,23 @@ final class CutsceneSchemas
                 'shake' => $keyframes,
             ],
         );
+    }
+
+    /** @return list<RecordField> */
+    private static function battleFlightFields(string $anchor): array
+    {
+        if (!in_array($anchor, ['caster', 'target'], true)) { return []; }
+        return [
+            RecordField::reference('attachmentPoint', 'Pose Point', ReferenceCatalog::BATTLE_POSE_POINTS, allowsNone: true, noneLabel: '(none)'),
+            new RecordField('detachFrame', 'Detach Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
+            ...($anchor !== 'caster' ? [] : [
+                new RecordField('flight.arrivalFrame', 'Arrival Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
+                new RecordField('flight.holdFrame', 'Hold Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
+                new RecordField('flight.route', 'Flight Route', options: ['', ...array_column(EffectFlightRoute::cases(), 'value')],
+                    removeWhenEmpty: true, displayDefault: EffectFlightRoute::WAYPOINTS->value),
+                new RecordField('flight.tipX', 'Tip X', InputControlType::FLOAT, removeWhenEmpty: true),
+            ]),
+        ];
     }
 
     /**

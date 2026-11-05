@@ -28,6 +28,60 @@ it('previews an effect in the action that plays it, as the battle draws it, for 
         ->and($terminal['terminalLines'])->not->toBe([]);
 });
 
+it('round-trips graphical flight authoring through the shared rows and previews the negotiated heading', function () {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $initial = require $path;
+    $category = 'cutscenes/effect';
+    $bindingPath = $root . '/assets/Data/Presentation/battlers.php';
+    writeTilesetTestPng($root . '/assets/Graphics/FixturePose.png', 8, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/FixtureEnemy.png', 8, 8);
+    file_put_contents($bindingPath, '<?php return ' . var_export(['actors' => ['Kaelion' => [
+        'artwork' => ['image' => 'Graphics/FixturePose.png'],
+        'poses' => ['attack' => ['image' => 'Graphics/FixturePose.png',
+            'attachmentPoints' => [['cell' => 0, 'name' => '0', 'point' => ['x' => .5, 'y' => .4]]]]],
+    ]], 'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/FixtureEnemy.png']]]], true) . ';');
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $session->selectCutscenePresentation($category, $index, 'graphical');
+
+    $choices = $session->listReferences(null, 'battle_pose_points', ['category' => $category, 'index' => $index]);
+    expect($choices)->toBe([['value' => '0', 'label' => '0 (Kaelion attack)']]);
+    $trackFrame = $session->describeCutsceneTimeline($category, $index)['tracks'][0]['art']['pivotKey']['frame'];
+    $row = static fn(string $field, array $frame): array =>
+        array_find($session->readDatabaseRecord($category, $index, $frame)['rows'],
+            static fn(array $entry): bool => ($entry['key']['field'] ?? null) === $field);
+    $change = static function (string $field, string $value, ?array $frame = null) use ($session, $category, $index, $row, $trackFrame): void {
+        expect($session->applyDatabaseRecord($category, $index, $row($field, $frame ?? $trackFrame)['key'], $value)['changed'])->toBeTrue();
+    };
+    $change('poseSyncFrame', '0', []);
+    $change('track0Anchor', 'caster');
+    $change('track0AttachmentPoint', '0');
+    $change('track0DetachFrame', '0');
+    $change('track0FlightarrivalFrame', '1');
+    $change('track0Flightroute', 'straight');
+    $change('track0FlighttipX', '.25');
+    $session->undo();
+    expect($row('track0FlighttipX', $trackFrame)['value'])->toBe('');
+    $session->redo();
+    $session->saveAll();
+
+    $saved = require $path;
+    $track = $saved['presentations']['graphical']['tracks'][0];
+    expect($saved['presentations']['terminal'])->toBe($initial['presentations']['terminal'])
+        ->and($saved['presentations']['graphical']['poseSyncFrame'])->toBe(0)
+        ->and($track)->toMatchArray(['attachmentPoint' => '0', 'detachFrame' => 0,
+            'flight' => ['arrivalFrame' => 1, 'route' => 'straight', 'tipX' => .25]]);
+
+    $ordinary = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
+    $rotating = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, imageRotation: true);
+    $image = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Effects/dusk-slash.png');
+    expect($image($ordinary))->not->toBeNull()->not->toHaveKey('rotation')
+        ->and($image($rotating))->toHaveKeys(['rotation', 'pivot'])
+        ->and($rotating['diagnostics'])->toBe([]);
+});
+
 it('says so when no action of the battle test party plays an effect, inventing none', function () {
     $session = EditorSession::open(effectBattlePreviewProject());
 

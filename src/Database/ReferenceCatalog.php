@@ -81,6 +81,9 @@ final class ReferenceCatalog
     /** Authored project input actions plus Engine defaults, independent of installed player bindings. */
     public const string INPUT_ACTIONS = 'input_actions';
 
+    /** Named points declared by the project's current battle pose cells. */
+    public const string BATTLE_POSE_POINTS = 'battle_pose_points';
+
     public const array CATEGORIES = [
         'actors',
         'actor_ids',
@@ -163,6 +166,7 @@ final class ReferenceCatalog
         'effect_cues',
         'stage_subjects',
         'stage_attachments',
+        self::BATTLE_POSE_POINTS,
         'event_markers',
         'tilesets',
         'effects',
@@ -374,6 +378,7 @@ final class ReferenceCatalog
             // named point on them (each image picks one on its own subject).
             'stage_subjects' => array_keys($this->getStageSubjects()),
             'stage_attachments' => array_keys($this->getStageAttachments()),
+            self::BATTLE_POSE_POINTS => array_map(strval(...), array_keys($this->getBattlePosePointLabels())),
             'event_markers' => $this->getSubjectMap()?->getEventMarkers() ?? [],
             // A map's kind is one of the project's tilesets, by file stem.
             'tilesets' => array_keys($this->loadTilesetNames()),
@@ -1200,6 +1205,10 @@ final class ReferenceCatalog
             return $labels;
         }
 
+        if ($category === self::BATTLE_POSE_POINTS) {
+            return $this->getBattlePosePointLabels();
+        }
+
         if ($category === 'stage_attachments') {
             // A point is picked on the image's own subject: the label says which have it.
             $labels = [];
@@ -1757,6 +1766,30 @@ final class ReferenceCatalog
         } catch (\Throwable) {
             return [];
         }
+    }
+
+    /** @return array<int|string, string> Point name => label with the owning battler poses. */
+    private function getBattlePosePointLabels(): array
+    {
+        try {
+            $catalog = $this->workspace->catalogs->loadBattlePresentation();
+            $bindings = $catalog ?? $this->workspace->catalogs->loadBattlerBindings();
+        } catch (Throwable) {
+            return [];
+        }
+        if ($bindings === null) { return []; }
+        $owners = [];
+        foreach ([$bindings->actorPoses, $bindings->enemyPoses] as $poses) {
+            foreach ($poses as $id => $set) {
+                foreach ($set->roles as $role => $pose) {
+                    foreach ($pose->getAttachmentPointNames() as $name) { $owners[$name][] = "$id $role"; }
+                }
+            }
+        }
+        ksort($owners);
+        $labels = [];
+        foreach ($owners as $name => $poses) { $labels[$name] = sprintf('%s (%s)', $name, implode(', ', array_unique($poses))); }
+        return $labels;
     }
 
     /** Returns asset-root-relative PNG choices without following paths outside the asset root. */

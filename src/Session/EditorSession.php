@@ -3723,7 +3723,7 @@ final class EditorSession
      * @throws SessionRefusal When the effect does not compile, no action of the party plays it, or the battle cannot be set up.
      */
     public function readEffectBattlePreview(int $index, int $frame, bool $reducedMotion = false,
-        EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null, int $binding = 0): array
+        EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null, int $binding = 0, bool $imageRotation = false): array
     {
         $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
         $effects = $this->workspace->cutscenes?->assets(CutsceneType::EFFECT) ?? [];
@@ -3744,7 +3744,7 @@ final class EditorSession
         $preview = $this->effectBattlePreviews[$presentation->value]['preview'];
         $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame);
         try {
-            $read = $preview->readFrame(max(0, min($frame, $preview->totalFrames - 1)), $reducedMotion);
+            $read = $preview->readFrame(max(0, min($frame, $preview->totalFrames - 1)), $reducedMotion, $imageRotation);
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
         }
