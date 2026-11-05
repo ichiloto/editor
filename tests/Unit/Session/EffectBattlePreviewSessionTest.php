@@ -350,3 +350,36 @@ it('previews the shared run-to-target plan while keeping Terminal and reduced mo
         ->and($terminal['canvas'])->toBeNull()->and($session->listUnsavedChanges())->toBe([])
         ->and(array_map(file_get_contents(...), [$path, $binding]))->toBe($sources);
 });
+
+it('saves a captured target-group contact rail and previews it only with strip support', function () {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $source = require $path;
+    $rail = ['left' => .2, 'right' => .8, 'ridgeY' => .45, 'referenceHeight' => .5];
+    $source['presentations']['graphical']['tracks'][0] = array_replace($source['presentations']['graphical']['tracks'][0], [
+        'anchor' => 'target-group', 'attachment' => 'ground', 'anchorLifetime' => 'effect-start', 'contactRail' => $rail,
+    ]);
+    file_put_contents($path, '<?php return ' . var_export($source, true) . ';');
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $category = 'cutscenes/effect';
+    $session->selectCutscenePresentation($category, $index, 'graphical');
+    $trackFrame = $session->describeCutsceneTimeline($category, $index)['tracks'][0]['art']['pivotKey']['frame'];
+    $row = array_find($session->readDatabaseRecord($category, $index, $trackFrame)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'track0ContactRailridgeY');
+    expect($row)->not->toBeNull()
+        ->and($session->applyDatabaseRecord($category, $index, $row['key'], '.4')['changed'])->toBeTrue();
+    $session->undo();
+    $session->redo();
+    expect($session->saveAll()['failures'])->toBe([]);
+    $saved = require $path;
+    expect($saved['presentations']['graphical']['tracks'][0]['contactRail'])->toBe([...$rail, 'ridgeY' => .4])
+        ->and($saved['presentations']['terminal'])->toBe($source['presentations']['terminal']);
+    $fallback = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
+    $enabled = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, textureStrip: true);
+    $usesStrip = static fn(array $canvas): bool => array_any($canvas['composites'] ?? [],
+        static fn(array $composite): bool => ($composite['operations'][0]['type'] ?? null) === 'texture_strip');
+    expect($usesStrip($fallback['canvas']))->toBeFalse()
+        ->and($usesStrip($enabled['canvas']))->toBeTrue()
+        ->and($enabled['diagnostics'])->toBe([]);
+});

@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Review;
 
 use GdImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImagePreflight;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicator;
@@ -32,7 +33,7 @@ use RuntimeException;
  * It reads only the canvas the Engine composed, so what it draws is what the
  * game would send a graphical renderer. It is a review picture, not the
  * renderer: glyphs come from a system font through GD, alpha has GD's 7 bits,
- * coordinates are rounded to whole pixels, and only coverage-dab composites
+ * coordinates are rounded to whole pixels. Coverage dabs and texture strips
  * are supported. Glyph effects are drawn plain. Everything left out is named
  * once in {@see $diagnostics}.
  */
@@ -43,7 +44,7 @@ final class CanvasStillRaster
         RendererSessionConfig::GRAPHICAL_CANVAS, RendererSessionConfig::CANVAS_OVERLAY, RendererSessionConfig::CANVAS_CLIP_OPACITY,
         RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::CANVAS_IMAGE_TONE, RendererSessionConfig::CANVAS_IMAGE_FLIP,
         RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
-        RendererSessionConfig::CANVAS_IMAGE_ROTATION,
+        RendererSessionConfig::CANVAS_IMAGE_ROTATION, RendererSessionConfig::CANVAS_TEXTURE_STRIP,
     ];
 
     /** Fonts tried, in order, when none is given: the graphical renderer's own text font first. */
@@ -133,7 +134,7 @@ final class CanvasStillRaster
 
     private function drawComposite(GdImage $surface, CanvasComposite $composite, string $context): void
     {
-        if (array_any($composite->operations, static fn($operation): bool => $operation->data['type'] !== 'coverage_dabs')) {
+        if (array_any($composite->operations, static fn($operation): bool => !in_array($operation->data['type'], ['coverage_dabs', 'texture_strip'], true))) {
             $this->diagnose(sprintf('The %s draws composites with operations this still leaves out.', $context));
             return;
         }
@@ -142,11 +143,53 @@ final class CanvasStillRaster
         $paint = self::createCanvas($width, $height);
         foreach ($composite->operations as $operation) {
             $layer = self::createCanvas($width, $height);
-            self::drawCoverageDabs($layer, $operation->data, $width, $height);
+            if ($operation->textureStrip !== null) {
+                $this->drawTextureStrip($layer, $operation);
+            } else {
+                self::drawCoverageDabs($layer, $operation->data, $width, $height);
+            }
             imagecopy($paint, $layer, 0, 0, 0, 0, $width, $height);
         }
         $this->drawPicture($surface, $paint, [0, 0, $width, $height], $composite->destination,
             $composite->clipRect, $composite->opacity, 1, false, false);
+    }
+
+    private function drawTextureStrip(GdImage $surface, CanvasCompositeOperation $operation): void
+    {
+        $data = $operation->data;
+        $strip = $operation->textureStrip;
+        $picture = $this->readImage($data['asset'], 'canvas texture strip');
+        if ($strip === null || $picture === null) {
+            return;
+        }
+        ['x' => $sourceX, 'y' => $sourceY, 'width' => $sourceWidth, 'height' => $sourceHeight] = $data['sourceRect'];
+        if ($sourceX + $sourceWidth > imagesx($picture) || $sourceY + $sourceHeight > imagesy($picture)) {
+            $this->diagnose(sprintf('Canvas texture strip %s is smaller than its source crop.', $data['asset']));
+            return;
+        }
+        [$left, $top, $right, $bottom] = $strip->getBounds();
+        $left = max(0, (int) floor($left));
+        $top = max(0, (int) floor($top));
+        $right = min(imagesx($surface), (int) ceil($right));
+        $bottom = min(imagesy($surface), (int) ceil($bottom));
+        $opacity = $data['opacity'];
+        imagealphablending($surface, false);
+        for ($y = $top; $y < $bottom; $y++) {
+            for ($x = $left; $x < $right; $x++) {
+                $sample = $strip->getSourcePoint($x + .5, $y + .5);
+                if ($sample === null) {
+                    continue;
+                }
+                [$u, $v] = $sample;
+                $sampleX = (int) ($u * $sourceWidth);
+                $sampleY = (int) ($v * $sourceHeight);
+                $pixel = imagecolorat($picture,
+                    $sourceX + ($data['flipX'] ? $sourceWidth - 1 - $sampleX : $sampleX),
+                    $sourceY + ($data['flipY'] ? $sourceHeight - 1 - $sampleY : $sampleY));
+                $coverage = (int) round((127 - ($pixel >> 24)) * $opacity);
+                imagesetpixel($surface, $x, $y, ((127 - $coverage) << 24) | ($pixel & 0xFFFFFF));
+            }
+        }
     }
 
     private static function drawCoverageDabs(GdImage $surface, array $operation, int $width, int $height): void
@@ -406,9 +449,15 @@ final class CanvasStillRaster
     /** An asset-root image, read once, or null and a diagnostic when it cannot be read. */
     private function loadImage(string $path, string $role): ?GdImage
     {
-        if (array_key_exists($path, $this->images)) {
-            return $this->images[$path];
+        if (!array_key_exists($path, $this->images)) {
+            $this->images[$path] = $this->readImage($path, $role);
         }
+        return $this->images[$path];
+    }
+
+    /** Decode a bounded use of an asset without retaining the full atlas. */
+    private function readImage(string $path, string $role): ?GdImage
+    {
         $root = realpath($this->assetRoot);
         $file = $root === false ? false : realpath($root . DIRECTORY_SEPARATOR . $path);
         $bytes = $file !== false && str_starts_with($file, $root . DIRECTORY_SEPARATOR) ? @file_get_contents($file) : false;
@@ -416,14 +465,14 @@ final class CanvasStillRaster
         if ($image === false) {
             $this->diagnose(sprintf('The %s %s cannot be read from the project\'s assets; what it draws is left out.', $role, $path));
 
-            return $this->images[$path] = null;
+            return null;
         }
         if (! imageistruecolor($image)) {
             imagepalettetotruecolor($image);
         }
         imagesavealpha($image, true);
 
-        return $this->images[$path] = $image;
+        return $image;
     }
 
     private function diagnose(string $message): void

@@ -163,3 +163,25 @@ it('resamples a rotated atlas crop without leaking neighbouring colour', functio
     }
     expect($edge)->toBeGreaterThan(0);
 });
+
+it('paints one continuous texture strip with crop bounds and opacity', function () {
+    $root = canvasStillAssets();
+    $operation = new CanvasCompositeOperation([
+        'type' => 'texture_strip', 'asset' => 'Art/halves.png', 'opacity' => .5,
+        'sourceRect' => ['x' => 0, 'y' => 0, 'width' => 10, 'height' => 10],
+        'geometry' => ['origin' => [1, 1], 'axis' => [1, 0], 'length' => 8, 'height' => 2,
+            'knots' => [['u' => 0, 'offset' => 0], ['u' => .5, 'offset' => 2], ['u' => 1, 'offset' => 0]]],
+    ]);
+    $canvas = new PresentationCanvas(12, 8, composites: [
+        new CanvasComposite('bent', 12, 8, new CanvasRectangle(0, 0, 12, 8), [$operation]),
+    ]);
+    $raster = new CanvasStillRaster($root);
+    $image = $raster->rasterize($canvas, 0x000000);
+    expect(canvasStillPixel($image, 1, 1)[0])->toBeBetween(125, 130)
+        ->and(canvasStillPixel($image, 4, 1))->toBe([0, 0, 0])
+        ->and(canvasStillPixel($image, 4, 3)[0])->toBeBetween(125, 130)
+        ->and(canvasStillPixel($image, 5, 3)[0])->toBeBetween(125, 130)
+        ->and(canvasStillPixel($image, 8, 3))->toBe([0, 0, 0])
+        ->and(canvasStillPixel($image, 8, 1)[2])->toBe(0)
+        ->and($raster->diagnostics)->toBe([]);
+});

@@ -785,6 +785,13 @@ final class CutsceneSchemas
             ] : []),
             ...(array_key_exists('span', $entry) || ($groundGroup && ($entry['fit'] ?? null) === CanvasImageFit::CONTAIN->value)
                 ? [RecordField::boolean('span', 'Span Selected Targets')] : []),
+            ...(array_key_exists('contactRail', $entry) || ($groundGroup && ($entry['anchorLifetime'] ?? null) === EffectAnchorLifetime::EFFECT_START->value)
+                ? [
+                    new RecordField('contactRail.left', 'Contact Rail Start U', InputControlType::FLOAT, removeWhenEmpty: true),
+                    new RecordField('contactRail.right', 'Contact Rail End U', InputControlType::FLOAT, removeWhenEmpty: true),
+                    new RecordField('contactRail.ridgeY', 'Contact Rail V', InputControlType::FLOAT, removeWhenEmpty: true),
+                    new RecordField('contactRail.referenceHeight', 'Contact Rail Reference Height', InputControlType::FLOAT, removeWhenEmpty: true),
+                ] : []),
         ];
     }
 
