@@ -236,6 +236,28 @@ it('refuses referenced and opaque cinematic deletions before source history or r
     $opaque = EditorSession::open($root);
     expect(fn() => $opaque->deleteWorldObject('test-map', $opaque->readMap('test-map')['revision'], 'fixture-prop'))
         ->toThrow(SessionRefusal::class, 'fixture-cutscene');
+    // A list spreading in a shared route is proved by the plain data it loads as, wherever entries follow the spread.
+    $spread = static fn(string $tail): string => "<?php \$route = [['x'=>1,'y'=>0], ['x'=>1,'y'=>1]];
+        return [['type'=>'move_route', 'waypoints'=>[...\$route, ['x'=>0,'y'=>1]]], ...[['type'=>'wait','seconds'=>0.5]], {$tail}];";
+    $refuse = static function (string $root): string {
+        $session = EditorSession::open($root);
+        try {
+            $session->deleteWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop');
+        } catch (SessionRefusal $error) {
+            return $error->getMessage();
+        }
+        return '';
+    };
+    file_put_contents($scriptFile, $spread("['type'=>'wait','seconds'=>1.0]"));
+    expect($refuse($root))->toBe('');
+    // A reference after a spread is still found in what the list loads as.
+    file_put_contents($scriptFile, $spread("['type'=>'camera','operation'=>'focus','target'=>['kind'=>'world_object','id'=>'fixture-prop']]"));
+    expect($refuse($root))->toContain('fixture-cutscene.commands.2.target');
+    // A closure spread in is not plain data, so the list cannot vouch for it.
+    file_put_contents($scriptFile, $spread("...[['type'=>'wait','seconds'=>0.5,'until'=>static fn(): bool => true]]"));
+    expect($refuse($root))->toContain('fixture-cutscene');
+    // Proving a deletion safe left nothing behind.
+    expect(file_get_contents($file))->toBe($source);
     file_put_contents($scriptFile, "<?php \$wait = static fn(float \$seconds): array => ['type'=>'wait','seconds'=>\$seconds];
         return [\$wait(0.5), \$wait(1.0)];");
     $helper = EditorSession::open($root);

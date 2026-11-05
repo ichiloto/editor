@@ -89,15 +89,20 @@ final class SaveLandingCells
      * spawn or condition changes where the exit leads and nothing about the
      * ground it covers; only cells an exit newly covers are new. Other events
      * match only themselves: a marker identifies its event, and its behavior
-     * and subject must also remain the same. Legacy markerless entries qualify
-     * only when their exact territory remains unchanged.
+     * and subject must also remain the same. Conditions all hold together, so
+     * an event that keeps every saved condition and adds more runs in fewer
+     * states than it did, never under a save it did not already cover. Legacy
+     * markerless entries qualify only when their exact territory remains
+     * unchanged.
      */
     private static function isSameOccupant(array $current, array $saved): bool
     {
         if (self::isExit($current) && self::isExit($saved)) { return true; }
         if (!isset($current['marker']) && ($current['area'] ?? null) != ($saved['area'] ?? null)) { return false; }
-        unset($current['area'], $saved['area']);
-        return $current == $saved;
+        $conditions = (array) ($current['conditions'] ?? []);
+        $narrowed = array_all((array) ($saved['conditions'] ?? []), static fn(mixed $condition): bool => in_array($condition, $conditions));
+        unset($current['area'], $saved['area'], $current['conditions'], $saved['conditions']);
+        return $narrowed && $current == $saved;
     }
 
     /** Whether a resolved event takes the player off the map, as the Engine's reachability reads it. */

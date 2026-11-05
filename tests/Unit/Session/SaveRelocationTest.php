@@ -354,6 +354,31 @@ it('treats replaced behavior under a reused marker as new event ownership', func
     }
 });
 
+it('moves no save off an event that only adds conditions, and moves saves off one that drops or replaces one', function () {
+    $root = savedSyntheticBoundStoryAreaProject();
+    $path = $root . '/assets/Maps/home/home.data.php';
+    $data = require $path;
+    $data['events']['Z']['conditions'] = [['type' => 'event', 'name' => 'met_the_keeper']];
+    file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
+    $plan = static function (array $conditions) use ($root): ?Ichiloto\Editor\Maps\SaveRelocationPlan {
+        $map = getPhysicalOccupancyMap(EditorSession::open($root));
+        $map->setEventField('Z', ['conditions'], $conditions);
+        expect($map->isDirty())->toBeTrue();
+        return SaveRelocationPlanner::plan($map, $root);
+    };
+    $kept = ['type' => 'event', 'name' => 'met_the_keeper'];
+    $added = ['type' => 'event', 'name' => 'keeper_left', 'negate' => true];
+
+    // Every saved condition still holds alongside the new one: the event runs in fewer states, under no new save.
+    expect($plan([$kept, $added]))->toBeNull()
+        ->and($plan([$added, $kept]))->toBeNull();
+    // Dropping or replacing a saved condition lets it run where it could not, so saves move off its floor.
+    foreach ([[], [$added], [['type' => 'event', 'name' => 'met_the_keeper', 'negate' => true]]] as $conditions) {
+        expect(array_merge(...array_column($plan($conditions)?->relocations ?? [], 'cells')))
+            ->toEqualCanonicalizing([[1, 1], [2, 1], [1, 2]]);
+    }
+});
+
 /** The fixture with a saved door to town on home's floor at (1, 1). */
 function savedSyntheticTransferProject(): string
 {

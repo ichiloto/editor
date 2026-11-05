@@ -101,18 +101,21 @@ final readonly class WorldObjectReferences
      * Reports authored source a reference cannot be proved absent from.
      * Literal arrays and scalars are read as written. An expression or a
      * variable (an enum case's value, a script included with `require`, a
-     * helper the file defines) is proved by what it loaded as: when that
-     * value is plain data, scalars and arrays alone, the loaded definitions
-     * the references are read from hold all of it. A loaded value holding a
-     * closure or another object may yield more when the game runs it, and a
-     * node whose loaded value cannot be found is never proved.
+     * helper the file defines), or an array spreading one in, is proved by
+     * what it loaded as: when that value is plain data, scalars and arrays
+     * alone, the loaded definitions the references are read from hold all of
+     * it. A loaded value holding a closure or another object may yield more
+     * when the game runs it, and a node whose loaded value cannot be found is
+     * never proved.
      *
      * @param array{value: mixed}|null $loaded What the node loaded as, when known.
      */
     private static function describeOpaque(?SourceNode $node, string $path, array &$found, ?array $loaded): void
     {
         if ($node === null || $node->kind === SourceNode::SCALAR) { return; }
-        if ($node->kind !== SourceNode::ARRAY && $loaded !== null && self::isPlainData($loaded['value'])) { return; }
+        // Entries after a spread have no source position to pair with, so
+        // the whole array's loaded value answers for them.
+        if ($loaded !== null && self::isPlainData($loaded['value'])) { return; }
         if ($node->kind !== SourceNode::ARRAY || $node->hasOpaqueKey) {
             $found[] = $path . ': opaque authored source; subject references cannot be proved';
             return;

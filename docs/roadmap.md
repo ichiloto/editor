@@ -365,6 +365,22 @@ arbitrary seek/reset and consistent camera/sprite/world-canvas/text/edge-guidanc
 sampling. Existing camera command fields, selectors and source round trips stay
 supported.
 
+### Retired NPC placement names (open, 5 November 2026)
+
+A save stores an NPC's selected placement by its stable name, and the Engine's
+`NpcPlacementSet::readSelection()` refuses a name the map no longer has until a
+migration renames it. `npc.remove` (and renaming a placement) drops the name
+without asking whether any save can select it, so the map saves cleanly and the
+first such save fails on load. Last Legend's Neon Row needed a hand-written
+class step to carry the street Vax's `inn-door` and `alley-door` selections to
+`west-arch`.
+
+- [ ] Before a map save that removes or renames a named placement, plan its
+  retired names the way `SaveRelocationPlanner` plans newly solid cells: ask
+  which current placement each retired name becomes, and write that as one
+  reviewed save compatibility step with the map, so no save can name a
+  placement the map lacks. Refuse the save when the author gives no target.
+
 ### Registered command lists (planned)
 
 The Engine lets a registered script command declare any number of `list`
