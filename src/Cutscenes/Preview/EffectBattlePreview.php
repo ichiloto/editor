@@ -21,6 +21,8 @@ use Ichiloto\Engine\Core\GameState;
 use Ichiloto\Engine\Entities\Character;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Rendering\Presentation\PresentationSession;
+use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 use Ichiloto\Engine\Scenes\Battle\BattleConfig;
 use InvalidArgumentException;
 
@@ -179,9 +181,14 @@ final class EffectBattlePreview
      * @return array<string, mixed>
      * @throws InvalidArgumentException When the frame is outside the command.
      */
-    public function readFrame(int $frame, bool $reducedMotion, bool $imageRotation = false, bool $coverageDabs = false, bool $textureStrip = false): array
+    public function readFrame(int $frame, bool $reducedMotion, bool $imageRotation = false, bool $coverageDabs = false,
+        bool $textureStrip = false, bool $regionBudget = false): array
     {
-        return $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation, $coverageDabs, $textureStrip)->toArray();
+        $read = fn(): array => $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation, $coverageDabs, $textureStrip)->toArray();
+
+        return $regionBudget
+            ? PresentationSession::runForSession(static fn(string $capability): bool => $capability === RendererSessionConfig::CANVAS_REGION_BUDGET, $read)
+            : $read();
     }
 
     /**

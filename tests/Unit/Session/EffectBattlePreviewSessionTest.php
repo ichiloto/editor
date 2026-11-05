@@ -356,8 +356,12 @@ it('saves a captured target-group contact rail and previews it only with strip s
     $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
     $source = require $path;
     $rail = ['left' => .2, 'right' => .8, 'ridgeY' => .45, 'referenceHeight' => .5];
+    // The page exceeds the legacy frame budget once the arena is included.
+    // The 64px crop itself is small enough for a region-capable preview.
+    writeTilesetTestPng($root . '/assets/Graphics/Effects/LargeGroup.png', 4096, 4096);
     $source['presentations']['graphical']['tracks'][0] = array_replace($source['presentations']['graphical']['tracks'][0], [
         'anchor' => 'target-group', 'attachment' => 'ground', 'anchorLifetime' => 'effect-start', 'contactRail' => $rail,
+        'asset' => 'Graphics/Effects/LargeGroup.png', 'sheet' => ['columns' => 64, 'rows' => 64],
     ]);
     file_put_contents($path, '<?php return ' . var_export($source, true) . ';');
     $session = EditorSession::open($root);
@@ -375,11 +379,14 @@ it('saves a captured target-group contact rail and previews it only with strip s
     $saved = require $path;
     expect($saved['presentations']['graphical']['tracks'][0]['contactRail'])->toBe([...$rail, 'ridgeY' => .4])
         ->and($saved['presentations']['terminal'])->toBe($source['presentations']['terminal']);
-    $fallback = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
-    $enabled = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, textureStrip: true);
+    $legacy = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, textureStrip: true);
+    $enabled = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, textureStrip: true, regionBudget: true);
+    $legacyAgain = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, textureStrip: true);
     $usesStrip = static fn(array $canvas): bool => array_any($canvas['composites'] ?? [],
         static fn(array $composite): bool => ($composite['operations'][0]['type'] ?? null) === 'texture_strip');
-    expect($usesStrip($fallback['canvas']))->toBeFalse()
+    expect($usesStrip($legacy['canvas']))->toBeFalse()
+        ->and($legacy['diagnostics'])->not->toBeEmpty()
         ->and($usesStrip($enabled['canvas']))->toBeTrue()
-        ->and($enabled['diagnostics'])->toBe([]);
+        ->and($enabled['diagnostics'])->toBe([])
+        ->and($usesStrip($legacyAgain['canvas']))->toBeFalse();
 });
