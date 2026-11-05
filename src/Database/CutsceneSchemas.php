@@ -826,6 +826,7 @@ final class CutsceneSchemas
 
         return [
             ...self::battleFlightFields('caster', trail: true),
+            new RecordField('flight.bystanderClearance', 'Bystander Clearance', InputControlType::FLOAT, removeWhenEmpty: true),
             new RecordField('fadeEndFrame', 'Fade End (Exclusive)', InputControlType::INTEGER, removeWhenEmpty: true),
             new RecordField('depth', 'Depth', options: ['behind', 'front'], removeWhenEmpty: true, displayDefault: 'front'),
             ...array_map(static fn(string $key, string $label): RecordField => new RecordField(

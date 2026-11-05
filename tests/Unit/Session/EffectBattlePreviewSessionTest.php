@@ -137,7 +137,8 @@ it('edits a graphical trail and previews its coverage without rewriting Terminal
     $source['presentations']['graphical']['restFrame'] = 1;
     $source['presentations']['graphical']['tracks'] = [[
         'id' => 'trail', 'type' => 'trail', 'attachmentPoint' => 'launch', 'detachFrame' => 0, 'fadeEndFrame' => 5,
-        'flight' => ['arrivalFrame' => 1, 'route' => 'straight'],
+        'flight' => ['arrivalFrame' => 1, 'route' => 'cubic', 'bystanderClearance' => 1,
+            'curve' => ['launchProgress' => .3, 'launchOffsetY' => -.1, 'arrivalProgress' => .7, 'arrivalOffsetY' => -.1]],
         'profile' => ['length' => 40, 'spacing' => 2, 'startRadius' => 1, 'endRadius' => 5, 'radiusPower' => 1,
             'startOpacity' => .1, 'endOpacity' => .8, 'opacityPower' => 1, 'fadeLengthRatio' => .5,
             'brush' => ['falloff' => 1, 'alphaSteps' => 100, 'minimumAlpha' => 1,
@@ -154,6 +155,7 @@ it('edits a graphical trail and previews its coverage without rewriting Terminal
     expect($session->listReferences(null, 'battle_pose_points', ['category' => $category, 'index' => $index]))
         ->toBe([['value' => 'launch', 'label' => 'launch (Kaelion attack)']])
         ->and($change('track0ProfileendRadius', '6')['changed'])->toBeTrue()
+        ->and($change('track0FlightbystanderClearance', '2')['changed'])->toBeTrue()
         ->and($change('track0Band0Colorr', '99')['changed'])->toBeTrue();
     $session->undo();
     expect($row('track0Band0Colorr')['value'])->toBe('4');
@@ -161,6 +163,7 @@ it('edits a graphical trail and previews its coverage without rewriting Terminal
     expect($session->saveAll()['failures'])->toBe([]);
     $saved = require $path;
     expect($saved['presentations']['terminal'])->toBe($source['presentations']['terminal'])
+        ->and($saved['presentations']['graphical']['tracks'][0]['flight']['bystanderClearance'])->toBe(2.0)
         ->and($saved['presentations']['graphical']['tracks'][0]['profile']['brush']['bands'][0]['color']['r'])->toBe(99);
     $ordinary = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
     $enabled = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, coverageDabs: true);
