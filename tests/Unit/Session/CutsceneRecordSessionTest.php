@@ -148,7 +148,8 @@ function expectTerminalCanvas(array $canvas, int $columns, int $rows): void
 }
 
 it('shows an effect\'s graphical sequence with its image track\'s art, and sets the pivot as one undo step', function () {
-    $session = EditorSession::open(effectProject());
+    $root = effectProject();
+    $session = EditorSession::open($root);
     $index = array_search('dusk-slash', $session->listDatabaseRecords('cutscenes/effect')['records'], true);
 
     expect($session->describeCutsceneTimeline('cutscenes/effect', $index)['presentation'])->toBe('terminal')
@@ -163,6 +164,20 @@ it('shows an effect\'s graphical sequence with its image track\'s art, and sets 
     expect($session->describeCutsceneTimeline('cutscenes/effect', $index)['tracks'][0]['art']['pivot'])->toBe($art['pivot'])
         ->and(fn() => $session->selectCutscenePresentation('cutscenes/summon', 0, 'graphical'))->toThrow(SessionRefusal::class)
         ->and(fn() => $session->selectCutscenePresentation('cutscenes/effect', $index, 'holographic'))->toThrow(SessionRefusal::class);
+
+    $file = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $terminal = (require $file)['presentations']['terminal'];
+    $frame = $art['pivotKey']['frame'];
+    foreach (['track0Anchor' => 'target-group', 'track0Attachment' => 'ground', 'track0Fit' => 'contain',
+        'track0AnchorLifetime' => 'effect-start', 'track0Span' => 'true'] as $field => $value) {
+        expect($session->applyDatabaseRecord('cutscenes/effect', $index, ['frame' => $frame, 'field' => $field], $value)['changed'])->toBeTrue();
+    }
+    $session->saveAll();
+    $saved = require $file;
+    expect($saved['presentations']['terminal'])->toBe($terminal)
+        ->and($saved['presentations']['graphical']['tracks'][0])->toMatchArray([
+            'anchor' => 'target-group', 'attachment' => 'ground', 'fit' => 'contain', 'anchorLifetime' => 'effect-start', 'span' => true,
+        ]);
 });
 
 it('creates, duplicates and deletes summons as one undo step each, reaching disk on save', function () {

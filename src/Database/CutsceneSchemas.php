@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Database;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectAnchorLifetime;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
@@ -728,8 +729,9 @@ final class CutsceneSchemas
             variants: [
                 'image' => static fn(array $entry): array => $graphical && self::isOnStage($entry)
                     ? self::stageImageTrackFields()
-                    : [new RecordField('anchor', 'Anchor', options: $graphical ? self::SUMMON_IMAGE_ANCHORS : ['target', 'caster', 'screen'],
+                    : [new RecordField('anchor', 'Anchor', options: $graphical ? [...self::SUMMON_IMAGE_ANCHORS, 'target-group'] : ['target', 'caster', 'screen'],
                         removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], $anchors[2], ...self::imageTrackFields(sharedWithField: true),
+                        ...($graphical ? self::targetGroupFields($entry) : []),
                         ...($graphical ? self::battleFlightFields(is_string($entry['anchor'] ?? null) ? $entry['anchor'] : 'target') : [])],
                 'glyph' => $anchors,
                 'text' => $anchors,
@@ -746,6 +748,20 @@ final class CutsceneSchemas
                 'shake' => $keyframes,
             ],
         );
+    }
+
+    /** @return list<RecordField> */
+    private static function targetGroupFields(array $entry): array
+    {
+        $groundGroup = ($entry['anchor'] ?? null) === 'target-group' && ($entry['attachment'] ?? null) === 'ground';
+        return [
+            ...($groundGroup || array_key_exists('anchorLifetime', $entry) ? [
+                new RecordField('anchorLifetime', 'Ground Anchor Lifetime', options: ['', EffectAnchorLifetime::EFFECT_START->value],
+                    removeWhenEmpty: true, displayDefault: EffectAnchorLifetime::FOLLOW->value),
+            ] : []),
+            ...(array_key_exists('span', $entry) || ($groundGroup && ($entry['fit'] ?? null) === CanvasImageFit::CONTAIN->value)
+                ? [RecordField::boolean('span', 'Span Selected Targets')] : []),
+        ];
     }
 
     /** @return list<RecordField> */
