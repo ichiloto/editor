@@ -50,10 +50,32 @@ final class StorybookPlaybackFields
         return [RecordField::reference(self::getReferenceField(), 'Storybook', self::REFERENCE_CATEGORY)];
     }
 
+    /** Optional command list entered only after the last page is confirmed. */
+    public static function getFinishField(): ?string
+    {
+        $field = self::readContract()['finishField'] ?? null;
+        return is_string($field) && $field !== '' ? $field : null;
+    }
+
+    /** @return array<string, array<string, string>> */
+    public static function getCommandArms(): array
+    {
+        $field = self::getFinishField();
+        return $field === null ? [] : [self::getCommandType() => [$field => 'After Reading']];
+    }
+
+    /** @return array<int, mixed>|null */
+    public static function getFinishCommands(array $command): ?array
+    {
+        $field = self::getFinishField();
+        return $field !== null && ($command['type'] ?? null) === self::getCommandType()
+            && is_array($command[$field] ?? null) ? $command[$field] : null;
+    }
+
     /** @return array<string, mixed> */
     private static function readContract(): array
     {
-        $contract = CinematicCommandSchema::export()['storybookPlayback'] ?? null;
+        static $contract = CinematicCommandSchema::export()['storybookPlayback'] ?? null;
 
         return is_array($contract) ? $contract : throw new LogicException('The Engine exports no storybookPlayback contract.');
     }

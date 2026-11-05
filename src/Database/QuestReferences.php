@@ -210,6 +210,11 @@ final class QuestReferences
                 }
             }
 
+            $finish = StorybookPlaybackFields::getFinishCommands($command);
+            if ($finish !== null && $this->commandsName($finish, $questId)) {
+                return true;
+            }
+
             foreach (['then', 'else'] as $arm) {
                 if ($this->commandsName((array) ($command[$arm] ?? []), $questId)) {
                     return true;

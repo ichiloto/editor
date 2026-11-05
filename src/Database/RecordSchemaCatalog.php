@@ -2816,6 +2816,7 @@ final class RecordSchemaCatalog
                 'move_route' => static fn(array $entry): ?RecordSubList => MovementRouteFields::getPointList($entry, graphical: $graphical),
                 ...self::getRegisteredCommandLists($graphical),
             ]),
+            variantArms: $offered(StorybookPlaybackFields::getCommandArms()),
             prepareEdit: static fn(array $entry, string $field): array => MovementRouteFields::prepareEdit(
                 InnPresentationFields::prepareEdit($entry, $field), $field),
         );

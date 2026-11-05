@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes;
 
+use Ichiloto\Editor\Database\StorybookPlaybackFields;
+
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Editor\Database\ProjectCatalogs;
 use Throwable;
@@ -203,6 +205,24 @@ final class CutsceneLaneOverview
                 return [$longest, $rows[$rowIndex]['marks']];
         }
 
+        $finishField = StorybookPlaybackFields::getFinishField();
+        $finish = StorybookPlaybackFields::getFinishCommands($command);
+        if ($finishField !== null && $finish !== null) {
+            $index = count($rows);
+            $rows[] = ['depth' => $depth, 'key' => $key, 'label' => CutsceneOutline::summarize($command),
+                'seconds' => 0.0, 'marks' => [self::INPUT], 'kind' => 'block'];
+            $armKey = $key . '.' . $finishField;
+            $armIndex = count($rows);
+            $rows[] = ['depth' => $depth + 1, 'key' => $armKey, 'label' => 'after reading',
+                'seconds' => 0.0, 'marks' => [], 'kind' => 'arm'];
+            [$seconds, $marks] = self::walkList($finish, $armKey, $depth + 2, $rows, $effects);
+            $rows[$armIndex]['seconds'] = $rows[$index]['seconds'] = $seconds;
+            $rows[$armIndex]['marks'] = $marks;
+            $rows[$index]['marks'] = array_values(array_unique([self::INPUT, ...$marks]));
+
+            return [$seconds, $rows[$index]['marks']];
+        }
+
         [$seconds, $marks] = self::estimate($command, $effects);
         $rows[] = ['depth' => $depth, 'key' => $key, 'label' => CutsceneOutline::summarize($command), 'seconds' => $seconds, 'marks' => $marks, 'kind' => 'command'];
 
@@ -224,7 +244,7 @@ final class CutsceneLaneOverview
             'wait' => [$seconds('seconds', 0.5), []],
             'narration', 'title_card' => [$seconds('seconds', 2.5), []],
             'transition' => [$seconds('seconds', 0.24), []],
-            'text', 'choice' => [0.0, [self::INPUT]],
+            'text', 'choice', 'play_storybook' => [0.0, [self::INPUT]],
             'start_battle' => [0.0, [self::BATTLE]],
             'common_event' => [0.0, [self::UNKNOWN]],
             'move_route' => [self::routeSeconds($command), []],

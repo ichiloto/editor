@@ -4090,6 +4090,14 @@ class ProjectValidator
 
       if ($type === StorybookPlaybackFields::getCommandType()) {
         $issues = [...$issues, ...$this->storybooks->checkPlayback($command, $where)];
+        $finish = StorybookPlaybackFields::getFinishField();
+        if ($finish !== null && array_key_exists($finish, $command)) {
+          try {
+            CinematicScriptValidator::validateStorybookPlayback($command, $where, 'command');
+          } catch (InvalidArgumentException $error) {
+            $issues[] = Issue::error($where, $error->getMessage(), 'Correct the After Reading command list.');
+          }
+        }
       }
 
       if ($type === 'field_animation') {

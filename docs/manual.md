@@ -2714,8 +2714,10 @@ file name, and a book's `id` must match it.
 A `play_storybook` command in an event script, battle event page or cinematic
 plays one storybook, chosen in its `Storybook` picker among the project's
 storybooks, listed as `Title (id)` and stored by id. A book the game refuses is
-listed by its id alone. When the reader closes, the script carries on; reading
-writes no flag, reward or progress. Validation reports a `play_storybook` that
+listed by its id alone. The optional **After Reading Commands** frame runs when
+the player confirms Close at the end. Dismissing the reader skips the frame.
+After either path the caller continues. Reading itself writes no flag, reward
+or progress. Validation reports a `play_storybook` that
 names no storybook, one the project does not have and one the game refuses, a
 storybook the game refuses with its reason, and a page picture the game cannot
 read (that page shows its narration alone). A storybook reference the source
@@ -2798,7 +2800,7 @@ Supported command types, matching the engine's interpreter:
 | `play_sound` | Sound |
 | `play_music` | Music |
 | `play_skit` | Skit (picked from Skits) |
-| `play_storybook` | Storybook (picked from the project's storybooks) |
+| `play_storybook` | Storybook (picked from the project's storybooks), optional After Reading Commands |
 | `accept_quest` | Quest Id |
 | `common_event` | Event Script |
 | `knowledge` | Operation, Subject, Report, Replacement Report, Observation, Outcome, Source, Confidence |

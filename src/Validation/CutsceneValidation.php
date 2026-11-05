@@ -428,6 +428,13 @@ trait CutsceneValidation
                 }
             }
 
+            $finish = StorybookPlaybackFields::getFinishCommands($command);
+            if ($finish !== null) {
+                $finishedContext = $context;
+                $issues = [...$issues, ...$this->walkCinematicCommands($finish, $where, $known, $finishedContext, $commonEventStack)];
+                $context['map'] = ScriptMapState::mergeStates([$context['map'], $finishedContext['map']]);
+            }
+
             if ($type === 'transfer') {
                 $context['map'] = $context['map']->transferTo(trim(strval($command['map'] ?? '')), $context['npcIdsByMap']);
             }

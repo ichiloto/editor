@@ -272,6 +272,12 @@ final class CutsceneOutline
             }
         }
 
+        $finish = StorybookPlaybackFields::getFinishField();
+        $commands = StorybookPlaybackFields::getFinishCommands($command);
+        if ($finish !== null && $commands !== null) {
+            $children[] = ['path' => [$finish], 'commands' => self::listOf($commands), 'label' => 'after reading', 'key' => $finish];
+        }
+
         return $children;
     }
 
@@ -408,6 +414,11 @@ final class CutsceneOutline
     public static function nestingTarget(array $command, array $commandPath): ?array
     {
         $type = strval($command['type'] ?? '');
+
+        $finish = StorybookPlaybackFields::getFinishField();
+        if ($type === StorybookPlaybackFields::getCommandType() && $finish !== null) {
+            return [...$commandPath, $finish];
+        }
 
         switch ($type) {
             case 'sequence':

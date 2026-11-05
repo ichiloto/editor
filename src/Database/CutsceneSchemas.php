@@ -438,6 +438,7 @@ final class CutsceneSchemas
             variantArms: [
                 'sequence' => ['commands' => 'Sequence'],
                 'choice' => ['cancel' => 'Cancel'],
+                ...StorybookPlaybackFields::getCommandArms(),
             ],
             exclusiveFields: [['effect', 'animation'], ['effect', 'id'], ['effect', 'secondsPerFrame']],
             prepareEdit: static function (array $entry, string $field) use ($graphical): array {

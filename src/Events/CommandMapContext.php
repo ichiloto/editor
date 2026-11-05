@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Events;
 
+use Ichiloto\Editor\Database\StorybookPlaybackFields;
+
 /**
  * How an event script's alternative arms and parallel lanes share the map
  * it runs on.
@@ -46,6 +48,12 @@ final class CommandMapContext
             if (array_key_exists($arm, $command)) {
                 $arms[] = ['path' => [$arm], 'commands' => (array) ($command[$arm] ?? [])];
             }
+        }
+
+        $finish = StorybookPlaybackFields::getFinishField();
+        $commands = StorybookPlaybackFields::getFinishCommands($command);
+        if ($finish !== null && $commands !== null) {
+            $arms[] = ['path' => [$finish], 'commands' => $commands];
         }
 
         return $arms;
@@ -130,6 +138,7 @@ final class CommandMapContext
         $type = strval($command['type'] ?? '');
 
         return ($type === 'branch' && (! isset($command['then']) || ! isset($command['else'])))
-            || ($type === 'choice' && ! isset($command['cancel']));
+            || ($type === 'choice' && ! isset($command['cancel']))
+            || $type === StorybookPlaybackFields::getCommandType();
     }
 }

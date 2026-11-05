@@ -650,6 +650,11 @@ final class ReferenceCatalog
                 }
             }
 
+            $finish = StorybookPlaybackFields::getFinishCommands($command);
+            if ($finish !== null) {
+                self::collectStagedActorIds($finish, $ids);
+            }
+
             foreach (['lanes', 'options'] as $list) {
                 foreach ((array) ($command[$list] ?? []) as $member) {
                     if (is_array($member)) {

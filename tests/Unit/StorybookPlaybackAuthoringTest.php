@@ -208,3 +208,37 @@ it('offers the storybook picker on a cinematic play_storybook command through th
             ['value' => 'river-tale', 'label' => 'The River (river-tale)'],
         ]);
 });
+
+it('authors and saves an after-reading event arm through the same command frames', function (): void {
+    $root = makeTemporaryProject();
+    writePlaybackStorybooks($root);
+    $path = writeStorybookEventScript($root, "'river-tale'");
+    $database = loadRecordDatabase($root, 'common_events');
+    $index = array_search('reading-hour', $database->getEntryLabels(), true);
+    expect($index)->toBeInt();
+    $row = array_find($database->getSettingsFields($index),
+        static fn(array $field): bool => ($field['name'] ?? '') === 'After Reading Commands');
+    expect($row['frame'] ?? null)->toBe([1, 'onFinish']);
+    $next = ['type' => 'text', 'name' => '', 'text' => 'Tell me what you thought.'];
+    $database->insertFrameCommand($index, $row['frame'], 0, $next);
+    $database->save();
+
+    expect((require $path)[1])->toBe([
+        'type' => 'play_storybook', 'storybook' => 'river-tale', 'onFinish' => [$next],
+    ])->and(file_get_contents($path))->toContain('// Written by hand.');
+});
+
+it('validates references inside the optional finished-reading path', function (): void {
+    $root = cutsceneProject();
+    writePlaybackStorybooks($root);
+    $command = ['type' => 'play_storybook', 'storybook' => 'river-tale', 'onFinish' => [
+        ['type' => 'play_storybook', 'storybook' => 'missing-finish-book'],
+    ]];
+    file_put_contents($root . '/assets/Events/dresser-note.php', '<?php return ' . var_export([$command], true) . ';');
+    file_put_contents($root . '/assets/Cutscenes/Cinematics/harbour-lanterns/harbour-lanterns.script.php',
+        '<?php return ' . var_export([$command], true) . ';');
+    $issues = array_values(array_filter(validateProject($root),
+        static fn($issue): bool => str_contains($issue->message, '"missing-finish-book"')));
+
+    expect($issues)->toHaveCount(2);
+});

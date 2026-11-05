@@ -120,6 +120,11 @@ final class TroopEventPageContract
                     $command['options'][$option]['then'] = self::remapCommands($choice['then'], $map, $where);
                 }
             }
+            $finishField = StorybookPlaybackFields::getFinishField();
+            $finish = StorybookPlaybackFields::getFinishCommands($command);
+            if ($finishField !== null && $finish !== null) {
+                $command[$finishField] = self::remapCommands($finish, $map, $where);
+            }
             $commands[$index] = $command;
         }
 

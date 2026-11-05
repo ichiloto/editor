@@ -4853,6 +4853,7 @@ final class ProjectRecordDatabase
                     $position === 0 && $firstLevelSingular !== null => $firstLevelSingular,
                     $arm === 'commands' => 'Sequence',
                     $arm === 'cancel' => 'Choice',
+                    $arm === StorybookPlaybackFields::getFinishField() => 'Storybook',
                     default => 'Branch',
                 };
                 $parts[] = sprintf('%s %d › %s', $noun, $entryNumber, ucfirst($arm));
