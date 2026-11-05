@@ -777,6 +777,10 @@ final class CutsceneSchemas
                 new RecordField('flight.route', 'Flight Route', options: ['', ...array_column(EffectFlightRoute::cases(), 'value')],
                     removeWhenEmpty: true, displayDefault: EffectFlightRoute::WAYPOINTS->value),
                 new RecordField('flight.tipX', 'Tip X', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('flight.curve.launchProgress', 'Curve Launch Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('flight.curve.launchOffsetY', 'Curve Launch Control Y Offset', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('flight.curve.arrivalProgress', 'Curve Arrival Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('flight.curve.arrivalOffsetY', 'Curve Arrival Control Y Offset', InputControlType::FLOAT, removeWhenEmpty: true),
             ]),
         ];
     }

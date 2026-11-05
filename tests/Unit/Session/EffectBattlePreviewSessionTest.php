@@ -28,7 +28,7 @@ it('previews an effect in the action that plays it, as the battle draws it, for 
         ->and($terminal['terminalLines'])->not->toBe([]);
 });
 
-it('round-trips graphical flight authoring through the shared rows and previews the negotiated heading', function () {
+it('round-trips graphical flight authoring through the shared rows and previews the negotiated heading', function (bool $curved) {
     $root = effectBattlePreviewProject();
     $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
     $initial = require $path;
@@ -59,19 +59,25 @@ it('round-trips graphical flight authoring through the shared rows and previews 
     $change('track0AttachmentPoint', '0');
     $change('track0DetachFrame', '0');
     $change('track0FlightarrivalFrame', '1');
-    $change('track0Flightroute', 'straight');
-    $change('track0FlighttipX', '.25');
+    $route = $curved ? 'cubic' : 'straight';
+    $curve = ['launchProgress' => .28, 'launchOffsetY' => -.15, 'arrivalProgress' => .71, 'arrivalOffsetY' => -.075];
+    $change('track0Flightroute', $route);
+    $values = $curved ? array_combine(array_map(static fn(string $key): string => 'track0Flightcurve' . $key, array_keys($curve)), $curve)
+        : ['track0FlighttipX' => .25];
+    foreach ($values as $field => $value) {
+        $change($field, (string) $value);
+    }
     $session->undo();
-    expect($row('track0FlighttipX', $trackFrame)['value'])->toBe('');
+    expect($row(array_key_last($values), $trackFrame)['value'])->toBe('');
     $session->redo();
-    $session->saveAll();
+    expect($session->saveAll()['failures'])->toBe([]);
 
     $saved = require $path;
     $track = $saved['presentations']['graphical']['tracks'][0];
     expect($saved['presentations']['terminal'])->toBe($initial['presentations']['terminal'])
         ->and($saved['presentations']['graphical']['poseSyncFrame'])->toBe(0)
         ->and($track)->toMatchArray(['attachmentPoint' => '0', 'detachFrame' => 0,
-            'flight' => ['arrivalFrame' => 1, 'route' => 'straight', 'tipX' => .25]]);
+            'flight' => ['arrivalFrame' => 1, 'route' => $route, ...($curved ? ['curve' => $curve] : ['tipX' => .25])]]);
 
     $ordinary = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
     $rotating = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, imageRotation: true);
@@ -80,7 +86,7 @@ it('round-trips graphical flight authoring through the shared rows and previews 
     expect($image($ordinary))->not->toBeNull()->not->toHaveKey('rotation')
         ->and($image($rotating))->toHaveKeys(['rotation', 'pivot'])
         ->and($rotating['diagnostics'])->toBe([]);
-});
+})->with([false, true]);
 
 it('says so when no action of the battle test party plays an effect, inventing none', function () {
     $session = EditorSession::open(effectBattlePreviewProject());
