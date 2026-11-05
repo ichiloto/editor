@@ -1306,11 +1306,11 @@ The Terminal preview's `B` moves a staged effect between battle and its owned
 stage. The host's `cutscenes.timeline` reply adds `stageContext` (`battle`,
 `stage` or null) and keeps `ownedStage` true only for the owned-stage consumer;
 `cutscenes.preview` serves the stage canvas compiled with that consumer's
-admission. Remaining GUI work: route a battle-bound staged effect to the stage
-canvas when the battle test party cannot play it (today the GUI falls back to
-the field scene, which refuses stages), offer a stage-context choice beside
-the battle/field routing, and show the stage lanes beside the battle preview's
-source/target phases. Native visual acceptance of a cut-in remains open.
+admission. GUI develop `f261b9b` draws that stage canvas when the battle test
+party cannot play the effect, retains the battle refusal alongside the preview,
+and keeps the stage lanes available. Editor `b6317df` covers the same case at
+the host boundary. An explicit stage-context choice while a battle preview is
+available and native visual acceptance remain open.
 
 **A cutscene is a pair, and the pair is one asset.** `CutsceneAsset` reads
 `<id>.data.php` with `<id>.script.php` or `<id>.timeline.php`, knows which
