@@ -20,7 +20,7 @@ it('keys repeated cells by the exact glyph prefix and suffix without merging sty
             ['symbol' => '0', 'prefix' => '<fg=blue>', 'suffix' => '</>'],
             ['symbol' => 'x', 'prefix' => '<fg=red>', 'suffix' => '</>'],
         ],
-        // A row mixing ANSI and tags is read as the Engine reads it: each cell replays the row's controls.
+        // A row mixing ANSI and tags is read exactly as the Engine reads it.
         TerminalText::parseSourceCells("\033[31m00\033[0m<fg=red>0</>"),
         [['symbol' => '0', 'prefix' => '<fg=red><options=bold>', 'suffix' => '</></>']],
     ])->and($grid->cells[1][0])->toBe($grid->cells[1][1])
@@ -198,4 +198,153 @@ it('refuses to write a cell whose style would change the glyphs the Engine reads
     // An unrecognised tag is glyphs to the Engine, so the painted cell would read back as more than one.
     $grid->cells[0][0] = ['symbol' => 'x', 'prefix' => '<not-a-style>', 'suffix' => ''];
     expect(fn() => $grid->getSource())->toThrow(MapSourceRefusal::class, 'would not read back as the cells painted');
+});
+
+/**
+ * A synthetic row carrying zero-width style junk between its styled runs, as
+ * an earlier writer left some rows: empty colour tags and a colour set and
+ * cleared around no glyph, beside styled roof slopes and a raw-ANSI backslash.
+ */
+function zeroWidthJunkRow(int $runs): string
+{
+    $row = '<fg=#875f00>#</>';
+    for ($run = 0; $run < $runs; $run++) {
+        $row .= "<fg=#d7005f></>\033[38;2;215;0;95m\033[39m<fg=#d7005f>/~~</>\033[38;2;215;0;95m\\\033[39m<fg=#af875f></>";
+    }
+
+    return $row . '<fg=#875f00>#</>';
+}
+
+/**
+ * The glyphs the Engine reads from a row, each in the truecolour style it
+ * shows, resolved by the Engine on its own formatter for every cell.
+ *
+ * @return list<string>
+ */
+function shownRowCells(string $row): array
+{
+    return array_map(static function (array $cell): string {
+        $style = TerminalText::resolveSourceStyle($cell['prefix'], $cell['suffix']);
+
+        return $style['prefix'] . $cell['symbol'] . $style['suffix'];
+    }, TerminalText::parseSourceCells($row));
+}
+
+it('writes a painted junk-bearing row with each cell\'s effective style, and saving it again leaves it as written', function () {
+    $rows = ['<fg=#875f00>' . str_repeat('#', 11) . '</>', zeroWidthJunkRow(3), zeroWidthJunkRow(2), '<fg=#875f00>#</>' . str_repeat(' ', 9) . '<fg=#875f00>#</>'];
+    $text = implode("\n", $rows);
+    $source = MapGridSource::buildSource($text, 'JUNK');
+    $grid = new EditableGrid($text, $source);
+    $painted = ['symbol' => '=', 'prefix' => '<fg=#00af00>', 'suffix' => '</>'];
+    $grid->cells[1][2] = $painted;
+
+    $written = explode("\n", MapGridSource::parseSource($grid->getSource(), 'synthetic'));
+    $glyphs = readEngineRowGlyphs($rows[1]);
+    $glyphs[2] = '=';
+    $shown = shownRowCells($rows[1]);
+    $shown[2] = shownRowCells('<fg=#00af00>=</>')[0];
+    // Rows nobody painted keep their authored bytes, junk included.
+    expect([$written[0], $written[2], $written[3]])->toBe([$rows[0], $rows[2], $rows[3]])
+        // The painted row holds no style that shows nothing, and every glyph keeps its colour.
+        ->and($written[1])->not->toContain('<fg=#d7005f></>')
+        ->not->toContain('<fg=#af875f></>')
+        ->not->toContain("\033[38;2;215;0;95m\033[39m")
+        ->and(strlen($written[1]))->toBeLessThan(strlen($rows[1]))
+        ->and(readEngineRowGlyphs($written[1]))->toBe($glyphs)
+        ->and(shownRowCells($written[1]))->toBe($shown);
+
+    // Each further save of the row, reloaded from what was written, writes the same bytes for the same cells.
+    $first = $written[1];
+    $lengths = [];
+    foreach (['-', '=', '-', '='] as $glyph) {
+        $source = $grid->getSource();
+        $grid = new EditableGrid(MapGridSource::parseSource($source, 'synthetic'), $source);
+        $grid->cells[1][2] = ['symbol' => $glyph] + $painted;
+        $lengths[] = strlen(explode("\n", MapGridSource::parseSource($grid->getSource(), 'synthetic'))[1]);
+    }
+    expect(array_unique($lengths))->toBe([strlen($first)])
+        ->and(explode("\n", MapGridSource::parseSource($grid->getSource(), 'synthetic'))[1])->toBe($first);
+});
+
+it('grows junk-bearing rows only by the blank cells a column insertion adds, save after save', function () {
+    $rows = [zeroWidthJunkRow(3), zeroWidthJunkRow(3)];
+    $text = implode("\n", $rows);
+    $source = MapGridSource::buildSource($text, 'JUNK');
+    $glyphs = readEngineRowGlyphs($rows[0]);
+    $shown = shownRowCells($rows[0]);
+    $lengths = [];
+    for ($save = 0; $save < 3; $save++) {
+        $grid = new EditableGrid(MapGridSource::parseSource($source, 'synthetic'), $source);
+        $grid->insertLines('x', 1, 2);
+        $source = $grid->getSource();
+        $row = explode("\n", MapGridSource::parseSource($source, 'synthetic'))[0];
+        array_splice($glyphs, 1, 0, [' ', ' ']);
+        array_splice($shown, 1, 0, [' ', ' ']);
+        expect(readEngineRowGlyphs($row))->toBe($glyphs)
+            ->and(shownRowCells($row))->toBe($shown);
+        $lengths[] = strlen($row);
+    }
+    // Two unstyled blank cells are two bytes; the first save also drops the junk.
+    expect($lengths[0])->toBeLessThan(strlen($rows[0]))
+        ->and($lengths[1] - $lengths[0])->toBe(2)
+        ->and($lengths[2] - $lengths[1])->toBe(2);
+});
+
+it('writes a changed cell whose own style holds zero-width junk with the style it shows alone', function () {
+    $text = "ab\n<fg=#875f00>##</>";
+    $source = MapGridSource::buildSource($text, 'JUNK');
+    $grid = new EditableGrid($text, $source);
+    $grid->cells[0][0] = ['symbol' => 'x', 'prefix' => "<fg=#d7005f></>\033[31m\033[39m<fg=#0000af>", 'suffix' => '</>'];
+
+    expect($grid->getLines())->toBe(['<fg=#0000af>x</>b', '<fg=#875f00>##</>'])
+        ->and(shownRowCells($grid->getLines()[0]))->toBe(shownRowCells("<fg=#d7005f></>\033[31m\033[39m<fg=#0000af>x</>b"));
+});
+
+it('writes rows moved by a row insertion or removal from their cells again, keeping untouched rows as authored', function () {
+    $rows = [zeroWidthJunkRow(1), '<fg=#875f00>##</>', zeroWidthJunkRow(2)];
+    $text = implode("\n", $rows);
+    $grid = new EditableGrid($text, MapGridSource::buildSource($text, 'JUNK'));
+    $grid->cells[1][0] = ['symbol' => '+', 'prefix' => '<fg=#00af00>', 'suffix' => '</>'];
+    $painted = $grid->getLines()[1];
+    $grid->insertLines('y', 1, 1);
+    // The new row is as wide as the row it is inserted beside.
+    expect($grid->getLines())->toBe([$rows[0], '  ', $painted, $rows[2]]);
+    $grid->removeLines('y', 0, 2);
+    expect($grid->getLines())->toBe([$painted, $rows[2]]);
+});
+
+it('fingerprints a map after each paint at a cost that does not grow with the rows painted before or their junk', function () {
+    $root = makeTemporaryProject();
+    $directory = $root . '/assets/Maps/test-map';
+    $width = 160;
+    $height = 96;
+    $rows = [];
+    for ($y = 0; $y < $height; $y++) {
+        $row = zeroWidthJunkRow(20);
+        $rows[] = $row . str_repeat('.', $width - count(TerminalText::parseSourceCells($row)));
+    }
+    file_put_contents($directory . '/test-map.map.php', MapGridSource::buildSource(implode("\n", $rows), 'ICHILOTO_MAP'));
+    file_put_contents($directory . '/test-map.event.php', MapGridSource::buildSource(
+        implode("\n", array_fill(0, $height, str_repeat(' ', $width))), 'ICHILOTO_EVENT_MAP'));
+    file_put_contents($directory . '/test-map.data.php', "<?php\n\nreturn ['name' => 'Test Map', 'region' => '', 'description' => '', 'triggers' => [], 'events' => []];\n");
+    $map = array_find(\Ichiloto\Editor\ProjectWorkspace::fromProject($root)->maps, static fn(ProjectMap $map): bool => $map->mapId === 'test-map');
+    expect($map->getGridSourceIssue())->toBeNull();
+
+    $costs = [];
+    $fingerprints = [$map->contentFingerprint];
+    for ($y = 0; $y < $height; $y++) {
+        $map->setTileSymbol(1, $y, '=');
+        $start = hrtime(true);
+        $fingerprints[] = $map->contentFingerprint;
+        $costs[] = hrtime(true) - $start;
+    }
+    $median = static function (array $values): float {
+        sort($values);
+        return (float) $values[intdiv(count($values), 2)];
+    };
+    // Every paint changes the fingerprint; asking again without a paint costs nothing new.
+    expect(array_unique($fingerprints))->toHaveCount($height + 1)
+        ->and($map->contentFingerprint)->toBe(end($fingerprints))
+        // With every earlier row recomposed on each paint, the last paints cost tens of times the first.
+        ->and($median(array_slice($costs, -12)))->toBeLessThan(3 * $median(array_slice($costs, 0, 12)) + 2_000_000);
 });
