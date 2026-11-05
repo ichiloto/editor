@@ -3723,7 +3723,8 @@ final class EditorSession
      * @throws SessionRefusal When the effect does not compile, no action of the party plays it, or the battle cannot be set up.
      */
     public function readEffectBattlePreview(int $index, int $frame, bool $reducedMotion = false,
-        EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null, int $binding = 0, bool $imageRotation = false): array
+        EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null, int $binding = 0,
+        bool $imageRotation = false, ?int $targetIndex = null): array
     {
         $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
         $effects = $this->workspace->cutscenes?->assets(CutsceneType::EFFECT) ?? [];
@@ -3734,12 +3735,13 @@ final class EditorSession
         $battleUi = is_array($config) ? $config : [];
         $graphic = $presentation === EffectPresentation::GRAPHICAL;
         $key = hash('xxh128', serialize([$asset->id, array_map(static fn(CutsceneAsset $effect): array => $effect->payload(), $effects), $animations,
-            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $binding, $reducedMotion, $graphic ? $this->readProposedBattlerBindings() : null]));
+            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $binding, $reducedMotion, $targetIndex,
+            $graphic ? $this->readProposedBattlerBindings() : null]));
         if (($this->effectBattlePreviews[$presentation->value]['key'] ?? null) !== $key) {
             $catalog = $graphic ? $this->requireBattleLayoutCatalog('preview effects on') : null;
             $this->effectBattlePreviews[$presentation->value] = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
                 fn(): EffectBattlePreview => $this->createEffectBattlePreview($asset->id, $animations, $entry, $troop,
-                    BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation, $binding, $reducedMotion))];
+                    BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation, $binding, $reducedMotion, $targetIndex))];
         }
         $preview = $this->effectBattlePreviews[$presentation->value]['preview'];
         $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame);
@@ -3752,7 +3754,8 @@ final class EditorSession
         return [...$read, 'totalFrames' => $preview->totalFrames, 'fps' => BattleCommandTimeline::FPS,
             'assetRoot' => $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', 'lane' => $preview->lane,
             'sourceEffectAnchor' => $preview->sourceEffectAnchor->value, 'contexts' => $preview->contexts, 'binding' => $preview->binding,
-            'caster' => $preview->caster, 'targets' => $preview->targets, 'troop' => $troop['name'], 'phases' => $preview->phases];
+            'caster' => $preview->caster, 'targets' => $preview->targets, 'targetOptions' => $preview->targetOptions,
+            'targetIndex' => $preview->targetIndex, 'troop' => $troop['name'], 'phases' => $preview->phases];
     }
 
     /**
@@ -3764,7 +3767,8 @@ final class EditorSession
      * @throws SessionRefusal When the battle cannot be set up or no action of it plays the effect.
      */
     private function createEffectBattlePreview(string $effectId, array $animations, array $entry, array $troop, BattlePacing $pacing,
-        ?BattlePresentationCatalog $catalog, EffectPresentation $presentation, int $binding, bool $reducedMotion): EffectBattlePreview
+        ?BattlePresentationCatalog $catalog, EffectPresentation $presentation, int $binding, bool $reducedMotion,
+        ?int $targetIndex): EffectBattlePreview
     {
         // The animations as authored now; an entry the Engine would not read plays nothing, as in battle.
         $library = AnimationLibrary::createFromAnimations(array_values(array_filter(array_map(static function (mixed $data): ?Animation {
@@ -3784,7 +3788,7 @@ final class EditorSession
             [$battle, $skills] = $this->createPreviewBattle($entry, $troop);
 
             return EffectBattlePreview::create($effectId, $battle, $skills, $library, $pacing, $catalog,
-                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation, $compile, $binding, $reducedMotion);
+                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation, $compile, $binding, $reducedMotion, $targetIndex);
         } catch (SessionRefusal $refusal) {
             throw $refusal;
         } catch (Throwable $failure) {

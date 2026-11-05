@@ -19,6 +19,7 @@ use Ichiloto\Engine\Battle\Presentation\BattlePoseRole;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Core\GameState;
 use Ichiloto\Engine\Entities\Character;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Scenes\Battle\BattleConfig;
 use InvalidArgumentException;
@@ -43,6 +44,7 @@ final class EffectBattlePreview
      * @param list<array{caster: string, action: string, lane: string}> $contexts Every action of the party that plays it.
      * @param int $binding Which of them is shown.
      * @param list<string> $targets
+     * @param list<array{name: string, side: string, position: array{row: string, lane: int}|null}> $targetOptions
      * @param array<string, array{start: int, length: int}> $phases
      * @param int $laneFrames How many frames the effect itself has, in the lane it plays in.
      */
@@ -54,6 +56,8 @@ final class EffectBattlePreview
         public readonly int $binding,
         public readonly string $caster,
         public readonly array $targets,
+        public readonly array $targetOptions,
+        public readonly ?int $targetIndex,
         public readonly array $phases,
         public readonly SourceEffectAnchor $sourceEffectAnchor,
         private readonly int $laneFrames,
@@ -78,6 +82,7 @@ final class EffectBattlePreview
         callable $compile,
         int $binding = 0,
         bool $reducedMotion = false,
+        ?int $targetIndex = null,
     ): self {
         $state = new GameState();
         $found = [];
@@ -119,9 +124,17 @@ final class EffectBattlePreview
         $poses = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null && $catalog->getArenaFor($battle) !== null
             ? ($catalog->actorPoses[$caster->actorId] ?? null) : null;
         $pose = $poses?->getPose($role);
-        $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster,
-            $battle->partyRoster->battlers, $battle->troop->members->toArray(),
-            formation: $battle->formation, targeting: $action->targeting);
+        $allies = $battle->partyRoster->battlers;
+        $opponents = $battle->troop->members->toArray();
+        $selectable = $action->targetScope->number === ItemScopeNumber::ONE
+            ? BattleTargetPolicy::getEligibleTargets($action->targetScope, $caster, $allies, $opponents, $battle->formation, $action->targeting)
+            : [];
+        if ($targetIndex !== null && !isset($selectable[$targetIndex])) {
+            throw new InvalidArgumentException('Choose a target from the current action and formation.');
+        }
+        $targetIndex ??= $selectable === [] ? null : 0;
+        $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $allies, $opponents,
+            $targetIndex === null ? [] : [$selectable[$targetIndex]], formation: $battle->formation, targeting: $action->targeting);
         if ($targets === []) {
             throw new InvalidArgumentException(sprintf('%s has no one to act on in the battle test.', $action->name));
         }
@@ -146,6 +159,12 @@ final class EffectBattlePreview
             $binding,
             $caster->name,
             array_map(static fn($target): string => $target->name, $targets),
+            array_map(static fn($target): array => [
+                'name' => $target->name,
+                'side' => in_array($target, $allies, true) ? 'ally' : 'enemy',
+                'position' => $battle->formation->getPosition($target)?->toArray(),
+            ], $selectable),
+            $targetIndex,
             $plan->phases,
             $anchor,
             intval(($lane === 'source' ? $source : $target)?->defaults['lengthFrames'] ?? 0),

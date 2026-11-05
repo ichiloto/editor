@@ -110,10 +110,18 @@ it('previews the selected combat line from the troop formation in both presentat
     $index = findEffectIndex($session, 'dusk-slash');
     $graphical = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
     $terminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL, authoredFrame: 1);
+    $otherLane = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, targetIndex: 2);
+    $otherLaneTerminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL, authoredFrame: 1, targetIndex: 2);
     $images = array_filter($graphical['canvas']['images'],
         static fn(array $image): bool => $image['asset'] === 'Graphics/Effects/dusk-slash.png');
     expect($graphical['targets'])->toBe(['Regular Bat', 'Regular Bat'])
         ->and($terminal['targets'])->toBe($graphical['targets'])
+        ->and($graphical['targetIndex'])->toBe(0)
+        ->and($graphical['targetOptions'][2])->toBe(['name' => 'Regular Bat', 'side' => 'enemy', 'position' => ['row' => 'front', 'lane' => 1]])
+        ->and($otherLane['targetIndex'])->toBe(2)
+        ->and($otherLane['targets'])->toBe(['Regular Bat'])
+        ->and($otherLaneTerminal['targets'])->toBe($otherLane['targets'])
+        ->and(fn() => $session->readEffectBattlePreview($index, 0, targetIndex: 3))->toThrow(SessionRefusal::class, 'Choose a target')
         ->and($images)->toHaveCount(2)
         ->and($session->listUnsavedChanges())->toBe([]);
 });
