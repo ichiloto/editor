@@ -202,12 +202,14 @@ it('authors camera, covers, subjects and image placement of an ordinary cut-in t
     $apply(battleStageRows($session, $index, ['stage.covers'])['Cover key 1 Opacity'], '0.5');
     $apply(battleStageRows($session, $index, ['stage.subjects'])['Subject 1 Position'], '70, 82');
     $apply(battleStageRows($session, $index, ['tracks'])['Track 1 Offset'], '3, -4');
-    foreach (range(1, 4) as $step) {
+    $restore = $timeline['stage']['restoreFrameKey'];
+    expect($session->applyDatabaseRecord('cutscenes/effect', $index, $restore, (string) $timeline['lengthFrames'])['changed'])->toBeTrue();
+    foreach (range(1, 5) as $step) {
         $session->undo();
     }
     expect($session->saveAll()['failures'])->toBe([])
         ->and(file_get_contents(battleStagePath($root)))->toBe($source);
-    foreach (range(1, 4) as $step) {
+    foreach (range(1, 5) as $step) {
         $session->redo();
     }
     expect($session->saveAll()['failures'])->toBe([]);
@@ -215,6 +217,7 @@ it('authors camera, covers, subjects and image placement of an ordinary cut-in t
     $saved = require battleStagePath($root);
     $sequence = $paired ? $saved['presentations']['graphical'] : $saved;
     expect($sequence['stage']['camera'][1]['zoom'])->toEqual(2)
+        ->and($sequence['stage']['restoreFrame'])->toBe($sequence['lengthFrames'])
         ->and($sequence['stage']['covers'][0]['opacity'])->toEqual(0.5)
         ->and($sequence['stage']['subjects'][0]['position'])->toBe(['x' => 70, 'y' => 82])
         ->and($sequence['tracks'][0]['placement'])->toBe(['subject' => 'striker', 'attachment' => 'blade', 'position' => ['x' => 3, 'y' => -4]])
