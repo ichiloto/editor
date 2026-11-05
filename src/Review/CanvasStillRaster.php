@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Review;
 
 use GdImage;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicator;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicatorKind;
@@ -29,9 +30,9 @@ use RuntimeException;
  * It reads only the canvas the Engine composed, so what it draws is what the
  * game would send a graphical renderer. It is a review picture, not the
  * renderer: glyphs come from a system font through GD, alpha has GD's 7 bits,
- * coordinates are rounded to whole pixels, and composites and glyph effects
- * are left out (composites) or drawn plain (glyph effects). Everything left
- * out is named once in {@see $diagnostics}.
+ * coordinates are rounded to whole pixels, and only coverage-dab composites
+ * are supported. Glyph effects are drawn plain. Everything left out is named
+ * once in {@see $diagnostics}.
  */
 final class CanvasStillRaster
 {
@@ -107,11 +108,9 @@ final class CanvasStillRaster
     /** Draws a canvas into a surface of its size, in the renderer's paint order. */
     public function drawCanvas(GdImage $surface, PresentationCanvas $canvas, string $context): void
     {
-        if ($canvas->composites !== []) {
-            $this->diagnose(sprintf('The %s draws composites, which a still leaves out.', $context));
-        }
         $items = [];
-        foreach ([['image', $canvas->images], ['indicator', $canvas->indicators], ['text', $canvas->textLayers],
+        foreach ([['image', $canvas->images], ['composite', $canvas->composites],
+            ['indicator', $canvas->indicators], ['text', $canvas->textLayers],
             ['label', $canvas->labels]] as [$kind, $children]) {
             foreach ($children as $index => $child) {
                 $items[] = [$child->layer, self::KIND_ORDER[$kind], $index, $child];
@@ -121,10 +120,64 @@ final class CanvasStillRaster
         foreach (array_column($items, 3) as $item) {
             match (true) {
                 $item instanceof CanvasImage => $this->drawImage($surface, $item, $context),
+                $item instanceof CanvasComposite => $this->drawComposite($surface, $item, $context),
                 $item instanceof CanvasIndicator => $this->drawIndicator($surface, $item),
                 $item instanceof CanvasTextLayer => $this->drawTextLayer($surface, $item, $context),
                 default => $this->drawLabel($surface, $item, $context),
             };
+        }
+    }
+
+    private function drawComposite(GdImage $surface, CanvasComposite $composite, string $context): void
+    {
+        if (array_any($composite->operations, static fn($operation): bool => $operation->data['type'] !== 'coverage_dabs')) {
+            $this->diagnose(sprintf('The %s draws composites with operations this still leaves out.', $context));
+            return;
+        }
+        $width = $composite->width;
+        $height = $composite->height;
+        $paint = self::createCanvas($width, $height);
+        foreach ($composite->operations as $operation) {
+            $layer = self::createCanvas($width, $height);
+            self::drawCoverageDabs($layer, $operation->data, $width, $height);
+            imagecopy($paint, $layer, 0, 0, 0, 0, $width, $height);
+        }
+        $this->drawPicture($surface, $paint, [0, 0, $width, $height], $composite->destination,
+            $composite->clipRect, $composite->opacity, 1, false, false);
+    }
+
+    private static function drawCoverageDabs(GdImage $surface, array $operation, int $width, int $height): void
+    {
+        $strongest = str_repeat(chr(0), $width * $height);
+        $bands = array_map(static fn(array $band): array => [
+            'until' => $band['until'], 'rgb' => TerminalPalette::resolveDescriptor($band['color'], 0),
+        ], $operation['bands']);
+        $steps = $operation['alphaSteps'];
+        $minimum = $operation['minimumAlpha'];
+        $falloff = $operation['falloff'];
+        $opacity = $operation['opacity'];
+        imagealphablending($surface, false);
+        foreach ($operation['dabs'] as $dab) {
+            [$centerX, $centerY] = $dab['center'];
+            $radius = $dab['radius'];
+            $left = max(0, (int) floor($centerX - $radius));
+            $top = max(0, (int) floor($centerY - $radius));
+            $right = min($width, (int) ceil($centerX + $radius));
+            $bottom = min($height, (int) ceil($centerY + $radius));
+            for ($y = $top; $y < $bottom; $y++) {
+                for ($x = $left; $x < $right; $x++) {
+                    $distance = hypot($x + .5 - $centerX, $y + .5 - $centerY) / $radius;
+                    if ($distance >= 1) { continue; }
+                    $alpha = (int) round($steps * $dab['opacity'] * (1 - $distance) ** $falloff);
+                    $index = $y * $width + $x;
+                    if ($alpha < $minimum || $alpha <= ord($strongest[$index])) { continue; }
+
+                    $strongest[$index] = chr($alpha);
+                    $band = array_find($bands, static fn(array $band): bool => $distance < $band['until']);
+                    $coverage = (int) round(127 * $alpha / $steps * $opacity);
+                    imagesetpixel($surface, $x, $y, ((127 - $coverage) << 24) | $band['rgb']);
+                }
+            }
         }
     }
 

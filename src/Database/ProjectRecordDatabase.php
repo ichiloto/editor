@@ -5067,7 +5067,7 @@ final class ProjectRecordDatabase
 
         if ($oldNested !== null && $newNested !== $oldNested) {
             // Another list, even under the same key, holds another shape.
-            unset($after[$oldNested->key]);
+            $after = self::writeNested($after, explode('.', $oldNested->key), null);
         }
 
         return $after;

@@ -122,6 +122,55 @@ it('round-trips range timing keys and uses projected distance in the graphical b
         ->and($far['diagnostics'])->toBe([]);
 });
 
+it('edits a graphical trail and previews its coverage without rewriting Terminal data', function () {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $source = require $path;
+    writeTilesetTestPng($root . '/assets/Graphics/FixturePose.png', 8, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/FixtureEnemy.png', 8, 8);
+    $bindings = ['actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/FixturePose.png'],
+        'poses' => ['attack' => ['image' => 'Graphics/FixturePose.png',
+            'attachmentPoints' => [['cell' => 0, 'name' => 'launch', 'point' => ['x' => .5, 'y' => .4]]]]]]],
+        'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/FixtureEnemy.png']]]];
+    file_put_contents($root . '/assets/Data/Presentation/battlers.php', '<?php return ' . var_export($bindings, true) . ';');
+    $source['presentations']['graphical']['lengthFrames'] = 5;
+    $source['presentations']['graphical']['restFrame'] = 1;
+    $source['presentations']['graphical']['tracks'] = [[
+        'id' => 'trail', 'type' => 'trail', 'attachmentPoint' => 'launch', 'detachFrame' => 0, 'fadeEndFrame' => 5,
+        'flight' => ['arrivalFrame' => 1, 'route' => 'straight'],
+        'profile' => ['length' => 40, 'spacing' => 2, 'startRadius' => 1, 'endRadius' => 5, 'radiusPower' => 1,
+            'startOpacity' => .1, 'endOpacity' => .8, 'opacityPower' => 1, 'fadeLengthRatio' => .5,
+            'brush' => ['falloff' => 1, 'alphaSteps' => 100, 'minimumAlpha' => 1,
+                'bands' => [['until' => 1, 'color' => ['kind' => 'rgb', 'r' => 4, 'g' => 5, 'b' => 6]]]]],
+    ]];
+    file_put_contents($path, '<?php return ' . var_export($source, true) . ';');
+    $session = EditorSession::open($root);
+    $category = 'cutscenes/effect';
+    $index = findEffectIndex($session, 'dusk-slash');
+    $session->selectCutscenePresentation($category, $index, 'graphical');
+    $row = static fn(string $field): array => array_find($session->readDatabaseRecord($category, $index, ['tracks'])['rows'],
+        static fn(array $entry): bool => ($entry['key']['field'] ?? null) === $field);
+    $change = static fn(string $field, string $value): array => $session->applyDatabaseRecord($category, $index, $row($field)['key'], $value);
+    expect($session->listReferences(null, 'battle_pose_points', ['category' => $category, 'index' => $index]))
+        ->toBe([['value' => 'launch', 'label' => 'launch (Kaelion attack)']])
+        ->and($change('track0ProfileendRadius', '6')['changed'])->toBeTrue()
+        ->and($change('track0Band0Colorr', '99')['changed'])->toBeTrue();
+    $session->undo();
+    expect($row('track0Band0Colorr')['value'])->toBe('4');
+    $session->redo();
+    expect($session->saveAll()['failures'])->toBe([]);
+    $saved = require $path;
+    expect($saved['presentations']['terminal'])->toBe($source['presentations']['terminal'])
+        ->and($saved['presentations']['graphical']['tracks'][0]['profile']['brush']['bands'][0]['color']['r'])->toBe(99);
+    $ordinary = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
+    $enabled = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, coverageDabs: true);
+    $trail = static fn(array $frame): ?array => array_find($frame['canvas']['composites'] ?? [],
+        static fn(array $part): bool => str_contains($part['id'], 'target-trail'));
+    expect($trail($ordinary))->toBeNull()
+        ->and($trail($enabled)['operations'][0]['bands'][0]['color']['r'])->toBe(99)
+        ->and($enabled['diagnostics'])->toBe([]);
+});
+
 it('says so when no action of the battle test party plays an effect, inventing none', function () {
     $session = EditorSession::open(effectBattlePreviewProject());
 

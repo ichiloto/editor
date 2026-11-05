@@ -179,9 +179,9 @@ final class EffectBattlePreview
      * @return array<string, mixed>
      * @throws InvalidArgumentException When the frame is outside the command.
      */
-    public function readFrame(int $frame, bool $reducedMotion, bool $imageRotation = false): array
+    public function readFrame(int $frame, bool $reducedMotion, bool $imageRotation = false, bool $coverageDabs = false): array
     {
-        return $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation)->toArray();
+        return $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation, $coverageDabs)->toArray();
     }
 
     /**

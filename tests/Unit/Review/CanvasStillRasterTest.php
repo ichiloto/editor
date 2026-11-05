@@ -100,3 +100,31 @@ it('strokes indicators inside their bounds and names what a still leaves out', f
         ->and(canvasStillPixel($image, 30, 48))->toBe([250, 250, 0])
         ->and(implode("\n", $raster->diagnostics))->toContain('composites')->toContain('Art/missing.png');
 });
+
+it('keeps strongest dab coverage, preserves first ties and clips the retained surface', function () {
+    $root = canvasStillAssets();
+    $operation = new CanvasCompositeOperation([
+        'type' => 'coverage_dabs', 'falloff' => 1, 'alphaSteps' => 100, 'minimumAlpha' => 1,
+        'dabs' => [
+            ['center' => [1.5, 2.5], 'radius' => 4, 'opacity' => 1],
+            ['center' => [3.5, 2.5], 'radius' => 2, 'opacity' => .5],
+        ],
+        'bands' => [
+            ['until' => .5, 'color' => PresentationColor::rgb(255, 0, 0)->toArray()],
+            ['until' => 1, 'color' => PresentationColor::rgb(0, 0, 255)->toArray()],
+        ],
+    ]);
+    $canvas = new PresentationCanvas(12, 10, composites: [
+        new CanvasComposite('dabs', 6, 5, new CanvasRectangle(2, 3, 6, 5), [$operation],
+            clipRect: new CanvasRectangle(3, 3, 4, 5)),
+    ]);
+    $raster = new CanvasStillRaster($root);
+    $image = $raster->rasterize($canvas, 0x000000);
+    expect(canvasStillPixel($image, 2, 5))->toBe([0, 0, 0])
+        ->and(canvasStillPixel($image, 3, 5))->toBe([255, 0, 0])
+        // Both dabs have .5 coverage here. The first dab's outer blue wins.
+        ->and(canvasStillPixel($image, 5, 5)[0])->toBe(0)
+        ->and(canvasStillPixel($image, 5, 5)[2])->toBeBetween(125, 130)
+        ->and(canvasStillPixel($image, 7, 5))->toBe([0, 0, 0])
+        ->and($raster->diagnostics)->toBe([]);
+});

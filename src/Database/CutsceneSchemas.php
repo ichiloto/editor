@@ -735,7 +735,7 @@ final class CutsceneSchemas
             singular: 'track',
             fields: [
                 new RecordField('id', 'Id'),
-                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake']),
+                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake', ...($graphical ? ['trail'] : [])]),
                 new RecordField('presentation', 'Presentation',
                     options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
                     removeWhenEmpty: true, displayDefault: 'all'),
@@ -752,6 +752,7 @@ final class CutsceneSchemas
                 'text' => $anchors,
                 'flash' => $anchors,
                 'shake' => $anchors,
+                ...($graphical ? ['trail' => self::battleTrailFields()] : []),
             ],
             variantKey: 'type',
             nestedLists: [
@@ -761,7 +762,15 @@ final class CutsceneSchemas
                 'text' => $keyframes,
                 'flash' => $keyframes,
                 'shake' => $keyframes,
+                ...($graphical ? ['trail' => self::battleTrailBands()] : []),
             ],
+            prepareEdit: static function (array $entry, string $field): array {
+                if ($field === 'type' && ($entry['type'] ?? null) === 'trail') {
+                    unset($entry['presentation']);
+                }
+
+                return $entry;
+            },
         );
     }
 
@@ -780,7 +789,7 @@ final class CutsceneSchemas
     }
 
     /** @return list<RecordField> */
-    private static function battleFlightFields(string $anchor): array
+    private static function battleFlightFields(string $anchor, bool $trail = false): array
     {
         if (!in_array($anchor, ['caster', 'target'], true)) { return []; }
         return [
@@ -788,10 +797,11 @@ final class CutsceneSchemas
             new RecordField('detachFrame', 'Detach Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
             ...($anchor !== 'caster' ? [] : [
                 new RecordField('flight.arrivalFrame', 'Arrival Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
-                new RecordField('flight.holdFrame', 'Hold Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
+                ...($trail ? [] : [new RecordField('flight.holdFrame', 'Hold Frame', InputControlType::INTEGER,
+                    removeWhenEmpty: true, displayDefault: '(omitted)')]),
                 new RecordField('flight.route', 'Flight Route', options: ['', ...array_column(EffectFlightRoute::cases(), 'value')],
                     removeWhenEmpty: true, displayDefault: EffectFlightRoute::WAYPOINTS->value),
-                new RecordField('flight.tipX', 'Tip X', InputControlType::FLOAT, removeWhenEmpty: true),
+                ...($trail ? [] : [new RecordField('flight.tipX', 'Tip X', InputControlType::FLOAT, removeWhenEmpty: true)]),
                 new RecordField('flight.curve.launchProgress', 'Curve Launch Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('flight.curve.launchOffsetY', 'Curve Launch Control Y Offset', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('flight.curve.arrivalProgress', 'Curve Arrival Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
@@ -802,6 +812,57 @@ final class CutsceneSchemas
                 new RecordField('flight.farCurve.arrivalOffsetY', 'Far Curve Arrival Control Y Offset', InputControlType::FLOAT, removeWhenEmpty: true),
             ]),
         ];
+    }
+
+    /** @return list<RecordField> */
+    private static function battleTrailFields(): array
+    {
+        $profile = [
+            'length' => 'Maximum Tail Length', 'spacing' => 'Dab Spacing',
+            'startRadius' => 'Tail Radius', 'endRadius' => 'Head Radius', 'radiusPower' => 'Radius Curve',
+            'startOpacity' => 'Tail Opacity', 'endOpacity' => 'Head Opacity', 'opacityPower' => 'Opacity Curve',
+            'fadeLengthRatio' => 'Tail Length at End of Fade', 'brush.falloff' => 'Radial Falloff',
+        ];
+
+        return [
+            ...self::battleFlightFields('caster', trail: true),
+            new RecordField('fadeEndFrame', 'Fade End (Exclusive)', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('depth', 'Depth', options: ['behind', 'front'], removeWhenEmpty: true, displayDefault: 'front'),
+            ...array_map(static fn(string $key, string $label): RecordField => new RecordField(
+                'profile.' . $key, $label, InputControlType::FLOAT, removeWhenEmpty: true), array_keys($profile), array_values($profile)),
+            new RecordField('profile.brush.alphaSteps', 'Alpha Steps', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('profile.brush.minimumAlpha', 'Minimum Alpha Step', InputControlType::INTEGER, removeWhenEmpty: true),
+        ];
+    }
+
+    private static function battleTrailBands(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'profile.brush.bands',
+            prefix: 'band',
+            singular: 'colour band',
+            fields: [],
+            blank: ['until' => 1, 'color' => ['kind' => 'rgb', 'r' => 255, 'g' => 255, 'b' => 255]],
+            prepareEdit: static function (array $entry, string $field): array {
+                if ($field === 'color.kind') {
+                    $color = $entry['color'];
+                    $entry['color'] = $color['kind'] === 'rgb'
+                        ? ['kind' => 'rgb', 'r' => $color['r'] ?? 255, 'g' => $color['g'] ?? 255, 'b' => $color['b'] ?? 255]
+                        : ['kind' => $color['kind'], 'index' => $color['index'] ?? 0];
+                }
+
+                return $entry;
+            },
+            getFields: static fn(array $entry): array => [
+                new RecordField('until', 'Radius Boundary', InputControlType::FLOAT),
+                new RecordField('color.kind', 'Colour Kind', options: ['rgb', 'ansi16', 'ansi256']),
+                ...(($entry['color']['kind'] ?? 'rgb') === 'rgb'
+                    ? [new RecordField('color.r', 'Red', InputControlType::INTEGER),
+                        new RecordField('color.g', 'Green', InputControlType::INTEGER),
+                        new RecordField('color.b', 'Blue', InputControlType::INTEGER)]
+                    : [new RecordField('color.index', 'Palette Index', InputControlType::INTEGER)]),
+            ],
+        );
     }
 
     /**
