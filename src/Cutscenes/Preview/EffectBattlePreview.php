@@ -119,7 +119,9 @@ final class EffectBattlePreview
         $poses = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null && $catalog->getArenaFor($battle) !== null
             ? ($catalog->actorPoses[$caster->actorId] ?? null) : null;
         $pose = $poses?->getPose($role);
-        $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $battle->partyRoster->battlers, $battle->troop->members->toArray());
+        $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster,
+            $battle->partyRoster->battlers, $battle->troop->members->toArray(),
+            formation: $battle->formation, targeting: $action->targeting);
         if ($targets === []) {
             throw new InvalidArgumentException(sprintf('%s has no one to act on in the battle test.', $action->name));
         }

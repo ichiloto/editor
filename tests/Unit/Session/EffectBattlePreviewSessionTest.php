@@ -5,6 +5,10 @@ declare(strict_types=1);
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Battle\Formation\BattleTargeting;
+use Ichiloto\Engine\Battle\Formation\BattleTargetShape;
+use Ichiloto\Engine\Entities\Enumerations\Occasion;
+use Ichiloto\Engine\Entities\Skills\BasicSkill;
 
 /** A battle effect previewed in an action the battle test party actually plays it in, by the Engine's own animation selection. Synthetic fixtures only. */
 
@@ -29,6 +33,35 @@ it('says so when no action of the battle test party plays an effect, inventing n
 
     expect(fn() => $session->readEffectBattlePreview(findEffectIndex($session, 'ember-spark'), 0))
         ->toThrow(SessionRefusal::class, 'No action of the battle test party plays ember-spark in battle');
+});
+
+it('previews the selected combat line from the troop formation in both presentations', function () {
+    $root = effectBattlePreviewProject();
+    writeSkillRecords($root, new BasicSkill('Piercing shot', '', '', 0, 0,
+        occasion: Occasion::BATTLE_SCREEN, animationId: 1,
+        battleTargeting: new BattleTargeting(BattleTargetShape::LINE, ignoreCover: true)));
+    $actorPath = $root . '/assets/Data/Actors/Kaelion.php';
+    $actor = require $actorPath;
+    $actor['data']['attackSkill'] = 'Piercing shot';
+    file_put_contents($actorPath, '<?php return ' . var_export($actor, true) . ';');
+    $troopPath = $root . '/assets/Data/troops.php';
+    $troops = require $troopPath;
+    $troops[0]['enemies'][0]['battlePosition'] = ['row' => 'front', 'lane' => 0];
+    $troops[0]['enemies'][1]['battlePosition'] = ['row' => 'back', 'lane' => 0];
+    $troops[0]['enemies'][] = [
+        'enemy' => 'Regular Bat', 'position' => [20, 10], 'battlePosition' => ['row' => 'front', 'lane' => 1],
+    ];
+    file_put_contents($troopPath, '<?php return ' . var_export($troops, true) . ';');
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $graphical = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
+    $terminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL, authoredFrame: 1);
+    $images = array_filter($graphical['canvas']['images'],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Effects/dusk-slash.png');
+    expect($graphical['targets'])->toBe(['Regular Bat', 'Regular Bat'])
+        ->and($terminal['targets'])->toBe($graphical['targets'])
+        ->and($images)->toHaveCount(2)
+        ->and($session->listUnsavedChanges())->toBe([]);
 });
 
 
