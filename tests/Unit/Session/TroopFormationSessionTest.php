@@ -72,6 +72,22 @@ it('sends the picture the battle draws at rest, for the frontend to paint with t
         ->and($session->readTroopFormation(0, 'arena.road')['picture']['images'])->toBe([]);
 });
 
+it('previews the configured frontline rather than the theme slot count', function (bool $battleTest) {
+    $root = troopFormationProject();
+    $party = array_map(static fn(int $index): string => 'actor.' . $index, range(1, 8));
+    $system = ['startingParty' => $party, 'battle' => ['partySize' => $battleTest ? 3 : 8]];
+    if ($battleTest) {
+        $system['battleTest'] = [
+            'members' => array_map(static fn(string $id): array => ['actor' => $id, 'level' => 1], array_reverse($party)),
+            'battleSize' => 8,
+        ];
+    }
+    file_put_contents($root . '/assets/Data/system.php', '<?php return ' . var_export($system, true) . ';');
+    $session = EditorSession::open($root);
+    $preview = $session->readTroopFormation(0);
+    expect(array_column($preview['party'], 'name'))->toBe($battleTest ? array_reverse($party) : $party);
+})->with([false, true]);
+
 it('moves a member by its battle placement as one undo step, keeping the troop file\'s comments and the terminal position', function () {
     $root = troopFormationProject();
     $session = EditorSession::open($root);

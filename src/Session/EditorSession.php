@@ -28,6 +28,7 @@ use Ichiloto\Editor\Cutscenes\Preview\PreviewGame;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Engine\Events\MapEventDefinition;
+use Ichiloto\Engine\Entities\Party;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
@@ -4642,12 +4643,11 @@ final class EditorSession
         foreach ($this->workspace->actorDatabase->getActors() as $actor) {
             $names[$actor->getDefinitionId()] = $actor->getName();
         }
-        [$partyIds, $partySource] = $this->readPreviewParty();
+        [$partyIds, $partySource, $battleSize] = $this->readPreviewParty();
         if ($lead !== null) {
             $partyIds = [$lead, ...array_filter($partyIds, static fn(string $id): bool => $id !== $lead)];
         }
-        // A theme formation holds so many; without one the battle arranges the whole party.
-        $partyIds = array_values($catalog->ui->partySlots === [] ? $partyIds : array_slice($partyIds, 0, count($catalog->ui->partySlots)));
+        $partyIds = array_slice($partyIds, 0, $battleSize);
 
         // Each enemy stands where its habitat lives, as in battle.
         $enemies = array_map(fn(array $entry): array => ['habitat' => $this->readEnemyHabitat($entry['enemyId']), ...$entry], $enemies);
@@ -4716,19 +4716,20 @@ final class EditorSession
      * the starting party; and which it is. A battle test that cannot be read
      * is named, not quietly replaced.
      *
-     * @return array{0: list<string>, 1: string}
+     * @return array{0: list<string>, 1: string, 2: int}
      */
     private function readPreviewParty(): array
     {
         $starting = array_values(array_filter($this->readStartingPartyReferences(), is_string(...)));
+        $battleSize = $this->workspace->getSystemField('battle.partySize') ?? Party::BATTLE_SIZE;
         try {
             $setup = ProjectBattleTest::fromArray($this->readBattleTestEntry())->setup;
         } catch (InvalidArgumentException) {
-            return [$starting, 'starting party (the battle test cannot be read)'];
+            return [$starting, 'starting party (the battle test cannot be read)', $battleSize];
         }
 
-        return $setup === null ? [$starting, 'starting party']
-            : [array_map(static fn($member): string => $member->actorId, $setup->members), 'battle test'];
+        return $setup === null ? [$starting, 'starting party', $battleSize]
+            : [array_map(static fn($member): string => $member->actorId, $setup->members), 'battle test', $setup->battleSize];
     }
 
     /**
