@@ -1269,7 +1269,7 @@ final class ProjectMap
             }
         }
         if ($changed > 0) {
-            $this->setMapDataField([MapPhysicalOccupancy::DATA_KEY], $rows);
+            $this->setMapDataField([MapPhysicalOccupancy::DATA_KEY], $this->encodeEditedOccupancy($rows, $this->layers->getLayerSet()));
         }
 
         return $changed;
@@ -2596,6 +2596,16 @@ final class ProjectMap
         }
     }
 
+    /** Preserve the authored occupancy representation when its physical cells change. */
+    private function encodeEditedOccupancy(mixed $rows, MapLayerSet $layers): array
+    {
+        $occupancy = new MapPhysicalOccupancy($rows, $layers, $this->mapId . ' occupancy');
+        $original = $this->editableData[MapPhysicalOccupancy::DATA_KEY] ?? null;
+        return isset($original[MapPhysicalOccupancy::PACKED_ROWS_KEY])
+            ? $occupancy->exportPackedDeclaration()
+            : $occupancy->exportDeclaration();
+    }
+
     /** A shallow clone alone would still share the mutable EditableGrid objects. */
     private function copyEditableLayers(): MapLayers
     {
@@ -2617,8 +2627,7 @@ final class ProjectMap
             unset($next[MapPhysicalOccupancy::DATA_KEY]);
         } else {
             try {
-                $next[MapPhysicalOccupancy::DATA_KEY] = new MapPhysicalOccupancy($occupancy, $layers->getLayerSet(), $this->mapId . ' occupancy')
-                    ->exportDeclaration();
+                $next[MapPhysicalOccupancy::DATA_KEY] = $this->encodeEditedOccupancy($occupancy, $layers->getLayerSet());
             } catch (InvalidArgumentException $error) {
                 throw new MapSourceRefusal($error->getMessage() . ' Nothing was changed.', previous: $error);
             }

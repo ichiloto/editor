@@ -50,6 +50,31 @@ function loadOccupancyGeometryMap(string $root): ProjectMap
     return ProjectMap::fromDirectory($root . '/assets/Maps', $root . '/assets/Maps/test-map');
 }
 
+it('preserves packed occupancy through painting, line edits, history and source round trips', function () {
+    $root = createOccupancyGeometryProject(ragged: true);
+    writeGeometryOccupancyData($root . '/assets/Maps/test-map', ['packedRows' => ['0A51', '67']]);
+    $map = loadOccupancyGeometryMap($root);
+
+    expect($map->writePhysicalOccupancy([[0, 1, CollisionType::COUNTER]]))->toBe(1)
+        ->and($map->getMapDataField(['occupancy']))->toBe(['packedRows' => ['0A51', 'A7']]);
+    $before = $map->captureGridSnapshot();
+    $map->insertLines('x', 1, 1);
+    $after = $map->captureGridSnapshot();
+    $map->save();
+    expect(loadOccupancyGeometryMap($root)->getMapDataField(['occupancy']))->toBe(['packedRows' => ['01A51', 'A17']]);
+
+    $map->restoreGridSnapshot($before);
+    $map->save();
+    expect(loadOccupancyGeometryMap($root)->getMapDataField(['occupancy']))->toBe(['packedRows' => ['0A51', 'A7']]);
+    $map->restoreGridSnapshot($after);
+    $map->removeLines('x', 1, 1);
+    $map->save();
+    $reopened = loadOccupancyGeometryMap($root);
+    expect($reopened->getResolvedCollisionMap())->toBe([[0, 10, 5, 1], [10, 7]])
+        ->and($reopened->getMapDataField(['occupancy']))->toBe(['packedRows' => ['0A51', 'A7']])
+        ->and(file_get_contents($map->dataPath))->toContain("strtoupper('authored')", "'note' => \$note", '// Physical ground, not terminal art.');
+});
+
 it('resizes physical cells with terminal event and graphical geometry and pads only with solid cells', function (bool $legacy, bool $ragged) {
     $root = createOccupancyGeometryProject($ragged, $legacy);
     $map = loadOccupancyGeometryMap($root);

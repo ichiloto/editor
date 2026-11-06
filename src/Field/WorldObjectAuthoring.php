@@ -689,9 +689,7 @@ final readonly class WorldObjectAuthoring
             return [];
         }
         // The declared cells as authored, which footprints write; never what glyphs or terrain kinds resolve to.
-        $collision = array_map(static fn(mixed $row): array => array_map(
-            static fn(mixed $cell): ?int => $cell instanceof CollisionType ? $cell->value : null, (array) $row),
-            (array) $this->map->getMapDataField([MapPhysicalOccupancy::DATA_KEY]));
+        $collision = $this->map->getResolvedCollisionMap();
         $writes = [];
         foreach ($left as $key => [$x, $y, $type]) {
             if (! isset($taken[$key]) && ($collision[$y][$x] ?? null) === $type->value) {
