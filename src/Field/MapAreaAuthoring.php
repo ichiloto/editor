@@ -17,8 +17,8 @@ use InvalidArgumentException;
  * landmarks anchor to.
  *
  * The map's `areas` list holds `['id' => ..., 'area' => ...]` entries, the
- * area in the Engine's CellArea shape: exact `cells`, or `x`, `y`, `width`
- * and `height`. Every edit is checked by the Engine's own reader
+ * area in the Engine's named-area shape: exact `cells`, row `runs`, or a
+ * rectangle. Every edit is checked by the Engine's own reader
  * ({@see MapAreaCatalog}) against the map's physical grid before it lands,
  * and is one undo step. Renaming an area rewrites the events, landmarks and
  * encounter troops that name it in the same step; deleting one they name is

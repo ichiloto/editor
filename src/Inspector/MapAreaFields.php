@@ -154,7 +154,7 @@ final readonly class MapAreaFields
      */
     public static function describeCells(array $shape, array $cells): string
     {
-        if (! array_key_exists('cells', $shape)) {
+        if (array_key_exists('x', $shape)) {
             return sprintf('x %d, y %d · %d x %d', $shape['x'] ?? 0, $shape['y'] ?? 0, $shape['width'] ?? 0, $shape['height'] ?? 0);
         }
         $pieces = count(CellArea::fromCells($cells)->findPieces());

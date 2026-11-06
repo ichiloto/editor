@@ -99,3 +99,16 @@ it('shows the areas in the map inspector and offers them as an event\'s subject'
         ->and(array_column($rows, 'value'))->toBe(['', 'yard', 'x 0, y 1 · 1 x 1', 'nothing'])
         ->and($subject['options'])->toBe(['', 'world_object:old-tower', 'area:yard']);
 });
+
+
+it('shows compact area runs by their exact cells and pieces in the inspector', function () {
+    [$root] = createLandmarkProject("'areas' => [['id' => 'yard', 'area' => ['runs' => [[0, 0, 2], [1, 3, 1]]]]],");
+    $editor = areaEditor($root);
+    $map = callEditorMethod($editor, 'getSelectedMap');
+
+    $rows = MapAreaFields::describeMapFields($map);
+    $geometry = array_find($rows, static fn(array $row): bool => ($row['field'] ?? null) === 'cells');
+
+    expect($geometry['value'])->toBe('3 cells in 2 places')
+        ->and($geometry['areaCells'])->toBe([[0, 0], [1, 0], [3, 1]]);
+});
