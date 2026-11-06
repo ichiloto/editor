@@ -100,6 +100,7 @@ use Ichiloto\Editor\Maps\LineRemoval;
 use Ichiloto\Editor\Maps\MapFolder;
 use Ichiloto\Editor\Maps\MapLinePlan;
 use Ichiloto\Editor\Maps\MapLinePlanner;
+use Ichiloto\Editor\Maps\PackedOccupancyMigration;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TerrainKindConversion;
@@ -581,6 +582,37 @@ final class EditorSession
     {
         return $this->editMapLines($mapId, $revision, $answer, $confirm, 'removed', 'removing map lines',
             fn(): MapLinePlan => MapLinePlanner::planRemoval($this->workspace->projectRoot, $mapId, $axis, $at, $count, $landing));
+    }
+
+    /** Reviews and applies an explicit, source-preserving collision encoding migration. */
+    public function packPhysicalOccupancy(string $mapId, int $revision, ?string $answer = null, ?string $confirm = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($answer === 'cancel') {
+            return ['status' => 'cancelled', 'map' => $mapId, 'revision' => $revision, 'changed' => false];
+        }
+        if ($this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal('Save or undo pending edits before packing occupancy. No files were changed.');
+        }
+        try {
+            $plan = PackedOccupancyMigration::plan($map, $this->workspace->projectRoot);
+        } catch (InvalidArgumentException|RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($plan === null) {
+            return ['status' => 'unchanged', 'map' => $mapId, 'revision' => $revision, 'changed' => false];
+        }
+
+        $path = substr($map->dataPath, strlen($this->workspace->projectRoot) + 1);
+        $required = new SourceSetRequired($plan, 'Pack physical occupancy', 'packing map occupancy',
+            sprintf('Pack the collision rows of %s with the same physical cells?', $mapId), [$path]);
+        $result = $this->writeSourceSet($required, $answer, static fn(): array => [], $confirm);
+        if (($result['status'] ?? null) === 'question') {
+            return [...$result, 'map' => $mapId, 'revision' => $revision, 'paths' => [$path]];
+        }
+
+        return ['status' => 'packed', 'map' => $mapId, 'revision' => $this->getMapRevision($this->requireMap($mapId)),
+            'changed' => true];
     }
 
     /**

@@ -139,6 +139,42 @@ final class ArraySourceWriter
     }
 
     /**
+     * Replace a verified matrix of enum-case literals during an explicit source migration.
+     * Computed cells, shared references, keys and comments belong to the author.
+     *
+     * @param list<int|string> $path
+     * @param list<list<\UnitEnum>> $rows
+     */
+    public static function replaceLiteralEnumRows(PhpArraySourceDocument $document, array $path, array $rows,
+        array $replacement): PhpArraySourceDocument
+    {
+        $writer = new self($document);
+        $node = $document->entryAt($path)?->value;
+        if ($node === null || $node->kind !== SourceNode::ARRAY || !$node->isList
+            || $node->hasOpaqueKey || count($node->entries) !== count($rows)) {
+            throw new SourcePreservationRefusal('The occupancy declaration must be a literal list of enum rows.');
+        }
+        $source = substr($document->source, $node->start, $node->end - $node->start);
+        if (str_contains($source, '//') || str_contains($source, '/*') || str_contains($source, '#')) {
+            throw new SourcePreservationRefusal('The occupancy declaration contains comments that the conversion would remove.');
+        }
+        foreach ($rows as $y => $row) {
+            $rowNode = $node->entries[$y]->value;
+            if ($rowNode->kind !== SourceNode::ARRAY || !$rowNode->isList
+                || $rowNode->hasOpaqueKey || count($rowNode->entries) !== count($row)) {
+                throw new SourcePreservationRefusal("Occupancy row {$y} must be a literal list of enum cases.");
+            }
+            foreach ($row as $x => $case) {
+                if ($writer->findEnumCaseEdits($rowNode->entries[$x]->value, $case, $case) === null) {
+                    throw new SourcePreservationRefusal("Occupancy cell {$x}, {$y} must be a literal enum case.");
+                }
+            }
+        }
+
+        return $document->withEdits([$document->replaceValueEdit($path, $writer->literalFor($replacement, $path))]);
+    }
+
+    /**
      * @param SourceEntry|null $holder The entry whose value the node is; null for the returned array.
      * @param array<int, int|string> $path The value's path in what the file evaluates to, for diagnostics.
      */

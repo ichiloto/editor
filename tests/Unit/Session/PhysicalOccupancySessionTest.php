@@ -141,3 +141,56 @@ it('uses declared occupancy in the shared field preview and refuses malformed re
         $field->dispose();
     }
 });
+
+it('reviews, writes and undoes compact occupancy through the revisioned session', function () {
+    $root = createPhysicalOccupancyProject(<<<'MAP'
+<?php
+use Ichiloto\Engine\Events\Enumerations\CollisionType as Collision;
+return [
+    'name' => strtoupper('physical fixture'),
+    'events' => [],
+    // Keep the author comment outside the converted value.
+    'occupancy' => [[Collision::NONE, Collision::COUNTER, Collision::SOLID], [Collision::SAVE_POINT, Collision::ENCOUNTER]],
+];
+MAP);
+    $request = createPhysicalOccupancyRpc($root);
+    $file = $root . '/assets/Maps/test-map/test-map.data.php';
+    $initial = file_get_contents($file);
+    $before = sourceHashTree($root);
+    $revision = $request('map.read', ['map' => 'test-map'])['result']['revision'];
+    $params = ['map' => 'test-map', 'revision' => $revision];
+    $review = $request('map.packOccupancy', $params)['result'];
+
+    expect($review)->toMatchArray(['status' => 'question', 'paths' => ['assets/Maps/test-map/test-map.data.php']])
+        ->and(sourceHashTree($root))->toBe($before)
+        ->and($request('map.packOccupancy', $params + ['answer' => 'write', 'confirm' => 'stale'])['error']['kind'])->toBe('refusal')
+        ->and($request('map.packOccupancy', $params + ['answer' => 'cancel'])['result']['status'])->toBe('cancelled')
+        ->and(sourceHashTree($root))->toBe($before);
+
+    $applied = $request('map.packOccupancy', $params + ['answer' => 'write', 'confirm' => $review['confirm']])['result'];
+    $packed = file_get_contents($file);
+    expect($applied)->toMatchArray(['status' => 'packed', 'changed' => true])
+        ->and((require $file)['occupancy'])->toBe(['packedRows' => ['0A1', '67']])
+        ->and($packed)->toContain("strtoupper('physical fixture')", '// Keep the author comment outside the converted value.')
+        ->and($request('map.read', ['map' => 'test-map'])['result']['occupancy']['rows'])->toBe([[0, 10, 1], [6, 7]])
+        ->and($request('map.packOccupancy', ['map' => 'test-map', 'revision' => $applied['revision']])['result']['status'])->toBe('unchanged');
+    $request('history.undo', []);
+    expect(file_get_contents($file))->toBe($initial)->and(sourceHashTree($root))->toBe($before);
+    $request('history.redo', []);
+    expect(file_get_contents($file))->toBe($packed);
+});
+
+it('refuses to pack computed or commented occupancy without a source change', function (string $rows, string $reason) {
+    $root = createPhysicalOccupancyProject('<?php use Ichiloto\Engine\Events\Enumerations\CollisionType as C; '
+        . 'return ["events" => [], "occupancy" => ' . $rows . '];');
+    $session = EditorSession::open($root);
+    $before = sourceHashTree($root);
+    $revision = $session->readMap('test-map')['revision'];
+
+    expect(fn() => $session->packPhysicalOccupancy('test-map', $revision))->toThrow(SessionRefusal::class, $reason)
+        ->and(sourceHashTree($root))->toBe($before);
+})->with([
+    'computed row' => ['[[C::NONE, C::SOLID, C::COUNTER], array_fill(0, 2, C::NONE)]', 'literal list of enum cases'],
+    'computed cell' => ['[[C::from(0), C::SOLID, C::COUNTER], [C::NONE, C::NONE]]', 'must be a literal enum case'],
+    'commented cell' => ['[[C::NONE, /* keep */ C::SOLID, C::COUNTER], [C::NONE, C::NONE]]', 'contains comments'],
+]);

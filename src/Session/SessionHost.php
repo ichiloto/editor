@@ -391,6 +391,10 @@ final class SessionHost
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
             ),
+            'map.packOccupancy' => $session->packPhysicalOccupancy(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm'),
+            ),
             'map.paintOccupancy' => $session->paintOccupancy(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),

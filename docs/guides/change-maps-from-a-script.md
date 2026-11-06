@@ -386,7 +386,7 @@ batches.
 | Paint a terrain kind | `kinds.paint {map, kind, from, to}` on a map painted in kinds; its glyph, its tiles and, under declared occupancy, its collision. `{map, kind, cells}` paints listed `[x, y]` cells instead, for terrain no rectangle fits |
 | Convert a map to terrain kinds | `kinds.convert {map, mapping}`, such as `{";": "grassland", "~": "water"}`; or `ichiloto map:convert-kinds` |
 | Layers | `layer.create`, `layer.rename`, `layer.remove`, `layer.reorder`, `layer.decoration`; tile layers `tileLayer.*` |
-| Collision | `map.paintOccupancy`, `occupancy.stampPiece` |
+| Collision | `map.paintOccupancy`, `occupancy.stampPiece`, `map.packOccupancy {map, revision, answer?, confirm?}` |
 | Resize | `map.insertLines`, `map.removeLines` (with an `answer`), or the map's size rows |
 | Events | `event.create {map, cells, type, marker?}`, `event.move {map, marker, dx, dy}`, `event.bounds`, `event.destination`, `event.delete`; fields with `inspector.apply` |
 | Name who speaks an event | `inspector.add {map, key: {target: event-speakers, marker}}` names the nearest NPC not yet listed; `inspector.apply` with `{target: event-speakers, marker, field: speaker, index}` and an NPC id chooses another; `inspector.remove` with that key removes it |
@@ -417,6 +417,13 @@ batches.
 | Copy or move a map | `map.duplicate {map, to?}`; `map.move {map, to}` asks first, then `{map, to, destination, confirm: true}` |
 | Landmark id | `inspector.apply` with `{target: map-landmarks, index, field: id}`; other maps' atlas parents follow the rename |
 | NPC id | `npc.create {..., id?}`, `npc.assignId {..., id?}`, or the NPC's Id row with `npc.apply` |
+
+`map.packOccupancy` reviews a representation-only change for a map that
+already has declared enum rows. Confirm with the returned fingerprint to
+write the map data file. The Editor checks every physical cell and compares
+the staged file's full evaluated data before writing. Undo restores the exact
+previous source. A computed declaration or comments inside its rows require
+an author to prepare the source first.
 
 Two NPCs may anchor on one tile only as phases the game never shows
 together: one has a visibility condition (its Visible When row) that the
