@@ -33,8 +33,8 @@ use RuntimeException;
  * It reads only the canvas the Engine composed, so what it draws is what the
  * game would send a graphical renderer. It is a review picture, not the
  * renderer: glyphs come from a system font through GD, alpha has GD's 7 bits,
- * coordinates are rounded to whole pixels. Coverage dabs and texture strips
- * are supported. Glyph effects are drawn plain. Everything left out is named
+ * coordinates are rounded to whole pixels. Unmasked source-over fills,
+ * coverage dabs and texture strips are supported. Glyph effects are drawn plain. Everything left out is named
  * once in {@see $diagnostics}.
  */
 final class CanvasStillRaster
@@ -134,7 +134,15 @@ final class CanvasStillRaster
 
     private function drawComposite(GdImage $surface, CanvasComposite $composite, string $context): void
     {
-        if (array_any($composite->operations, static fn($operation): bool => !in_array($operation->data['type'], ['coverage_dabs', 'texture_strip'], true))) {
+        if (array_any($composite->operations, static function (CanvasCompositeOperation $operation): bool {
+            $data = $operation->data;
+
+            return match ($data['type']) {
+                'coverage_dabs', 'texture_strip' => false,
+                'fill' => $data['masks'] !== [] || $data['blend'] !== 'source_over',
+                default => true,
+            };
+        })) {
             $this->diagnose(sprintf('The %s draws composites with operations this still leaves out.', $context));
             return;
         }
@@ -143,15 +151,85 @@ final class CanvasStillRaster
         $paint = self::createCanvas($width, $height);
         foreach ($composite->operations as $operation) {
             $layer = self::createCanvas($width, $height);
-            if ($operation->textureStrip !== null) {
-                $this->drawTextureStrip($layer, $operation);
-            } else {
-                self::drawCoverageDabs($layer, $operation->data, $width, $height);
-            }
+            match ($operation->data['type']) {
+                'fill' => self::drawFill($layer, $operation->data),
+                'texture_strip' => $this->drawTextureStrip($layer, $operation),
+                'coverage_dabs' => self::drawCoverageDabs($layer, $operation->data, $width, $height),
+            };
             imagecopy($paint, $layer, 0, 0, 0, 0, $width, $height);
         }
         $this->drawPicture($surface, $paint, [0, 0, $width, $height], $composite->destination,
             $composite->clipRect, $composite->opacity, 1, false, false);
+    }
+
+    private static function drawFill(GdImage $surface, array $operation): void
+    {
+        ['x' => $left, 'y' => $top, 'width' => $width, 'height' => $height] = $operation['destination'];
+        $right = $left + $width;
+        $bottom = $top + $height;
+        $endX = min(imagesx($surface), (int) ceil($right));
+        $endY = min(imagesy($surface), (int) ceil($bottom));
+        $startX = max(0, (int) floor($left));
+        $brush = $operation['brush'];
+        $solid = $brush['type'] === 'solid' ? TerminalPalette::resolveDescriptor($brush['color'], 0) : null;
+        $stops = array_map(static function (array $stop): array {
+            $rgb = TerminalPalette::resolveDescriptor($stop['color'], 0);
+            $opacity = $stop['opacity'];
+
+            return [$stop['offset'], $opacity, ($rgb >> 16) * $opacity,
+                (($rgb >> 8) & 255) * $opacity, ($rgb & 255) * $opacity];
+        }, $brush['stops'] ?? []);
+        $position = match ($brush['type']) {
+            'linear' => self::getLinearGradientPosition($brush['start'], $brush['end']),
+            'radial' => static fn(float $x, float $y): float => hypot(
+                ($x - $brush['center'][0]) / $brush['radius'][0], ($y - $brush['center'][1]) / $brush['radius'][1]),
+            'solid' => null,
+        };
+        imagealphablending($surface, false);
+        for ($y = max(0, (int) floor($top)); $y < $endY; $y++) {
+            $rowOpacity = (min($y + 1, $bottom) - max($y, $top)) * $operation['opacity'];
+            for ($x = $startX; $x < $endX; $x++) {
+                $opacity = (min($x + 1, $right) - max($x, $left)) * $rowOpacity;
+                $pixel = $position === null
+                    ? ((127 - (int) round(127 * $opacity)) << 24) | $solid
+                    : self::getGradientPixel($stops, $position($x + .5, $y + .5), $opacity);
+                imagesetpixel($surface, $x, $y, $pixel);
+            }
+        }
+    }
+
+    private static function getLinearGradientPosition(array $start, array $end): \Closure
+    {
+        $dx = $end[0] - $start[0];
+        $dy = $end[1] - $start[1];
+        $length = hypot($dx, $dy);
+        $ux = $dx / $length;
+        $uy = $dy / $length;
+
+        return static fn(float $x, float $y): float => (($x - $start[0]) * $ux + ($y - $start[1]) * $uy) / $length;
+    }
+
+    /** Interpolate premultiplied stops, then convert to GD's straight colour and inverse alpha. */
+    private static function getGradientPixel(array $stops, float $position, float $opacity): int
+    {
+        $position = min(1.0, max(0.0, $position));
+        $upper = 1;
+        while ($position > $stops[$upper][0]) {
+            $upper++;
+        }
+        [$from, $fromAlpha, $fromRed, $fromGreen, $fromBlue] = $stops[$upper - 1];
+        [$to, $toAlpha, $toRed, $toGreen, $toBlue] = $stops[$upper];
+        $t = ($position - $from) / ($to - $from);
+        $alpha = $fromAlpha + ($toAlpha - $fromAlpha) * $t;
+        $coverage = (int) round(127 * $alpha * $opacity);
+        if ($coverage === 0) {
+            return 127 << 24;
+        }
+        $red = (int) round(($fromRed + ($toRed - $fromRed) * $t) / $alpha);
+        $green = (int) round(($fromGreen + ($toGreen - $fromGreen) * $t) / $alpha);
+        $blue = (int) round(($fromBlue + ($toBlue - $fromBlue) * $t) / $alpha);
+
+        return ((127 - $coverage) << 24) | ($red << 16) | ($green << 8) | $blue;
     }
 
     private function drawTextureStrip(GdImage $surface, CanvasCompositeOperation $operation): void

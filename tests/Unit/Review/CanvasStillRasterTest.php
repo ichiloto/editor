@@ -91,7 +91,7 @@ it('strokes indicators inside their bounds and names what a still leaves out', f
         indicators: [new CanvasIndicator('focus', 'target', CanvasIndicatorKind::OUTLINE, new CanvasRectangle(10, 10, 40, 40), 3,
             PresentationColor::rgb(250, 250, 0), 4)],
         composites: [new CanvasComposite('shape', 10, 10, new CanvasRectangle(0, 0, 10, 10), [new CanvasCompositeOperation(
-            ['type' => 'fill', 'destination' => ['x' => 0, 'y' => 0, 'width' => 10, 'height' => 10],
+            ['type' => 'fill', 'blend' => 'screen', 'destination' => ['x' => 0, 'y' => 0, 'width' => 10, 'height' => 10],
                 'brush' => ['type' => 'solid', 'color' => ['kind' => 'rgb', 'r' => 1, 'g' => 2, 'b' => 3]]])])],
         images: [new CanvasImage('target', 'Art/missing.png', new CanvasRectangle(10, 10, 40, 40))]);
     $raster = new CanvasStillRaster($root);
@@ -100,6 +100,41 @@ it('strokes indicators inside their bounds and names what a still leaves out', f
         ->and(canvasStillPixel($image, 30, 30))->toBe([0, 0, 0])
         ->and(canvasStillPixel($image, 30, 48))->toBe([250, 250, 0])
         ->and(implode("\n", $raster->diagnostics))->toContain('composites')->toContain('Art/missing.png');
+});
+
+it('paints solid stage fills and gradient contacts with the canvas order and coverage', function () {
+    $white = PresentationColor::rgb(255, 255, 255)->toArray();
+    $black = PresentationColor::rgb(0, 0, 0)->toArray();
+    $red = PresentationColor::rgb(255, 0, 0)->toArray();
+    $blue = PresentationColor::rgb(0, 0, 255)->toArray();
+    $stage = new CanvasComposite('stage', 1, 1, new CanvasRectangle(0, 0, 14, 8), [new CanvasCompositeOperation([
+        'type' => 'fill', 'destination' => ['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1],
+        'brush' => ['type' => 'solid', 'color' => $white],
+    ])], layer: 1);
+    $contact = new CanvasComposite('contact', 7, 5, new CanvasRectangle(0, 0, 7, 5), [new CanvasCompositeOperation([
+        'type' => 'fill', 'destination' => ['x' => 0, 'y' => 0, 'width' => 7, 'height' => 5],
+        'brush' => ['type' => 'radial', 'center' => [3.5, 2.5], 'radius' => [3, 2], 'stops' => [
+            ['offset' => 0, 'color' => $black], ['offset' => 1, 'color' => $black, 'opacity' => 0],
+        ]],
+    ])], layer: 2, opacity: .5);
+    $gradient = new CanvasComposite('gradient', 4, 2, new CanvasRectangle(8, 0, 4, 2), [new CanvasCompositeOperation([
+        'type' => 'fill', 'destination' => ['x' => .5, 'y' => 0, 'width' => 3, 'height' => 2],
+        'brush' => ['type' => 'linear', 'start' => [.5, 0], 'end' => [2.5, 0], 'stops' => [
+            ['offset' => 0, 'color' => $red], ['offset' => 1, 'color' => $blue, 'opacity' => 0],
+        ]],
+    ])], layer: 2);
+    $raster = new CanvasStillRaster(canvasStillAssets());
+    $image = $raster->rasterize(new PresentationCanvas(14, 8, composites: [$contact, $stage, $gradient]), 0x000000);
+
+    expect(canvasStillPixel($image, 13, 7))->toBe([255, 255, 255])
+        ->and(canvasStillPixel($image, 3, 2)[0])->toBeBetween(125, 130)
+        ->and(canvasStillPixel($image, 5, 2)[0])->toBeGreaterThan(canvasStillPixel($image, 3, 2)[0])
+        ->and(canvasStillPixel($image, 6, 2))->toBe([255, 255, 255])
+        ->and(canvasStillPixel($image, 8, 0)[1])->toBeBetween(125, 130)
+        ->and(canvasStillPixel($image, 9, 0)[0])->toBe(255)
+        ->and(canvasStillPixel($image, 9, 0)[1])->toBeBetween(125, 130)
+        ->and(canvasStillPixel($image, 10, 0))->toBe([255, 255, 255])
+        ->and($raster->diagnostics)->toBe([]);
 });
 
 it('keeps strongest dab coverage, preserves first ties and clips the retained surface', function () {
