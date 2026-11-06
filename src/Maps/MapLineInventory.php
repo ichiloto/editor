@@ -66,7 +66,7 @@ final class MapLineInventory
     /**
      * Moves by file, in the order found.
      *
-     * @return array<string, list<array{path: list<int|string>, value: int}>>
+     * @return array<string, list<array{path: list<int|string>, value: int|list<list<int>>}>>
      */
     public function getShifts(): array
     {
@@ -572,6 +572,10 @@ final class MapLineInventory
      */
     private function shiftNamedArea(string $file, array $path, array $area, string $id): void
     {
+        if (array_key_exists('runs', $area)) {
+            $this->shiftNamedAreaRuns($file, $path, (array) $area['runs'], $id);
+            return;
+        }
         if (! array_key_exists('cells', $area)) {
             $this->shiftArea($file, $path, $area);
             return;
@@ -596,6 +600,87 @@ final class MapLineInventory
             } else {
                 $this->shifts[$file][self::formatKey($cellPath)] = ['path' => $cellPath, 'value' => $shifted];
             }
+        }
+    }
+
+    /**
+     * Moves a named area written as row runs (`[y, x, length]`) exactly as
+     * its cells would move: the same territory, the same removal refusal and
+     * the same reported gap. A run lying across inserted columns parts there,
+     * so the area's runs are written anew; every other run keeps its entry
+     * and only its moved coordinate changes.
+     *
+     * @param list<int|string> $path
+     * @param array<mixed> $runs
+     */
+    private function shiftNamedAreaRuns(string $file, array $path, array $runs, string $id): void
+    {
+        $cells = [];
+        foreach ($runs as $runIndex => $run) {
+            if (! is_array($run) || ! is_int($run[0] ?? null) || ! is_int($run[1] ?? null) || ! is_int($run[2] ?? null) || $run[2] < 1) {
+                $this->reportHandEdit($file, [...$path, 'runs', $runIndex], 'it is not a row run of whole numbers');
+                return;
+            }
+            for ($offset = 0; $offset < $run[2]; $offset++) {
+                $cells[] = [$run[1] + $offset, $run[0]];
+            }
+        }
+        $byColumn = $this->edit->axis === 'x';
+        if ($this->edit instanceof LineInsertion && self::spansLine($cells, $byColumn ? 0 : 1, $this->edit->at)) {
+            $this->reportHandEdit($file, [...$path, 'runs'], sprintf('area %s has cells on both sides of the inserted lines, which leave a gap in it; reshape it over them', $id));
+        }
+
+        $parted = [];
+        $moves = [];
+        $refused = false;
+        foreach ($runs as $runIndex => [$y, $x, $length]) {
+            if (! $byColumn) {
+                if ($y < $this->edit->at) {
+                    $parted[] = [$y, $x, $length];
+                    continue;
+                }
+                $shifted = $this->edit->getShiftedCoordinate($y);
+                if ($shifted === null) {
+                    $this->reportBlocked($file, [...$path, 'runs', $runIndex, 0], sprintf('area %s has a cell on a removed line', $id));
+                    $refused = true;
+                    continue;
+                }
+                $parted[] = [$shifted, $x, $length];
+                $moves[] = [[...$path, 'runs', $runIndex, 0], $shifted];
+                continue;
+            }
+            $end = $x + $length;
+            if ($end <= $this->edit->at) {
+                $parted[] = [$y, $x, $length];
+                continue;
+            }
+            if ($this->edit instanceof LineRemoval && $x < $this->edit->at + $this->edit->count) {
+                $this->reportBlocked($file, [...$path, 'runs', $runIndex], sprintf('area %s has a cell on a removed line', $id));
+                $refused = true;
+                continue;
+            }
+            if ($x < $this->edit->at) {
+                $before = $this->edit->at - $x;
+                $parted[] = [$y, $x, $before];
+                $parted[] = [$y, $this->edit->at + $this->edit->count, $length - $before];
+                $moves = null;
+                continue;
+            }
+            $shifted = (int) $this->edit->getShiftedCoordinate($x);
+            $parted[] = [$y, $shifted, $length];
+            if ($moves !== null) {
+                $moves[] = [[...$path, 'runs', $runIndex, 1], $shifted];
+            }
+        }
+        if ($refused) {
+            return;
+        }
+        if ($moves === null) {
+            $this->shifts[$file][self::formatKey([...$path, 'runs'])] = ['path' => [...$path, 'runs'], 'value' => $parted];
+            return;
+        }
+        foreach ($moves as [$movePath, $value]) {
+            $this->shifts[$file][self::formatKey($movePath)] = ['path' => $movePath, 'value' => $value];
         }
     }
 

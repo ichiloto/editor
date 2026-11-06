@@ -275,11 +275,12 @@ final class MapLinePlanner
     }
 
     /**
-     * Rewrites a data file's coordinates in place. A coordinate written as
-     * anything but a literal, or in a file that is not one returned array
+     * Rewrites a data file's coordinates in place; an area's row runs that
+     * part across inserted lines are written anew as a whole literal list.
+     * A coordinate written as anything but a literal, or in a file that is not one returned array
      * literal, is reported for a hand edit and left as authored.
      *
-     * @param list<array{path: list<int|string>, value: int}> $shifts
+     * @param list<array{path: list<int|string>, value: int|list<list<int>>}> $shifts
      * @param list<array{file: string, where: string, reason: string}> $handEdits
      * @return array{source: string, value: array<array-key, mixed>}|null Null when nothing in the file can be rewritten.
      */
@@ -300,7 +301,7 @@ final class MapLinePlanner
         $next = $payload;
         $kept = [];
         foreach ($shifts as $shift) {
-            $refusal = self::findLiteralRefusal($document, $shift['path']);
+            $refusal = self::findLiteralRefusal($document, $shift['path'], is_array($shift['value']));
             if ($refusal !== null) {
                 $report($shift['path'], $refusal);
                 continue;
@@ -334,7 +335,7 @@ final class MapLinePlanner
      *
      * @param list<int|string> $path
      */
-    private static function findLiteralRefusal(PhpArraySourceDocument $document, array $path): ?string
+    private static function findLiteralRefusal(PhpArraySourceDocument $document, array $path, bool $wholeList = false): ?string
     {
         $node = $document->root();
         foreach ($path as $step) {
@@ -351,7 +352,29 @@ final class MapLinePlanner
             $node = $entry->value;
         }
 
+        if ($wholeList) {
+            return self::isLiteralTree($node) ? null : 'it is not written as a list of literal entries';
+        }
+
         return $node->kind === SourceNode::SCALAR ? null : 'it is written as an expression or variable, not a literal';
+    }
+
+    /** Whether a value is written wholly as literals: a scalar, or an array of literal entries with no spread or computed key. */
+    private static function isLiteralTree(SourceNode $node): bool
+    {
+        if ($node->kind === SourceNode::SCALAR) {
+            return true;
+        }
+        if ($node->kind !== SourceNode::ARRAY || $node->hasOpaqueKey) {
+            return false;
+        }
+        foreach ($node->entries as $entry) {
+            if (! self::isLiteralTree($entry->value)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

@@ -61,7 +61,7 @@ it('makes an area of cells selected by keyboard, writing a filled rectangle as o
     pressAreaKeys($editor, 1, 0, 'r');
     pressAreaKeys($editor, 2, 1, 'r');
     pressAreaKeys($editor, 2, 1, ' ', "\r", 'p', 'o', 'r', 'c', 'h', "\r");
-    expect(readEditorAreas($editor)[1])->toBe(['id' => 'porch', 'area' => ['cells' => [[1, 0], [2, 0], [1, 1]]]]);
+    expect(readEditorAreas($editor)[1])->toBe(['id' => 'porch', 'area' => ['runs' => [[0, 1, 2], [1, 1, 1]]]]);
 });
 
 it('picks an area up with Enter to change its cells, steps through areas sharing a cell, and deletes one', function () {
@@ -98,4 +98,16 @@ it('shows the areas in the map inspector and offers them as an event\'s subject'
     expect(array_column($rows, 'label'))->toBe(['Areas · 1', '  Area', '    Cells', '    Named By'])
         ->and(array_column($rows, 'value'))->toBe(['', 'yard', 'x 0, y 1 · 1 x 1', 'nothing'])
         ->and($subject['options'])->toBe(['', 'world_object:old-tower', 'area:yard']);
+});
+
+it('shows compact area runs by their exact cells and pieces in the inspector', function () {
+    [$root] = createLandmarkProject("'areas' => [['id' => 'yard', 'area' => ['runs' => [[0, 0, 2], [1, 3, 1]]]]],");
+    $editor = areaEditor($root);
+    $map = callEditorMethod($editor, 'getSelectedMap');
+
+    $rows = MapAreaFields::describeMapFields($map);
+    $geometry = array_find($rows, static fn(array $row): bool => ($row['field'] ?? null) === 'cells');
+
+    expect($geometry['value'])->toBe('3 cells in 2 places')
+        ->and($geometry['areaCells'])->toBe([[0, 0], [1, 0], [3, 1]]);
 });
