@@ -151,16 +151,19 @@ it("sets and removes a battle image's attachment and pivot as whole fields, and 
     pressKeys($editor, "\n");
     $find = static fn(string $suffix): string => array_values(array_filter(cutsceneFieldIds($editor),
         static fn(string $id): bool => str_ends_with(strtolower($id), $suffix)))[0];
-    [$attachment, $pivot] = [$find('attachment'), $find('pivot')];
+    [$attachment, $pivot, $depth] = [$find('attachment'), $find('pivot'), $find('depth')];
 
     expect(cutsceneField($editor, $attachment)['options'])
-        ->toBe(['', ...array_map(static fn(EffectImageAttachment $case): string => $case->value, EffectImageAttachment::cases())]);
+        ->toBe(['', ...array_map(static fn(EffectImageAttachment $case): string => $case->value, EffectImageAttachment::cases())])
+        ->and(cutsceneField($editor, $depth)['options'])->toBe(['front', 'behind', 'subject-front']);
 
     // The ring at the cell's foot sits on the ground beneath the battler.
     setCutsceneField($editor, $attachment, 'ground');
     setCutsceneField($editor, $pivot, '0.5, 0.92');
+    setCutsceneField($editor, $depth, 'subject-front');
     expect($track()['attachment'])->toBe('ground')
         ->and($track()['pivot'])->toBe(['x' => 0.5, 'y' => 0.92])
+        ->and($track()['depth'])->toBe('subject-front')
         ->and(cutsceneField($editor, $pivot)['value'])->toBe('0.5, 0.92')
         ->and($asset->compiledEffect(EffectPresentation::GRAPHICAL, true))->not->toBeNull();
 
@@ -172,7 +175,8 @@ it("sets and removes a battle image's attachment and pivot as whole fields, and 
 
     setCutsceneField($editor, $pivot, '');
     setCutsceneField($editor, $attachment, '');
-    expect($track())->not->toHaveKey('pivot')->not->toHaveKey('attachment')
+    setCutsceneField($editor, $depth, '');
+    expect($track())->not->toHaveKey('pivot')->not->toHaveKey('attachment')->not->toHaveKey('depth')
         ->and($asset->isDirty())->toBeFalse();
 });
 

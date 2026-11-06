@@ -12,6 +12,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
 use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
+use Ichiloto\Engine\Animations\Timelines\EffectImageDepth;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageFit;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
@@ -745,7 +746,8 @@ final class CutsceneSchemas
                 'image' => static fn(array $entry): array => $graphical && self::isOnStage($entry)
                     ? self::stageImageTrackFields()
                     : [new RecordField('anchor', 'Anchor', options: $graphical ? [...self::SUMMON_IMAGE_ANCHORS, 'target-group'] : ['target', 'caster', 'screen'],
-                        removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], $anchors[2], ...self::imageTrackFields(sharedWithField: true),
+                        removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], $anchors[2],
+                        ...self::imageTrackFields(sharedWithField: true, subjectOrder: self::supportsSubjectOrder($entry)),
                         ...($graphical ? self::targetGroupFields($entry) : []),
                         ...($graphical ? self::battleFlightFields(is_string($entry['anchor'] ?? null) ? $entry['anchor'] : 'target') : [])],
                 'glyph' => $anchors,
@@ -954,7 +956,7 @@ final class CutsceneSchemas
      *
      * @return list<RecordField>
      */
-    public static function imageTrackFields(bool $sharedWithField = false): array
+    public static function imageTrackFields(bool $sharedWithField = false, bool $subjectOrder = false): array
     {
         return [
             RecordField::reference('asset', 'Image', 'png_assets'),
@@ -966,7 +968,9 @@ final class CutsceneSchemas
             // own proportions inside them (the empty choice removes it: stretched).
             new RecordField('fit', 'Fit', options: ['', ...array_map(static fn(CanvasImageFit $fit): string => $fit->value, CanvasImageFit::cases())],
                 removeWhenEmpty: true, displayDefault: '(' . CanvasImageFit::STRETCH->value . ')'),
-            new RecordField('depth', 'Depth', options: ['front', 'behind'], removeWhenEmpty: true, displayDefault: 'front'),
+            new RecordField('depth', 'Depth', options: [EffectImageDepth::FRONT->value, EffectImageDepth::BEHIND->value,
+                ...($subjectOrder ? [EffectImageDepth::SUBJECT_FRONT->value] : [])],
+                removeWhenEmpty: true, displayDefault: EffectImageDepth::FRONT->value),
             // Attachments are battle-only; a field image has only its pivot.
             new RecordField('attachment', $sharedWithField ? 'Attachment (battle only)' : 'Attachment',
                 options: ['', ...array_map(static fn(EffectImageAttachment $attachment): string => $attachment->value, EffectImageAttachment::cases())],
@@ -1006,7 +1010,7 @@ final class CutsceneSchemas
                 new RecordField('anchor', 'Anchor', options: self::SUMMON_IMAGE_ANCHORS, removeWhenEmpty: true, displayDefault: 'target'),
                 // Battle only: the way the art is drawn; the battle mirrors it for a summon cast the other way.
                 new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
-                ...self::imageTrackFields(),
+                ...self::imageTrackFields(subjectOrder: self::supportsSubjectOrder($entry)),
             ]],
             variantKey: 'type',
             nestedLists: [
@@ -1025,6 +1029,13 @@ final class CutsceneSchemas
     private static function isOnStage(array $track): bool
     {
         return ($track['anchor'] ?? null) === 'stage';
+    }
+
+    private static function supportsSubjectOrder(array $track): bool
+    {
+        $anchor = $track['anchor'] ?? 'target';
+        return is_string($anchor) && EffectImageDepth::supportsSubjectOrder($anchor)
+            && !array_key_exists('detachFrame', $track) && !array_key_exists('flight', $track);
     }
 
     /**
