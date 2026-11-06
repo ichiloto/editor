@@ -303,7 +303,8 @@ final readonly class MapAreaAuthoring
 
     /**
      * The shape an author writes for selected cells: a rectangle when they
-     * fill one exactly, otherwise the exact cells in reading order. Both
+     * fill one exactly, otherwise the Engine's most compact exact encoding,
+     * row runs or cells in reading order. Both
      * editors write selections through it.
      *
      * @param list<array{int, int}> $cells
@@ -327,7 +328,7 @@ final readonly class MapAreaAuthoring
 
         return $width * $height === count($cells)
             ? ['x' => min($xs), 'y' => min($ys), 'width' => $width, 'height' => $height]
-            : ['cells' => $cells];
+            : MapAreaCatalog::encodeArea(CellArea::fromCells($cells));
     }
 
     /** The first `area-N` id the map does not hold, for an area made before it is named. */
