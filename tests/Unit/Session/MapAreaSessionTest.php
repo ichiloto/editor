@@ -291,3 +291,28 @@ it('writes a selection that is no rectangle in the Engine\'s compact encoding', 
         ->and(MapAreaAuthoring::createShapeFor([[2, 0], [3, 1]]))->toBe(['cells' => [[2, 0], [3, 1]]])
         ->and(MapAreaAuthoring::createShapeFor([[0, 1], [1, 1]]))->toBe(['x' => 0, 'y' => 1, 'width' => 2, 'height' => 1]);
 });
+
+
+it('refuses a line edit that would leave computed compact area runs behind', function (string $axis) {
+    [, $file, $session] = createLandmarkProject(
+        "'areas' => [['id' => 'yard', 'area' => ['runs' => array_merge([[0, 0, 3]], [[1, 2, 2]])]]],",
+    );
+    $source = file_get_contents($file);
+    $revision = $session->readMap('test-map')['revision'];
+
+    expect(fn() => $session->insertMapLines('test-map', $revision, $axis, 1, 2))
+        ->toThrow(SessionRefusal::class, 'compact area runs could not be moved')
+        ->and(file_get_contents($file))->toBe($source);
+})->with(['x', 'y']);
+
+it('validates compact run bounds before expanding them for a line edit', function () {
+    [, $file, $session] = createLandmarkProject(
+        "'areas' => [['id' => 'yard', 'area' => ['runs' => [[0, 0, PHP_INT_MAX]]]]],",
+    );
+    $source = file_get_contents($file);
+    $revision = $session->readMap('test-map')['revision'];
+
+    expect(fn() => $session->insertMapLines('test-map', $revision, 'x', 1, 2))
+        ->toThrow(SessionRefusal::class, 'row run extends outside the physical map')
+        ->and(file_get_contents($file))->toBe($source);
+});

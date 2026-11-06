@@ -94,6 +94,7 @@ final class MapLinePlanner
         [$width, $height] = [$map->getWidth(), $map->getHeight()];
         // Relative points are judged against where their subjects stand before the edit moves them.
         $subjects = MapSubjectCells::readMap($map);
+        $targetGrid = $map->getLayerSet()->getComposedGrid();
         $edit instanceof LineRemoval
             ? $map->removeLines($edit->axis, $edit->at, $edit->count)
             : $map->insertLines($edit->axis, $edit->at, $edit->count);
@@ -138,7 +139,7 @@ final class MapLinePlanner
                 $commonEvents[basename($path, '.php')] = ['file' => $path, 'commands' => $payloads[$path]];
             }
         }
-        $inventory = new MapLineInventory($edit, $commonEvents, $subjects);
+        $inventory = new MapLineInventory($edit, $commonEvents, $subjects, $targetGrid);
         foreach ($dataPaths as $path) {
             if (str_starts_with($path, $root . '/assets/Maps/') && is_array($payloads[$path])) {
                 $inventory->addMapData($path, substr(dirname($path), strlen($root . '/assets/Maps/')), $payloads[$path]);
@@ -280,20 +281,25 @@ final class MapLinePlanner
      * A coordinate written as anything but a literal, or in a file that is not one returned array
      * literal, is reported for a hand edit and left as authored.
      *
-     * @param list<array{path: list<int|string>, value: int|list<list<int>>}> $shifts
+     * @param list<array{path: list<int|string>, value: int|list<list<int>>, required?: true}> $shifts
      * @param list<array{file: string, where: string, reason: string}> $handEdits
      * @return array{source: string, value: array<array-key, mixed>}|null Null when nothing in the file can be rewritten.
      */
     private static function rewriteShifts(string $source, mixed $payload, array $shifts, string $file, array &$handEdits): ?array
     {
-        $report = static function (array $path, string $reason) use (&$handEdits, $file): void {
-            $handEdits[] = ['file' => $file, 'where' => PhpArraySourceDocument::describePath($path), 'reason' => $reason];
+        $report = static function (array $shift, string $reason) use (&$handEdits, $file): void {
+            $where = PhpArraySourceDocument::describePath($shift['path']);
+            if ($shift['required'] ?? false) {
+                throw new RuntimeException(sprintf('%s %s: compact area runs could not be moved (%s). Nothing was changed.',
+                    $file, $where, $reason));
+            }
+            $handEdits[] = ['file' => $file, 'where' => $where, 'reason' => $reason];
         };
         try {
             $document = PhpArraySourceDocument::parse($source);
         } catch (SourceUnreadable $unreadable) {
             foreach ($shifts as $shift) {
-                $report($shift['path'], 'the file is not one returned array literal (' . rtrim($unreadable->getMessage(), '.') . ')');
+                $report($shift, 'the file is not one returned array literal (' . rtrim($unreadable->getMessage(), '.') . ')');
             }
             return null;
         }
@@ -303,7 +309,7 @@ final class MapLinePlanner
         foreach ($shifts as $shift) {
             $refusal = self::findLiteralRefusal($document, $shift['path'], is_array($shift['value']));
             if ($refusal !== null) {
-                $report($shift['path'], $refusal);
+                $report($shift, $refusal);
                 continue;
             }
             $value = &$next;
@@ -322,7 +328,7 @@ final class MapLinePlanner
             return ['source' => ArraySourceWriter::rewrite($document, $payload, $next)->source, 'value' => $next];
         } catch (SourcePreservationRefusal $refusal) {
             foreach ($kept as $shift) {
-                $report($shift['path'], rtrim($refusal->getMessage(), '.'));
+                $report($shift, rtrim($refusal->getMessage(), '.'));
             }
             return null;
         }

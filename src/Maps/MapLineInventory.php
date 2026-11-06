@@ -8,6 +8,7 @@ use Ichiloto\Editor\Database\RelativePositionFields;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Field\MapAreaAuthoring;
 use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
+use Ichiloto\Engine\Field\MapAreaCatalog;
 
 /**
  * Finds every coordinate a row or column insertion or removal moves, across
@@ -33,7 +34,7 @@ use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
  */
 final class MapLineInventory
 {
-    /** @var array<string, array<string, array{path: list<int|string>, value: int}>> Moves by file, keyed by path. */
+    /** @var array<string, array<string, array{path: list<int|string>, value: int|list<list<int>>, required?: true}>> Moves by file, keyed by path. */
     private array $shifts = [];
 
     /** @var array<string, array<string, array{path: list<int|string>, reason: string}>> Hand edits by file, keyed by path. */
@@ -55,18 +56,20 @@ final class MapLineInventory
      * @param MapLineEdit $edit The insertion or removal.
      * @param array<string, array{file: string, commands: mixed}> $commonEvents Reusable event scripts by id.
      * @param MapSubjectCells|null $subjects Where the edited map's subjects stood before the edit.
+     * @param list<list<string>> $targetGrid The physical map before the edit.
      */
     public function __construct(
         private readonly MapLineEdit $edit,
         private readonly array $commonEvents,
         private readonly ?MapSubjectCells $subjects = null,
+        private readonly array $targetGrid = [],
     ) {
     }
 
     /**
      * Moves by file, in the order found.
      *
-     * @return array<string, list<array{path: list<int|string>, value: int|list<list<int>>}>>
+     * @return array<string, list<array{path: list<int|string>, value: int|list<list<int>>, required?: true}>>
      */
     public function getShifts(): array
     {
@@ -573,7 +576,7 @@ final class MapLineInventory
     private function shiftNamedArea(string $file, array $path, array $area, string $id): void
     {
         if (array_key_exists('runs', $area)) {
-            $this->shiftNamedAreaRuns($file, $path, (array) $area['runs'], $id);
+            $this->shiftNamedAreaRuns($file, $path, $area, $id);
             return;
         }
         if (! array_key_exists('cells', $area)) {
@@ -611,20 +614,13 @@ final class MapLineInventory
      * and only its moved coordinate changes.
      *
      * @param list<int|string> $path
-     * @param array<mixed> $runs
+     * @param array<string, mixed> $area
      */
-    private function shiftNamedAreaRuns(string $file, array $path, array $runs, string $id): void
+    private function shiftNamedAreaRuns(string $file, array $path, array $area, string $id): void
     {
-        $cells = [];
-        foreach ($runs as $runIndex => $run) {
-            if (! is_array($run) || ! is_int($run[0] ?? null) || ! is_int($run[1] ?? null) || ! is_int($run[2] ?? null) || $run[2] < 1) {
-                $this->reportHandEdit($file, [...$path, 'runs', $runIndex], 'it is not a row run of whole numbers');
-                return;
-            }
-            for ($offset = 0; $offset < $run[2]; $offset++) {
-                $cells[] = [$run[1] + $offset, $run[0]];
-            }
-        }
+        $catalog = MapAreaCatalog::readMap(['areas' => [['id' => $id, 'area' => $area]]], $this->targetGrid);
+        $cells = $catalog->getArea($id)->cells;
+        $runs = $area['runs'];
         $byColumn = $this->edit->axis === 'x';
         if ($this->edit instanceof LineInsertion && self::spansLine($cells, $byColumn ? 0 : 1, $this->edit->at)) {
             $this->reportHandEdit($file, [...$path, 'runs'], sprintf('area %s has cells on both sides of the inserted lines, which leave a gap in it; reshape it over them', $id));
@@ -676,11 +672,11 @@ final class MapLineInventory
             return;
         }
         if ($moves === null) {
-            $this->shifts[$file][self::formatKey([...$path, 'runs'])] = ['path' => [...$path, 'runs'], 'value' => $parted];
+            $this->shifts[$file][self::formatKey([...$path, 'runs'])] = ['path' => [...$path, 'runs'], 'value' => $parted, 'required' => true];
             return;
         }
         foreach ($moves as [$movePath, $value]) {
-            $this->shifts[$file][self::formatKey($movePath)] = ['path' => $movePath, 'value' => $value];
+            $this->shifts[$file][self::formatKey($movePath)] = ['path' => $movePath, 'value' => $value, 'required' => true];
         }
     }
 
