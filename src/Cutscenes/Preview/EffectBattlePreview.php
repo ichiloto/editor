@@ -144,7 +144,7 @@ final class EffectBattlePreview
         $graphical = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null
             ? \Ichiloto\Engine\Battle\Presentation\GraphicalBattlePresentation::prepare($battle, $catalog, $assetRoot) : null;
         $travel = !$reducedMotion && $animation->movement->usesTargetRoute()
-            ? $graphical?->planActionTravel($caster, $targets, $action, animationId: $animation->id) : null;
+            ? $graphical?->planActionTravel($caster, $targets, $action, animationId: $animation->id, movement: $animation->movement) : null;
         $actionPoseOverride = $poses?->getAnimationPose($animation->id);
         $flashStep = $travel?->isPossible ? $animation->flashStep : null;
         if ($flashStep !== null && !$flashStep->supportsPose($actionPoseOverride)) {

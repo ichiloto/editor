@@ -2410,7 +2410,7 @@ final class RecordSchemaCatalog
                     singular: 'action pose',
                     fields: [
                         RecordField::reference('animationId', 'Animation', 'animation_ids'),
-                        ...array_filter($poseFields, static fn(RecordField $field): bool => !in_array($field->key, ['loop', 'entryFrames', 'exitFrames'], true)),
+                        ...array_filter($poseFields, static fn(RecordField $field): bool => $field->key !== 'loop'),
                     ],
                     blank: ['animationId' => '', 'image' => '', 'loop' => false, 'impactFrame' => 0],
                     heading: 'Action Poses',
