@@ -665,6 +665,9 @@ final class CutsceneSchemas
             ...($graphical ? [
                 new RecordField('poseSyncFrame', 'Pose Sync Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
                 new RecordField('rangeTiming.minDistance', 'Far Range Threshold', InputControlType::FLOAT, removeWhenEmpty: true),
+                RecordField::reference('flightTiming.track', 'Flight Track', ReferenceCatalog::EFFECT_FLIGHT_TRACKS,
+                    allowsNone: true, noneLabel: '(none)'),
+                new RecordField('flightTiming.speed', 'Flight Speed (arena widths/s)', InputControlType::FLOAT, removeWhenEmpty: true),
             ] : []),
         ];
 

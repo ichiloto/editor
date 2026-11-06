@@ -62,6 +62,9 @@ final class ReferenceCatalog
     /** The entry choice source of a tileset's tile layers ({@see listEntryChoices()}). */
     public const string TILESET_TILE_LAYERS = 'tileset_tile_layers';
 
+    /** The current effect's caster-attached projectile image tracks. */
+    public const string EFFECT_FLIGHT_TRACKS = 'effect_flight_tracks';
+
     /** The conversation groups the current cinematic declares, which `select_conversation_group` selects among. */
     public const string CINEMATIC_CONVERSATION_GROUPS = 'cinematic_conversation_groups';
 
@@ -164,6 +167,7 @@ final class ReferenceCatalog
         ConversationFields::SPEAKERS,
         'summon_cues',
         'effect_cues',
+        self::EFFECT_FLIGHT_TRACKS,
         'stage_subjects',
         'stage_attachments',
         self::BATTLE_POSE_POINTS,
@@ -374,6 +378,7 @@ final class ReferenceCatalog
             ConversationFields::SPEAKERS => $this->listScopedChoices(ConversationFields::SPEAKERS) ?? [],
             'summon_cues' => $this->getTimelineCueIds(CutsceneType::SUMMON),
             'effect_cues' => $this->getTimelineCueIds(CutsceneType::EFFECT),
+            self::EFFECT_FLIGHT_TRACKS => $this->getEffectFlightTrackIds(),
             // A summon sequence's stage: the subjects it registers, and every
             // named point on them (each image picks one on its own subject).
             'stage_subjects' => array_keys($this->getStageSubjects()),
@@ -1029,6 +1034,25 @@ final class ReferenceCatalog
         }
 
         return array_values($ids);
+    }
+
+    /** @return list<string> */
+    private function getEffectFlightTrackIds(): array
+    {
+        if ($this->currentCutscene?->type !== CutsceneType::EFFECT) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ((array) ($this->currentCutscene->payload()[CutsceneSchemas::TRACKS_KEY] ?? []) as $track) {
+            if (is_array($track) && ($track['type'] ?? null) === 'image' && ($track['anchor'] ?? null) === 'caster'
+                && is_int($track['detachFrame'] ?? null) && is_array($track['flight'] ?? null)
+                && is_string($track['id'] ?? null) && ($track['presentation'] ?? 'graphical') === 'graphical') {
+                $ids[] = $track['id'];
+            }
+        }
+
+        return $ids;
     }
 
     /**

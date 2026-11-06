@@ -191,17 +191,27 @@ final class EffectBattlePreview
             : $read();
     }
 
+    public function getTotalFrames(bool $reducedMotion): int
+    {
+        return $this->preview->getTotalFrames($reducedMotion);
+    }
+
+    public function getPlaybackPhases(bool $reducedMotion): array
+    {
+        return $this->preview->getPlaybackPhases($reducedMotion);
+    }
+
     /**
      * The command frame that draws one of the effect's own frames, in the lane it plays in, wherever the
      * command anchors that lane; a frame before it maps to its first, one after it to its last.
      */
-    public function findCommandFrame(int $authoredFrame): int
+    public function findCommandFrame(int $authoredFrame, bool $reducedMotion = false): int
     {
         // A frame the battle's pacing leaves no time for is drawn where the nearest earlier one is.
         for ($frame = max(0, min($authoredFrame, $this->laneFrames - 1)); $frame >= 0; $frame--) {
             $command = $this->plan->getCommandFrameForAuthoredFrame($this->lane, $frame);
             if ($command !== null) {
-                return $command;
+                return $this->preview->getPlaybackFrame($command, $reducedMotion);
             }
         }
 

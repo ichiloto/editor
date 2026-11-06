@@ -3777,18 +3777,19 @@ final class EditorSession
                     BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation, $binding, $reducedMotion, $targetIndex))];
         }
         $preview = $this->effectBattlePreviews[$presentation->value]['preview'];
-        $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame);
         try {
-            $read = $preview->readFrame(max(0, min($frame, $preview->totalFrames - 1)), $reducedMotion, $imageRotation, $coverageDabs, $textureStrip, $regionBudget);
+            $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame, $reducedMotion);
+            $totalFrames = $preview->getTotalFrames($reducedMotion);
+            $read = $preview->readFrame(max(0, min($frame, $totalFrames - 1)), $reducedMotion, $imageRotation, $coverageDabs, $textureStrip, $regionBudget);
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
         }
 
-        return [...$read, 'totalFrames' => $preview->totalFrames, 'fps' => BattleCommandTimeline::FPS,
+        return [...$read, 'totalFrames' => $totalFrames, 'fps' => BattleCommandTimeline::FPS,
             'assetRoot' => $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', 'lane' => $preview->lane,
             'sourceEffectAnchor' => $preview->sourceEffectAnchor->value, 'contexts' => $preview->contexts, 'binding' => $preview->binding,
             'caster' => $preview->caster, 'targets' => $preview->targets, 'targetOptions' => $preview->targetOptions,
-            'targetIndex' => $preview->targetIndex, 'troop' => $troop['name'], 'phases' => $preview->phases];
+            'targetIndex' => $preview->targetIndex, 'troop' => $troop['name'], 'phases' => $preview->getPlaybackPhases($reducedMotion)];
     }
 
     /**
