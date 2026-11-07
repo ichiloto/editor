@@ -181,6 +181,47 @@ it('undoes what a refused change set wrote at once, such as inserted rows', func
         ->and(sourceHashTree($root . '/assets'))->toBe($before);
 });
 
+/** A batch that inserts a row, duplicates the map, then edits the copy: it writes files at once twice before its last step. */
+function changeSetInsertThenDuplicate(string $buildings, array $last): array
+{
+    return [
+        ['method' => 'map.insertLines', 'params' => ['map' => 'test-map', 'axis' => 'y', 'at' => 2, 'count' => 1], 'answer' => 'write'],
+        ['method' => 'map.duplicate', 'params' => ['map' => 'test-map', 'to' => 'test-map-copy']],
+        ['method' => 'map.paint', 'params' => ['map' => 'test-map-copy', 'layer' => $buildings, 'cells' => [[1, 0]], 'symbol' => ' ']],
+        $last,
+    ];
+}
+
+it('writes nothing when only checking a batch that inserted rows, then made a map', function () {
+    $root = changeSetProject();
+    $before = sourceHashTree($root . '/assets');
+    $buildings = changeSetLayer(EditorSession::open($root), 'buildings');
+
+    $outcome = ChangeBatch::apply($root, changeSetInsertThenDuplicate($buildings,
+        ['method' => 'map.paint', 'params' => ['map' => 'test-map', 'layer' => $buildings, 'cells' => [[2, 1]], 'symbol' => ' ']]), checkOnly: true);
+
+    expect($outcome['status'])->toBe('checked')
+        ->and($outcome)->not->toHaveKey('unrestored')
+        ->and(sourceHashTree($root . '/assets'))->toBe($before);
+});
+
+it('undoes a refused or failed batch that inserted rows, then made a map, and writes nothing of it', function (bool $fails) {
+    $root = changeSetProject();
+    $before = sourceHashTree($root . '/assets');
+    $buildings = changeSetLayer(EditorSession::open($root), 'buildings');
+
+    $outcome = ChangeBatch::apply($root, changeSetInsertThenDuplicate($buildings, $fails
+        ? ['method' => 'map.paint', 'params' => ['map' => 'test-map', 'layer' => 'no-layer', 'cells' => [[0, 0]], 'symbol' => '#']]
+        : ['method' => 'map.paint', 'params' => ['map' => 'test-map', 'layer' => $buildings, 'cells' => [[3, 1]], 'symbol' => 'x']]));
+
+    expect($outcome['status'])->toBe($fails ? 'failed' : 'refused')
+        ->and($outcome)->not->toHaveKey('unrestored')
+        ->and(sourceHashTree($root . '/assets'))->toBe($before);
+    // Nothing is left half undone: the next change set begins on the project as it was.
+    expect(ChangeBatch::apply($root, [['method' => 'map.paint',
+        'params' => ['map' => 'test-map', 'layer' => $buildings, 'cells' => [[1, 0]], 'symbol' => ' ']]])['status'])->toBe('saved');
+})->with(['a later request fails' => true, 'the project it leaves is refused' => false]);
+
 it('applies a batch of session requests as one change set, filling each map\'s revision as it stands', function () {
     $root = changeSetProject();
     $buildings = changeSetLayer(EditorSession::open($root), 'buildings');

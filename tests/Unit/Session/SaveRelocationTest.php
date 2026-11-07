@@ -274,6 +274,47 @@ it('moves no save off a map a change set made, though something already led to i
 });
 
 
+/** Inserts two blank columns before home's east wall, next to its floor, as the author confirms them, and walls them in. */
+function insertWalledColumns(EditorSession $session, array $alsoWalled = []): array
+{
+    $question = $session->insertMapLines('home', $session->readMap('home')['revision'], 'x', 5, 2);
+    $inserted = $session->insertMapLines('home', $session->readMap('home')['revision'], 'x', 5, 2, 'write', $question['confirm']);
+    $map = $session->readMap('home');
+    $session->paint('home', $map['revision'], $map['baseLayer'],
+        [[5, 0], [6, 0], [5, 1], [6, 1], [5, 2], [6, 2], [5, 3], [6, 3], [5, 4], [6, 4], ...$alsoWalled], '#');
+
+    return $inserted;
+}
+
+it('plans no save off columns a change set inserted, though their blank cells were written at once', function () {
+    $root = mapLineRemovalProject();
+    $manifest = (string) file_get_contents($root . '/assets/Data/save-compatibility.php');
+    $session = EditorSession::open($root);
+    $session->beginChanges();
+    $inserted = insertWalledColumns($session);
+
+    $outcome = $session->commitChanges(checkOnly: true);
+
+    expect($inserted['status'] ?? null)->toBe('inserted')
+        ->and($outcome['relocated'])->toBe([])
+        ->and((string) ($outcome['reason'] ?? ''))->not->toContain('Saves')
+        ->and((string) file_get_contents($root . '/assets/Data/save-compatibility.php'))->toBe($manifest);
+});
+
+it('still moves saves off floor that was there before the change set, beside the columns it inserted', function () {
+    $root = mapLineRemovalProject();
+    $session = EditorSession::open($root);
+    $session->beginChanges();
+    insertWalledColumns($session, [[4, 1]]);
+
+    $outcome = $session->commitChanges(checkOnly: true);
+
+    // Saves on the old floor it cuts off still move; none is planned off the inserted columns x 5 and 6.
+    expect($outcome['relocated'])->not->toBe([])
+        ->and(implode(' | ', $outcome['relocated']))->toContain('x 4, y 1')
+        ->and(implode(' | ', $outcome['relocated']))->not->toMatch('/x [56], y/');
+});
+
 /** Current and saved ownership deliberately share territory while individual event identities remain distinct. */
 function addSyntheticBoundStoryArea(\Ichiloto\Editor\ProjectMap $map, string $marker = 'Z'): void
 {

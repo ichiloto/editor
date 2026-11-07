@@ -112,6 +112,8 @@ use Ichiloto\Editor\Maps\SaveMapRetirement;
 use Ichiloto\Editor\Maps\SaveMigrationRegistration;
 use Ichiloto\Editor\Maps\SaveRelocationPlanner;
 use Ichiloto\Editor\History\SourceSetCommand;
+use Ichiloto\Editor\History\MapCreationCommand;
+use Ichiloto\Editor\Maps\UnsavedMapLines;
 use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\History\SourceSetRequired;
 use Ichiloto\Editor\ProjectMap;
@@ -284,9 +286,10 @@ final class EditorSession
      *
      * Requests that write the save manifest at once note what they wrote:
      * `migrationRegistered`, and each map retirement by its step and map.
+     * `lines` holds the rows and columns it inserted, which hold no save.
      *
-     * @var array{baseline: list<Issue>, revisions: array<string, int>, steps: int, dropped: int, migrationRegistered?: bool,
-     *     retirements?: list<array{from: int, map: string}>}|null
+     * @var array{baseline: list<Issue>, revisions: array<string, int>, steps: int, dropped: int, lines: UnsavedMapLines,
+     *     migrationRegistered?: bool, retirements?: list<array{from: int, map: string}>}|null
      */
     private ?array $changeSet = null;
 
@@ -463,7 +466,8 @@ final class EditorSession
         } catch (MapSourceRefusal|RuntimeException $error) {
             throw new SessionRefusal(sprintf('The map was not created: %s', $error->getMessage()), previous: $error);
         }
-        $this->workspace = $this->workspace->withLoadedMap($mapId);
+        $this->recordMadeMap('Create map', $mapId, fn(): string => $this->workspace->createMapAt($mapId,
+            $name === null || trim($name) === '' ? null : trim($name), kind: $kind, width: $width, height: $height));
 
         return ['map' => $mapId, 'maps' => $this->describeMaps()];
     }
@@ -488,9 +492,33 @@ final class EditorSession
         } catch (MapSourceRefusal|RuntimeException $error) {
             throw new SessionRefusal(sprintf('%s was not duplicated: %s', $mapId, $error->getMessage()), previous: $error);
         }
-        $this->workspace = $this->workspace->withLoadedMap($created);
+        $this->recordMadeMap('Duplicate map', $created, fn(): string => $this->workspace->duplicateMap(
+            (int) array_search($mapId, $this->workspace->mapIds, true), mapId: $created) ?? throw new RuntimeException("{$mapId} is no longer in the workspace."));
 
         return ['map' => $created, 'maps' => $this->describeMaps()];
+    }
+
+    /**
+     * Puts the workspace holding a map just made in place. Inside a change set
+     * the making is a step of its history, so cancelling it, or a refused or
+     * checked commit, undoes it in its turn: steps taken before it, such as a
+     * line insertion written at once, then find the workspace they left.
+     * Outside one, a made map stays made, as the terminal editor's does.
+     *
+     * @param Closure(): string $remake Writes the map's files again, for redo, and returns its id.
+     */
+    private function recordMadeMap(string $label, string $mapId, Closure $remake): void
+    {
+        $before = $this->workspace;
+        $this->workspace = $this->workspace->withLoadedMap($mapId);
+        if ($this->changeSet === null) {
+            return;
+        }
+        $this->history->record(new MapCreationCommand($label, $mapId, $before, $this->workspace,
+            function () use ($remake): ProjectWorkspace { return $this->workspace->withLoadedMap($remake()); },
+            fn(): ProjectWorkspace => $this->workspace,
+            function (ProjectWorkspace $workspace): void { $this->workspace = $workspace; },
+        ));
     }
 
     /**
@@ -647,6 +675,13 @@ final class EditorSession
                 ...($edit instanceof LineRemoval ? ['landing' => $edit->landing] : []),
                 'paths' => $paths, 'handEdits' => $plan->handEdits, 'notes' => $plan->notes,
                 'width' => $plan->width, 'height' => $plan->height];
+        }
+
+        // A change set's save planner reads the lines it inserted as holding no save, whatever their blank cells hold.
+        if ($this->changeSet !== null) {
+            $done === 'removed'
+                ? $this->changeSet['lines']->recordRemoval($mapId, $edit->axis, $edit->at, $edit->count)
+                : $this->changeSet['lines']->recordInsertion($mapId, $edit->axis, $edit->at, $edit->count);
         }
 
         return ['status' => $done, 'map' => $mapId, 'revision' => $this->getMapRevision($this->requireMap($mapId)),
@@ -7086,6 +7121,7 @@ final class EditorSession
             'revisions' => array_map($this->getMapRevision(...), $this->getMapsById()),
             'steps' => $this->history->count(),
             'dropped' => $this->history->countDropped(),
+            'lines' => new UnsavedMapLines(),
         ];
 
         return ['status' => 'open', 'errors' => count(MapValidator::selectSeverity($baseline, Severity::ERROR)),
@@ -7145,7 +7181,7 @@ final class EditorSession
         $changedMaps = array_values(array_filter(array_map(fn(string $mapId): ?ProjectMap => $this->getMapsById()[$mapId] ?? null, $changed),
             static fn(?ProjectMap $map): bool => $map?->isDirty() === true && ! in_array($map->mapId, $unrelocated, true)));
         // The change set writes one manifest step for every map that moves saves.
-        $relocations = SaveRelocationPlanner::planAll($changedMaps, $this->workspace->projectRoot)?->describeMoves() ?? [];
+        $relocations = SaveRelocationPlanner::planAll($changedMaps, $this->workspace->projectRoot, $changes['lines'])?->describeMoves() ?? [];
         $retirementRefusal = $blocking === [] ? $this->findRetirementRefusal($changes) : null;
         $reason = match (true) {
             $blocking !== [] => sprintf('%d error%s the player would meet.', count($blocking), count($blocking) === 1 ? '' : 's'),
@@ -7172,7 +7208,8 @@ final class EditorSession
         };
 
         try {
-            $saves = WorkspaceSave::prepareAll($this->workspace, $relocateSaves ? fn(Command $step) => $this->history->record($step) : null, $unrelocated);
+            $saves = WorkspaceSave::prepareAll($this->workspace, $relocateSaves ? fn(Command $step) => $this->history->record($step) : null, $unrelocated,
+                $changes['lines']);
             $written = SaveSet::commit($this->workspace->projectRoot, $saves, $backup);
         } catch (SaveSetAdoptionFailure $partial) {
             // The files are written: the change set is, though the editor's view of it is not current.
