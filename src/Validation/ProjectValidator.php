@@ -201,6 +201,7 @@ class ProjectValidator
       ...$this->checkBattleEntryRules($workspace),
       ...$this->checkSkillCatalog($workspace),
       ...$this->checkCrisisAbilities($workspace),
+      ...$this->checkTutorialFollowOns($workspace),
       ...$this->checkItemCatalog($workspace),
       ...$this->checkSummons($workspace),
       ...$this->checkCutscenes($workspace),
@@ -1483,6 +1484,39 @@ class ProjectValidator
   }
 
   /** Validates current crisis resources against the same skill and state identities runtime consumes. */
+  /**
+   * One concept per tutorial, started when it comes into play: a tutorial's follow-on cinematic carries the story
+   * on, so one that starts another tutorial chains lessons back to back and is warned of.
+   *
+   * @return Issue[]
+   */
+  protected function checkTutorialFollowOns(ProjectWorkspace $workspace): array
+  {
+    $followOns = [];
+    foreach ($workspace->getRecordDatabase(\Ichiloto\Editor\Progression\TutorialFields::CATEGORY)?->getRecords() ?? [] as $record) {
+      $cinematic = $record->get('onFinish');
+      if (is_string($cinematic) && $cinematic !== '') {
+        $followOns['cinematic ' . $cinematic][] = [strval($record->get('id')), $cinematic];
+      }
+    }
+    if ($followOns === []) {
+      return [];
+    }
+
+    $issues = [];
+    \Ichiloto\Editor\Events\ScriptCommandUses::visitCommands($workspace, $workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [],
+      'start_tutorial', static function (array $command, string $where) use ($followOns, &$issues): void {
+        foreach ($followOns[$where] ?? [] as [$tutorial, $cinematic]) {
+          $issues[] = Issue::warning('assets/' . \Ichiloto\Engine\Progression\TutorialCatalog::FILE,
+            sprintf('Tutorial %s follows on with cinematic %s, which starts tutorial %s straight after it.', $tutorial, $cinematic,
+              is_string($command['tutorial'] ?? null) ? $command['tutorial'] : '(unnamed)'),
+            'Teach one concept at a time: give that tutorial its own trigger for when its concept comes into play.');
+        }
+      });
+
+    return $issues;
+  }
+
   private function checkCrisisAbilities(ProjectWorkspace $workspace): array
   {
     try {
