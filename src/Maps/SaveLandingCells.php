@@ -91,16 +91,21 @@ final class SaveLandingCells
      * match only themselves: a marker identifies its event, and its behavior
      * and subject must also remain the same. Conditions all hold together, so
      * an event that keeps every saved condition and adds more runs in fewer
-     * states than it did, never under a save it did not already cover. Legacy
-     * markerless entries qualify only when their exact territory remains
-     * unchanged.
+     * states than it did, never under a save it did not already cover. An
+     * event whose trigger declares that entry only offers the action key
+     * ({@see ReachabilityEvent::$isActionOnly}) starts nothing under a
+     * standing save in any state, so for it a change of conditions alone is
+     * the same occupant; it still owns only the cells it already covered.
+     * Legacy markerless entries qualify only when their exact territory
+     * remains unchanged.
      */
     private static function isSameOccupant(array $current, array $saved): bool
     {
         if (self::isExit($current) && self::isExit($saved)) { return true; }
         if (!isset($current['marker']) && ($current['area'] ?? null) != ($saved['area'] ?? null)) { return false; }
         $conditions = (array) ($current['conditions'] ?? []);
-        $narrowed = array_all((array) ($saved['conditions'] ?? []), static fn(mixed $condition): bool => in_array($condition, $conditions));
+        $narrowed = array_all((array) ($saved['conditions'] ?? []), static fn(mixed $condition): bool => in_array($condition, $conditions))
+            || (ReachabilityEvent::fromDefinition($current)->isActionOnly && ReachabilityEvent::fromDefinition($saved)->isActionOnly);
         unset($current['area'], $saved['area'], $current['conditions'], $saved['conditions']);
         return $narrowed && $current == $saved;
     }
