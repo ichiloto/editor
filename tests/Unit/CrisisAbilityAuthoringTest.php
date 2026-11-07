@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\MenuPresentationSettings;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Engine\Battle\CrisisAbilityCatalog;
 
 it('round trips crisis activation and guarded skill variants through the database', function () {
@@ -27,6 +29,41 @@ it('round trips crisis activation and guarded skill variants through the databas
     $variantFields = $reopened->getSettingsFields($index);
     expect(array_find($variantFields, static fn(array $field): bool => ($field['field'] ?? '') === 'variant0Skill')['reference'])
         ->toBe('crisis_skills');
+});
+
+it('round trips the optional crisis acquisition icon through the theme role picker', function (): void {
+    $root = makeTemporaryProject();
+    writeSkillRecords($root, new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Test technique', 'Strikes.', '', 2, 0));
+    $database = loadRecordDatabase($root, 'crisis_abilities');
+    $index = $database->addRecord();
+    $database->setField($index, 'id', 'synthetic-surge');
+    $database->save();
+
+    $theme = $root . '/' . MenuPresentationSettings::RELATIVE_PATH;
+    if (!is_dir(dirname($theme))) {
+        mkdir(dirname($theme), 0777, true);
+    }
+    file_put_contents($theme, '<?php return ' . var_export([
+        'schema' => 'ichiloto.menu/1',
+        'icons' => ['progression.surge' => 'Graphics/Icons/Surge.png'],
+    ], true) . ';');
+
+    $session = EditorSession::open($root);
+    $category = 'crisis_abilities';
+    $row = array_find($session->readDatabaseRecord($category, $index)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'iconRole');
+    expect($row)->toMatchArray(['reference' => ReferenceCatalog::ICON_ROLES, 'noneLabel' => '(actor portrait)'])
+        ->and(array_column($session->listReferences(null, ReferenceCatalog::ICON_ROLES), 'value'))
+        ->toContain('progression.surge');
+
+    $session->applyDatabaseRecord($category, $index, $row['key'], 'progression.surge');
+    $session->saveDatabase($category);
+    $load = static fn() => CrisisAbilityCatalog::fromProject($root . '/assets')->getAbility('synthetic-surge');
+    expect($load()->iconRole)->toBe('progression.surge');
+
+    $session->applyDatabaseRecord($category, $index, $row['key'], '');
+    $session->saveDatabase($category);
+    expect($load()->toArray())->not->toHaveKey('iconRole');
 });
 
 it('offers a variant only the skills the Engine accepts for a crisis technique', function () {

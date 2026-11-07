@@ -565,6 +565,8 @@ final class RecordSchemaCatalog
             fields: [new RecordField('id', 'Id'), new RecordField('name', 'Name'),
                 new RecordField('label', 'Badge Label', removeWhenEmpty: true),
                 new RecordField('description', 'Description', removeWhenEmpty: true),
+                RecordField::reference('iconRole', 'Acquisition Icon Role', ReferenceCatalog::ICON_ROLES,
+                    allowsNone: true, noneLabel: '(actor portrait)'),
                 new RecordField('hpBelowPercent', 'HP Below %', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('states', 'Activation States', reference: 'states', codec: RecordFieldCodec::CSV_LIST,
                     removeWhenEmpty: true)],
