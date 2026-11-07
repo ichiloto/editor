@@ -586,7 +586,7 @@ final class RecordSchemaCatalog
             ], blank: ['skill' => '']),
             saveCheck: static function (array $whole, string $root): ?string {
                 try {
-                    new \Ichiloto\Engine\Battle\CrisisAbilityCatalog($whole);
+                    new \Ichiloto\Engine\Battle\CrisisAbilityCatalog($whole)->validateVariantConditions();
                 } catch (\InvalidArgumentException $error) { return $error->getMessage(); }
                 return null;
             },

@@ -1489,6 +1489,7 @@ class ProjectValidator
       $entries = array_map(static fn($record): array => (array) $record->toArray(),
         $workspace->getRecordDatabase('crisis_abilities')?->getRecords() ?? []);
       $catalog = new \Ichiloto\Engine\Battle\CrisisAbilityCatalog($entries);
+      $catalog->validateVariantConditions();
       $states = new ReferenceCatalog($workspace)->valuesFor('states');
       foreach ($catalog->getAbilities() as $id => $ability) {
         $ability->validateSkills($workspace->loadSkillCatalog());
@@ -1501,7 +1502,7 @@ class ProjectValidator
       return [];
     } catch (InvalidArgumentException $error) {
       return [Issue::error('assets/Data/crisis-abilities.php', $error->getMessage(),
-        'Correct the crisis activation and resource references in the database.')];
+        'Correct the activation, variant conditions or resource references in Crisis Abilities.')];
     }
   }
 

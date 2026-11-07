@@ -15,13 +15,13 @@ it('round trips crisis activation and guarded skill variants through the databas
     $database->setField($index, 'name', 'Surge');
     $database->setField($index, 'hpBelowPercent', '12.5');
     $database->setField($index, 'states', 'focus');
+    $database->setField($index, 'variant0Conditions', 'variable:form:==:first');
     $database->addSubItem($index, ['skill' => 'Test technique',
         'conditions' => [['type' => 'variable', 'name' => 'form', 'value' => 'second']]]);
     $database->save();
     $ability = CrisisAbilityCatalog::fromProject($root . '/assets')->getAbility('synthetic-surge');
     expect($ability->hpBelowPercent)->toBe(12.5)->and($ability->states)->toBe(['focus'])
-        // The new record's own variant offers the project's skill; the added one is guarded.
-        ->and($ability->variants[0])->toBe(['skill' => 'Test technique', 'conditions' => []])
+        ->and($ability->variants[0]['conditions'][0]['value'])->toBe('first')
         ->and($ability->variants[1]['conditions'][0]['value'])->toBe('second');
     $reopened = loadRecordDatabase($root, 'crisis_abilities');
     $variantFields = $reopened->getSettingsFields($index);
@@ -91,6 +91,53 @@ it('refuses malformed activation before writing the crisis source', function () 
     expect(fn() => $database->save())->toThrow(\RuntimeException::class)
         ->and(is_file($root . '/assets/Data/crisis-abilities.php'))->toBeFalse();
 });
+
+it('blocks indistinguishable crisis variants on save and reports them in existing source', function (
+    string $first, array $firstConditions, string $message,
+) {
+    $root = makeTemporaryProject();
+    writeSkillRecords($root, new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Test technique', 'Strikes.', '', 2, 0));
+    $database = loadRecordDatabase($root, 'crisis_abilities');
+    $index = $database->addRecord();
+    $database->setField($index, 'id', 'synthetic-surge');
+    $database->setField($index, 'variant0Conditions', $first);
+    $secondConditions = [
+        ['type' => 'switch', 'name' => 'transformed'],
+        ['type' => 'event', 'name' => 'awake'],
+    ];
+    $database->addSubItem($index, ['skill' => 'Test technique', 'conditions' => $secondConditions]);
+    $path = $root . '/assets/Data/crisis-abilities.php';
+    expect(fn() => $database->save())->toThrow(RuntimeException::class, $message)
+        ->and(is_file($path))->toBeFalse();
+
+    file_put_contents($path, '<?php return ' . var_export([
+        ['id' => 'synthetic-surge', 'name' => 'Surge', 'hpBelowPercent' => 10,
+            'variants' => [
+                ['skill' => 'Test technique', 'conditions' => $firstConditions],
+                ['skill' => 'Test technique', 'conditions' => $secondConditions],
+            ]],
+    ], true) . ';');
+    $original = file_get_contents($path);
+    $reopened = loadRecordDatabase($root, 'crisis_abilities');
+    $reopened->setField(0, 'name', 'Updated Surge');
+    expect(fn() => $reopened->save())->toThrow(RuntimeException::class, $message)
+        ->and(file_get_contents($path))->toBe($original);
+
+    $issues = new \Ichiloto\Editor\Validation\ProjectValidator()->validate(ProjectWorkspace::fromProject($root));
+    expect(array_any($issues, static fn($issue): bool => str_contains($issue->message, $message)))->toBeTrue();
+})->with([
+    'unconditional variant' => ['', [], 'variant 1 requires conditions'],
+    'same conditions in a different order' => [
+        'event:awake; switch:transformed',
+        [['name' => 'awake', 'type' => 'event'], ['type' => 'switch', 'name' => 'transformed']],
+        'variants 1 and 2 have identical conditions',
+    ],
+    'explicit default switch value' => [
+        'event:awake; switch:transformed:true',
+        [['type' => 'event', 'name' => 'awake'], ['type' => 'switch', 'name' => 'transformed', 'value' => true]],
+        'variants 1 and 2 have identical conditions',
+    ],
+]);
 
 it('stores state identities while labelling choices with their current display names', function () {
     $root = makeTemporaryProject();
