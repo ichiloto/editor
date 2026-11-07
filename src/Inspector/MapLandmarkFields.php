@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Inspector;
 
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Field\MapAreaAuthoring;
 use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\ProjectMap;
@@ -157,6 +158,7 @@ final readonly class MapLandmarkFields
             'kind' => $landmarks->setKind($index, self::requireKind($landmarks, $anchor
                 ?? throw new InvalidArgumentException('Choose this landmark\'s anchor first.'), (string) $value)),
             'category' => $landmarks->setCategory($index, $this->requireCategory((string) $value)),
+            'iconArea' => $landmarks->setIconArea($index, self::requireIconArea($map, $anchor, (string) $value)),
             'name' => $landmarks->setName($index, (string) $value),
             'nameMessage' => $landmarks->setNameMessage($index, (string) $value),
             'secret' => $landmarks->setSecret($index, (bool) $value),
@@ -272,6 +274,42 @@ final readonly class MapLandmarkFields
         }
     }
 
+    /**
+     * A chosen icon area: none, or an area the map declares, for a landmark anchored to a transfer entrance. Whether
+     * the area holds the entrance and no other entrance's area is the Engine's check when the edit is written.
+     *
+     * @param array<string, string>|null $anchor
+     */
+    private static function requireIconArea(ProjectMap $map, ?array $anchor, string $value): ?string
+    {
+        if ($value === '') { return null; }
+        if ($anchor === null || !isset($anchor['event']) || !MapLandmarks::isTransfer($map->getEventDefinition($anchor['event']) ?? [])) {
+            throw new InvalidArgumentException('Only an entrance anchored to a transfer event can share its place icon through an area.');
+        }
+        if (!in_array($value, array_column(MapAreaAuthoring::readEntries($map), 'id'), true)) {
+            throw new InvalidArgumentException(sprintf('%s declares no area %s.', $map->mapId, $value));
+        }
+        return $value;
+    }
+
+    /**
+     * The icon area choices: none, then each area the map declares, keeping an undeclared current value visible.
+     *
+     * @return list<array{label: string, value: string, description: string}>
+     */
+    private static function describeIconAreaChoices(ProjectMap $map, string $current): array
+    {
+        $choices = [['label' => '(its own cells)', 'value' => '', 'description' => 'One place icon over this entrance alone.']];
+        $ids = array_map(strval(...), array_column(MapAreaAuthoring::readEntries($map), 'id'));
+        foreach ($ids as $id) {
+            $choices[] = ['label' => $id, 'value' => $id, 'description' => 'One place icon for every way into this place inside the area.'];
+        }
+        if ($current !== '' && !in_array($current, $ids, true)) {
+            $choices[] = ['label' => $current . ' · not declared', 'value' => $current, 'description' => 'Choose a declared area or none.'];
+        }
+        return $choices;
+    }
+
     /** A chosen place category: none, or one the Engine's or the project's catalogue declares. */
     private function requireCategory(string $value): ?string
     {
@@ -339,6 +377,14 @@ final readonly class MapLandmarkFields
             $row(['label' => '    Name', 'value' => $named ? (string) ($entry['name']['default'] ?? '') : '(unnamed · the minimap shows no label)',
                 'control' => new InputControl(InputControlType::TEXT, $named ? (string) ($entry['name']['default'] ?? '') : ''), 'field' => 'name']),
         ];
+        // An entrance's place icon may stand once for every way into its place inside a named area, such as both mouths
+        // of a pass; only a transfer entrance can share its icon this way.
+        if ($anchor !== null && isset($anchor['event'])
+            && MapLandmarks::isTransfer($landmarks->map->getEventDefinition($anchor['event']) ?? [])) {
+            $iconArea = is_string($entry[MapLandmarks::ICON_AREA_KEY] ?? null) ? $entry[MapLandmarks::ICON_AREA_KEY] : '';
+            $fields[] = $row(['label' => '    Icon Area', 'value' => $iconArea === '' ? '(its own cells)' : $iconArea, 'editable' => true,
+                'field' => 'iconArea', 'choices' => self::describeIconAreaChoices($landmarks->map, $iconArea)]);
+        }
         if ($named) {
             $fields[] = $row(['label' => '    Name Translation Key', 'value' => (string) ($entry['name']['message'] ?? ''),
                 'control' => new InputControl(InputControlType::TEXT, (string) ($entry['name']['message'] ?? '')), 'field' => 'nameMessage']);

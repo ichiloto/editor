@@ -26,6 +26,8 @@ final readonly class MapLandmarks
 {
     /** The map key holding the ordered declarations. */
     public const string KEY = 'landmarks';
+    /** The entrance key naming the area whose one place icon marks every way into its place inside it. */
+    public const string ICON_AREA_KEY = 'iconArea';
 
     /** @param list<array<string, mixed>> $entries */
     private function __construct(public ProjectMap $map, public array $entries) {}
@@ -301,6 +303,21 @@ final readonly class MapLandmarks
     }
 
     /**
+     * Gives an entrance one place icon for every way into its place that lies in a named area, such as both mouths of
+     * a pass, or takes the area away when none is chosen. The Engine checks the area holds the entrance and no other
+     * entrance's area.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function setIconArea(int $index, ?string $area): array
+    {
+        $entries = $this->entries;
+        if ($area === null || $area === '') { unset($entries[$index][self::ICON_AREA_KEY]); }
+        else { $entries[$index][self::ICON_AREA_KEY] = $area; }
+        return $entries;
+    }
+
+    /**
      * Names a landmark, or removes its name when the text is blank. A first name takes the Engine's map-scoped
      * translation key; a name already keyed keeps its key.
      *
@@ -414,6 +431,23 @@ final readonly class MapLandmarks
         $index = $landmarks->findAnchorIndex($anchor);
         return $index === null ? [] : [sprintf('%s landmark %s (%s)', $map->mapId, $landmarks->entries[$index]['id'] ?? $index,
             $landmarks->entries[$index]['kind'] ?? 'no kind')];
+    }
+
+    /**
+     * The entrance landmarks whose one place icon an area holds, which keep the area from being deleted. A landmark
+     * block that cannot be read is reported, since its references cannot be proved.
+     *
+     * @return list<string>
+     */
+    public static function describeIconAreaReferences(ProjectMap $map, string $area): array
+    {
+        try {
+            $landmarks = self::readMap($map);
+        } catch (InvalidArgumentException $error) {
+            return [sprintf('%s landmarks: %s', $map->mapId, $error->getMessage())];
+        }
+        return array_values(array_map(static fn(array $entry): string => sprintf('%s landmark %s (icon area)', $map->mapId, $entry['id'] ?? '?'),
+            array_filter($landmarks->entries, static fn(array $entry): bool => ($entry[self::ICON_AREA_KEY] ?? null) === $area)));
     }
 
     /**
