@@ -2501,18 +2501,25 @@ Each tutorial has:
 - `Trigger`, the shared world-condition editor. Every condition must hold. An
   automatic tutorial needs at least one;
 - `Guide Offers`: `practice` replays the steps on the real screens, `demo`
-  plays its `Demonstration`, and `none` offers nothing;
-- `Follow-On Script`, the script that runs once the tutorial is completed or
-  skipped.
+  plays its `Demonstration`, a stage timeline picked from the project's, and
+  `none` offers nothing;
+- `Follow-On Cinematic`, picked from the project's cinematics, which plays once
+  the tutorial is completed or skipped.
 
 `Steps` run in order, one per view. Each step names the `Screen`, `View` and
-`Target` the player acts on and the `Action` whose control the game shows,
-picked from the project's input actions. A step is completed by one thing:
-`Completed By Outcome`, an outcome the screen reports when the player's action
-succeeds (with an optional `Outcome Subject`), or `Completed By Condition`, one
-world condition. Choosing one clears the other. A step's `Line` is one short
-sentence, said by its optional `Speaker`. `Move Focus To Target` moves the
-cursor to the target when the step begins.
+`Target` the player acts on and the `Action` whose control the game shows. They
+are picked from what the Engine declares for teaching: a screen's views, a
+view's actions and its fixed targets, and the targets it draws from the project
+(party members, summons, Magi Arts disciplines, families and nodes), listed as
+the Engine resolves them. Each opens a list filtered as you type (`Enter` in
+the Terminal, a click in the GUI editor). Changing a step's screen or view keeps
+only what the new view declares. A step is completed by one thing: `Completed By Outcome`, an
+outcome the view reports when the player's action succeeds (with an optional
+`Outcome Subject` among those the outcome names), or `Completed By Condition`,
+one world condition. Choosing one clears the other. A step's `Line` is one
+sentence on one line, up to the number of cells its label shows, said by its
+optional `Speaker`, a party member picked by actor id. `Move Focus To Target`
+moves the cursor to the target when the step begins.
 
 A new tutorial starts from a script, offers nothing in the Guide, and has one
 step on the first screen the Engine declares for teaching, grouped under that
@@ -2520,10 +2527,12 @@ screen until its author chooses a category. The `Step Order` pane beside the
 record lists the steps one line each: where the player acts, with which
 action, what completes the step and its line.
 
-Edits are written into the file's own source. The Engine's catalogue reads the
+Edits are written into the file's own source. The Engine reads and matches the
 tutorials before anything is saved: a duplicate id, an automatic tutorial
-without a trigger, a step without a target, action or completion, or a line
-that is not a sentence is refused with its reason and nothing is written.
+without a trigger, a target, action, outcome, subject or speaker the Engine
+does not know, a follow-on cinematic or demonstration the project lacks, or a
+line that is not one sentence on one line is refused with its reason and
+nothing is written.
 
 ### Word Forms
 
