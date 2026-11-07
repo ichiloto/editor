@@ -472,6 +472,7 @@ final class CutsceneOutline
             'narration', 'title_card' => self::quote(strval($command['title'] ?? $command['text'] ?? ''), '') . self::seconds($command, 'seconds'),
             'choice' => self::quote(strval($command['prompt'] ?? $command['title'] ?? ''), '') . sprintf(' · %d options', count(self::listOf($command['options'] ?? null))),
             'wait' => self::seconds($command, 'seconds'),
+            'play_stage' => strval($command['stage'] ?? '') . self::seconds($command, 'seconds'),
             'set_switch' => strval($command['name'] ?? '') . ' = ' . (($command['value'] ?? true) ? 'on' : 'off'),
             'set_variable' => strval($command['name'] ?? '') . ' ' . (strval($command['op'] ?? 'set') === 'add' ? '+=' : '=') . ' ' . strval(is_scalar($command['value'] ?? null) ? $command['value'] : ''),
             'record_event' => strval($command['name'] ?? ''),

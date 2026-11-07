@@ -244,7 +244,10 @@ final class CutsceneLaneOverview
             'wait' => [$seconds('seconds', 0.5), []],
             'narration', 'title_card' => [$seconds('seconds', 2.5), []],
             'transition' => [$seconds('seconds', 0.24), []],
-            'text', 'choice', 'play_storybook' => [0.0, [self::INPUT]],
+            // A stage plays for exactly its authored seconds, in Terminal too.
+            'play_stage' => [$seconds('seconds', 0.0), []],
+            // Power unlock notices wait for the player to acknowledge each one.
+            'text', 'choice', 'play_storybook', 'show_power_unlocks' => [0.0, [self::INPUT]],
             'start_battle' => [0.0, [self::BATTLE]],
             'common_event' => [0.0, [self::UNKNOWN]],
             'move_route' => [self::routeSeconds($command), []],
