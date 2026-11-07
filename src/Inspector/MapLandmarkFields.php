@@ -55,7 +55,7 @@ final readonly class MapLandmarkFields
             ['label' => '  Unnamed Route Markers', 'value' => (string) $automatic, 'editable' => false],
             // The list's own heading, so adding works on an empty list as on every other inspector list.
             ['label' => sprintf('  Landmarks · %d', $count), 'value' => '', 'editable' => false,
-                'target' => self::TARGET, 'landmarkList' => ['index' => max(0, $count - 1)]],
+                'target' => self::TARGET, 'landmarkList' => ['index' => max(0, $count - 1)], 'listHeading' => true],
         ];
         $problem = $this->findCurrentProblem($map, $landmarks->entries);
         if ($problem !== null) {
