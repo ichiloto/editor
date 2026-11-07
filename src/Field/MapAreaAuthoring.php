@@ -155,6 +155,10 @@ final readonly class MapAreaAuthoring
                     if (is_array($landmark) && ($landmark['anchor'] ?? null) === [self::ANCHOR_KIND => $id]) {
                         $landmarks[$index]['anchor'] = [self::ANCHOR_KIND => $to];
                     }
+                    // An entrance's shared place icon follows its area too.
+                    if (is_array($landmark) && ($landmark[MapLandmarks::ICON_AREA_KEY] ?? null) === $id) {
+                        $landmarks[$index][MapLandmarks::ICON_AREA_KEY] = $to;
+                    }
                 }
                 $this->map->setMapDataField([MapLandmarks::KEY], $landmarks);
             }
@@ -206,6 +210,7 @@ final readonly class MapAreaAuthoring
         $pools = $encounters->findPoolsInArea($id);
 
         return [...$found, ...MapLandmarks::describeAnchorReferences($map, [self::ANCHOR_KIND => $id]),
+            ...MapLandmarks::describeIconAreaReferences($map, $id),
             ...array_map(static fn(string $troop): string => sprintf('%s encounter %s', $map->mapId, $troop), $troops),
             ...array_map(static fn(int $rule): string => sprintf('%s battle arena rule %d', $map->mapId, $rule + 1), $rules),
             ...array_map(static fn(int $pool): string => sprintf('%s encounter pool %d', $map->mapId, $pool + 1), $pools)];
