@@ -60,15 +60,18 @@ final class SaveRelocationPlanner
      * written once, whichever of its maps move saves.
      *
      * @param list<ProjectMap> $maps
+     * @param UnsavedMapLines|null $unsavedLines Rows and columns a change set inserted: written at once, but no save
+     *     ever stood on them, so their cells are never a save's origin.
      * @throws RuntimeException When the manifest cannot be read or rewritten; nothing is written.
      */
-    public static function planAll(array $maps, string $projectRoot): ?SaveRelocationPlan
+    public static function planAll(array $maps, string $projectRoot, ?UnsavedMapLines $unsavedLines = null): ?SaveRelocationPlan
     {
-        return ProjectDirectoryContext::run($projectRoot, static fn(string $root): ?SaveRelocationPlan => self::buildPlan($maps, $root));
+        return ProjectDirectoryContext::run($projectRoot, static fn(string $root): ?SaveRelocationPlan => self::buildPlan($maps, $root,
+            $unsavedLines ?? new UnsavedMapLines()));
     }
 
     /** @param list<ProjectMap> $maps */
-    private static function buildPlan(array $maps, string $root): ?SaveRelocationPlan
+    private static function buildPlan(array $maps, string $root, UnsavedMapLines $unsavedLines): ?SaveRelocationPlan
     {
         $manifestPath = $root . '/' . SaveManifestStep::PATH;
         $maps = array_values(array_filter($maps, static fn(ProjectMap $map): bool => $map->isDirty()));
@@ -89,7 +92,7 @@ final class SaveRelocationPlanner
         $moving = [];
         foreach ($maps as $map) {
             $report = $reachability->reports[$map->mapId] ?? null;
-            $found = $report === null ? [] : self::planMap($map, $root, $report, $changed->reports[$map->mapId] ?? null);
+            $found = $report === null ? [] : self::planMap($map, $root, $report, $changed->reports[$map->mapId] ?? null, $unsavedLines);
             if ($found !== []) {
                 $relocations = [...$relocations, ...$found];
                 $moving[] = $map->mapId;
@@ -128,7 +131,8 @@ final class SaveRelocationPlanner
      *
      * @return list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>
      */
-    private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report, ?MapReachabilityReport $changed): array
+    private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report, ?MapReachabilityReport $changed,
+        UnsavedMapLines $unsavedLines): array
     {
         $grid = $map->getResolvedCollisionMap();
         // A map the player reaches nowhere today, such as one made in this change and not yet joined to the world,
@@ -152,6 +156,10 @@ final class SaveRelocationPlanner
         $blocked = [];
         foreach ($grid as $y => $row) {
             foreach (array_keys($row) as $x) {
+                // A line the change set inserted holds no save, though its blank cells are on disk.
+                if ($unsavedLines->containsCell($map->mapId, $x, $y)) {
+                    continue;
+                }
                 $taken = CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]) || isset($covered["{$x},{$y}"]);
                 // Floor the player reaches today and the change walls off: a save there would load with no way out.
                 $cutOff = $changed !== null && $report->isReachable($x, $y) && ! $changed->isReachable($x, $y);
