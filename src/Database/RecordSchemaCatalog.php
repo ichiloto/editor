@@ -2109,6 +2109,10 @@ final class RecordSchemaCatalog
                     new RecordField('layer', 'Glyph Layer'),
                     ...($graphical ? [new RecordField('occupancy', 'Physical Footprint', codec: RecordFieldCodec::PHYSICAL_FOOTPRINT,
                         removeWhenEmpty: true)] : []),
+                    // The tile layers its stamp leaves in place, as a base piece keeps the ground and water drawn over it:
+                    // graphical authoring, so the GUI editor's; the Engine refuses a layer the piece itself writes.
+                    ...($graphical ? [new RecordField('keeps', 'Keeps Tile Layers', codec: RecordFieldCodec::CSV_TOKENS,
+                        removeWhenEmpty: true)] : []),
                     new RecordField(
                         'connects',
                         'Connects',
