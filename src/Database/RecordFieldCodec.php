@@ -19,6 +19,12 @@ enum RecordFieldCodec: string
     /** A list of engine world-conditions, shown as `type:name:extras; …`. */
     case CONDITIONS = 'conditions';
 
+    /**
+     * One engine world-condition stored as itself, not in a list: a tutorial
+     * step's completion. Shown and built as a condition list that holds at most one.
+     */
+    case WORLD_CONDITION = 'world_condition';
+
     /** A list of plain strings, shown comma-separated. */
     case CSV_LIST = 'csv_list';
 

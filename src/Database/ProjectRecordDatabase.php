@@ -148,6 +148,8 @@ final class ProjectRecordDatabase
         return match (true) {
             $authored === null => null,
             $field->codec === RecordFieldCodec::CONDITIONS => ConditionCodec::findCarryIssue($authored),
+            $field->codec === RecordFieldCodec::WORLD_CONDITION => is_array($authored) && isset($authored['type'])
+                ? ConditionCodec::findCarryIssue([$authored]) : null,
             $field->codec === RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::findCarryIssue($authored),
             default => null,
         };
@@ -3799,10 +3801,13 @@ final class ProjectRecordDatabase
             return $descriptor;
         }
 
-        if ($field->codec === RecordFieldCodec::CONDITIONS) {
+        if ($field->codec === RecordFieldCodec::CONDITIONS || $field->codec === RecordFieldCodec::WORLD_CONDITION) {
             // A condition list is built a part at a time. The encoded line is
             // still what gets stored, but nobody has to write it.
             $descriptor['conditions'] = true;
+            if ($field->codec === RecordFieldCodec::WORLD_CONDITION) {
+                $descriptor['conditionLimit'] = 1;
+            }
 
             return $descriptor;
         }
@@ -4006,6 +4011,15 @@ final class ProjectRecordDatabase
             return $conditions === [] && $field->removeWhenEmpty ? null : $conditions;
         }
 
+        if ($field->codec === RecordFieldCodec::WORLD_CONDITION) {
+            $conditions = ConditionCodec::decodeAllStrictly($trimmed);
+            if (count($conditions) > 1) {
+                throw new \InvalidArgumentException(sprintf('%s is one condition; choose the one that completes it.', $field->label));
+            }
+
+            return $conditions[0] ?? null;
+        }
+
         if ($field->codec === RecordFieldCodec::AFFINITIES) {
             // Empty decodes to [], which the exporter's default-trimming
             // drops from a rebuilt constructor call.
@@ -4152,6 +4166,8 @@ final class ProjectRecordDatabase
             RecordFieldCodec::PHYSICAL_FOOTPRINT => \Ichiloto\Editor\Maps\PhysicalFootprintCodec::encode($value),
             RecordFieldCodec::PIECE_DOORWAY => \Ichiloto\Editor\Maps\PieceDoorwayCodec::encode($value),
             RecordFieldCodec::CONDITIONS => ConditionCodec::encodeAll(is_array($value) ? $value : []),
+            // Only a world condition reads here; anything else (an outcome) is another row's.
+            RecordFieldCodec::WORLD_CONDITION => is_array($value) && isset($value['type']) ? ConditionCodec::encode($value) : '',
             RecordFieldCodec::AFFINITIES => ElementAffinityCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::ACTOR_PREDICATES => BattleEntryPredicateCodec::encodeAll(is_array($value) ? $value : []),

@@ -7438,6 +7438,8 @@ final class EditorSession
             // A list picked a member at a time: each pick toggles one member.
             'multi' => $kind === 'reference' && ($field['multi'] ?? false) === true ? true : null,
             'list' => is_array($list) && $target !== null ? ['index' => (int) ($list['index'] ?? 0)] : null,
+            // A condition row that holds one condition, not a list (a tutorial step's completion).
+            'conditionLimit' => $kind === 'conditions' && is_int($field['conditionLimit'] ?? null) ? $field['conditionLimit'] : null,
             // Conditions and writes are built a part at a time from these.
             'entries' => match ($kind) {
                 'conditions' => ConditionCodec::decodeAll(is_string($field['encoded'] ?? null) ? $field['encoded'] : (string) ($field['value'] ?? '')),
