@@ -11,11 +11,13 @@ use Ichiloto\Editor\Database\RecordFieldCodec;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordStorage;
 use Ichiloto\Editor\Database\RecordSubList;
-use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Engine\Progression\TutorialCatalog;
+use Ichiloto\Engine\Progression\TutorialProjectReferences;
+use Ichiloto\Engine\Progression\TutorialReferenceSource;
 use Ichiloto\Engine\Progression\TutorialReplayMode;
 use Ichiloto\Engine\Progression\TutorialScreenCatalog;
 use Ichiloto\Engine\Progression\TutorialStartMode;
+use Ichiloto\Engine\Progression\TutorialStep;
 use InvalidArgumentException;
 
 /**
@@ -29,8 +31,12 @@ use InvalidArgumentException;
  * owning screen reports (with an optional subject), or one world condition. Its
  * optional line is one short sentence, spoken by an optional speaker.
  *
- * The Engine's own catalogue judges every save, so a step or tutorial the
- * runtime could not read is refused before a byte is written.
+ * Screens, views, targets, actions, outcomes and their subjects are picked from
+ * what the Engine's {@see TutorialScreenCatalog} declares, the targets and
+ * subjects a view draws from the project resolved by the Engine's
+ * {@see TutorialProjectReferences}. The Engine's own catalogue and that
+ * resolver's validation judge every save, so a step the runtime could not read
+ * or match is refused before a byte is written.
  *
  * @package Ichiloto\Editor\Progression
  */
@@ -45,6 +51,15 @@ final class TutorialFields
     private const string OUTCOME = 'until.outcome';
     private const string SUBJECT = 'until.subject';
     private const string CONDITION = 'until';
+
+    /** The entry-choice sources a step's pickers read ({@see self::listChoices()}). */
+    public const string SCREENS = 'tutorial_screens';
+    public const string VIEWS = 'tutorial_views';
+    public const string TARGETS = 'tutorial_targets';
+    public const string ACTIONS = 'tutorial_actions';
+    public const string OUTCOMES = 'tutorial_outcomes';
+    public const string SUBJECTS = 'tutorial_subjects';
+    public const string SPEAKERS = 'tutorial_speakers';
 
     private function __construct()
     {
@@ -66,8 +81,9 @@ final class TutorialFields
                 // Every condition must hold; an automatic tutorial needs at least one.
                 new RecordField('trigger', 'Trigger', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
                 new RecordField('replay', 'Guide Offers', options: array_column(TutorialReplayMode::cases(), 'value')),
-                new RecordField('demo', 'Demonstration', removeWhenEmpty: true, displayDefault: '(none)'),
-                new RecordField('onFinish', 'Follow-On Script', removeWhenEmpty: true, displayDefault: '(none)'),
+                RecordField::reference('demo', 'Demonstration', 'stage_timelines', allowsNone: true, noneLabel: '(none)'),
+                // Played once the tutorial is completed or skipped.
+                RecordField::reference('onFinish', 'Follow-On Cinematic', 'cinematics', allowsNone: true, noneLabel: '(none)'),
             ],
             labelKey: 'title',
             identityKey: 'id',
@@ -104,7 +120,10 @@ final class TutorialFields
     public static function checkSource(array $whole, string $projectRoot = ''): ?string
     {
         try {
-            new TutorialCatalog(array_values($whole));
+            $catalog = new TutorialCatalog(array_values($whole));
+            if ($projectRoot !== '') {
+                new TutorialProjectReferences(rtrim($projectRoot, '/') . '/assets')->validateCatalog($catalog);
+            }
         } catch (InvalidArgumentException $error) {
             return $error->getMessage();
         }
@@ -125,16 +144,18 @@ final class TutorialFields
         $byCondition = is_array($until) && ! array_key_exists('outcome', $until) && $until !== [];
 
         return [
-            new RecordField('target.screen', 'Screen'),
-            new RecordField('target.view', 'View'),
-            new RecordField('target.id', 'Target'),
-            RecordField::reference('action', 'Action', ReferenceCatalog::INPUT_ACTIONS),
-            new RecordField(self::OUTCOME, 'Completed By Outcome', removeWhenEmpty: true,
-                displayDefault: $byCondition ? '(a world condition)' : null),
-            ...($byCondition ? [] : [new RecordField(self::SUBJECT, 'Outcome Subject', removeWhenEmpty: true, displayDefault: '(any)')]),
+            new RecordField('target.screen', 'Screen', entryChoices: self::SCREENS),
+            new RecordField('target.view', 'View', entryChoices: self::VIEWS),
+            new RecordField('target.id', 'Target', entryChoices: self::TARGETS),
+            new RecordField('action', 'Action', entryChoices: self::ACTIONS),
+            new RecordField(self::OUTCOME, 'Completed By Outcome', options: [''], removeWhenEmpty: true,
+                displayDefault: $byCondition ? '(a world condition)' : null, entryChoices: self::OUTCOMES),
+            ...($byCondition ? [] : [RecordField::entryChoice(self::SUBJECT, 'Outcome Subject', self::SUBJECTS, '(any)')]),
             new RecordField(self::CONDITION, 'Completed By Condition', codec: RecordFieldCodec::WORLD_CONDITION),
-            new RecordField('say', 'Line', removeWhenEmpty: true, displayDefault: '(no line)'),
-            new RecordField('speaker', 'Speaker', removeWhenEmpty: true, displayDefault: '(no speaker)'),
+            // One sentence on one line, held to the Engine's budget.
+            new RecordField('say', sprintf('Line (one sentence, up to %d cells)', TutorialStep::MAX_INSTRUCTION_CELLS),
+                removeWhenEmpty: true, displayDefault: '(no line)'),
+            RecordField::entryChoice('speaker', 'Speaker', self::SPEAKERS, '(no speaker)'),
             new RecordField('focus', 'Move Focus To Target', InputControlType::BOOLEAN, removeWhenEmpty: true),
         ];
     }
@@ -152,8 +173,70 @@ final class TutorialFields
         if ($field === self::OUTCOME || $field === self::SUBJECT) {
             $step['until'] = array_intersect_key($until, ['outcome' => true, 'subject' => true]);
         }
+        if ($field === 'target.screen' || $field === 'target.view') {
+            $step = self::keepStepOnDeclaredView($step);
+        }
 
         return $step;
+    }
+
+    /**
+     * After its screen or view changes, a step keeps only what that view declares: the screen's first view when
+     * its own is not there, its first fixed target, action and outcome where the step's are not, and no subject
+     * the new outcome cannot name. A target a view draws from the project is left for the author to pick.
+     *
+     * @param array<string, mixed> $step
+     * @return array<string, mixed>
+     */
+    private static function keepStepOnDeclaredView(array $step): array
+    {
+        $views = TutorialScreenCatalog::getViews()[$step['target']['screen'] ?? ''] ?? [];
+        if ($views === []) {
+            return $step;
+        }
+        if (! isset($views[$step['target']['view'] ?? ''])) {
+            $step['target']['view'] = array_key_first($views);
+        }
+        $declared = $views[$step['target']['view']];
+        if (! in_array($step['target']['id'] ?? null, $declared['targets'], true)) {
+            $step['target']['id'] = $declared['targets'][0] ?? '';
+        }
+        if (! in_array($step['action'] ?? null, $declared['actions'], true)) {
+            $step['action'] = $declared['actions'][0] ?? '';
+        }
+        $until = is_array($step['until'] ?? null) ? $step['until'] : [];
+        if (array_key_exists('outcome', $until) && ! isset($declared['outcomes'][$until['outcome']])) {
+            $step['until'] = ['outcome' => (string) array_key_first($declared['outcomes'])];
+        }
+
+        return $step;
+    }
+
+    /**
+     * What a step's picker offers, from the Engine's declarations for the step's own screen and view and the
+     * project identities the Engine's resolver lists.
+     *
+     * @param array<string, mixed> $step
+     * @return list<string>
+     */
+    public static function listChoices(string $source, array $step, TutorialProjectReferences $references): array
+    {
+        $views = TutorialScreenCatalog::getViews();
+        $screen = (string) ($step['target']['screen'] ?? '');
+        $view = (string) ($step['target']['view'] ?? '');
+        $declared = $views[$screen][$view] ?? null;
+        $subjects = $declared['outcomes'][$step['until']['outcome'] ?? ''] ?? [];
+
+        return array_values(array_map(strval(...), match ($source) {
+            self::SCREENS => array_keys($views),
+            self::VIEWS => array_keys($views[$screen] ?? []),
+            self::TARGETS => $references->getTargetIds($screen, $view),
+            self::ACTIONS => $declared['actions'] ?? [],
+            self::OUTCOMES => array_keys($declared['outcomes'] ?? []),
+            self::SUBJECTS => is_string($subjects) ? $references->getIds($subjects) : $subjects,
+            self::SPEAKERS => $references->getIds(TutorialReferenceSource::ACTOR),
+            default => [],
+        }));
     }
 
     /**

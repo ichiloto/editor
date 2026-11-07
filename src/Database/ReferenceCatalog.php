@@ -246,6 +246,9 @@ final class ReferenceCatalog
     /** @var array<string, string>|null The battle presentation's arenas, read once. */
     private ?array $arenaNames = null;
 
+    /** The project identities tutorials name, as the Engine resolves them, read once per catalogue. */
+    private ?\Ichiloto\Engine\Progression\TutorialProjectReferences $tutorialReferences = null;
+
     public function __construct(
         private readonly ProjectWorkspace $workspace,
         private readonly ?ProjectMap $currentMap = null,
@@ -732,10 +735,12 @@ final class ReferenceCatalog
      * @param array<string, mixed> $owner The record holding the entry.
      * @param string|null $selector For a source whose choices belong to something another field of the holder
      *   names, that field ({@see RecordField::$entryChoicesSelector}).
+     * @param array<string, mixed> $entry The whole list entry the field belongs to, for choices that depend on more
+     *   than the object the field lives in (a tutorial step's outcome subjects depend on its target's screen and view).
      * @return list<string>
      * @throws InvalidArgumentException For a source nothing reads.
      */
-    public function listEntryChoices(string $source, array $holder, array $owner = [], ?string $selector = null): array
+    public function listEntryChoices(string $source, array $holder, array $owner = [], ?string $selector = null, array $entry = []): array
     {
         if ($source === self::NPC_PLACEMENTS) {
             $npcId = $selector === null ? null : ($holder[$selector] ?? null);
@@ -763,6 +768,11 @@ final class ReferenceCatalog
         }
         if ($source === self::TILESET_TILE_LAYERS) {
             return self::listTilesetTileLayers($owner);
+        }
+        if (str_starts_with($source, 'tutorial_')) {
+            $this->tutorialReferences ??= new \Ichiloto\Engine\Progression\TutorialProjectReferences($this->workspace->projectRoot . '/assets');
+
+            return \Ichiloto\Editor\Progression\TutorialFields::listChoices($source, $entry === [] ? $holder : $entry, $this->tutorialReferences);
         }
         if ($source === 'tileset_thickets') {
             $thickets = is_array($owner['thickets'] ?? null) ? $owner['thickets'] : [];
