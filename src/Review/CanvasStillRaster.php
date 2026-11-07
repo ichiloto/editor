@@ -8,6 +8,7 @@ use GdImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageBottomFade;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImagePreflight;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicator;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicatorKind;
@@ -45,6 +46,7 @@ final class CanvasStillRaster
         RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::CANVAS_IMAGE_TONE, RendererSessionConfig::CANVAS_IMAGE_FLIP,
         RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
         RendererSessionConfig::CANVAS_IMAGE_ROTATION, RendererSessionConfig::CANVAS_TEXTURE_STRIP,
+        RendererSessionConfig::CANVAS_IMAGE_BOTTOM_FADE,
     ];
 
     /** Fonts tried, in order, when none is given: the graphical renderer's own text font first. */
@@ -324,7 +326,7 @@ final class CanvasStillRaster
         $rotation = $part->rotation ?? 0;
         if ($rotation === 0) {
             $this->drawPicture($surface, $source, [$sourceX, $sourceY, $sourceWidth, $sourceHeight], $part->destination,
-                $part->clipRect, $part->opacity, $part->brightness, $part->flipX, $part->flipY);
+                $part->clipRect, $part->opacity, $part->brightness, $part->flipX, $part->flipY, $part->bottomFade);
             return;
         }
         if (CanvasImage::getRotatedRegionBytes($sourceWidth, $sourceHeight, $rotation) > CanvasImagePreflight::MAX_BYTES) {
@@ -480,7 +482,8 @@ final class CanvasStillRaster
      * @param array{int, int, int, int} $source The region's x, y, width and height in the picture.
      */
     private function drawPicture(GdImage $surface, GdImage $picture, array $source, CanvasRectangle $destination,
-        ?CanvasRectangle $clip, float $opacity, float $brightness, bool $flipX, bool $flipY): void
+        ?CanvasRectangle $clip, float $opacity, float $brightness, bool $flipX, bool $flipY,
+        ?CanvasImageBottomFade $bottomFade = null): void
     {
         [$sourceX, $sourceY, $sourceWidth, $sourceHeight] = $source;
         $drawLeft = (int) round($destination->x);
@@ -498,6 +501,9 @@ final class CanvasStillRaster
         if ($brightness < 1 || $opacity < 1) {
             self::adjustPixels($stretched, $brightness, $opacity);
         }
+        if ($bottomFade !== null) {
+            self::applyBottomFade($stretched, $bottomFade);
+        }
         $maskLeft = $clip === null ? $drawLeft : max($drawLeft, (int) round($clip->x));
         $maskTop = $clip === null ? $drawTop : max($drawTop, (int) round($clip->y));
         $maskRight = $clip === null ? $drawLeft + $drawWidth : min($drawLeft + $drawWidth, (int) round($clip->x + $clip->width));
@@ -506,6 +512,22 @@ final class CanvasStillRaster
             imagecopy($surface, $stretched, $maskLeft, $maskTop, $maskLeft - $drawLeft, $maskTop - $drawTop,
                 $maskRight - $maskLeft, $maskBottom - $maskTop);
         }
+    }
+
+    private static function applyBottomFade(GdImage $image, CanvasImageBottomFade $fade): void
+    {
+        imagealphablending($image, false);
+        $width = imagesx($image);
+        $height = imagesy($image);
+        for ($x = 0; $x < $width; $x++) {
+            $start = $fade->getStart(($x + .5) / $width);
+            for ($y = max(0, (int) ceil($start * $height - .5)); $y < $height; $y++) {
+                $pixel = imagecolorat($image, $x, $y);
+                $coverage = (127 - ($pixel >> 24)) * $fade->getCoverage($start, ($y + .5) / $height);
+                imagesetpixel($image, $x, $y, ((127 - (int) round($coverage)) << 24) | ($pixel & 0xffffff));
+            }
+        }
+        imagealphablending($image, true);
     }
 
     /** Scales an image's colour by a brightness and its coverage by an opacity, each in [0, 1], as the renderer prepares them. */

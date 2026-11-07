@@ -4100,7 +4100,8 @@ final class EditorSession
      * @return array<string, mixed>
      * @throws SessionRefusal When the troop is unknown, the project has no graphical battle, or the move is refused.
      */
-    public function readTroopFormation(int $index, ?string $arena = null, ?array $moving = null): array
+    public function readTroopFormation(int $index, ?string $arena = null, ?array $moving = null,
+        bool $imageBottomFade = false): array
     {
         $catalog = $this->requireBattleLayoutCatalog('arrange troops on');
         ['members' => $members, 'places' => $places] = $this->readTroopPlaces($index);
@@ -4109,7 +4110,7 @@ final class EditorSession
         }
         $enemies = array_map(static fn(array $member, ?BattleStageSlot $place): array => ['enemyId' => $member['enemy'], 'slot' => $place],
             $members, $places);
-        [$formation, $view, $clearance] = $this->composeFormation($catalog, $arena, $enemies);
+        [$formation, $view, $clearance] = $this->composeFormation($catalog, $arena, $enemies, imageBottomFade: $imageBottomFade);
         foreach ($formation->enemies as $position => $battler) {
             $place = $formation->staging->enemyPlaces[$position];
             $members[$position]['place'] = ['x' => $place->x, 'depth' => $place->depth];
@@ -4136,7 +4137,8 @@ final class EditorSession
      * @return array<string, mixed>
      * @throws SessionRefusal When the arena or troop is unknown, the project has no graphical battle, or the ground or footing is refused.
      */
-    public function readArenaPreview(int $index, ?int $troop = null, array $ground = [], array $footing = []): array
+    public function readArenaPreview(int $index, ?int $troop = null, array $ground = [], array $footing = [],
+        bool $imageBottomFade = false): array
     {
         $record = $this->requireRecordDatabase(BattleArenaFields::CATEGORY)->getRecordByIndex($index)
             ?? throw new SessionRefusal(sprintf('%s has no record %d.', BattleArenaFields::CATEGORY, $index));
@@ -4147,7 +4149,8 @@ final class EditorSession
         ['members' => $members, 'places' => $places] = $troop === null ? ['members' => [], 'places' => []] : $this->readTroopPlaces($troop);
         $enemies = array_map(static fn(array $member, ?BattleStageSlot $place): array => ['enemyId' => $member['enemy'], 'slot' => $place],
             $members, $places);
-        [$formation, $view, $clearance] = $this->composeFormation($catalog, (string) $record->get('id'), $enemies);
+        [$formation, $view, $clearance] = $this->composeFormation($catalog, (string) $record->get('id'), $enemies,
+            imageBottomFade: $imageBottomFade);
         foreach ($formation->enemies as $position => $battler) {
             $members[$position]['battler'] = self::describeFormationBattler($battler, $clearance['enemies'][$position]);
         }
@@ -4314,7 +4317,7 @@ final class EditorSession
      * @return array{members: list<array<string, mixed>>, enemies: list<string>, formation: ?array<string, mixed>, formationIssue: ?string, align: array{available: bool, reason: ?string}}
      * @throws SessionRefusal When the troop is unknown.
      */
-    public function readTroopPage(int $index, ?string $arena = null, ?array $moving = null): array
+    public function readTroopPage(int $index, ?string $arena = null, ?array $moving = null, bool $imageBottomFade = false): array
     {
         $record = $this->requireRecordDatabase('troops')->getRecordByIndex($index)
             ?? throw new SessionRefusal(sprintf('troops has no record %d.', $index));
@@ -4335,7 +4338,7 @@ final class EditorSession
             'align' => ['available' => true, 'reason' => null],
         ];
         try {
-            $page['formation'] = $this->readTroopFormation($index, $arena, $moving);
+            $page['formation'] = $this->readTroopFormation($index, $arena, $moving, $imageBottomFade);
         } catch (SessionRefusal $refusal) {
             $page['formationIssue'] = $refusal->getMessage();
         }
@@ -4429,7 +4432,7 @@ final class EditorSession
      * @return array<string, mixed>
      * @throws SessionRefusal When the enemy is unknown.
      */
-    public function readEnemyPreview(int $index, ?string $arena = null): array
+    public function readEnemyPreview(int $index, ?string $arena = null, bool $imageBottomFade = false): array
     {
         $record = $this->requireRecordDatabase('enemies')->getRecordByIndex($index)
             ?? throw new SessionRefusal(sprintf('enemies has no record %d.', $index));
@@ -4439,7 +4442,8 @@ final class EditorSession
         try {
             $catalog = $this->requireBattleLayoutCatalog('preview enemies at battle scale on');
             // Where the battle stands a troop of this enemy alone, on the previewed arena's ground.
-            $composed = $this->composeFormation($catalog, $arena, [['enemyId' => $name, 'slot' => null]]);
+            $composed = $this->composeFormation($catalog, $arena, [['enemyId' => $name, 'slot' => null]],
+                imageBottomFade: $imageBottomFade);
             [$formation, $view, $clearance] = $composed;
             $preview['formation'] = [...$view, 'members' => [[
                 'enemy' => $name,
@@ -4673,7 +4677,8 @@ final class EditorSession
      * @param list<array{enemyId: string, slot: ?BattleStageSlot}> $enemies
      * @return array{0: BattleFormationLayout, 1: array<string, mixed>, 2: array{party: list<list<string>>, enemies: list<list<string>>}}
      */
-    private function composeFormation(BattlePresentationCatalog $catalog, ?string $arena, array $enemies, ?string $lead = null): array
+    private function composeFormation(BattlePresentationCatalog $catalog, ?string $arena, array $enemies, ?string $lead = null,
+        bool $imageBottomFade = false): array
     {
         $assetRoot = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         $names = [];
@@ -4691,7 +4696,7 @@ final class EditorSession
         try {
             $formation = BattleFormationLayout::compose($catalog, $arena, $enemies, $partyIds, $assetRoot);
             // The picture is the battle's own canvas at rest, which the frontend paints with the renderer itself.
-            $canvas = $formation->composeCanvas()->toArray();
+            $canvas = $formation->composeCanvas(bottomFade: $imageBottomFade)->toArray();
         } catch (\InvalidArgumentException|\RuntimeException $error) {
             throw new SessionRefusal('The formation cannot be composed: ' . $error->getMessage(), previous: $error);
         }

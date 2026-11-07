@@ -6,6 +6,7 @@ use Ichiloto\Editor\Review\CanvasStillRaster;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageBottomFade;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicator;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicatorKind;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
@@ -55,6 +56,24 @@ it('draws images cropped, stretched, mirrored and clipped in the renderer paint 
         ->and(canvasStillPixel($image, 65, 40))->toBe([0, 0, 255])
         ->and(canvasStillPixel($image, 90, 40))->toBe([0, 0, 255])
         ->and($raster->diagnostics)->toBe([]);
+});
+
+it('keeps a sloped bottom fade in destination space after mirroring and overlay composition', function () {
+    $root = canvasStillAssets();
+    $body = new CanvasImage('body', 'Art/halves.png', new CanvasRectangle(0, 0, 80, 80),
+        flipX: true, bottomFade: new CanvasImageBottomFade([0.25, 0.5], 0.25));
+    $roundTrip = CanvasImage::fromArray($body->toArray());
+    $canvas = PresentationCanvas::composeOverlay(null, new PresentationCanvas(80, 80, [$roundTrip]), 'preview-');
+    $image = (new CanvasStillRaster($root))->rasterize($canvas, 0x000000);
+
+    expect($canvas->images[0]->id)->toBe('preview-body')
+        ->and(canvasStillPixel($image, 0, 10))->toBe([0, 0, 255])
+        ->and(canvasStillPixel($image, 79, 10))->toBe([255, 0, 0])
+        ->and(canvasStillPixel($image, 0, 30)[2])->toBeGreaterThan(110)->toBeLessThan(145)
+        ->and(canvasStillPixel($image, 79, 30))->toBe([255, 0, 0])
+        ->and(canvasStillPixel($image, 0, 45))->toBe([0, 0, 0])
+        ->and(canvasStillPixel($image, 79, 45)[0])->toBeGreaterThan(180)
+        ->and(canvasStillPixel($image, 79, 70))->toBe([0, 0, 0]);
 });
 
 it('paints text cell backgrounds and glyphs at the layer cell size, masked by the clip', function () {
