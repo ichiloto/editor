@@ -379,27 +379,6 @@ it('moves no save off an event that only adds conditions, and moves saves off on
     }
 });
 
-it('moves no save off a faced action event whose conditions change, since it starts only on the action key', function () {
-    $root = savedSyntheticBoundStoryAreaProject();
-    $path = $root . '/assets/Maps/home/home.data.php';
-    $data = require $path;
-    // The same story area answered only by the action key while facing it, like a lamp the player rubs.
-    $data['events']['Z']['data']['mode'] = 'action';
-    $data['events']['Z']['engagement'] = 'facing';
-    $data['events']['Z']['conditions'] = [['type' => 'event', 'name' => 'met_the_keeper'], ['type' => 'event', 'name' => 'trial_won', 'negate' => true]];
-    file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
-    $plan = static function (array $conditions) use ($root): ?Ichiloto\Editor\Maps\SaveRelocationPlan {
-        $map = getPhysicalOccupancyMap(EditorSession::open($root));
-        $map->setEventField('Z', ['conditions'], $conditions);
-        expect($map->isDirty())->toBeTrue();
-        return SaveRelocationPlanner::plan($map, $root);
-    };
-
-    // Replacing the closing condition opens it in states it was closed in, yet a save standing in it starts nothing.
-    expect($plan([['type' => 'event', 'name' => 'met_the_keeper'], ['type' => 'event', 'name' => 'follow_up_done', 'negate' => true]]))->toBeNull()
-        ->and($plan([]))->toBeNull();
-});
-
 /** The fixture with a saved door to town on home's floor at (1, 1). */
 function savedSyntheticTransferProject(): string
 {

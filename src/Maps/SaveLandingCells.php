@@ -25,8 +25,7 @@ use Ichiloto\Engine\Field\Validation\MapEventResolver;
  *
  * It also says which cells an event now covers that the same kind of event
  * did not cover in the saved map ({@see getNewEventCells()}): a save
- * standing on such a cell would load inside something new. Events used only
- * with the action key start nothing under a standing save and are left out.
+ * standing on such a cell would load inside something new.
  *
  * @package Ichiloto\Editor\Maps
  */
@@ -36,9 +35,8 @@ final class SaveLandingCells
      * @param array<int, array<int, int>> $grid Resolved collision by row then column.
      * @param array<string, true> $npcs NPC start cells by `x,y`.
      * @param array<string, true> $events Event marker cells by `x,y`.
-     * @param list<array{area: CellArea, previous: list<CellArea>, interaction: bool}> $areas Current event areas, the
-     *     saved areas whose events a save there would already have stood in ({@see readMap()}), and whether the event
-     *     only answers the action key.
+     * @param list<array{area: CellArea, previous: list<CellArea>}> $areas Current event areas and the saved areas whose
+     *     events a save there would already have stood in ({@see readMap()}).
      */
     private function __construct(
         public readonly string $mapId,
@@ -76,8 +74,7 @@ final class SaveLandingCells
                 if (!is_array($saved) || !is_array($saved['area'] ?? null) || !self::isSameOccupant($event, $saved)) { continue; }
                 $previous[] = CellArea::fromArray($saved['area'], 'Saved event area');
             }
-            $areas[] = ['area' => CellArea::fromArray($event['area'], 'Event area'), 'previous' => $previous,
-                'interaction' => ReachabilityEvent::fromDefinition($event)->isInteraction];
+            $areas[] = ['area' => CellArea::fromArray($event['area'], 'Event area'), 'previous' => $previous];
         }
 
         return new self($map->mapId, $map->getResolvedCollisionMap(), self::readNpcCells((array) ($map->getEditableData()['npcs'] ?? [])),
@@ -118,10 +115,6 @@ final class SaveLandingCells
      * Cells each event covers that its saved counterpart did not
      * ({@see isSameOccupant()}), preserving event ownership when areas
      * overlap: a save standing there would load inside something new.
-     * An event the player only uses with the action key, such as a faced
-     * object ({@see ReachabilityEvent::$isInteraction}), never starts under
-     * a standing save and never refuses a player already inside it, so a
-     * save standing in it needs no move however its conditions change.
      *
      * @return array<string, true>
      */
@@ -129,7 +122,6 @@ final class SaveLandingCells
     {
         $cells = [];
         foreach ($this->areas as $entry) {
-            if ($entry['interaction']) { continue; }
             foreach ($entry['area']->cells as [$x, $y]) {
                 if (!array_any($entry['previous'], static fn(CellArea $area): bool => $area->containsCell($x, $y))) {
                     $cells["{$x},{$y}"] = true;
