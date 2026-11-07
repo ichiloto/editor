@@ -350,3 +350,17 @@ it('offers the master volume and each bus volume a game starts at, writing nothi
 
     expect((require $root . '/config.php')['audio'])->toBe(['master_volume' => 60, 'music_volume' => 80]);
 });
+
+it('offers whether tutorials start on their own, true as the Engine reads it, writing only a change', function () {
+    $root = createZoomProject();
+    $original = file_get_contents($root . '/config.php');
+    $workspace = ProjectWorkspace::fromProject($root);
+    expect($workspace->config->getRecord(ProjectConfig::TUTORIAL_PROMPTS)->toArray()['default'])->toBeTrue()
+        ->and($original)->not->toContain('automatic_prompts');
+    setConfiguration($workspace, ProjectConfig::TUTORIAL_PROMPTS, 'true');
+    expect($workspace->hasUnsavedChanges())->toBeFalse();
+    setConfiguration($workspace, ProjectConfig::TUTORIAL_PROMPTS, 'false');
+    $workspace->config->save();
+    expect((require $root . '/config.php')['ui']['tutorials']['automatic_prompts'])->toBeFalse()
+        ->and(fn() => $workspace->config->assertAcceptableValue(ProjectConfig::TUTORIAL_PROMPTS, 'sometimes'))->toThrow(InvalidArgumentException::class);
+});

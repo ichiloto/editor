@@ -15,6 +15,7 @@ use Ichiloto\Engine\Battle\Enumerations\BattleActionCategory;
 use Ichiloto\Engine\Battle\Enumerations\BattlePace;
 use Ichiloto\Engine\Localization\EngineMessageTerms;
 use Ichiloto\Engine\Field\PlayerDash;
+use Ichiloto\Engine\Progression\TutorialDirector;
 use Ichiloto\Engine\Rendering\FieldViewport;
 
 /** One source owner for config.php, shared by Terms and Configuration. */
@@ -27,13 +28,15 @@ final class ProjectConfig extends ProjectSettingsFile
     public const string SAVE_POINT_SCRIPT = 'save.point_script';
     /** Always Dash's first value; the player changes it in Options and Config (PlayerDash). */
     public const string ALWAYS_DASH = PlayerDash::CONFIG_ALWAYS_DASH;
+    /** Whether tutorials start on their own when their trigger first holds; the player changes it in Config (TutorialDirector). */
+    public const string TUTORIAL_PROMPTS = TutorialDirector::CONFIG_AUTOMATIC_PROMPTS;
 
     /**
      * Settings the engine reads with a default when the file leaves them
      * out, by path, with that default.
      */
     private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM, self::INN_PRESENTATION => null,
-        self::SAVE_POINT_SCRIPT => null, self::ALWAYS_DASH => false];
+        self::SAVE_POINT_SCRIPT => null, self::ALWAYS_DASH => false, self::TUTORIAL_PROMPTS => true];
 
     /**
      * Settings that name another resource, by path, with the reference kind
@@ -152,6 +155,9 @@ final class ProjectConfig extends ProjectSettingsFile
         }
         if ($path === self::ALWAYS_DASH && ! is_bool($value)) {
             throw new \InvalidArgumentException('Always Dash must be true or false.');
+        }
+        if ($path === self::TUTORIAL_PROMPTS && ! is_bool($value)) {
+            throw new \InvalidArgumentException('Tutorial prompts must be true or false.');
         }
         if (self::isAnnouncementSeconds($path) && (! is_int($value) && ! is_float($value) || ! is_finite((float) $value)
             || $value < BattlePacing::MIN_ANNOUNCEMENT_SECONDS || $value > BattlePacing::MAX_ANNOUNCEMENT_SECONDS)) {
