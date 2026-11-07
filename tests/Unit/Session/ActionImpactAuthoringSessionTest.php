@@ -164,7 +164,8 @@ it('offers the caster effect\'s start only with a caster effect, and refuses an 
     $path = $root . '/assets/Data/animations.php';
     file_put_contents($path, "<?php\n\nreturn " . var_export([
         ['id' => 1, 'name' => 'Dusk Slash', 'roles' => ['attack'], 'targetEffect' => 'dusk-slash'],
-        ['id' => 2, 'name' => 'Odd', 'sourceEffect' => 'ember-spark', 'sourceEffectAnchor' => 'sideways'],
+        // Its id, not its position, names it in the refusal.
+        ['id' => 7, 'name' => 'Odd', 'sourceEffect' => 'ember-spark', 'sourceEffectAnchor' => 'sideways'],
     ], true) . ";\n");
     $before = (string) file_get_contents($path);
     $session = EditorSession::open($root);
@@ -172,7 +173,7 @@ it('offers the caster effect\'s start only with a caster effect, and refuses an 
     expect(readAnimationRow($session, 'sourceEffectAnchor'))->toBeNull();
 
     $session->applyDatabaseRecord('animations', 0, readAnimationRow($session, 'name')['key'], 'Dusk Cut');
-    expect(fn() => $session->saveDatabase('animations'))->toThrow(SessionRefusal::class, 'Animation 2 could not be read as it would be saved')
+    expect(fn() => $session->saveDatabase('animations'))->toThrow(SessionRefusal::class, 'Animation 7 "Odd" could not be read as it would be saved')
         ->and((string) file_get_contents($path))->toBe($before);
 });
 

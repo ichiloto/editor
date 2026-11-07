@@ -383,7 +383,11 @@ final class RecordSchemaCatalog
             try {
                 Animation::fromArray(is_array($entry) ? $entry : []);
             } catch (\InvalidArgumentException|\ValueError|\TypeError $error) {
-                return sprintf('Animation %d could not be read as it would be saved: %s', intval($index) + 1, $error->getMessage());
+                // Animations are numbered by their own id, which their position need not match.
+                $id = is_array($entry) && (is_int($entry['id'] ?? null) || is_string($entry['id'] ?? null)) ? $entry['id'] : intval($index) + 1;
+                $name = is_array($entry) && is_string($entry['name'] ?? null) ? sprintf(' "%s"', $entry['name']) : '';
+
+                return sprintf('Animation %s%s could not be read as it would be saved: %s', $id, $name, $error->getMessage());
             }
         }
 
