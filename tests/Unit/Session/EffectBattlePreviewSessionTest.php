@@ -28,7 +28,7 @@ it('previews an effect in the action that plays it, as the battle draws it, for 
         ->and($terminal['terminalLines'])->not->toBe([]);
 });
 
-it('round-trips graphical flight authoring through the shared rows and previews the negotiated heading', function (bool $curved) {
+it('round-trips graphical flight authoring through the shared rows and previews the negotiated heading', function (bool $curved, bool $timed) {
     $root = effectBattlePreviewProject();
     $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
     $initial = require $path;
@@ -67,8 +67,17 @@ it('round-trips graphical flight authoring through the shared rows and previews 
     foreach ($values as $field => $value) {
         $change($field, (string) $value);
     }
+    $authoredImpact = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
+    if ($timed) {
+        expect($session->listReferences(null, 'effect_flight_tracks', ['category' => $category, 'index' => $index]))
+            ->toBe([['value' => 'stroke-art', 'label' => 'stroke-art']]);
+        $change('effectTiming.mode', 'frame', []);
+        $change('effectTiming.frame', '1', []);
+        $change('flightTiming.track', 'stroke-art', []);
+        $change('flightTiming.speed', '.5', []);
+    }
     $session->undo();
-    expect($row(array_key_last($values), $trackFrame)['value'])->toBe('');
+    expect($timed ? $row('flightTiming.speed', [])['value'] : $row(array_key_last($values), $trackFrame)['value'])->toBe('');
     $session->redo();
     expect($session->saveAll()['failures'])->toBe([]);
 
@@ -79,6 +88,9 @@ it('round-trips graphical flight authoring through the shared rows and previews 
         ->and($track)->toMatchArray(['attachmentPoint' => '0', 'detachFrame' => 0,
             'flight' => ['arrivalFrame' => 1, 'route' => $route, ...($curved ? ['curve' => $curve] : ['tipX' => .25])]]);
 
+    if ($timed) {
+        expect($saved['presentations']['graphical']['flightTiming'])->toBe(['track' => 'stroke-art', 'speed' => .5]);
+    }
     $ordinary = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
     $rotating = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, imageRotation: true);
     $image = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
@@ -86,7 +98,18 @@ it('round-trips graphical flight authoring through the shared rows and previews 
     expect($image($ordinary))->not->toBeNull()->not->toHaveKey('rotation')
         ->and($image($rotating))->toHaveKeys(['rotation', 'pivot'])
         ->and($rotating['diagnostics'])->toBe([]);
-})->with([false, true]);
+    if ($timed) {
+        expect($rotating['frame'])->toBeGreaterThan($authoredImpact['frame'])
+            ->and($rotating['totalFrames'])->toBeGreaterThan($authoredImpact['totalFrames'])
+            ->and($rotating['authoredFrames']['target'])->toBe(1)
+            ->and(array_find($rotating['crossedCues'], static fn(array $cue): bool => $cue['type'] === 'commandResolved')['frame'])
+            ->toBe($rotating['frame']);
+        $reduced = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, reducedMotion: true);
+        expect($reduced['diagnostics'])->toBe([])
+            ->and(array_find($reduced['crossedCues'], static fn(array $cue): bool => $cue['type'] === 'commandResolved')['frame'])
+            ->toBe($reduced['frame']);
+    }
+})->with([[false, false], [true, false], [false, true]]);
 
 it('round-trips range timing keys and uses projected distance in the graphical battle preview', function () {
     $root = effectBattlePreviewProject();
