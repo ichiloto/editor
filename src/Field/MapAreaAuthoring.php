@@ -159,7 +159,8 @@ final readonly class MapAreaAuthoring
                 $this->map->setMapDataField([MapLandmarks::KEY], $landmarks);
             }
             $encounters = MapEncounters::fromMap($this->map);
-            if ($encounters->isSupported() && ($encounters->troopsInArea($id) !== [] || $encounters->arenaRulesInArea($id) !== [])) {
+            if ($encounters->isSupported() && ($encounters->troopsInArea($id) !== []
+                || $encounters->arenaRulesInArea($id) !== [] || $encounters->poolsInArea($id) !== [])) {
                 $this->map->setMapDataField([MapEncounters::KEY], $encounters->withAreaRenamed($id, $to));
             }
         });
@@ -201,11 +202,13 @@ final readonly class MapAreaAuthoring
 
         $encounters = MapEncounters::fromMap($map);
         $troops = $encounters->isSupported() ? $encounters->troopsInArea($id) : [];
-        $rules = $encounters->isSupported() ? $encounters->arenaRulesInArea($id) : [];
+        $rules = $encounters->arenaRulesInArea($id);
+        $pools = $encounters->poolsInArea($id);
 
         return [...$found, ...MapLandmarks::describeAnchorReferences($map, [self::ANCHOR_KIND => $id]),
             ...array_map(static fn(string $troop): string => sprintf('%s encounter %s', $map->mapId, $troop), $troops),
-            ...array_map(static fn(int $rule): string => sprintf('%s battle arena rule %d', $map->mapId, $rule + 1), $rules)];
+            ...array_map(static fn(int $rule): string => sprintf('%s battle arena rule %d', $map->mapId, $rule + 1), $rules),
+            ...array_map(static fn(int $pool): string => sprintf('%s encounter pool %d', $map->mapId, $pool + 1), $pools)];
     }
 
     /** Whether an event definition is bound to the area as its subject. */

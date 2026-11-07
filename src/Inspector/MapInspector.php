@@ -376,6 +376,9 @@ final readonly class MapInspector
                 ? null
                 : $this->writeMapData($map, $path, $value === '' ? null : $value, (string) ($field['label'] ?? 'Field')),
             'map-encounters' => $this->applyMapEncounterValue($map, $field, $value),
+            MapEncounterPoolFields::TARGET => MapEncounterPoolFields::apply($this, $map, $this->requireEditableEncounters($map),
+                $field, $rawValue, $this->readMapAreaIds($map), $this->readEncounterTerrains($map) ?? [],
+                $this->references->valuesFor('troops'), $this->references->valuesFor('battle_arenas')),
             'map-bgm-variants' => $this->applyMapBgmVariantValue($map, $field, $value),
             'map-size' => $this->applyMapSize($map, (string) ($field['field'] ?? ''), (int) $value),
             'event' => $this->applyEventField($map, $field, $value),
@@ -630,6 +633,7 @@ final readonly class MapInspector
     public function addListEntry(ProjectMap $map, array $field): ?InspectorListEdit
     {
         if (isset($field['innPresentationList'])) { return $this->editInnPresentationList($map, $field, false); }
+        if (($field['target'] ?? null) === MapEncounterPoolFields::TARGET) { return $this->editEncounterPoolList($map, $field, false); }
         if (($field['target'] ?? null) === 'map-encounters' && is_array($field[self::ARENA_RULE_LIST] ?? null)) {
             return $this->addArenaRule($map, (int) $field[self::ARENA_RULE_LIST]['index']);
         }
@@ -690,6 +694,12 @@ final readonly class MapInspector
             sprintf('Added %s %d.', self::describeListPath($list['path']), $position + 1));
     }
 
+    private function editEncounterPoolList(ProjectMap $map, array $field, bool $remove): InspectorListEdit
+    {
+        return MapEncounterPoolFields::editList($this, $map, $this->requireEditableEncounters($map), $field,
+            $this->readMapAreaIds($map), $this->readEncounterTerrains($map) ?? [], $this->references->valuesFor('troops'), $remove);
+    }
+
     /**
      * Adds an arena rule after another: for the first of the map's encounter
      * terrains no rule names yet, else its first area, on the map's arena
@@ -701,7 +711,7 @@ final readonly class MapInspector
     {
         $encounters = $this->requireEditableEncounters($map);
 
-        if ($encounters->rows() === []) {
+        if ($encounters->rows() === [] && $encounters->pools() === []) {
             throw new InspectorRefusal('Add an encounter troop first; arena rules choose where its battles are drawn.');
         }
 
@@ -730,6 +740,7 @@ final readonly class MapInspector
     public function removeListEntry(ProjectMap $map, array $field): ?InspectorListEdit
     {
         if (isset($field['innPresentationList'])) { return $this->editInnPresentationList($map, $field, true); }
+        if (($field['target'] ?? null) === MapEncounterPoolFields::TARGET) { return $this->editEncounterPoolList($map, $field, true); }
         if (($field['target'] ?? null) === 'map-encounters' && is_array($field[self::ARENA_RULE_LIST] ?? null)) {
             $encounters = $this->requireEditableEncounters($map);
             $index = (int) $field[self::ARENA_RULE_LIST]['index'];
@@ -1942,7 +1953,9 @@ final readonly class MapInspector
             }
         }
 
-        if ($rows === []) {
+        $fields = [...$fields, ...MapEncounterPoolFields::describe($encounters, $this->readMapAreaIds($map),
+            $this->readEncounterTerrains($map) ?? [], $this->graphical)];
+        if ($rows === [] && $encounters->pools() === []) {
             return $fields;
         }
 

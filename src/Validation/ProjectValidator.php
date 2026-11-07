@@ -1965,7 +1965,7 @@ class ProjectValidator
 
     $rows = $encounters->rows();
 
-    if ($rows === []) {
+    if ($rows === [] && $encounters->pools() === []) {
       return [Issue::error(
         $map->mapId,
         'The map declares encounters but names no troops the engine can read.',
@@ -2014,6 +2014,26 @@ class ProjectValidator
       $issues = [...$issues, ...$this->checkEncounterHabitats($map, $row['name'], $row['arena'] ?? $encounters->mapArena())];
     }
 
+    foreach ($encounters->pools() as $index => $pool) {
+      $entries = $pool['troops'] ?? null;
+      if (! is_array($entries)) {
+        continue; // The shared table reports the invalid pool below.
+      }
+      foreach ($entries as $name => $entry) {
+        if (! is_string($name)) {
+          continue;
+        }
+        $context = sprintf('Encounter pool %d troop "%s"', $index + 1, $name);
+        if ($troops !== [] && ! in_array($name, $troops, true)) {
+          $issues[] = Issue::error($map->mapId, "{$context} is not a project troop.", 'Check assets/Data/troops.php.');
+        }
+        $arena = is_array($entry) ? ($entry[MapEncounters::ARENA_KEY] ?? null) : null;
+        if (is_string($arena)) {
+          $issues = [...$issues, ...$this->checkBattleArena($arena, $map->mapId, $context)];
+        }
+      }
+    }
+
     $issues = [...$issues, ...$this->checkEncounterArenaCoverage($map, $encounters)];
 
     return [...$issues, ...$this->checkEncounterRate($map, $encounters), ...$this->checkEncounterTiles($map, $encounters), ...$this->checkEncounterTroopDuplicates($map)];
@@ -2047,10 +2067,20 @@ class ProjectValidator
     }
 
     foreach ($table->ignored as $ignored) {
+      if (str_starts_with($ignored, 'Encounter pool')) {
+        $issues[] = Issue::error($map->mapId, $ignored,
+          'Use a declared area, an encounter terrain, or both and a weighted troop roster.');
+      }
       if (str_starts_with($ignored, 'Battle arena rule') || str_contains($ignored, MapEncounters::ARENA_RULES_KEY)) {
         $issues[] = Issue::error($map->mapId, $ignored,
           'A rule names one of the map\'s areas, an encounter terrain its kinds meet, or both, and the arena it picks.');
       }
+    }
+
+    foreach ($table->findUnusedPoolNumbers($collisions) as $number) {
+      $issues[] = Issue::warning($map->mapId,
+        sprintf('Encounter pool %d supplies no encounter-eligible cell.', $number),
+        'Check the area, terrain, encounter tiles and priority of earlier pools.');
     }
 
     if ($this->arenaCatalog === null) {
