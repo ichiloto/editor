@@ -45,6 +45,8 @@ final class RecordPanes
             'quests' => self::describeQuest(($row = $data()) === null ? null : new ProjectQuest($row)),
             'system' => self::describeSystem($workspace),
             'battle_entry_rules' => ['cue' => ['title' => 'Execution Order', 'lines' => self::describeBattleEntryOrder($workspace, $index)]],
+            \Ichiloto\Editor\Progression\TutorialFields::CATEGORY => ['cue' => ['title' => 'Step Order',
+                'lines' => \Ichiloto\Editor\Progression\TutorialFields::describeStepOrder($data())]],
             default => [],
         };
     }

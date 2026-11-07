@@ -71,6 +71,9 @@ final class ReferenceCatalog
     /** The project's declared world abilities, read through the Engine's WorldAbilityCatalog. */
     public const string WORLD_ABILITIES = 'world_abilities';
 
+    /** The tutorials a script may start (`start_tutorial`): those whose start is script, by stable id. */
+    public const string SCRIPT_TUTORIALS = 'script_tutorials';
+
     /**
      * An NPC's named placements, `default` among them: the category of the `npc_placement` reference kind and the
      * entry choice source its field is chosen from, by the NPC the command's own NPC field selects
@@ -116,6 +119,8 @@ final class ReferenceCatalog
         'income_schedules',
         // The exploration powers the project declares, by stable id, for world_ability conditions and power commands.
         self::WORLD_ABILITIES,
+        // The tutorials a script may start, by stable id, unsaved edits included.
+        self::SCRIPT_TUTORIALS,
         // The theme's semantic icon roles, which a world power shows.
         self::ICON_ROLES,
         self::INPUT_ACTIONS,
@@ -306,6 +311,7 @@ final class ReferenceCatalog
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'income_schedules' => array_keys($this->incomeScheduleNames()),
             self::WORLD_ABILITIES => array_keys($this->workspace->getWorldAbilities()->getLabels()),
+            self::SCRIPT_TUTORIALS => array_map(strval(...), array_keys($this->listScriptTutorials())),
             self::ICON_ROLES => $this->workspace->menuPresentation?->listIconRoles() ?? [],
             self::INPUT_ACTIONS => array_keys(\Ichiloto\Engine\IO\InputManager::getProjectBindings($this->workspace->projectRoot)),
             'maps' => $this->workspace->mapIds,
@@ -1168,6 +1174,10 @@ final class ReferenceCatalog
             return $this->workspace->getWorldAbilities()->getLabels();
         }
 
+        if ($category === self::SCRIPT_TUTORIALS) {
+            return $this->listScriptTutorials();
+        }
+
         if ($category === 'field_resources') {
             $labels = [];
             foreach ($this->loadFieldResourceNames() as $id => $name) {
@@ -1840,6 +1850,26 @@ final class ReferenceCatalog
      *
      * @return list<string>
      */
+    /**
+     * The tutorials a script may start, as the Engine's director accepts them (a script start), by id with
+     * their titles, unsaved edits included.
+     *
+     * @return array<string, string>
+     */
+    private function listScriptTutorials(): array
+    {
+        $tutorials = [];
+        foreach ($this->workspace->getRecordDatabase(\Ichiloto\Editor\Progression\TutorialFields::CATEGORY)?->getRecords() ?? [] as $record) {
+            $id = trim(strval($record->get('id') ?? ''));
+            if ($id !== '' && $record->get('start') === \Ichiloto\Engine\Progression\TutorialStartMode::SCRIPT->value) {
+                $title = trim(strval($record->get('title') ?? ''));
+                $tutorials[$id] = $title === '' ? $id : sprintf('%s (%s)', $title, $id);
+            }
+        }
+
+        return $tutorials;
+    }
+
     private function masteryNodeIds(): array
     {
         $ids = [];

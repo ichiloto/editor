@@ -1713,6 +1713,7 @@ skill's effects, a quest's rewards) listed under them.
 | Troops | `assets/Data/troops.php` | Editable | Same |
 | Battle Entry | `assets/Data/battle-entry-rules.php` | Editable | Same |
 | Crisis Abilities | `assets/Data/crisis-abilities.php` | Editable - one record per stable id: name, badge label, description, the HP percentage and states that activate it, and its variants, each a skill with the world conditions that choose it | Same |
+| Tutorials | `assets/Data/tutorials.php` | Editable - one record per stable id: title, Guide category, how it starts, its trigger, what the Guide offers and its follow-on script, and its ordered steps, each a screen, view, target, action, what completes it and an optional line | Same |
 | States | `assets/Data/states.php` | Editable | Same |
 | Animations | `assets/Data/animations.php` | Editable | Same |
 | Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, pieces by id with their glyphs and tiles, and place icons (the piece shown for each place type) | Same |
@@ -2483,6 +2484,47 @@ the powers as this page holds them, unsaved edits included. Validation also
 reports a first-use effect that does not play once on the field, and quests
 or items an unlock condition names that the project lacks.
 
+### Tutorials
+
+The project's guided tutorials, in `assets/Data/tutorials.php`, the file the
+Engine's `TutorialCatalog` reads. A project without the file declares none;
+saving the first tutorial creates it. A tutorial teaches a mechanic on its real
+screens: the player does the real thing, and doing it completes the step.
+
+Each tutorial has:
+
+- an `Id`, which saves keep the tutorial's progress under and `start_tutorial`
+  names. It is chosen, not derived from the title;
+- a `Title` and a `Category`, which the game's Guide lists it by;
+- `Starts`: `script`, when an event's `start_tutorial` queues it, or
+  `automatic`, when its `Trigger` first holds in play;
+- `Trigger`, the shared world-condition editor. Every condition must hold. An
+  automatic tutorial needs at least one;
+- `Guide Offers`: `practice` replays the steps on the real screens, `demo`
+  plays its `Demonstration`, and `none` offers nothing;
+- `Follow-On Script`, the script that runs once the tutorial is completed or
+  skipped.
+
+`Steps` run in order, one per view. Each step names the `Screen`, `View` and
+`Target` the player acts on and the `Action` whose control the game shows,
+picked from the project's input actions. A step is completed by one thing:
+`Completed By Outcome`, an outcome the screen reports when the player's action
+succeeds (with an optional `Outcome Subject`), or `Completed By Condition`, one
+world condition. Choosing one clears the other. A step's `Line` is one short
+sentence, said by its optional `Speaker`. `Move Focus To Target` moves the
+cursor to the target when the step begins.
+
+A new tutorial starts from a script, offers nothing in the Guide, and has one
+step on the first screen the Engine declares for teaching, grouped under that
+screen until its author chooses a category. The `Step Order` pane beside the
+record lists the steps one line each: where the player acts, with which
+action, what completes the step and its line.
+
+Edits are written into the file's own source. The Engine's catalogue reads the
+tutorials before anything is saved: a duplicate id, an automatic tutorial
+without a trigger, a step without a target, action or completion, or a line
+that is not a sentence is refused with its reason and nothing is written.
+
 ### Word Forms
 
 The game inflects names by English rules: one Potion, two Potions. A word
@@ -2862,6 +2904,7 @@ rows come from their declarations:
 | `set_bed_posture` | Occupant (picked from the map's NPCs; required), Posture (`lying`, `sitting` or `standing`), Transition Seconds (0 to 30) |
 | `commit_npc_placement` | NPC (picked from the map's NPCs; required), Placement (picked from that NPC's named placements or `default`; required) |
 | `show_power_unlocks` | World Powers (picked from World Powers), Actor, Current Crisis Technique, Opening Announcement |
+| `start_tutorial` | Tutorial (picked from Tutorials that start from a script; required) |
 
 A reference's picker lists what the command can name where it runs. An
 `Occupant` or `NPC` is an NPC of the map an event belongs to; in a cinematic it is an

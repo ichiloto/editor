@@ -153,6 +153,7 @@ final class RecordSchemaCatalog
             self::battleEntryRules(),
             self::crisisAbilities(),
             \Ichiloto\Editor\Progression\WorldAbilityFields::getSchema(),
+            \Ichiloto\Editor\Progression\TutorialFields::getSchema(),
             self::items(),
             self::weapons(),
             self::armors(),
