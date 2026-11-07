@@ -1043,16 +1043,11 @@ final class ReferenceCatalog
             return [];
         }
 
-        $ids = [];
-        foreach ((array) ($this->currentCutscene->payload()[CutsceneSchemas::TRACKS_KEY] ?? []) as $track) {
-            if (is_array($track) && ($track['type'] ?? null) === 'image' && ($track['anchor'] ?? null) === 'caster'
-                && is_int($track['detachFrame'] ?? null) && is_array($track['flight'] ?? null)
-                && is_string($track['id'] ?? null) && ($track['presentation'] ?? 'graphical') === 'graphical') {
-                $ids[] = $track['id'];
-            }
-        }
+        // The Engine owns which tracks flight timing may follow; its validator reads the same rule.
+        $tracks = array_filter((array) ($this->currentCutscene->payload()[CutsceneSchemas::TRACKS_KEY] ?? []),
+            \Ichiloto\Engine\Animations\Timelines\EffectTimelineValidator::canTimeFlightFromTrack(...));
 
-        return $ids;
+        return array_values(array_map(static fn(array $track): string => $track['id'], $tracks));
     }
 
     /**
