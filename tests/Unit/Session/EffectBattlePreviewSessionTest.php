@@ -28,7 +28,7 @@ it('previews an effect in the action that plays it, as the battle draws it, for 
         ->and($terminal['terminalLines'])->not->toBe([]);
 });
 
-it('round-trips graphical flight authoring through the shared rows and previews the negotiated heading', function (bool $curved) {
+it('round-trips graphical flight authoring through the shared rows and previews the negotiated heading', function (bool $curved, bool $timed) {
     $root = effectBattlePreviewProject();
     $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
     $initial = require $path;
@@ -67,8 +67,17 @@ it('round-trips graphical flight authoring through the shared rows and previews 
     foreach ($values as $field => $value) {
         $change($field, (string) $value);
     }
+    $authoredImpact = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
+    if ($timed) {
+        expect($session->listReferences(null, 'effect_flight_tracks', ['category' => $category, 'index' => $index]))
+            ->toBe([['value' => 'stroke-art', 'label' => 'stroke-art']]);
+        $change('effectTiming.mode', 'frame', []);
+        $change('effectTiming.frame', '1', []);
+        $change('flightTiming.track', 'stroke-art', []);
+        $change('flightTiming.speed', '.5', []);
+    }
     $session->undo();
-    expect($row(array_key_last($values), $trackFrame)['value'])->toBe('');
+    expect($timed ? $row('flightTiming.speed', [])['value'] : $row(array_key_last($values), $trackFrame)['value'])->toBe('');
     $session->redo();
     expect($session->saveAll()['failures'])->toBe([]);
 
@@ -79,6 +88,9 @@ it('round-trips graphical flight authoring through the shared rows and previews 
         ->and($track)->toMatchArray(['attachmentPoint' => '0', 'detachFrame' => 0,
             'flight' => ['arrivalFrame' => 1, 'route' => $route, ...($curved ? ['curve' => $curve] : ['tipX' => .25])]]);
 
+    if ($timed) {
+        expect($saved['presentations']['graphical']['flightTiming'])->toBe(['track' => 'stroke-art', 'speed' => .5]);
+    }
     $ordinary = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
     $rotating = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, imageRotation: true);
     $image = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
@@ -86,7 +98,18 @@ it('round-trips graphical flight authoring through the shared rows and previews 
     expect($image($ordinary))->not->toBeNull()->not->toHaveKey('rotation')
         ->and($image($rotating))->toHaveKeys(['rotation', 'pivot'])
         ->and($rotating['diagnostics'])->toBe([]);
-})->with([false, true]);
+    if ($timed) {
+        expect($rotating['frame'])->toBeGreaterThan($authoredImpact['frame'])
+            ->and($rotating['totalFrames'])->toBeGreaterThan($authoredImpact['totalFrames'])
+            ->and($rotating['authoredFrames']['target'])->toBe(1)
+            ->and(array_find($rotating['crossedCues'], static fn(array $cue): bool => $cue['type'] === 'commandResolved')['frame'])
+            ->toBe($rotating['frame']);
+        $reduced = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, reducedMotion: true);
+        expect($reduced['diagnostics'])->toBe([])
+            ->and(array_find($reduced['crossedCues'], static fn(array $cue): bool => $cue['type'] === 'commandResolved')['frame'])
+            ->toBe($reduced['frame']);
+    }
+})->with([[false, false], [true, false], [false, true]]);
 
 it('round-trips range timing keys and uses projected distance in the graphical battle preview', function () {
     $root = effectBattlePreviewProject();
@@ -349,6 +372,48 @@ it('previews the shared run-to-target plan while keeping Terminal and reduced mo
     expect($rest['phases'])->not->toHaveKey('recovery')->and($terminal['phases'])->not->toHaveKey('recovery')
         ->and($terminal['canvas'])->toBeNull()->and($session->listUnsavedChanges())->toBe([])
         ->and(array_map(file_get_contents(...), [$path, $binding]))->toBe($sources);
+});
+
+it('previews the saved flash step and its action cells through the shared session in both modes', function () {
+    $root = effectBattlePreviewProject();
+    writeTilesetTestPng($root . '/assets/Graphics/Contact.png', 32, 64);
+    writeTilesetTestPng($root . '/assets/Graphics/ContactEnemy.png', 32, 64);
+    writeTilesetTestPng($root . '/assets/Graphics/Flash.png', 128, 64);
+    $binding = $root . '/assets/Data/Presentation/battlers.php';
+    $pose = ['image' => 'Graphics/Flash.png', 'columns' => 4, 'frames' => [2], 'fps' => 24,
+        'loop' => false, 'restFrame' => 2, 'impactFrame' => 0, 'entryFrames' => [0, 1], 'exitFrames' => [3]];
+    file_put_contents($binding, '<?php return ' . var_export([
+        'actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/Contact.png'], 'actionPoses' => [1 => $pose],
+            'poses' => ['move' => ['image' => 'Graphics/UnusedRun.png']]]],
+        'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/ContactEnemy.png']]],
+    ], true) . ';');
+    $path = $root . '/assets/Data/animations.php';
+    $animations = require $path;
+    $animations[0]['movement'] = 'flash-step';
+    $animations[0]['flashStep'] = ['fps' => 24, 'guardFrames' => 20, 'advanceFrames' => 3, 'holdFrames' => 10,
+        'returnFrames' => 3, 'settleFrames' => 7, 'echoes' => 2];
+    file_put_contents($path, '<?php return ' . var_export($animations, true) . ';');
+    $session = EditorSession::open($root);
+    $effect = findEffectIndex($session, 'dusk-slash');
+    $advance = $session->readEffectBattlePreview($effect, 110);
+    $strike = $session->readEffectBattlePreview($effect, 0, authoredFrame: 0);
+    $echoes = static fn(array $frame): array => array_values(array_filter($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => str_starts_with($image['id'], 'command-echo-')));
+    $body = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Flash.png' && str_starts_with($image['id'], 'combatant-'));
+    expect($advance['phases']['advance'])->toBe(['start' => 100, 'length' => 15])
+        ->and($advance['diagnostics'])->toBe([])
+        ->and($echoes($advance))->toHaveCount(2)
+        ->and($body($advance)['sourceRect']['x'])->toBe(32)
+        ->and($strike['frame'])->toBe(115)
+        ->and($body($strike)['sourceRect']['x'])->toBe(64)
+        ->and($echoes($strike))->toBe([]);
+    $rest = $session->readEffectBattlePreview($effect, 0, reducedMotion: true);
+    $terminal = $session->readEffectBattlePreview($effect, 0, presentation: EffectPresentation::TERMINAL);
+    expect($rest['phases'])->not->toHaveKey('guard')
+        ->and($terminal['phases'])->not->toHaveKey('guard')
+        ->and($terminal['canvas'])->toBeNull()
+        ->and($session->listUnsavedChanges())->toBe([]);
 });
 
 it('saves a captured target-group contact rail and previews it only with strip support', function () {

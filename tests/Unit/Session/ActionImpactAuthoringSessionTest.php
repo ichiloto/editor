@@ -117,12 +117,15 @@ it('chooses the action animation and its pose image in the battler editor and pr
     $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0Image')['key'], 'Graphics/Actors/KaelionAttack.png');
     $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0Columns')['key'], '4');
     $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0Frames')['key'], '2, 3');
+    $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0EntryFrames')['key'], '0, 1');
+    $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0ExitFrames')['key'], '3, 0');
     $session->undo();
     $session->redo();
     $session->saveDatabase($category);
     $data = require $path;
     expect($data['actors']['Kaelion']['poses'])->toBe($before['actors']['Kaelion']['poses'])
-        ->and($data['actors']['Kaelion']['actionPoses'][1])->toMatchArray(['impactFrame' => 0, 'loop' => false, 'frames' => [2, 3]])
+        ->and($data['actors']['Kaelion']['actionPoses'][1])->toMatchArray(['impactFrame' => 0, 'loop' => false, 'frames' => [2, 3],
+            'entryFrames' => [0, 1], 'exitFrames' => [3, 0]])
         ->and(BattlerBindings::load($root . '/assets')->actorPoses['Kaelion']->getAnimationPose(1)?->frames)->toBe([2, 3]);
     $effect = findEffectIndex($session, 'dusk-slash');
     $impact = $session->readEffectBattlePreview($effect, 0, authoredFrame: 0);
@@ -161,7 +164,8 @@ it('offers the caster effect\'s start only with a caster effect, and refuses an 
     $path = $root . '/assets/Data/animations.php';
     file_put_contents($path, "<?php\n\nreturn " . var_export([
         ['id' => 1, 'name' => 'Dusk Slash', 'roles' => ['attack'], 'targetEffect' => 'dusk-slash'],
-        ['id' => 2, 'name' => 'Odd', 'sourceEffect' => 'ember-spark', 'sourceEffectAnchor' => 'sideways'],
+        // Its id, not its position, names it in the refusal.
+        ['id' => 7, 'name' => 'Odd', 'sourceEffect' => 'ember-spark', 'sourceEffectAnchor' => 'sideways'],
     ], true) . ";\n");
     $before = (string) file_get_contents($path);
     $session = EditorSession::open($root);
@@ -169,7 +173,7 @@ it('offers the caster effect\'s start only with a caster effect, and refuses an 
     expect(readAnimationRow($session, 'sourceEffectAnchor'))->toBeNull();
 
     $session->applyDatabaseRecord('animations', 0, readAnimationRow($session, 'name')['key'], 'Dusk Cut');
-    expect(fn() => $session->saveDatabase('animations'))->toThrow(SessionRefusal::class, 'Animation 2 could not be read as it would be saved')
+    expect(fn() => $session->saveDatabase('animations'))->toThrow(SessionRefusal::class, 'Animation 7 "Odd" could not be read as it would be saved')
         ->and((string) file_get_contents($path))->toBe($before);
 });
 

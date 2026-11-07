@@ -67,3 +67,24 @@ it('keeps every field it does not edit, comments and the header, and numbers a n
         ->and($again[$index])->toBe(['id' => 5, 'name' => 'New Animation'])
         ->and($again[0]['targetEffect'])->toBe('battle-physical-impact');
 });
+
+it('authors flash-step timing through the animation record and preserves its source', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/animations.php';
+    file_put_contents($path, "<?php\n// Preserve this animation note.\nreturn [['id' => 1, 'name' => 'Test']];\n");
+    $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('animations');
+    $database->setField(0, 'movement', 'flash-step');
+    $timing = ['fps' => 24, 'guardFrames' => 20, 'advanceFrames' => 3, 'holdFrames' => 10,
+        'returnFrames' => 3, 'settleFrames' => 7, 'echoes' => 0];
+    foreach ($timing as $field => $value) {
+        $database->setField(0, 'flashStep.' . $field, (string) $value);
+    }
+    $database->save();
+    $saved = (require $path)[0];
+    expect($saved['movement'])->toBe('flash-step')
+        ->and($saved['flashStep'])->toBe($timing)
+        ->and(file_get_contents($path))->toContain('// Preserve this animation note.');
+    $database->setField(0, 'movement', 'run-to-target');
+    $database->save();
+    expect((require $path)[0])->toMatchArray(['movement' => 'run-to-target'])->not->toHaveKey('flashStep');
+});

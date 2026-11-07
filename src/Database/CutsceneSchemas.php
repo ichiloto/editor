@@ -10,6 +10,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectAnchorLifetime;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
+use Ichiloto\Engine\Animations\Timelines\EffectFlightContact;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
 use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
 use Ichiloto\Engine\Animations\Timelines\EffectImageDepth;
@@ -664,6 +665,9 @@ final class CutsceneSchemas
             ...($graphical ? [
                 new RecordField('poseSyncFrame', 'Pose Sync Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
                 new RecordField('rangeTiming.minDistance', 'Far Range Threshold', InputControlType::FLOAT, removeWhenEmpty: true),
+                RecordField::reference('flightTiming.track', 'Flight Track', ReferenceCatalog::EFFECT_FLIGHT_TRACKS,
+                    allowsNone: true, noneLabel: '(none)'),
+                new RecordField('flightTiming.speed', 'Flight Speed (arena widths/s)', InputControlType::FLOAT, removeWhenEmpty: true),
             ] : []),
         ];
 
@@ -810,6 +814,8 @@ final class CutsceneSchemas
                     removeWhenEmpty: true, displayDefault: '(omitted)')]),
                 new RecordField('flight.route', 'Flight Route', options: ['', ...array_column(EffectFlightRoute::cases(), 'value')],
                     removeWhenEmpty: true, displayDefault: EffectFlightRoute::WAYPOINTS->value),
+                new RecordField('flight.contact', 'Straight Flight Contact', options: ['', ...array_column(EffectFlightContact::cases(), 'value')],
+                    removeWhenEmpty: true, displayDefault: EffectFlightContact::EDGE->value),
                 ...($trail ? [] : [new RecordField('flight.tipX', 'Tip X', InputControlType::FLOAT, removeWhenEmpty: true)]),
                 new RecordField('flight.curve.launchProgress', 'Curve Launch Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('flight.curve.launchOffsetY', 'Curve Launch Control Y Offset', InputControlType::FLOAT, removeWhenEmpty: true),
