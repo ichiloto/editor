@@ -25,6 +25,7 @@ final class MapEncounterPoolFields
             'target' => self::TARGET,
             'field' => 'pools',
             'list' => ['index' => count($pools) - 1, 'path' => [MapEncounters::POOLS_KEY]],
+            'listHeading' => true,
         ]];
         foreach ($pools as $index => $pool) {
             $key = ['target' => self::TARGET, 'index' => $index,
@@ -39,7 +40,7 @@ final class MapEncounterPoolFields
             $troops = is_array($pool['troops'] ?? null) ? $pool['troops'] : [];
             $troopList = ['index' => count($troops) - 1, 'path' => [MapEncounters::POOLS_KEY, (string) $index, 'troops']];
             $fields[] = ['label' => sprintf('    Troops · %d', count($troops)), 'value' => '', 'editable' => false,
-                'field' => 'troops', ...$key, 'list' => $troopList];
+                'field' => 'troops', ...$key, 'list' => $troopList, 'listHeading' => true];
             foreach (array_keys($troops) as $position => $name) {
                 $entry = $troops[$name];
                 $weight = is_array($entry) ? ($entry['weight'] ?? null) : $entry;

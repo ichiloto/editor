@@ -44,7 +44,7 @@ final readonly class MapSpeakerFields
         $choices = self::describeChoices($map);
         $fields = [['label' => sprintf('Speakers · %d', count($speakers)),
             'value' => $speakers === [] ? ($choices === [] ? 'No NPC on this map has an id' : 'No one speaks it') : '',
-            'editable' => false, 'target' => self::TARGET, 'marker' => $marker, 'speakerList' => ['index' => max(0, count($speakers) - 1)]]];
+            'editable' => false, 'target' => self::TARGET, 'marker' => $marker, 'speakerList' => ['index' => max(0, count($speakers) - 1)], 'listHeading' => true]];
         foreach ($speakers as $index => $id) {
             $known = array_find($choices, static fn(array $choice): bool => $choice['value'] === $id);
             $fields[] = ['label' => '  Speaker', 'value' => $id, 'editable' => true,
