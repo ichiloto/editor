@@ -1890,6 +1890,7 @@ final readonly class MapInspector
             'editable' => false,
             'target' => 'map-encounters',
             'encounterList' => ['index' => max(0, count($rows) - 1)],
+            'listHeading' => true,
         ];
 
         foreach ($rows as $index => $row) {
@@ -2011,6 +2012,7 @@ final readonly class MapInspector
             // Named apart from the troop list's heading, which shares the target.
             'field' => 'arenaRules',
             self::ARENA_RULE_LIST => ['index' => max(0, count($rules) - 1)],
+            'listHeading' => true,
         ]];
 
         foreach ($rules as $index => $rule) {
@@ -2121,6 +2123,7 @@ final readonly class MapInspector
                 'editable' => false,
                 'target' => 'map-bgm-variants',
                 'bgmVariantList' => ['index' => max(0, $variants->count() - 1)],
+                'listHeading' => true,
             ],
         ];
 
@@ -2477,7 +2480,7 @@ final readonly class MapInspector
             $entries = $points->readEntries($route[$points->key] ?? []);
             $fields[] = ['label' => ucfirst($points->key), 'value' => strval(count($entries)), 'editable' => false,
                 'path' => [...$path, $points->key], 'movementRoutePath' => $path, 'movementRoutePoints' => true,
-                'list' => ['path' => [...$path, $points->key], 'index' => count($entries) - 1, 'blank' => $points->blank]];
+                'list' => ['path' => [...$path, $points->key], 'index' => count($entries) - 1, 'blank' => $points->blank], 'listHeading' => true];
         }
         return $fields;
     }
@@ -2520,7 +2523,7 @@ final readonly class MapInspector
         $listPath = [...$presentationPath, substr($list->key, strlen('presentation.'))];
         $fields[] = ['label' => $list->heading, 'value' => (string) count($entries), 'editable' => false,
             'target' => 'event', 'marker' => $marker, 'path' => $listPath, 'innPresentationPath' => $presentationPath,
-            'innPresentationList' => $context, 'list' => ['path' => $listPath, 'index' => -1]];
+            'innPresentationList' => $context, 'list' => ['path' => $listPath, 'index' => -1], 'listHeading' => true];
         foreach ($entries as $index => $entry) {
             if (! is_array($entry)) { continue; }
             foreach ($list->fieldsFor($entry) as $field) {
@@ -2832,6 +2835,7 @@ final readonly class MapInspector
                             'index' => max(0, count($value) - 1),
                             'blank' => $this->blankInspectorListEntry($nextPath),
                         ],
+                        'listHeading' => true,
                     ];
 
                     foreach ($value as $index => $entry) {
