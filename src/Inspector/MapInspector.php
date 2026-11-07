@@ -378,7 +378,7 @@ final readonly class MapInspector
             'map-encounters' => $this->applyMapEncounterValue($map, $field, $value),
             MapEncounterPoolFields::TARGET => MapEncounterPoolFields::apply($this, $map, $this->requireEditableEncounters($map),
                 $field, $rawValue, $this->readMapAreaIds($map), $this->readEncounterTerrains($map) ?? [],
-                $this->references->valuesFor('troops'), $this->references->valuesFor('battle_arenas')),
+                $this->references->valuesFor('troops')),
             'map-bgm-variants' => $this->applyMapBgmVariantValue($map, $field, $value),
             'map-size' => $this->applyMapSize($map, (string) ($field['field'] ?? ''), (int) $value),
             'event' => $this->applyEventField($map, $field, $value),
@@ -711,7 +711,7 @@ final readonly class MapInspector
     {
         $encounters = $this->requireEditableEncounters($map);
 
-        if ($encounters->rows() === [] && $encounters->pools() === []) {
+        if ($encounters->rows() === [] && $encounters->pools === []) {
             throw new InspectorRefusal('Add an encounter troop first; arena rules choose where its battles are drawn.');
         }
 
@@ -1639,7 +1639,7 @@ final readonly class MapInspector
      *
      * @throws InspectorRefusal When it names an arena the presentation does not declare.
      */
-    private function requireArena(string $value, string $none): ?string
+    public function requireArena(string $value, string $none): ?string
     {
         $value = trim($value);
 
@@ -1953,9 +1953,9 @@ final readonly class MapInspector
             }
         }
 
-        $fields = [...$fields, ...MapEncounterPoolFields::describe($encounters, $this->readMapAreaIds($map),
+        $fields = [...$fields, ...MapEncounterPoolFields::describe($this, $encounters, $this->readMapAreaIds($map),
             $this->readEncounterTerrains($map) ?? [], $this->graphical)];
-        if ($rows === [] && $encounters->pools() === []) {
+        if ($rows === [] && $encounters->pools === []) {
             return $fields;
         }
 
@@ -2093,7 +2093,7 @@ final readonly class MapInspector
      * How an arena reads on a row: its name, what applies when none is set,
      * or a key the battle presentation does not declare, kept and said so.
      */
-    private function describeArena(?string $arena, string $none): string
+    public function describeArena(?string $arena, string $none): string
     {
         if ($arena === null) {
             return $none;

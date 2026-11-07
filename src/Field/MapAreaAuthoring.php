@@ -160,7 +160,7 @@ final readonly class MapAreaAuthoring
             }
             $encounters = MapEncounters::fromMap($this->map);
             if ($encounters->isSupported() && ($encounters->troopsInArea($id) !== []
-                || $encounters->arenaRulesInArea($id) !== [] || $encounters->poolsInArea($id) !== [])) {
+                || $encounters->arenaRulesInArea($id) !== [] || $encounters->findPoolsInArea($id) !== [])) {
                 $this->map->setMapDataField([MapEncounters::KEY], $encounters->withAreaRenamed($id, $to));
             }
         });
@@ -203,7 +203,7 @@ final readonly class MapAreaAuthoring
         $encounters = MapEncounters::fromMap($map);
         $troops = $encounters->isSupported() ? $encounters->troopsInArea($id) : [];
         $rules = $encounters->arenaRulesInArea($id);
-        $pools = $encounters->poolsInArea($id);
+        $pools = $encounters->findPoolsInArea($id);
 
         return [...$found, ...MapLandmarks::describeAnchorReferences($map, [self::ANCHOR_KIND => $id]),
             ...array_map(static fn(string $troop): string => sprintf('%s encounter %s', $map->mapId, $troop), $troops),

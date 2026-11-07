@@ -1965,7 +1965,7 @@ class ProjectValidator
 
     $rows = $encounters->rows();
 
-    if ($rows === [] && $encounters->pools() === []) {
+    if ($rows === [] && $encounters->pools === []) {
       return [Issue::error(
         $map->mapId,
         'The map declares encounters but names no troops the engine can read.',
@@ -2014,7 +2014,7 @@ class ProjectValidator
       $issues = [...$issues, ...$this->checkEncounterHabitats($map, $row['name'], $row['arena'] ?? $encounters->mapArena())];
     }
 
-    foreach ($encounters->pools() as $index => $pool) {
+    foreach ($encounters->pools as $index => $pool) {
       $entries = $pool['troops'] ?? null;
       if (! is_array($entries)) {
         continue; // The shared table reports the invalid pool below.
