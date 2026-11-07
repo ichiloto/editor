@@ -2534,6 +2534,11 @@ does not know, a follow-on cinematic or demonstration the project lacks, or a
 line that is not one sentence on one line is refused with its reason and
 nothing is written.
 
+Each tutorial teaches one concept and starts when that concept comes into
+play. Its follow-on cinematic carries the story on; validation warns when a
+follow-on cinematic starts another tutorial straight after it, since that
+chains lessons back to back.
+
 ### Word Forms
 
 The game inflects names by English rules: one Potion, two Potions. A word
@@ -2594,6 +2599,13 @@ outside the range is refused before anything changes.
 switch (off by default, as in RPG Maker). Players change it in the game's
 Options and Config; with it on they dash without holding Dash. It applies
 only to a game whose Dash is on in Database > System.
+
+#### Tutorial Prompts
+
+`ui.tutorials.automatic_prompts` is the first value of the player's Tutorial
+prompts option, a switch (on by default). With it off, tutorials whose
+`Starts` is `automatic` wait; tutorials an event starts still run and can be
+skipped. Players change it in the game's Config.
 
 #### Field Zoom
 
