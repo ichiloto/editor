@@ -92,6 +92,23 @@ it('draws the Terminal field exactly as the field\'s camera draws it, with its N
         ->and($rendering->terminal->renderHtml())->toContain('color:#61afef');
 });
 
+it('draws a player who has art by their sprite alone, never their Terminal glyph cell beneath it', function () {
+    $root = mapReviewProject();
+    $still = EditorSession::open($root)->renderMapReview(new MapRenderView('test-map', subject: new MapRenderSubject(5, 3)))->still;
+    $cells = [];
+    foreach ($still->textLayers as $layer) {
+        foreach ($layer->runs as $run) {
+            for ($i = 0; $i < mb_strlen($run->text); $i++) {
+                $cells[] = [$run->column + $i, $run->row];
+            }
+        }
+    }
+
+    // The game's composer leaves out the Terminal layer of a subject its sprite presents; the still does too.
+    expect($still->sprites)->not->toBe([])
+        ->and($cells)->not->toContain([5, 3]);
+});
+
 it('crops a region to exactly the cells the whole map shows there, both ways', function () {
     $root = mapReviewGraphicsProject();
     $session = EditorSession::open($root);

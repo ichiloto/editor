@@ -11,6 +11,7 @@ use Ichiloto\Engine\Events\Interfaces\EventInterface;
 use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
 use Ichiloto\Engine\Field\Player;
 use Ichiloto\Engine\Field\PlayerPresentationConfig;
+use Ichiloto\Engine\IO\Console\Console;
 use Ichiloto\Engine\Scenes\Game\GameScene;
 
 /**
@@ -50,12 +51,18 @@ final class PreviewPlayer extends Player
             graphicalSprites: $appearance ?? $presentation->graphical);
     }
 
+    /**
+     * Draws the player's Terminal glyph on their own presentation layer, as
+     * the game's player does, so a graphical frame that shows them by their
+     * sprite leaves that glyph cell out instead of painting it beneath them.
+     */
     public function render(): void
     {
         $scene = $this->scene ?? null;
 
         if ($scene instanceof GameScene) {
-            $scene->camera->renderOnScreen($this->sprite, $this->position);
+            Console::withLayer($this->getGraphicalSpriteId(),
+                fn() => $scene->camera->renderOnScreen($this->sprite, $this->position));
         }
     }
 
