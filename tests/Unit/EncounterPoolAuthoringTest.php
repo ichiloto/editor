@@ -105,6 +105,10 @@ it('authors a terrain-only pool with a graphical arena and preserves it in termi
     $arena = findLandmarkRow($session, $key(['field' => 'arena', 'index' => 0]));
     $name = $arena['key']['path'][0];
     applyLandmarkRow($session, $key(['field' => 'arena', 'index' => 0, 'path' => [$name]]), 'arena.cave');
+    // The pool's arena reads and is checked as every other encounter arena row is.
+    expect(findLandmarkRow($session, $key(['field' => 'arena', 'index' => 0]))['value'])->toEndWith('(arena.cave)')
+        ->and(fn() => applyLandmarkRow($session, $key(['field' => 'arena', 'index' => 0, 'path' => [$name]]), 'arena.nowhere'))
+        ->toThrow('"arena.nowhere" is not an arena the battle presentation declares.');
     $session->saveMap('test-map');
     expect((require $file)['encounters']['pools'])->toBe([[
         'terrain' => 'grove', 'troops' => [$name => ['weight' => 1, 'battleArena' => 'arena.cave']],

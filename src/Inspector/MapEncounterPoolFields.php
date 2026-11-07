@@ -15,9 +15,9 @@ final class MapEncounterPoolFields
     private const string ANY_TERRAIN = '(any terrain)';
 
     /** @return list<array<string, mixed>> */
-    public static function describe(MapEncounters $encounters, array $areas, array $terrains, bool $graphical): array
+    public static function describe(MapInspector $inspector, MapEncounters $encounters, array $areas, array $terrains, bool $graphical): array
     {
-        $pools = $encounters->pools();
+        $pools = $encounters->pools;
         $fields = [[
             'label' => sprintf('  Scoped Encounter Pools · %d', count($pools)),
             'value' => 'First matching pool wins',
@@ -50,7 +50,7 @@ final class MapEncounterPoolFields
                 $fields[] = ['label' => '      Weight', 'value' => is_scalar($weight) ? (string) $weight : '',
                     'field' => 'weight', 'control' => new InputControl(InputControlType::INTEGER, (string) (int) $weight), ...$row];
                 if ($graphical) {
-                    $fields[] = ['label' => '      Arena', 'value' => is_string($arena) ? $arena : MapInspector::ENCOUNTER_ARENA_NONE,
+                    $fields[] = ['label' => '      Arena', 'value' => $inspector->describeArena(is_string($arena) ? $arena : null, MapInspector::ENCOUNTER_ARENA_NONE),
                         'field' => 'arena', 'reference' => 'battle_arenas', 'noneLabel' => MapInspector::ENCOUNTER_ARENA_NONE, ...$row];
                 }
             }
@@ -59,9 +59,9 @@ final class MapEncounterPoolFields
     }
 
     public static function apply(MapInspector $inspector, ProjectMap $map, MapEncounters $encounters, array $field, string $value,
-        array $areas, array $terrains, array $troopNames, array $arenas): ?Command
+        array $areas, array $terrains, array $troopNames): ?Command
     {
-        $pools = $encounters->pools();
+        $pools = $encounters->pools;
         $index = (int) $field['index'];
         $pool = $pools[$index] ?? throw new InspectorRefusal('There is no encounter pool at that position.');
         $key = $field['field'];
@@ -99,9 +99,8 @@ final class MapEncounterPoolFields
                     }
                     $entry['weight'] = (int) $value;
                 } elseif ($key === 'arena') {
-                    if ($value === '' || $value === MapInspector::ENCOUNTER_ARENA_NONE) { unset($entry[MapEncounters::ARENA_KEY]); }
-                    elseif (in_array($value, $arenas, true)) { $entry[MapEncounters::ARENA_KEY] = $value; }
-                    else { throw new InspectorRefusal('Choose a project battle arena.'); }
+                    $arena = $inspector->requireArena($value, MapInspector::ENCOUNTER_ARENA_NONE);
+                    if ($arena === null) { unset($entry[MapEncounters::ARENA_KEY]); } else { $entry[MapEncounters::ARENA_KEY] = $arena; }
                 } else {
                     throw new InspectorRefusal('Unknown encounter pool field.');
                 }
@@ -116,7 +115,7 @@ final class MapEncounterPoolFields
     public static function editList(MapInspector $inspector, ProjectMap $map, MapEncounters $encounters, array $field,
         array $areas, array $terrains, array $troopNames, bool $remove): InspectorListEdit
     {
-        $pools = $encounters->pools();
+        $pools = $encounters->pools;
         $index = $field['index'] ?? null;
         $troopList = count($field['list']['path'] ?? []) === 3;
         if ($troopList) {

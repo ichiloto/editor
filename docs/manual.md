@@ -1442,6 +1442,28 @@ rows beneath it edit the engine's own `encounters` block:
   Validation lists every arena and encounter terrain a battle on the map
   starts on without a variant, which draws the arena's own background, and
   every rule the Engine leaves out.
+- `Scoped Encounter Pools` give one of the map's areas, one of its encounter
+  terrains, or a terrain within an area a roster of its own. A step inside a
+  pool's scope is met by that pool's troops alone; a step in no pool's scope
+  uses `Troops` above. Pools are tried in `Priority` order and the first whose
+  scope holds the step supplies the whole roster, so an overlapping later pool
+  never mixes in. `Shift+O` on the heading adds a pool at the end, and on a
+  pool's row adds one after that pool, scoped to the map's first area (or
+  its first encounter terrain) with the project's first troop at weight 1,
+  ready to change; `Del` on a pool's
+  `Priority`, `Area` or `Terrain` row removes the pool. `Area` and `Terrain`
+  are chosen from the map's own, `(whole map)` and `(any terrain)` leaving that
+  side open; a pool keeps at least one of the two. Each pool's `Troops` is a
+  list like the map's: `Shift+O` adds a troop the pool does not have yet, `Del`
+  removes one, and a pool keeps at least one troop (remove the pool instead).
+  `Weight` is a positive whole number. In the GUI editor each pool troop also
+  has an `Arena`, `(map arena)` leaving it to the map. Renaming an area renames
+  it in every pool, and an area a pool names cannot be deleted. Validation
+  reports a pool troop or arena the project does not have, a pool the Engine
+  cannot read, and a pool that supplies no encounter cell because earlier pools
+  or the tile mode leave it none. Written `'pools' => [['area' =>
+  'east-roost', 'troops' => ['Roost Bats' => 3, 'Cave Rats' => 1]],
+  ['terrain' => 'woodland', 'troops' => ['Wolf Pack' => 1]]]`.
 
 A key inside the block or a troop's entry the editor does not own - a field a
 later engine will read - is preserved untouched, and keeps the block alive
@@ -2270,6 +2292,17 @@ project's first battle-usable basic or special skill. Without such a skill,
 creation is refused and says so. Saves are checked by the Engine's own
 reading, and validation reports a variant skill or activation state the
 project does not have.
+
+With more than one variant, every variant needs World Conditions and no two
+variants may test the same thing: a save that leaves a variant without
+conditions, or two variants with the same conditions in any order or spelling
+the Engine reads alike, is refused and names the variants. Variants whose
+conditions differ but can hold at once are caught by the battle when it
+meets them.
+
+The **Acquisition Icon Role** is the theme icon the game shows when the party
+first gains the crisis ability, chosen from the theme's icon roles;
+`(actor portrait)` shows the actor's portrait instead.
 
 ### Battle Art
 
