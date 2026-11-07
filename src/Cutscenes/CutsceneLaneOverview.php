@@ -60,7 +60,7 @@ final class CutsceneLaneOverview
         $parts = [];
 
         if ($seconds > 0.0 || $marks === []) {
-            $parts[] = sprintf('%.1fs', $seconds);
+            $parts[] = self::formatSeconds($seconds);
         }
 
         foreach (array_unique($marks) as $mark) {
@@ -72,6 +72,17 @@ final class CutsceneLaneOverview
         }
 
         return implode(' ', $parts);
+    }
+
+    /**
+     * Seconds to the hundredth, as cues are authored, with at least one
+     * decimal: 2.0s, 1.22s, 0.45s.
+     */
+    private static function formatSeconds(float $seconds): string
+    {
+        $text = number_format(round($seconds, 2), 2, '.', '');
+
+        return (str_ends_with($text, '0') ? substr($text, 0, -1) : $text) . 's';
     }
 
     /**
@@ -244,8 +255,8 @@ final class CutsceneLaneOverview
             'wait' => [$seconds('seconds', 0.5), []],
             'narration', 'title_card' => [$seconds('seconds', 2.5), []],
             'transition' => [$seconds('seconds', 0.24), []],
-            // A stage plays for exactly its authored seconds, in Terminal too.
-            'play_stage' => [$seconds('seconds', 0.0), []],
+            // A stage and a cinematic sound cue each run for exactly their authored seconds, in Terminal too.
+            'play_stage', 'cinematic_sound' => [$seconds('seconds', 0.0), []],
             // Power unlock notices wait for the player to acknowledge each one.
             'text', 'choice', 'play_storybook', 'show_power_unlocks' => [0.0, [self::INPUT]],
             'start_battle' => [0.0, [self::BATTLE]],

@@ -40,3 +40,23 @@ it('reads an instant stage as taking no time, leaving only the notices to wait o
     expect(CutsceneLaneOverview::describe($overview->totalSeconds, $overview->totalMarks))->toBe('+input')
         ->and(CutsceneOutline::summarize(stageThenUnlocks(0.0)[0]))->toBe('play_stage  test-stage-dim 0s');
 });
+
+it('times a cinematic sound cue by its authored seconds beside a shorter stage', function () {
+    $cue = ['type' => 'cinematic_sound', 'sound' => 'test-heartbeat', 'seconds' => 1.22, 'volume' => 0.8];
+    $overview = CutsceneLaneOverview::of([
+        ['type' => 'parallel', 'lanes' => [
+            [$cue],
+            [['type' => 'play_stage', 'stage' => 'test-stage-dim', 'seconds' => 1.0]],
+        ]],
+        ['type' => 'show_power_unlocks', 'abilities' => [['ability' => 'test-dash']]],
+    ]);
+
+    expect(CutsceneLaneOverview::describe($overview->totalSeconds, $overview->totalMarks))->toBe('1.22s +input')
+        ->and(array_column($overview->rows, 'label'))->toContain('cinematic_sound  test-heartbeat 1.22s');
+});
+
+it('reads overview seconds to the hundredth with at least one decimal', function () {
+    expect(array_map(static fn(float $seconds): string => CutsceneLaneOverview::describe($seconds, []), [2.0, 1.22, 0.45, 0.125, 0.0]))
+        ->toBe(['2.0s', '1.22s', '0.45s', '0.13s', '0.0s'])
+        ->and(CutsceneLaneOverview::describe(0.0, [CutsceneLaneOverview::INPUT]))->toBe('+input');
+});
