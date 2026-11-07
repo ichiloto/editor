@@ -9609,6 +9609,13 @@ final class Editor
             return;
         }
 
+        // So is one chosen among what its own entry offers (a tutorial step's targets), filtered as typed.
+        if (($field['entryChoices'] ?? false) === true) {
+            $this->openEntryChoicePicker($field);
+
+            return;
+        }
+
         if (($field['conditions'] ?? false) === true) {
             $this->openConditionEditor($field);
 
@@ -10843,6 +10850,39 @@ final class Editor
         return new ReferenceCatalog($this->workspace, $this->getSelectedMap());
     }
 
+    /**
+     * Opens the picker on a field chosen among what its own entry offers. Where the field may be left empty,
+     * its none row clears it.
+     *
+     * @param array<string, mixed> $field
+     */
+    private function openEntryChoicePicker(array $field): void
+    {
+        $label = (string) ($field['label'] ?? 'Choice');
+        $values = [];
+        $labels = [];
+        foreach (is_array($field['choices'] ?? null) ? $field['choices'] : [] as $choice) {
+            $value = is_array($choice) ? (string) ($choice['value'] ?? '') : '';
+            $values[] = $value === '' ? self::getEntryChoiceNoneLabel($field) : $value;
+            $labels[$value] = is_array($choice) ? (string) ($choice['label'] ?? $value) : $value;
+        }
+
+        if (! $this->referencePicker->open((string) ($field['field'] ?? ''), $label, $label, $values, (string) ($field['value'] ?? ''), $labels)) {
+            $this->setStatus(sprintf('%s offers nothing to choose here yet.', $label), StatusLevel::WARN);
+        } else {
+            $this->statusMessage = sprintf('Choose %s.', lcfirst($label));
+        }
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /** @param array<string, mixed> $field */
+    private static function getEntryChoiceNoneLabel(array $field): string
+    {
+        $none = array_find(is_array($field['choices'] ?? null) ? $field['choices'] : [], static fn(mixed $choice): bool => is_array($choice) && ($choice['value'] ?? null) === '');
+
+        return is_array($none) ? (string) ($none['label'] ?? '(None)') : '(None)';
+    }
+
     private function openReferencePicker(array $field): bool
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
@@ -11094,10 +11134,11 @@ final class Editor
                 return;
             }
 
-            // The record layer reads the none row as clearing the reference.
-            $this->applyDatabaseFieldValueRecorded($field, $selected);
+            // The record layer reads the none row as clearing the reference; an entry choice's none row is its empty value.
+            $clears = ($field['entryChoices'] ?? false) === true && $selected === self::getEntryChoiceNoneLabel($field);
+            $this->applyDatabaseFieldValueRecorded($field, $clears ? '' : $selected);
             $this->setStatus(
-                $selected === (string) ($field['noneLabel'] ?? '(None)')
+                $clears || $selected === (string) ($field['noneLabel'] ?? '(None)')
                     ? sprintf('%s cleared.', $label)
                     : sprintf('%s set to %s.', $label, $selected),
                 StatusLevel::INFO,
