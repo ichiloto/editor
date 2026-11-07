@@ -379,6 +379,55 @@ it('moves no save off an event that only adds conditions, and moves saves off on
     }
 });
 
+/**
+ * The bound story area as a faced event of the given trigger and data, saved with a closing condition, and a
+ * planner that replaces its conditions.
+ *
+ * @return callable(array): ?Ichiloto\Editor\Maps\SaveRelocationPlan
+ */
+function planFacedEventConditions(string $class, array $data): callable
+{
+    $root = savedSyntheticBoundStoryAreaProject();
+    $path = $root . '/assets/Maps/home/home.data.php';
+    $saved = require $path;
+    $saved['events']['Z'] = ['class' => $class, 'subject' => $saved['events']['Z']['subject'], 'data' => $data,
+        'engagement' => 'facing', 'conditions' => [['type' => 'event', 'name' => 'trial_won', 'negate' => true]]];
+    file_put_contents($path, '<?php return ' . var_export($saved, true) . ';');
+
+    return static function (array $conditions) use ($root): ?Ichiloto\Editor\Maps\SaveRelocationPlan {
+        $map = getPhysicalOccupancyMap(EditorSession::open($root));
+        $map->setEventField('Z', ['conditions'], $conditions);
+        expect($map->isDirty())->toBeTrue();
+        return SaveRelocationPlanner::plan($map, $root);
+    };
+}
+
+it('keeps saves in place when an action-only event changes its conditions, and moves them when it moves', function () {
+    $plan = planFacedEventConditions(\Ichiloto\Engine\Events\Triggers\ScriptEventTrigger::class,
+        ['mode' => 'action', 'reusable' => true, 'scriptId' => 'home-only']);
+    // Opened in states it was closed in, like a lamp kept open until a follow-up ends: entry still only offers the action key.
+    expect($plan([['type' => 'event', 'name' => 'follow_up_done', 'negate' => true]]))->toBeNull()
+        ->and($plan([]))->toBeNull();
+
+    // Moved onto ground it never covered, it still takes that ground from the saves standing there.
+    $root = savedSyntheticBoundStoryAreaProject();
+    $path = $root . '/assets/Maps/home/home.data.php';
+    $saved = require $path;
+    $saved['events']['Z']['data']['mode'] = 'action';
+    $saved['events']['Z']['engagement'] = 'facing';
+    file_put_contents($path, '<?php return ' . var_export($saved, true) . ';');
+    $map = getPhysicalOccupancyMap(EditorSession::open($root));
+    $map->setMapDataField(['areas'], [['id' => 'story-floor', 'area' => ['cells' => [[1, 1], [2, 1], [1, 2], [3, 1]]]]]);
+    expect(array_merge(...array_column(SaveRelocationPlanner::plan($map, $root)?->relocations ?? [], 'cells')))->toBe([[3, 1]]);
+});
+
+it('moves saves off a faced event that runs as the player steps in when its conditions change', function () {
+    // Faced audio plays on entry, so opening it in new states would start it under a save standing there.
+    $plan = planFacedEventConditions(\Ichiloto\Engine\Events\Triggers\PlayAudioEventTrigger::class, ['sfx' => 'chime']);
+    expect(array_merge(...array_column($plan([['type' => 'event', 'name' => 'follow_up_done', 'negate' => true]])?->relocations ?? [], 'cells')))
+        ->toEqualCanonicalizing([[1, 1], [2, 1], [1, 2]]);
+});
+
 /** The fixture with a saved door to town on home's floor at (1, 1). */
 function savedSyntheticTransferProject(): string
 {
