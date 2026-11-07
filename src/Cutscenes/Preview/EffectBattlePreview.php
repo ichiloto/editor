@@ -143,16 +143,22 @@ final class EffectBattlePreview
 
         $graphical = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null
             ? \Ichiloto\Engine\Battle\Presentation\GraphicalBattlePresentation::prepare($battle, $catalog, $assetRoot) : null;
-        $travel = !$reducedMotion && $animation->movement === \Ichiloto\Engine\Animations\ActionMovement::RUN_TO_TARGET
-            ? $graphical?->planActionTravel($caster, $targets, $action, animationId: $animation->id) : null;
+        $travel = !$reducedMotion && $animation->movement->usesTargetRoute()
+            ? $graphical?->planActionTravel($caster, $targets, $action, animationId: $animation->id, movement: $animation->movement) : null;
+        $actionPoseOverride = $poses?->getAnimationPose($animation->id);
+        $flashStep = $travel?->isPossible ? $animation->flashStep : null;
+        if ($flashStep !== null && !$flashStep->supportsPose($actionPoseOverride)) {
+            throw new InvalidArgumentException('Flash step requires action transit cells and a planted first frame.');
+        }
+        $movementPoses = !$reducedMotion && $flashStep === null;
         $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
             targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor, actionPose: $pose,
-            movementPoses: !$reducedMotion && ($poses?->getPose(BattlePoseRole::MOVE) !== null
+            movementPoses: $movementPoses && ($poses?->getPose(BattlePoseRole::MOVE) !== null
                 || $poses?->getPose(BattlePoseRole::RETURNING) !== null), travel: $travel,
-            movePose: $reducedMotion ? null : $poses?->getPose(BattlePoseRole::MOVE),
-            returnPose: $reducedMotion ? null : $poses?->getPose(BattlePoseRole::RETURNING),
+            movePose: $movementPoses ? $poses?->getPose(BattlePoseRole::MOVE) : null,
+            returnPose: $movementPoses ? $poses?->getPose(BattlePoseRole::RETURNING) : null,
             projectedRange: isset($target->defaults['rangeTiming']) ? $graphical?->measureActionRange($caster, $targets) : null,
-            actionPoseOverride: $poses?->getAnimationPose($animation->id));
+            actionPoseOverride: $actionPoseOverride, flashStep: $flashStep);
 
         return new self(
             new BattleCommandPreview($battle, $plan, $caster, $targets, $role,

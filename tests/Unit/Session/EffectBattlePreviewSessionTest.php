@@ -351,6 +351,48 @@ it('previews the shared run-to-target plan while keeping Terminal and reduced mo
         ->and(array_map(file_get_contents(...), [$path, $binding]))->toBe($sources);
 });
 
+it('previews the saved flash step and its action cells through the shared session in both modes', function () {
+    $root = effectBattlePreviewProject();
+    writeTilesetTestPng($root . '/assets/Graphics/Contact.png', 32, 64);
+    writeTilesetTestPng($root . '/assets/Graphics/ContactEnemy.png', 32, 64);
+    writeTilesetTestPng($root . '/assets/Graphics/Flash.png', 128, 64);
+    $binding = $root . '/assets/Data/Presentation/battlers.php';
+    $pose = ['image' => 'Graphics/Flash.png', 'columns' => 4, 'frames' => [2], 'fps' => 24,
+        'loop' => false, 'restFrame' => 2, 'impactFrame' => 0, 'entryFrames' => [0, 1], 'exitFrames' => [3]];
+    file_put_contents($binding, '<?php return ' . var_export([
+        'actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/Contact.png'], 'actionPoses' => [1 => $pose],
+            'poses' => ['move' => ['image' => 'Graphics/UnusedRun.png']]]],
+        'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/ContactEnemy.png']]],
+    ], true) . ';');
+    $path = $root . '/assets/Data/animations.php';
+    $animations = require $path;
+    $animations[0]['movement'] = 'flash-step';
+    $animations[0]['flashStep'] = ['fps' => 24, 'guardFrames' => 20, 'advanceFrames' => 3, 'holdFrames' => 10,
+        'returnFrames' => 3, 'settleFrames' => 7, 'echoes' => 2];
+    file_put_contents($path, '<?php return ' . var_export($animations, true) . ';');
+    $session = EditorSession::open($root);
+    $effect = findEffectIndex($session, 'dusk-slash');
+    $advance = $session->readEffectBattlePreview($effect, 110);
+    $strike = $session->readEffectBattlePreview($effect, 0, authoredFrame: 0);
+    $echoes = static fn(array $frame): array => array_values(array_filter($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => str_starts_with($image['id'], 'command-echo-')));
+    $body = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Flash.png' && str_starts_with($image['id'], 'combatant-'));
+    expect($advance['phases']['advance'])->toBe(['start' => 100, 'length' => 15])
+        ->and($advance['diagnostics'])->toBe([])
+        ->and($echoes($advance))->toHaveCount(2)
+        ->and($body($advance)['sourceRect']['x'])->toBe(32)
+        ->and($strike['frame'])->toBe(115)
+        ->and($body($strike)['sourceRect']['x'])->toBe(64)
+        ->and($echoes($strike))->toBe([]);
+    $rest = $session->readEffectBattlePreview($effect, 0, reducedMotion: true);
+    $terminal = $session->readEffectBattlePreview($effect, 0, presentation: EffectPresentation::TERMINAL);
+    expect($rest['phases'])->not->toHaveKey('guard')
+        ->and($terminal['phases'])->not->toHaveKey('guard')
+        ->and($terminal['canvas'])->toBeNull()
+        ->and($session->listUnsavedChanges())->toBe([]);
+});
+
 it('saves a captured target-group contact rail and previews it only with strip support', function () {
     $root = effectBattlePreviewProject();
     $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';

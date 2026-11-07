@@ -321,6 +321,15 @@ final class RecordSchemaCatalog
         // at the target phase's start, on the caster, beside the target effect and the pose's impact entry.
         $anchor = new RecordField('sourceEffectAnchor', 'Caster Effect Starts', options: ['', SourceEffectAnchor::TARGET->value],
             removeWhenEmpty: true, displayDefault: SourceEffectAnchor::SOURCE->value);
+        $flashStep = [
+            new RecordField('flashStep.fps', 'Flash Step FPS', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('flashStep.guardFrames', 'Guard Frames', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('flashStep.advanceFrames', 'Outbound Frames', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('flashStep.holdFrames', 'Planted Hold Frames', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('flashStep.returnFrames', 'Return Frames', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('flashStep.settleFrames', 'Settle Frames', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('flashStep.echoes', 'Transit Echoes', InputControlType::INTEGER),
+        ];
         $legacy = [
             new RecordField('position', 'Legacy Position',
                 options: array_map(static fn(AnimationTargetPosition $position): string => $position->value, AnimationTargetPosition::cases()),
@@ -341,13 +350,24 @@ final class RecordSchemaCatalog
             // A numeric identity: a new animation takes the next free number.
             blank: ['id' => 1, 'name' => 'New Animation'],
             // The caster effect's start is offered once there is a caster effect, or a start authored for one.
-            fieldsFor: static function (array $row) use ($fields, $anchor, $legacy): array {
+            fieldsFor: static function (array $row) use ($fields, $anchor, $legacy, $flashStep): array {
                 $own = isset($row['sourceEffect']) || array_key_exists('sourceEffectAnchor', $row)
                     ? [...array_slice($fields, 0, 4), $anchor, ...array_slice($fields, 4)] : $fields;
+                if (($row['movement'] ?? null) === \Ichiloto\Engine\Animations\ActionMovement::FLASH_STEP->value
+                    || isset($row['flashStep'])) {
+                    $own = [...$own, ...$flashStep];
+                }
 
                 return array_key_exists('frames', $row) || array_key_exists('cues', $row) ? [...$own, ...$legacy] : $own;
             },
             saveCheck: self::checkAnimations(...),
+            prepareEdit: static function (array $draft, string $field): array {
+                if ($field === 'movement' && ($draft['movement'] ?? null) !== \Ichiloto\Engine\Animations\ActionMovement::FLASH_STEP->value) {
+                    unset($draft['flashStep']);
+                }
+
+                return $draft;
+            },
         );
     }
 
@@ -2392,7 +2412,7 @@ final class RecordSchemaCatalog
                     singular: 'action pose',
                     fields: [
                         RecordField::reference('animationId', 'Animation', 'animation_ids'),
-                        ...array_filter($poseFields, static fn(RecordField $field): bool => !in_array($field->key, ['loop', 'entryFrames', 'exitFrames'], true)),
+                        ...array_filter($poseFields, static fn(RecordField $field): bool => $field->key !== 'loop'),
                     ],
                     blank: ['animationId' => '', 'image' => '', 'loop' => false, 'impactFrame' => 0],
                     heading: 'Action Poses',
