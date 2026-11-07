@@ -152,6 +152,45 @@ it('warns where an entrance\'s icon is not its place type\'s, and follows the ty
     expect($untyped)->toHaveCount(1)->and($untyped[0]['message'])->toContain('shows the Walls icon', 'names no place type');
 });
 
+it('judges two ways into one place by one icon once their entrance landmark names an icon area, and keeps the area while it does', function () {
+    $root = createPlaceIconProject(['town' => 'walls']);
+    // A second way into the same place, F at 2,1, beside E under the walls.
+    $world = $root . '/assets/Maps/test-map';
+    file_put_contents($world . '/test-map.event.php', MapGridSource::buildSource("    \n EF ", 'EVENTS'));
+    file_put_contents($world . '/test-map.data.php', str_replace("'data' => ['destinationMap' => 'site', 'spawnPoint' => ['x' => 1, 'y' => 0]]],",
+        "'data' => ['destinationMap' => 'site', 'spawnPoint' => ['x' => 1, 'y' => 0]]],\n        'F' => ['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\TransferPlayerTrigger',\n            'data' => ['destinationMap' => 'site', 'spawnPoint' => ['x' => 2, 'y' => 0]]],",
+        (string) file_get_contents($world . '/test-map.data.php')));
+    $session = EditorSession::open($root);
+    createPlaceType($session, 'Town');
+    setPlaceType($session, 'site', 'town');
+    $revision = static fn(): int => $session->readMap('test-map')['revision'];
+
+    // Each way in is judged alone: F has no icon over it.
+    $alone = findPlaceIssues($session, MapPlaceIconRule::ICON);
+    expect($alone)->toHaveCount(1)->and($alone[0]['cells'])->toBe([[2, 1]]);
+
+    // The entrance landmark on E shares its icon with every way into the place inside the gate area.
+    $session->createArea('test-map', $revision(), 'gate', ['x' => 1, 'y' => 1, 'width' => 2, 'height' => 1]);
+    applyLandmarkRow($session, ['target' => 'event-landmark'], 'entrance', 'E');
+    $row = findLandmarkRow($session, ['target' => 'map-landmarks', 'field' => 'iconArea', 'index' => 0]);
+    expect($row['options'])->toBe(['', 'gate']);
+    applyLandmarkRow($session, ['target' => 'map-landmarks', 'field' => 'iconArea', 'index' => 0], 'gate');
+    expect(readLandmarkEntries($session)[0]['iconArea'])->toBe('gate')
+        ->and(findPlaceIssues($session, MapPlaceIconRule::ICON))->toBe([]);
+
+    // The area follows a rename and cannot be deleted while the landmark shares its icon through it.
+    $session->renameArea('test-map', $revision(), 'gate', 'mouths');
+    expect(readLandmarkEntries($session)[0]['iconArea'])->toBe('mouths')
+        ->and(findPlaceIssues($session, MapPlaceIconRule::ICON))->toBe([])
+        ->and(fn() => $session->deleteArea('test-map', $revision(), 'mouths'))
+            ->toThrow(SessionRefusal::class, 'test-map landmark');
+
+    // Choosing its own cells again judges each way in alone.
+    applyLandmarkRow($session, ['target' => 'map-landmarks', 'field' => 'iconArea', 'index' => 0], '');
+    expect(readLandmarkEntries($session)[0])->not->toHaveKey('iconArea')
+        ->and(findPlaceIssues($session, MapPlaceIconRule::ICON))->toHaveCount(1);
+});
+
 it('reports a map naming a place type the project does not have', function () {
     $root = createPlaceIconProject();
     $file = $root . '/assets/Maps/site/site.data.php';
