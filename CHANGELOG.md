@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- `map:apply --check` and `map:render --changes` run on a scratch copy of the project, so edits that write at once
+  (imported assets, tileset cells, new maps) can never reach the project, even if the process dies part way.
+
 ### Added
 
 - Project validation reports a staged actor the Engine's stage would refuse (`CinematicStageManager::validateBinding`)
