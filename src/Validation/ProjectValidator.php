@@ -50,6 +50,7 @@ use Ichiloto\Engine\Core\WorldConditionType;
 use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Field\NpcPlacementSet;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicStageManager;
 use Ichiloto\Engine\Field\SkitSpeaker;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
@@ -4326,8 +4327,30 @@ class ProjectValidator
       'knowledge' => $this->checkKnowledgeCommand($command, $where),
       'start_battle' => $this->checkBattleContinuation($command, $where),
       'move_route' => $this->checkMovementRoute($command, $where, $npcIds, $mapId, $cinematic),
+      'stage_actor' => $this->checkStagedActorBinding($command, $where),
       default => [],
     };
+  }
+
+  /**
+   * Reports what the Engine's stage manager would refuse about one staged
+   * actor, at the script that owns the command. The Engine owns the staging
+   * contract; the entry is selected as the interpreter selects it, so the
+   * flat and the wrapped `actor` form are judged alike and the source is
+   * left as authored.
+   *
+   * @param array<string, mixed> $command The stage_actor command.
+   * @return Issue[] The issue found, if any.
+   */
+  protected function checkStagedActorBinding(array $command, string $where): array
+  {
+    try {
+      CinematicStageManager::validateBinding(is_array($command['actor'] ?? null) ? $command['actor'] : $command);
+    } catch (Throwable $throwable) {
+      return [Issue::error($where, $throwable->getMessage(), 'Correct the staged actor as the Engine\'s cinematic stage requires.')];
+    }
+
+    return [];
   }
 
   /**

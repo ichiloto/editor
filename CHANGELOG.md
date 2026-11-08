@@ -4,6 +4,9 @@
 
 ### Added
 
+- Project validation reports a staged actor the Engine's stage would refuse (`CinematicStageManager::validateBinding`)
+  at the owning script, in Common Events and map scripts, for the flat command and the wrapped `actor` form, through
+  nested sequences. The Engine owns the rule; the source stays as authored.
 - The `present_actor` and `present_party_size` world conditions (Engine 4d524de) in the condition line, the
   Terminal's condition editor and the condition grammar: a member is chosen by stable actor id, and a party size names
   the Engine's `PresentPartyScope` and the exact number of members present, which is required and always written.
