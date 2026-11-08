@@ -64,20 +64,24 @@ final class ChangeBatch
      *
      * @param list<mixed> $changes The session requests, in order.
      * @param bool $relocateSaves Whether saves standing where a changed map is now solid may move to open floor.
-     * @param bool $checkOnly Whether to only report what committing would find, writing nothing.
+     * @param bool $checkOnly Whether to only report what committing would find. A check runs on a scratch copy of
+     *     the project ({@see ProjectScratchCopy}), so the project is untouched even if the process dies part way.
      * @return array<string, mixed> The commit's outcome ({@see EditorSession::commitChanges()}), or
      *     `{status: 'failed', step, method, message}` when a change was refused and nothing was written.
      */
     public static function apply(string $projectRoot, array $changes, bool $relocateSaves = false, bool $checkOnly = false): array
     {
-        return self::run($projectRoot, $changes,
+        $commit = static fn(string $root): array => self::run($root, $changes,
             static fn(self $batch): array => $batch->request('changes.commit', ['relocateSaves' => $relocateSaves, 'check' => $checkOnly]));
+
+        return $checkOnly ? ProjectScratchCopy::run($projectRoot, $commit) : $commit($projectRoot);
     }
 
     /**
      * Applies changes to a project as {@see apply()} does, shows the session
-     * they leave, unsaved, to `$inspect`, and then undoes them: nothing is
-     * written. A script sees what a batch would make before it applies it.
+     * they leave, unsaved, to `$inspect`, on a scratch copy of the project
+     * ({@see ProjectScratchCopy}): nothing is written to the project. A script
+     * sees what a batch would make before it applies it.
      *
      * @param list<mixed> $changes The session requests, in order.
      * @param Closure(EditorSession): mixed $inspect
@@ -86,14 +90,14 @@ final class ChangeBatch
      */
     public static function preview(string $projectRoot, array $changes, Closure $inspect): array
     {
-        return self::run($projectRoot, $changes, static function (self $batch) use ($inspect): array {
+        return ProjectScratchCopy::run($projectRoot, static fn(string $root): array => self::run($root, $changes, static function (self $batch) use ($inspect): array {
             try {
                 return ['status' => 'previewed', 'result' => $inspect($batch->host->session
                     ?? throw new SessionRefusal('The batch has no session open.'))];
             } finally {
                 $batch->request('changes.cancel');
             }
-        });
+        }));
     }
 
     /**
