@@ -54,6 +54,7 @@ final class MapValidator
             ...self::findAtlasProblems($map, $mapsById),
             ...MapGraphicsValidator::validate($map),
             ...MapGraphicsValidator::validateCoverage($map),
+            ...BrokenPieceCheck::validate($map),
             ...PassageAgreementCheck::validate($map),
         ], $map->mapId);
     }
