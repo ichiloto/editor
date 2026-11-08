@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Assets;
 use Ichiloto\Editor\Storage\SourceSetPlan;
 use Ichiloto\Engine\Rendering\Sprites\SpriteValidation;
 use InvalidArgumentException;
+use RuntimeException;
 
 /**
  * Brings a file from anywhere on the computer into the project's assets,
@@ -42,8 +43,7 @@ final class AssetImport
     public static function plan(string $projectRoot, string $source, string $destination, bool $replace = false): AssetImportPlan
     {
         $name = basename(trim(str_replace(DIRECTORY_SEPARATOR, '/', $destination)));
-        $kind = AssetKind::tryFromName($name)
-            ?? throw new InvalidArgumentException(sprintf('%s is not the name of a file the game uses. %s', trim($destination), AssetKind::describeNames()));
+        $kind = self::getDestinationKind($destination);
         $admission = $kind->createAdmission();
         $bytes = self::readSource($source, $admission);
         $admitted = $admission->admit($bytes, basename($source), $name);
@@ -68,8 +68,14 @@ final class AssetImport
         $readBack = static fn(string $path, string $staged): string => $admission->readStagedValue($staged, $path);
         $before = $existing === null ? null : $admission->readValue($existing, $path);
         // The file itself when it is there, and any file that would come to share its name.
-        $findWatched = static fn(): array => array_merge($existing === null ? [] : [$target],
-            array_map(static fn(string $clash): string => "{$assets}/{$clash}", $admission->findNameClashes($assets, $path)));
+        $findWatched = static function () use ($assets, $target, $existing, $admission, $path): array {
+            if (!self::isOwnedDestination($assets, $target)) {
+                throw new RuntimeException("assets/{$path} no longer resolves to a writable place inside the assets folder.");
+            }
+
+            return array_merge($existing === null ? [] : [$target],
+                array_map(static fn(string $clash): string => "{$assets}/{$clash}", $admission->findNameClashes($assets, $path)));
+        };
         $plan = new SourceSetPlan($projectRoot, $existing === null ? [] : [$target => $existing], [$target => $existing], [$target => $bytes],
             [$target => $before], [$target => $admitted->value], $findWatched, $readBack, "{$kind->getNoun()} import",
             'Imported ' . $kind->getNoun());
@@ -103,8 +109,39 @@ final class AssetImport
             throw new InvalidArgumentException("{$destination} is not a place inside the assets folder.");
         }
         $kind->createAdmission()->checkPath($destination);
+        if (!self::isOwnedDestination($assets, $assets . '/' . $destination)) {
+            throw new InvalidArgumentException("{$destination} is not a writable place inside the assets folder.");
+        }
 
         return $destination;
+    }
+
+    /** Resolves a caller's destination to an asset-relative path that can be used on a project copy. */
+    public static function resolveProjectDestination(string $projectRoot, string $destination): string
+    {
+        return self::resolveDestination(rtrim($projectRoot, '/') . '/assets', $destination,
+            self::getDestinationKind($destination));
+    }
+
+    private static function getDestinationKind(string $destination): AssetKind
+    {
+        $name = basename(trim(str_replace(DIRECTORY_SEPARATOR, '/', $destination)));
+
+        return AssetKind::tryFromName($name)
+            ?? throw new InvalidArgumentException(sprintf('%s is not the name of a file the game uses. %s', trim($destination), AssetKind::describeNames()));
+    }
+
+    private static function isOwnedDestination(string $assets, string $target): bool
+    {
+        clearstatcache(true);
+        $root = realpath($assets);
+        $folder = self::findExistingAncestor(dirname($target));
+        $resolved = $folder === null ? false : realpath($folder);
+
+        // A leaf link is not a replaceable asset file. A parent link may be
+        // traversed only when it resolves within the project's asset root.
+        return $root !== false && $resolved !== false && !is_link($target)
+            && ($resolved === $root || str_starts_with($resolved, $root . DIRECTORY_SEPARATOR));
     }
 
     private static function readSource(string $source, AssetAdmission $admission): string
