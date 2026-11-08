@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Inspector;
 
+use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Dialogue\DialogueEmotionFields;
 use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
@@ -85,6 +86,8 @@ use Throwable;
  */
 final readonly class MapInspector
 {
+    /** A transfer's Spawn Facing when it names none: the player keeps the heading they walked in with. */
+    public const string KEEP_HEADING = 'Keep walking heading';
     public const string MAP_BGM_NONE = '(None)';
     public const string MAP_KIND_NONE = 'Not set';
     /** What a map without a role shows on its Role row. */
@@ -599,7 +602,8 @@ final readonly class MapInspector
                 $x, $y, $destination->mapId, $destination->getWidth(), $destination->getHeight()));
         }
 
-        $facing = $heading === null ? null : (self::findSpawnHeading($heading)
+        // No heading leaves the event's facing as it is; an empty one clears it, so the player keeps their heading.
+        $facing = $heading === null || $heading === '' ? null : (self::findSpawnHeading($heading)
             ?? throw new InspectorRefusal(sprintf('%s is not a spawn facing; choose %s.', $heading, implode(', ', self::listSpawnHeadingNames()))));
 
         $next = $current;
@@ -607,6 +611,9 @@ final readonly class MapInspector
         $next['data']['spawnPoint'] = [...(is_array($current['data']['spawnPoint'] ?? null) ? $current['data']['spawnPoint'] : []), 'x' => $x, 'y' => $y];
         if ($facing !== null) {
             $next['data']['spawnSprite'] = [$facing->value];
+        }
+        if ($heading === '') {
+            unset($next['data']['spawnSprite']);
         }
 
         if ($next === $current) {
@@ -1419,17 +1426,26 @@ final readonly class MapInspector
      */
     private function applySpawnHeading(ProjectMap $map, string $marker, mixed $value): ?Command
     {
+        $path = ['data', 'spawnSprite'];
+        $held = $map->hasEventField($marker, $path);
+        $old = $map->getEventField($marker, $path);
+        if ($value === self::KEEP_HEADING) {
+            if (! $held) {
+                return null;
+            }
+            $clear = static fn() => $map->removeEventField($marker, $path);
+            $clear();
+
+            return new GenericCommand('Spawn facing edit', $clear, static fn() => $map->setEventField($marker, $path, $old));
+        }
         $heading = is_string($value) ? self::findSpawnHeading($value) : null;
         if ($heading === null) {
             throw new InspectorRefusal(sprintf('Choose %s for the spawn facing.', implode(', ', self::listSpawnHeadingNames())));
         }
-        $path = ['data', 'spawnSprite'];
-        $old = $map->getEventField($marker, $path);
         $next = [$heading->value];
         if ($old === $next) {
             return null;
         }
-        $held = $map->hasEventField($marker, $path);
         $apply = static fn() => $map->setEventField($marker, $path, $next);
         $restore = $held ? static fn() => $map->setEventField($marker, $path, $old) : static fn() => $map->removeEventField($marker, $path);
         $apply();
@@ -1457,17 +1473,21 @@ final readonly class MapInspector
      * @param list<array<string, mixed>> $fields
      * @return list<array<string, mixed>>
      */
-    private static function insertSpawnHeadingField(array $fields, string $marker, mixed $spawnSprite): array
+    private static function insertSpawnHeadingField(array $fields, string $marker, mixed $spawnSprite, bool $mayKeepHeading): array
     {
         $heading = is_array($spawnSprite) || is_string($spawnSprite) ? PlayerSpriteSet::headingFromName($spawnSprite) : null;
         $art = is_array($spawnSprite) ? implode(' ', array_map(static fn(mixed $row): string => is_scalar($row) ? (string) $row : '?', $spawnSprite)) : (is_scalar($spawnSprite) ? (string) $spawnSprite : '');
         $row = [
             'label' => 'Spawn Facing',
-            'value' => $heading?->value ?? sprintf('(sprite art: %s)', $art),
-            'selectedValue' => $heading?->value ?? '',
-            'choices' => array_map(static fn(string $name): array => ['label' => $name, 'value' => $name,
-                'description' => sprintf('The player arrives facing %s.', strtolower($name))], self::listSpawnHeadingNames()),
-            'options' => self::listSpawnHeadingNames(),
+            'value' => $heading?->value ?? ($spawnSprite === null ? self::KEEP_HEADING : sprintf('(sprite art: %s)', $art)),
+            'selectedValue' => $heading?->value ?? ($spawnSprite === null ? self::KEEP_HEADING : ''),
+            'choices' => [
+                ...($mayKeepHeading ? [['label' => self::KEEP_HEADING, 'value' => self::KEEP_HEADING,
+                    'description' => 'The player arrives facing the way they were walking.']] : []),
+                ...array_map(static fn(string $name): array => ['label' => $name, 'value' => $name,
+                    'description' => sprintf('The player arrives facing %s.', strtolower($name))], self::listSpawnHeadingNames()),
+            ],
+            'options' => [...($mayKeepHeading ? [self::KEEP_HEADING] : []), ...self::listSpawnHeadingNames()],
             'path' => ['data', 'spawnSprite'],
             'spawnHeading' => true,
             'target' => 'event',
@@ -2232,7 +2252,8 @@ final readonly class MapInspector
                 $this->flattenInspectorFields([...self::withPageEmotions($eventData, $pages), ...array_diff_key($optional, $eventData)], ['data']),
             ));
             $fields = $this->describePageEmotions($fields, $pages);
-            if ($hasSpawnSprite) { $fields = self::insertSpawnHeadingField($fields, $marker, $spawnSprite); }
+            $mayKeepHeading = $className !== null && is_a($className, TransferPlayerTrigger::class, true);
+            if ($hasSpawnSprite || $mayKeepHeading) { $fields = self::insertSpawnHeadingField($fields, $marker, $spawnSprite, $mayKeepHeading); }
             if ($hasPresentation) { $fields = [...$fields, ...$this->buildInnPresentationFields($marker, $presentation)]; }
         }
 

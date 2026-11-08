@@ -89,8 +89,6 @@ final class EventTypeCatalog
                         'x' => 0,
                         'y' => 0,
                     ],
-                    // A heading the player faces on arrival, as PlayerSpriteSet reads it.
-                    'spawnSprite' => [MovementHeading::SOUTH->value],
                 ],
                 defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),

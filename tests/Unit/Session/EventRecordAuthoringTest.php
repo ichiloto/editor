@@ -136,7 +136,8 @@ it('leaves authored empty lists alone, writes no empty defaults on new events, a
     expect($retyped['class'])->toBe('Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger')
         ->and($retyped['conditions'])->toBe([['type' => 'event', 'name' => 'door_open']])
         ->and($retyped['sets'])->toBe([['type' => 'event', 'name' => 'met_guide', 'note' => 'kept by the author']])
-        ->and($retyped['data'])->toHaveKeys(['destinationMap', 'spawnPoint', 'spawnSprite'])
+        ->and($retyped['data'])->toHaveKeys(['destinationMap', 'spawnPoint'])
+        ->and($retyped['data'])->not->toHaveKey('spawnSprite')
         ->and($retyped['data'])->not->toHaveKey('dialogue');
 });
 
@@ -307,7 +308,7 @@ it('picks the heading a transfer arrives facing, with its destination or alone, 
     $read = $request('inspector.read', ['map' => 'test-map', 'event' => 'T'])['result'];
     $facing = eventRecordRow($read, 'data.spawnSprite');
 
-    expect($facing)->toMatchArray(['kind' => 'options', 'label' => 'Spawn Facing', 'value' => '(sprite art: @)', 'options' => ['North', 'East', 'South', 'West']])
+    expect($facing)->toMatchArray(['kind' => 'options', 'label' => 'Spawn Facing', 'value' => '(sprite art: @)', 'options' => ['Keep walking heading', 'North', 'East', 'South', 'West']])
         ->and($request('inspector.apply', ['map' => 'test-map', 'revision' => $read['revision'], 'key' => $facing['key'], 'value' => 'Up'])['error']['message'])
             ->toContain('choose one of');
 
@@ -328,7 +329,7 @@ it('picks the heading a transfer arrives facing, with its destination or alone, 
         ->and(eventRecordRow($request('inspector.read', ['map' => 'test-map', 'event' => 'T'])['result'], 'data.spawnSprite')['value'])->toBe('North');
 
     $created = $request('event.create', ['map' => 'test-map', 'revision' => $request('map.read', ['map' => 'test-map'])['result']['revision'], 'cells' => [[2, 3]], 'type' => 'Transfer Player'])['result'];
-    expect(eventRecordRow($request('inspector.read', ['map' => 'test-map', 'event' => $created['marker']])['result'], 'data.spawnSprite')['value'])->toBe('South');
+    expect(eventRecordRow($request('inspector.read', ['map' => 'test-map', 'event' => $created['marker']])['result'], 'data.spawnSprite')['value'])->toBe('Keep walking heading');
 });
 
 it('places a Story Script\'s inline route on the map through its frame rows, at the commands\' place in the event data', function () {
@@ -361,4 +362,24 @@ it('offers no row for the subject an event is bound to or its area, which their 
     $rows = EditorSession::open($root)->readInspector('test-map', 'D')['rows'];
 
     expect(array_filter($rows, static fn(array $row): bool => in_array($row['key']['path'][0] ?? $row['key']['field'] ?? null, ['subject', 'area'], true)))->toBe([]);
+});
+
+it('lets a transfer keep the walking heading, with the facing left out of its source', function () {
+    $root = eventRecordProject();
+    $request = eventRecordHost($root);
+    $read = $request('inspector.read', ['map' => 'test-map', 'event' => 'T'])['result'];
+    $kept = $request('inspector.apply', ['map' => 'test-map', 'revision' => $read['revision'], 'key' => eventRecordRow($read, 'data.spawnSprite')['key'],
+        'value' => 'Keep walking heading'])['result'];
+    expect($kept['changed'])->toBeTrue()
+        ->and(eventRecordRow($request('inspector.read', ['map' => 'test-map', 'event' => 'T'])['result'], 'data.spawnSprite')['value'])->toBe('Keep walking heading');
+    $request('map.save', ['map' => 'test-map']);
+    expect((require eventRecordDataPath($root))['events']['T']['data'])->not->toHaveKey('spawnSprite');
+
+    // A retarget leaves the absence alone; a facing can be named again; an empty heading clears it.
+    $moved = $request('event.destination', ['map' => 'test-map', 'revision' => $kept['revision'], 'marker' => 'T', 'destination' => 'test-map', 'x' => 2, 'y' => 2])['result'];
+    $named = $request('event.destination', ['map' => 'test-map', 'revision' => $moved['revision'], 'marker' => 'T', 'destination' => 'test-map', 'x' => 2, 'y' => 2, 'heading' => 'West'])['result'];
+    expect(eventRecordRow($request('inspector.read', ['map' => 'test-map', 'event' => 'T'])['result'], 'data.spawnSprite')['value'])->toBe('West');
+    $request('event.destination', ['map' => 'test-map', 'revision' => $named['revision'], 'marker' => 'T', 'destination' => 'test-map', 'x' => 2, 'y' => 2, 'heading' => '']);
+    $request('map.save', ['map' => 'test-map']);
+    expect((require eventRecordDataPath($root))['events']['T']['data'])->not->toHaveKey('spawnSprite');
 });
