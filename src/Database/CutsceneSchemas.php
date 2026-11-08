@@ -482,6 +482,7 @@ final class CutsceneSchemas
                 'record_event' => $variants['record_event'],
                 'move_player' => $variants['move_player'],
                 'transfer' => $variants['transfer'],
+                \Ichiloto\Engine\Field\MapDoorReference::COMMAND => RecordSchemaCatalog::getDoorTransferFields(),
                 'camera' => [
                     new RecordField('operation', 'Operation', options: ['attach', 'reset']),
                 ],
@@ -533,6 +534,7 @@ final class CutsceneSchemas
                 new RecordField('y', 'Y', InputControlType::INTEGER),
                 new RecordField('sprite', 'Player Sprite', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             ],
+            \Ichiloto\Engine\Field\MapDoorReference::COMMAND => RecordSchemaCatalog::getDoorTransferFields(),
             'sequence' => [],
             'parallel' => [],
             'common_event' => [RecordField::reference('id', 'Common Event', 'common_events')],

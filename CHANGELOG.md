@@ -4,6 +4,11 @@
 
 ### Added
 
+- `transfer_through_door` (Engine 62e5fdc) in event scripts, cinematics and finalizers: the command names a map
+  and one of its doors, chosen among the events the Engine's `MapDoorReference` resolves on that map, unsaved edits
+  included; the door owns where the player arrives and faces. Validation reports a command whose door the Engine
+  cannot resolve, and every walk that follows a script's current map (NPC checks, NPC placement lifecycles, map
+  line edits, a cinematic's maps) follows it through the door to the door's destination.
 - Tutorial start contexts, as the Engine's `TutorialStartContext` declares them: Database > Tutorials gains
   **Starts In** (the field when unwritten, the Summons library or a battle's command window). A record that never
   names a context keeps none. The Engine's catalogue and `TutorialProjectReferences` judge each save, so a context

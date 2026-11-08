@@ -117,13 +117,15 @@ final class ScriptMapState
      * @param callable(string): ?array<int, mixed> $findCommonEvent The commands of a reusable event script, or null when it is unknown.
      * @param list<string> $commonEventStack Reusable event scripts being followed.
      * @param callable(array{path: list<int|string>, commands: array<int, mixed>}, self): self $walkLane Walks one lane from its start state, returning its end state.
+     * @param (\Closure(array<string, mixed>): ?string)|null $resolveDoor A door command's destination map ({@see CommandMapContext::findDestinationMap()}).
      * @return self The state after the block.
      */
-    public function walkParallelLanes(array $command, array $npcIdsByMap, callable $findCommonEvent, array $commonEventStack, callable $walkLane): self
+    public function walkParallelLanes(array $command, array $npcIdsByMap, callable $findCommonEvent, array $commonEventStack, callable $walkLane,
+        ?\Closure $resolveDoor = null): self
     {
         $lanes = CommandMapContext::getLanes($command);
         $destinations = array_map(
-            static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, $commonEventStack),
+            static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, $commonEventStack, $resolveDoor),
             $lanes,
         );
         $ends = [];

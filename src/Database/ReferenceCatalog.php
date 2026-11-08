@@ -75,9 +75,9 @@ final class ReferenceCatalog
     public const string ASSIGNED_SUMMON_SCOPES = 'assigned_summon_scopes';
 
     /**
-     * The doors a `transfer_through_door` command leaves through: a map's
-     * TransferPlayerTrigger events, which own the destination, arrival and
-     * facing. As an entry choice source, the markers of the map the command's
+     * The doors a `transfer_through_door` command leaves through: the events
+     * the Engine's MapDoorReference resolves to the destination, arrival and
+     * facing they own ({@see \Ichiloto\Editor\Maps\MapDoors}). As an entry choice source, the markers of the map the command's
      * own `map` names ({@see listEntryChoices()}); as a category, every door
      * in the project as `map:marker`, which validation checks a command against.
      */
@@ -336,7 +336,8 @@ final class ReferenceCatalog
             self::INPUT_ACTIONS => array_keys(\Ichiloto\Engine\IO\InputManager::getProjectBindings($this->workspace->projectRoot)),
             'maps' => $this->workspace->mapIds,
             self::MAP_DOORS => array_merge(...array_map(fn(string $mapId): array => array_map(
-                static fn(string $marker): string => $mapId . ':' . $marker, array_keys($this->listMapDoors($mapId))), $this->workspace->mapIds)),
+                static fn(int|string $marker): string => $mapId . ':' . $marker,
+                array_keys(new \Ichiloto\Editor\Maps\MapDoors($this->workspace)->listDoors($mapId))), $this->workspace->mapIds)),
             // A shop's stock is whatever the engine's ItemStore holds, and
             // that is everything in items.php: items, weapons and armors
             // alike. Offering only the items would refuse a sword a shop is
@@ -769,7 +770,8 @@ final class ReferenceCatalog
         if ($source === self::MAP_DOORS) {
             $mapId = $selector === null ? null : ($holder[$selector] ?? null);
 
-            return is_string($mapId) && trim($mapId) !== '' ? array_keys($this->listMapDoors(trim($mapId))) : [];
+            return is_string($mapId) && trim($mapId) !== ''
+                ? array_map(strval(...), array_keys(new \Ichiloto\Editor\Maps\MapDoors($this->workspace)->listDoors(trim($mapId)))) : [];
         }
         if ($source === 'terrain_grounds') {
             // A keyed entry carries its key as its id while edited, and not as stored.
@@ -956,7 +958,7 @@ final class ReferenceCatalog
         $mapIds = array_filter([
             is_string($start) ? $start : '',
             ...CommandMapContext::listTransferDestinations([...$cinematic->commands(), ...$finalizer],
-                static fn(string $id): ?array => $scripts[$id] ?? null),
+                static fn(string $id): ?array => $scripts[$id] ?? null, resolveDoor: new \Ichiloto\Editor\Maps\MapDoors($this->workspace)->createDestinationResolver()),
         ], static fn(string $id): bool => $id !== '');
 
         return array_values(array_filter($this->workspace->maps, static fn(ProjectMap $map): bool => in_array($map->mapId, $mapIds, true)));
@@ -1369,26 +1371,6 @@ final class ReferenceCatalog
      * @param string $category The kind of reference.
      * @return bool True when it is.
      */
-    /**
-     * A map's doors, by marker: its TransferPlayerTrigger events, each with the
-     * data that owns its destination, arrival and facing.
-     *
-     * @return array<string, array<string, mixed>>
-     */
-    public function listMapDoors(string $mapId): array
-    {
-        $index = array_search($mapId, $this->workspace->mapIds, true);
-        $events = $index === false ? null : ($this->workspace->maps[$index] ?? null)?->getMapDataField(['events']);
-        $doors = [];
-        foreach (is_array($events) ? $events : [] as $marker => $event) {
-            if (is_array($event) && is_a(strval($event['class'] ?? ''), \Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger::class, true)) {
-                $doors[(string) $marker] = is_array($event['data'] ?? null) ? $event['data'] : [];
-            }
-        }
-
-        return $doors;
-    }
-
     /**
      * The events of a map a map event condition names, each read as what it is
      * ("E · Chest"): what a marker is chosen from in both editors.

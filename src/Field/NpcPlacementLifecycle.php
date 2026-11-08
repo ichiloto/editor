@@ -75,7 +75,10 @@ final class NpcPlacementLifecycle
      * @param array<string, array<int, mixed>> $scripts Reusable event scripts by id.
      * @param array<string, string[]> $npcIdsByMap Each map's NPC ids.
      */
-    private function __construct(private readonly array $scripts, private readonly array $npcIdsByMap)
+    /**
+     * @param (\Closure(array<string, mixed>): ?string)|null $resolveDoor A door command's destination map.
+     */
+    private function __construct(private readonly array $scripts, private readonly array $npcIdsByMap, private readonly ?\Closure $resolveDoor = null)
     {
     }
 
@@ -102,7 +105,7 @@ final class NpcPlacementLifecycle
                 (array) ($map->getEditableData()['npcs'] ?? []),
             ), static fn(string $id): bool => $id !== ''));
         }
-        $lifecycle = new self($scripts, $npcIdsByMap);
+        $lifecycle = new self($scripts, $npcIdsByMap, new \Ichiloto\Editor\Maps\MapDoors($workspace)->createDestinationResolver());
 
         foreach ($workspace->maps as $map) {
             $site = 'map:' . $map->mapId;
@@ -319,6 +322,7 @@ final class NpcPlacementLifecycle
                     fn(string $id): ?array => $this->scripts[$id] ?? null,
                     $stack,
                     fn(array $lane, ScriptMapState $start): ScriptMapState => $this->walkScript($lane['commands'], $at . '/' . implode('/', $lane['path']), $start, $stack, $guards),
+                    $this->resolveDoor,
                 );
             }
 
@@ -333,8 +337,9 @@ final class NpcPlacementLifecycle
                 $state = ScriptMapState::mergeStates(CommandMapContext::canSkipArms($command) ? [...$ends, $state] : $ends);
             }
 
-            if ($type === 'transfer') {
-                $state = $state->transferTo(trim(strval($command['map'] ?? '')), $this->npcIdsByMap);
+            $destination = CommandMapContext::findDestinationMap($command, $this->resolveDoor);
+            if ($destination !== null) {
+                $state = $state->transferTo($destination, $this->npcIdsByMap);
             }
         }
 

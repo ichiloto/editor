@@ -63,6 +63,8 @@ final class MapLineInventory
         private readonly array $commonEvents,
         private readonly ?MapSubjectCells $subjects = null,
         private readonly array $targetGrid = [],
+        /** A door command's destination map ({@see \Ichiloto\Editor\Events\CommandMapContext::findDestinationMap()}). */
+        private readonly ?\Closure $resolveDoor = null,
     ) {
     }
 
@@ -321,7 +323,7 @@ final class MapLineInventory
                     ? $this->commonEvents[$id]['commands']
                     : null;
                 $destinations = array_map(
-                    static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, $stack),
+                    fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, $stack, $this->resolveDoor),
                     $lanes,
                 );
                 // The block ends where a transferring lane can leave it, or where it started.
@@ -359,9 +361,10 @@ final class MapLineInventory
                 $context = self::mergeContexts($ends);
             }
 
-            if ($type === 'transfer') {
-                $destination = trim(strval($command['map'] ?? ''));
-                if ($file !== null && $destination === $this->edit->mapId) {
+            $destination = CommandMapContext::findDestinationMap($command, $this->resolveDoor);
+            if ($destination !== null) {
+                // A door owns its own landing, which moves with the door's destination map; a transfer names its cell.
+                if ($type === 'transfer' && $file !== null && $destination === $this->edit->mapId) {
                     $this->shiftPoint($file, $at, $command);
                 }
                 $context = self::mergeContexts(array_map(self::getTransferContext(...), [$destination, ...$concurrent]));

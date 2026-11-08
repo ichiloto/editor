@@ -139,7 +139,15 @@ final class MapLinePlanner
                 $commonEvents[basename($path, '.php')] = ['file' => $path, 'commands' => $payloads[$path]];
             }
         }
-        $inventory = new MapLineInventory($edit, $commonEvents, $subjects, $targetGrid);
+        // A script leaving through a door arrives on the door's destination map, read as the Engine reads the saved door.
+        $resolveDoor = static function (array $command) use ($root): ?string {
+            try {
+                return \Ichiloto\Engine\Field\MapDoorReference::fromCommand($command)->resolveFromProject($root . '/assets')->mapFilename;
+            } catch (\InvalidArgumentException|\Ichiloto\Engine\Exceptions\NotFoundException) {
+                return null;
+            }
+        };
+        $inventory = new MapLineInventory($edit, $commonEvents, $subjects, $targetGrid, $resolveDoor);
         foreach ($dataPaths as $path) {
             if (str_starts_with($path, $root . '/assets/Maps/') && is_array($payloads[$path])) {
                 $inventory->addMapData($path, substr(dirname($path), strlen($root . '/assets/Maps/')), $payloads[$path]);
