@@ -40,11 +40,17 @@ final class ConditionEditor
     /**
      * What a type starts with when chosen, where the Engine requires more
      * than a name the author types: an assigned summons condition counts
-     * the party's assigned summons, and needs at least one.
+     * within the first scope the Engine declares, and needs at least one.
+     *
+     * @return array<string, mixed>
      */
-    private const array TYPE_DEFAULTS = [
-        'assigned_summons' => ['name' => ConditionCodec::ASSIGNED_SUMMONS_SCOPES[0], 'quantity' => 1],
-    ];
+    private static function getTypeDefaults(string $type): array
+    {
+        return match ($type) {
+            'assigned_summons' => ['name' => \Ichiloto\Engine\Core\AssignedSummonScope::values()[0], 'quantity' => 1],
+            default => [],
+        };
+    }
 
     /** The quest statuses a condition can require; the first is the default. */
     public const array QUEST_STATUSES = ['completed', 'active'];
@@ -277,7 +283,7 @@ final class ConditionEditor
         $index = is_int($index) ? $index : 0;
         $type = $types[(($index + $step) % count($types) + count($types)) % count($types)];
 
-        $rebuilt = ['type' => $type, 'name' => strval($condition['name'] ?? ''), ...(self::TYPE_DEFAULTS[$type] ?? [])];
+        $rebuilt = ['type' => $type, 'name' => strval($condition['name'] ?? ''), ...self::getTypeDefaults($type)];
 
         if (($condition['negate'] ?? false) === true) {
             $rebuilt['negate'] = true;

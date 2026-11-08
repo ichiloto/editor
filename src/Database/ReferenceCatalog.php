@@ -71,7 +71,7 @@ final class ReferenceCatalog
     /** The project's declared world abilities, read through the Engine's WorldAbilityCatalog. */
     public const string WORLD_ABILITIES = 'world_abilities';
 
-    /** What an assigned summons condition may count ({@see ConditionCodec::ASSIGNED_SUMMONS_SCOPES}). */
+    /** What an assigned summons condition may count: the Engine's {@see \Ichiloto\Engine\Core\AssignedSummonScope} values. */
     public const string ASSIGNED_SUMMON_SCOPES = 'assigned_summon_scopes';
 
     /** The tutorials a script may start (`start_tutorial`): those whose start is script, by stable id. */
@@ -319,7 +319,7 @@ final class ReferenceCatalog
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'income_schedules' => array_keys($this->incomeScheduleNames()),
             self::WORLD_ABILITIES => array_keys($this->workspace->getWorldAbilities()->getLabels()),
-            self::ASSIGNED_SUMMON_SCOPES => ConditionCodec::ASSIGNED_SUMMONS_SCOPES,
+            self::ASSIGNED_SUMMON_SCOPES => \Ichiloto\Engine\Core\AssignedSummonScope::values(),
             self::SCRIPT_TUTORIALS => array_map(strval(...), array_keys($this->listScriptTutorials())),
             self::ICON_ROLES => $this->workspace->menuPresentation?->listIconRoles() ?? [],
             self::INPUT_ACTIONS => array_keys(\Ichiloto\Engine\IO\InputManager::getProjectBindings($this->workspace->projectRoot)),

@@ -21,8 +21,9 @@ use InvalidArgumentException;
  * Wire form ({@see WorldStateLine}): entries separated by `;`, each
  * `[!]type:name[:extras]`, where extras depend on the type (quest status,
  * switch `false`, item quantity, variable `op:value`, a map event's marker
- * after its map id, or the least number of summons the party holds assigned,
- * which an assigned summons condition always writes: `assigned_summons:party:2`). A leading `!` negates. A name or value escapes its `\`,
+ * after its map id, or the least number of summons assigned within one of the
+ * Engine's {@see \Ichiloto\Engine\Core\AssignedSummonScope} scopes, which an
+ * assigned summons condition always writes: `assigned_summons:party:2`). A leading `!` negates. A name or value escapes its `\`,
  * `:` and `;` with a backslash, so any name the Engine accepts round-trips.
  * A line is read only as written: a part the type does not take, or a value
  * the Engine would refuse, makes the entry unreadable, never rewritten.
@@ -41,12 +42,6 @@ final class ConditionCodec
         'assigned_summons' => ['quantity'],
     ];
 
-    /**
-     * What an assigned summons condition may count: the Engine's evaluator
-     * counts the summons assigned across the party, and accepts `party`
-     * alone as its name ({@see WorldConditionEvaluator}).
-     */
-    public const array ASSIGNED_SUMMONS_SCOPES = ['party'];
 
     /**
      * Why an authored condition list cannot go through the condition line,

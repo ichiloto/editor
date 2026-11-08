@@ -170,7 +170,7 @@ it('refuses an assigned summons condition without its positive quantity or the p
     'no quantity' => ['assigned_summons:party', 'least number of assigned summons'],
     'a zero quantity' => ['assigned_summons:party:0', 'whole number above zero'],
     'a fractional quantity' => ['assigned_summons:party:1.5', 'whole number above zero'],
-    'a name other than the party' => ['assigned_summons:crew:2', 'requires name "party"'],
+    'a name other than the party' => ['assigned_summons:crew:2', 'requires one of these names [party]'],
 ]);
 
 it('keeps a hand-written assigned summons condition it cannot carry read-only, and its source as written', function (): void {

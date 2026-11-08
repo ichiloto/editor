@@ -12,7 +12,7 @@
   anything is written.
 - The `assigned_summons` world condition (`assigned_summons:party:2`) in the condition line, the Terminal's
   condition editor and the condition grammar: its quantity is required and always written, its name is chosen
-  from what the Engine counts (the party), and a missing or non-positive quantity or another name is refused by
+  from the Engine's `AssignedSummonScope` values (the party), and a missing or non-positive quantity or another name is refused by
   the Engine's own validation, never read as a default.
 - Storybook playback, as Engine 78f1f12 plays it through `CinematicCommandSchema::export()['storybookPlayback']`: a
   `play_storybook` command in event scripts, battle event pages and cinematics chooses its storybook in a
