@@ -21,6 +21,8 @@ use Throwable;
 final class SourceSetPlan
 {
     private bool $applied = false;
+    /** @var list<string> Directories this installation created, parents first. */
+    private array $createdFolders = [];
 
     /**
      * @param string $root The project root.
@@ -116,7 +118,7 @@ final class SourceSetPlan
     public function apply(): array
     {
         if (! $this->applied) {
-            $this->installSources($this->proposals, $this->afterValues);
+            $this->createdFolders = $this->installSources($this->proposals, $this->afterValues);
             $this->applied = true;
         }
         return $this->getChangedPaths();
@@ -136,9 +138,11 @@ final class SourceSetPlan
         }
         $this->assertSourcesUnchanged();
 
+        $staging = null;
         return new PreparedSave(
             $label,
-            function (FileSetTransaction $transaction): void {
+            function (FileSetTransaction $transaction) use (&$staging): void {
+                $staging = $transaction;
                 foreach ($this->watched as $path => $source) {
                     $transaction->expectSource($path, $source);
                 }
@@ -158,7 +162,12 @@ final class SourceSetPlan
                     }
                 }
             },
-            function (): void {
+            function () use (&$staging): void {
+                foreach ($staging->getCreatedFolders() as $folder) {
+                    if (array_any(array_keys($this->proposals), static fn(string $path): bool => str_starts_with($path, $folder . '/'))) {
+                        $this->createdFolders[] = $folder;
+                    }
+                }
                 $this->applied = true;
             },
         );
@@ -169,21 +178,23 @@ final class SourceSetPlan
         if ($this->applied) {
             $this->installSources($this->originals, $this->beforeValues);
             $this->applied = false;
-            // A folder only the plan's created file lived in goes with it.
-            foreach (array_keys(array_filter($this->originals, static fn(?string $source): bool => $source === null)) as $path) {
-                $folder = dirname($path);
-                if (is_dir($folder) && (scandir($folder) ?: []) === ['.', '..']) {
+            foreach (array_reverse($this->createdFolders) as $folder) {
+                if (!is_link($folder) && is_dir($folder) && (scandir($folder) ?: []) === ['.', '..']) {
                     rmdir($folder);
                 }
             }
+            $this->createdFolders = [];
         }
     }
 
-    /** @param array<string, string|null> $sources Null removes a file. */
-    private function installSources(array $sources, array $expectedValues): void
+    /**
+     * @param array<string, string|null> $sources Null removes a file.
+     * @return list<string> Directories created by the transaction, parents first.
+     */
+    private function installSources(array $sources, array $expectedValues): array
     {
         $this->assertSourcesUnchanged();
-        if ($sources === []) { return; }
+        if ($sources === []) { return []; }
         $transaction = new FileSetTransaction($this->root . '/assets');
         foreach ($sources as $path => $source) {
             if ($source === null) {
@@ -202,6 +213,8 @@ final class SourceSetPlan
                 }
             }
             $transaction->commit();
+
+            return $transaction->getCreatedFolders();
         } catch (Throwable $failure) {
             $transaction->rollBack();
             throw $failure;

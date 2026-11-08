@@ -62,18 +62,63 @@ final class ProjectScratchCopy
         if (is_dir($source . '/vendor') && ! @symlink($source . '/vendor', $copy . '/vendor')) {
             throw new RuntimeException('The project\'s dependencies could not be linked into a scratch copy.');
         }
-        foreach (new FilesystemIterator($source, FilesystemIterator::SKIP_DOTS) as $entry) {
-            if (! in_array($entry->getFilename(), self::LEFT_BEHIND, true)) {
+        $entries = array_filter(
+            iterator_to_array(new FilesystemIterator($source, FilesystemIterator::SKIP_DOTS), false),
+            static fn(SplFileInfo $entry): bool => ! in_array($entry->getFilename(), self::LEFT_BEHIND, true),
+        );
+        if ($entries === []) {
+            return;
+        }
+        if (PHP_OS_FAMILY === 'Darwin' && function_exists('proc_open') && is_executable('/bin/cp')) {
+            self::cloneEntries($entries, $copy);
+        } else {
+            foreach ($entries as $entry) {
                 self::copyEntry($entry, $copy . '/' . $entry->getFilename());
             }
+        }
+        self::rebindLinks($source, $copy);
+    }
+
+    /** @param array<int, SplFileInfo> $entries */
+    private static function cloneEntries(array $entries, string $copy): void
+    {
+        $paths = array_values(array_map(static fn(SplFileInfo $entry): string => $entry->getPathname(), $entries));
+        // macOS cp clones files where the volume can, and copies them where it
+        // cannot; -P carries a project's links across without following them.
+        $process = @proc_open(['/bin/cp', '-cRP', ...$paths, $copy],
+            [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => STDERR], $pipes);
+        if (! is_resource($process) || proc_close($process) !== 0) {
+            throw new RuntimeException('The project could not be copied into scratch.');
+        }
+    }
+
+    /**
+     * Points every copied link at the copy's own data before any work runs on
+     * it, or refuses a link the copy cannot isolate. The linked `vendor` stays:
+     * it is the one reference a change set only reads.
+     */
+    private static function rebindLinks(string $source, string $copy): void
+    {
+        // Listed before any is replaced: a directory changing while it is read may skip an entry.
+        $links = [];
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($copy, FilesystemIterator::SKIP_DOTS)) as $entry) {
+            if ($entry->isLink() && $entry->getPathname() !== $copy . '/vendor') {
+                $links[] = $entry->getPathname();
+            }
+        }
+        foreach ($links as $path) {
+            $original = new SplFileInfo($source . substr($path, strlen($copy)));
+            if (! $original->isLink() || readlink($original->getPathname()) !== readlink($path) || ! unlink($path)) {
+                throw new RuntimeException(sprintf('%s changed while copying a project link into scratch.', $original->getPathname()));
+            }
+            self::copyLink($original, $path, $source, $copy);
         }
     }
 
     private static function copyEntry(SplFileInfo $entry, string $target): void
     {
         if ($entry->isLink()) {
-            $resolved = $entry->getRealPath();
-            if ($resolved !== false && ! @symlink($resolved, $target)) {
+            if (! @symlink(readlink($entry->getPathname()), $target)) {
                 throw new RuntimeException(sprintf('%s could not be linked into a scratch copy.', $entry->getPathname()));
             }
 
@@ -89,6 +134,22 @@ final class ProjectScratchCopy
         self::makeDirectory($target);
         foreach (new FilesystemIterator($entry->getPathname(), FilesystemIterator::SKIP_DOTS) as $child) {
             self::copyEntry($child, $target . '/' . $child->getFilename());
+        }
+    }
+
+    private static function copyLink(SplFileInfo $entry, string $target, string $source, string $copy): void
+    {
+        $resolved = $entry->getRealPath();
+        $prefix = $source . DIRECTORY_SEPARATOR;
+        $relative = $resolved !== false && str_starts_with($resolved, $prefix)
+            ? substr($resolved, strlen($prefix)) : '';
+        $topLevel = explode(DIRECTORY_SEPARATOR, $relative, 2)[0];
+        if ($relative === '' || in_array($topLevel, self::LEFT_BEHIND, true)) {
+            throw new RuntimeException(sprintf('%s cannot be isolated in a scratch copy. Its link must resolve to copied project data.',
+                $entry->getPathname()));
+        }
+        if (! @symlink($copy . DIRECTORY_SEPARATOR . $relative, $target)) {
+            throw new RuntimeException(sprintf('%s could not be linked into a scratch copy.', $entry->getPathname()));
         }
     }
 

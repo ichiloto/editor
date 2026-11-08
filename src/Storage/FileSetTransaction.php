@@ -126,6 +126,12 @@ final class FileSetTransaction
         $this->expectedSources[$path] = $expected;
     }
 
+    /** @return list<string> Directories created during staging, parents first. */
+    public function getCreatedFolders(): array
+    {
+        return $this->createdFolders;
+    }
+
     /** Whether any source is required to remain unchanged. */
     public function hasExpectedSources(): bool
     {

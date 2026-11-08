@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Assets\AssetImport;
 use Ichiloto\Editor\Session\ChangeBatch;
 
 /**
@@ -77,5 +78,156 @@ it('still writes an applied change set to the project itself', function () {
 
     expect($outcome['status'])->toBe('saved')
         ->and(is_file($root . '/assets/Graphics/Applied.png'))->toBeTrue();
+    unlink($source);
+});
+
+it('redirects an internal asset link into the scratch project during preview', function () {
+    $root = mapGraphicsProject();
+    $source = writeIncomingPng();
+    $graphics = $root . '/assets/Graphics';
+    $link = $graphics . '/Linked';
+    $physical = $graphics . '/Physical';
+    mkdir($physical, 0777, true);
+    symlink($physical, $link);
+
+    try {
+        $outcome = ChangeBatch::preview($root, [
+            ['method' => 'assets.import', 'params' => ['source' => $source, 'destination' => 'Graphics/Linked/Checked.png']],
+        ], static function ($session) use ($physical): array {
+            $scratch = new ReflectionProperty($session, 'workspace')->getValue($session)->projectRoot;
+
+            return [is_file($scratch . '/assets/Graphics/Physical/Checked.png'), is_file($physical . '/Checked.png')];
+        });
+
+        expect($outcome)->toBe(['status' => 'previewed', 'result' => [true, false]])
+            ->and(is_file($physical . '/Checked.png'))->toBeFalse();
+    } finally {
+        unlink($link);
+        unlink($source);
+    }
+});
+
+it('refuses a project link outside scratch ownership before a checked import runs', function () {
+    $root = mapGraphicsProject();
+    $source = writeIncomingPng();
+    $external = sys_get_temp_dir() . '/' . uniqid('ichiloto-scratch-external-', true);
+    $link = $root . '/assets/Graphics/Linked';
+    mkdir($external);
+    symlink($external, $link);
+
+    try {
+        expect(fn() => ChangeBatch::apply($root, [
+            ['method' => 'assets.import', 'params' => ['source' => $source, 'destination' => 'Graphics/Linked/Checked.png']],
+        ], checkOnly: true))->toThrow(RuntimeException::class, 'cannot be isolated in a scratch copy');
+        $outcome = ChangeBatch::apply($root, [
+            ['method' => 'assets.import', 'params' => ['source' => $source, 'destination' => 'Graphics/Linked/Checked.png']],
+        ]);
+        expect($outcome['status'])->toBe('failed')
+            ->and($outcome['message'])->toContain('inside the assets folder')
+            ->and(scandir($external))->toBe(['.', '..']);
+    } finally {
+        unlink($link);
+        unlink($source);
+        rmdir($external);
+    }
+});
+
+it('only removes directories created by an asset import when undoing the import', function () {
+    $root = mapGraphicsProject();
+    $source = writeIncomingPng();
+    $existing = $root . '/assets/Graphics/Existing';
+    mkdir($existing);
+
+    try {
+        $withinExisting = AssetImport::plan($root, $source, 'Graphics/Existing/Checked.png')->plan;
+        $withinExisting->apply();
+        $withinExisting->revert();
+        expect(scandir($existing))->toBe(['.', '..']);
+
+        $nested = AssetImport::plan($root, $source, 'Graphics/Incoming/Nested/Checked.png')->plan;
+        $nested->apply();
+        $nested->revert();
+        expect(is_dir($root . '/assets/Graphics/Incoming'))->toBeFalse();
+    } finally {
+        unlink($source);
+    }
+});
+
+it('checks and previews an absolute project asset destination before applying the same batch', function () {
+    $root = mapGraphicsProject();
+    $source = writeIncomingPng();
+    $target = $root . '/assets/Graphics/Imported/Checked.png';
+    $changes = [['method' => 'assets.import', 'params' => ['source' => $source, 'destination' => $target]]];
+
+    try {
+        $outside = $root . '/../' . basename($root) . '-outside.png';
+        $refusal = ChangeBatch::apply($root, [
+            ['method' => 'assets.import', 'params' => ['source' => $source, 'destination' => $outside]],
+        ], checkOnly: true);
+        expect($refusal['status'])->toBe('failed')
+            ->and($refusal['method'])->toBe('assets.import')
+            ->and($refusal['message'])->toContain('inside it')
+            ->and(is_file($outside))->toBeFalse();
+
+        expect(ChangeBatch::apply($root, $changes, checkOnly: true)['status'])->toBe('checked')
+            ->and(is_file($target))->toBeFalse();
+        $outcome = ChangeBatch::preview($root, $changes, static function ($session) use ($target): array {
+            $scratch = new ReflectionProperty($session, 'workspace')->getValue($session)->projectRoot;
+
+            return [is_file($scratch . '/assets/Graphics/Imported/Checked.png'), is_file($target)];
+        });
+        expect($outcome)->toBe(['status' => 'previewed', 'result' => [true, false]])
+            ->and(is_file($target))->toBeFalse();
+        expect(ChangeBatch::apply($root, $changes)['status'])->toBe('saved')
+            ->and(file_get_contents($target))->toBe(file_get_contents($source));
+    } finally {
+        unlink($source);
+    }
+});
+
+it('rebinds every link in a project before a preview runs', function () {
+    $root = mapGraphicsProject();
+    $physical = $root . '/assets/Graphics/Physical';
+    $links = $root . '/assets/Graphics/Links';
+    mkdir($physical, 0777, true);
+    mkdir($links, 0777, true);
+    foreach (range(1, 128) as $number) {
+        symlink($physical, "{$links}/{$number}");
+    }
+
+    $outcome = ChangeBatch::preview($root, [], static function ($session): array {
+        $scratch = new ReflectionProperty($session, 'workspace')->getValue($session)->projectRoot;
+
+        return array_values(array_filter(glob($scratch . '/assets/Graphics/Links/*'),
+            static fn(string $link): bool => readlink($link) !== $scratch . '/assets/Graphics/Physical'));
+    });
+
+    expect($outcome)->toBe(['status' => 'previewed', 'result' => []]);
+    foreach (range(1, 128) as $number) {
+        unlink("{$links}/{$number}");
+    }
+});
+
+it('isolates links the same way when the project is copied file by file', function () {
+    $root = mapGraphicsProject();
+    $source = writeIncomingPng();
+    $physical = $root . '/assets/Graphics/Physical';
+    mkdir($physical, 0777, true);
+    symlink($physical, $root . '/assets/Graphics/Linked');
+    $bootstrap = dirname(__DIR__, 2) . '/bootstrap.php';
+    $script = sys_get_temp_dir() . '/' . uniqid('ichiloto-check-copies-', true) . '.php';
+    file_put_contents($script, '<?php require ' . var_export($bootstrap, true) . ';'
+        . ' echo json_encode(Ichiloto\Editor\Session\ChangeBatch::preview(' . var_export($root, true) . ', ['
+        . " ['method' => 'assets.import', 'params' => ['source' => " . var_export($source, true) . ", 'destination' => 'Graphics/Linked/Checked.png']],"
+        . ' ], static function ($session) { $scratch = (new ReflectionProperty($session, "workspace"))->getValue($session)->projectRoot;'
+        . ' return is_file($scratch . "/assets/Graphics/Physical/Checked.png"); }));');
+
+    exec(escapeshellarg(PHP_BINARY) . ' -d disable_functions=proc_open ' . escapeshellarg($script) . ' 2>/dev/null', $output, $status);
+
+    expect($status)->toBe(0)
+        ->and(json_decode(implode('', $output), true))->toBe(['status' => 'previewed', 'result' => true])
+        ->and(is_file($physical . '/Checked.png'))->toBeFalse();
+    unlink($root . '/assets/Graphics/Linked');
+    unlink($script);
     unlink($source);
 });
