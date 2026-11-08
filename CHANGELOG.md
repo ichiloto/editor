@@ -4,6 +4,11 @@
 
 ### Added
 
+- The `present_actor` and `present_party_size` world conditions (Engine 4d524de) in the condition line, the
+  Terminal's condition editor and the condition grammar: a member is chosen by stable actor id, and a party size names
+  the Engine's `PresentPartyScope` and the exact number of members present, which is required and always written.
+  A missing or non-positive quantity, another scope, or an extra after a member's id is refused, and a hand-written
+  size without its quantity stays read-only as authored.
 - `transfer_through_door` (Engine 62e5fdc) in event scripts, cinematics and finalizers: the command names a map
   and one of its doors, chosen among the events the Engine's `MapDoorReference` resolves on that map, unsaved edits
   included; the door owns where the player arrives and faces. Validation reports a command whose door the Engine
