@@ -251,6 +251,8 @@ final class RecordSchemaCatalog
                 // Protection: scales every hit a guard could block (0.5 halves it, 0 blocks it).
                 new RecordField('damageTakenRate', 'Damage Taken Rate', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
                 new RecordField('atbRate', 'ATB Fill Rate', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
+                new RecordField('accuracyModifier', 'Accuracy Modifier (Points)', InputControlType::INTEGER,
+                    removeWhenEmpty: true, displayDefault: '0 (unchanged)'),
                 // Cover: the bearer takes the single-target hits meant for its weakest ally.
                 RecordField::boolean('coversAllies', 'Covers Allies'),
                 // Confusion: the chance each turn that the bearer attacks a random battler of either side instead.
