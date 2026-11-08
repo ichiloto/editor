@@ -3719,7 +3719,7 @@ class ProjectValidator
    * needs listing here.
    */
   protected const array DIRECT_REFERENCE_CATEGORIES = [
-    'quests', 'maps', 'troops', 'inventory', 'bgm', 'sfx', 'common_events', 'cinematics', 'summons',
+    'quests', 'maps', ReferenceCatalog::MAP_DOORS, 'troops', 'inventory', 'bgm', 'sfx', 'common_events', 'cinematics', 'summons',
     'animations', 'effects', 'actors', 'income_schedules', SkitPlaybackFields::REFERENCE_CATEGORY,
     ReferenceCatalog::WORLD_ABILITIES,
   ];
@@ -4136,10 +4136,16 @@ class ProjectValidator
         'play_music' => ['bgm', 'music', 'track'],
         'play_sound' => ['sfx', 'sound', 'sound'],
         'accept_quest' => ['quests', 'id', 'quest'],
-        'transfer' => ['maps', 'map', 'map'],
+        'transfer', 'transfer_through_door' => ['maps', 'map', 'map'],
         'start_battle' => ['troops', 'troop', 'troop'],
         default => null,
       };
+
+      // The door, a TransferPlayerTrigger on the named map, owns the destination: a marker that is not one leads nowhere.
+      if ($type === 'transfer_through_door' && in_array(trim(strval($command['map'] ?? '')), $known['maps'] ?? [], true)) {
+        $issues = [...$issues, ...$this->checkReference(trim(strval($command['map'])) . ':' . trim(strval($command['event'] ?? '')),
+          ReferenceCatalog::MAP_DOORS, 'door', $where, $known)];
+      }
 
       if (is_array($named)) {
         [$category, $key, $noun] = $named;

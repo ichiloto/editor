@@ -3004,6 +3004,12 @@ final class RecordSchemaCatalog
                 new RecordField('x', 'X', InputControlType::INTEGER),
                 new RecordField('y', 'Y', InputControlType::INTEGER),
             ],
+            // The door owns where the player arrives and faces: the command names the door, never its coordinates.
+            'transfer_through_door' => [
+                RecordField::reference('map', 'Door On Map', 'maps'),
+                new RecordField('event', 'Door', options: [''], displayDefault: '(choose a door)',
+                    entryChoices: ReferenceCatalog::MAP_DOORS, entryChoicesSelector: 'map'),
+            ],
             'start_battle' => [
                 RecordField::reference('troop', 'Troop', 'troops'),
                 new RecordField('resultVariable', 'Result Variable', removeWhenEmpty: true),
