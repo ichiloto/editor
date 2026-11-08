@@ -229,6 +229,8 @@ final class CutsceneSchemas
             new RecordField('stage.canvas', 'Stage Canvas', codec: RecordFieldCodec::SIZE),
             new RecordField('stage.startFrame', 'Stage Start Frame', InputControlType::INTEGER),
             new RecordField('stage.restoreFrame', 'Stage Restore Frame', InputControlType::INTEGER),
+            // The still shown during the stage in reduced motion; absent, the sequence's rest frame serves.
+            new RecordField('stage.restFrame', 'Stage Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: 'Sequence rest frame'),
             // black, white or #RRGGBB, as cover colours are written.
             new RecordField('stage.background', 'Stage Background', removeWhenEmpty: true, displayDefault: 'black'),
         ];

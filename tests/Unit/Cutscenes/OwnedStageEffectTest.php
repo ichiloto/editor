@@ -393,3 +393,32 @@ it('preserves independent authored Terminal tracks and cues without applying gra
     expect($session->readCutscenePreview('cutscenes/effect', 0, 1, 24, 3)['cues'])->toBe($compiled->cueSchedule)
         ->and($session->describeCutsceneTimeline('cutscenes/effect', 0)['stage'])->toBeNull();
 });
+
+it('previews a generic stage at its own rest frame while the sequence rest frame stays independent', function () {
+    $root = ownedStageEffectProject();
+    $session = EditorSession::open($root);
+    $rows = static fn() => array_column($session->readDatabaseRecord('cutscenes/effect', 0)['rows'], null, 'label');
+    $find = static function (array $rows, string $label): array {
+        foreach ($rows as $row) {
+            if (trim($row['label']) === $label) {
+                return $row;
+            }
+        }
+        throw new RuntimeException("{$label} is not a row.");
+    };
+    expect($find($rows(), 'Stage Rest Frame')['value'])->toBe('Sequence rest frame');
+
+    $session->applyDatabaseRecord('cutscenes/effect', 0, $find($rows(), 'Stage Rest Frame')['key'], '5');
+    expect($session->saveAll()['failures'])->toBe([]);
+    $saved = require ownedStageEffectPath($root);
+    expect($saved['stage']['restFrame'])->toBe(5)->and($saved['restFrame'])->toBe(3);
+
+    $asset = CutsceneLibrary::fromProject($root)->find(CutsceneType::EFFECT, 'quiet-interval');
+    $asset->hydrate();
+    $compiled = $asset->compileEffect(EffectPresentation::GRAPHICAL, false, forStage: true);
+    $stage = new EffectPreviewStage(EffectPresentation::GRAPHICAL, false, forStage: true);
+    $still = $stage->renderCanvas($compiled, $root . '/assets', 2, 160, 80, true)->toArray();
+    expect($still)->toBe($stage->renderCanvas($compiled, $root . '/assets', 5, 160, 80, true)->toArray())
+        ->and($still)->toBe($stage->renderCanvas($compiled, $root . '/assets', 5, 160, 80)->toArray())
+        ->and($still)->not->toBe($stage->renderCanvas($compiled, $root . '/assets', 3, 160, 80)->toArray());
+});

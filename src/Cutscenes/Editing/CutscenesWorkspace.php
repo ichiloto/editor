@@ -898,7 +898,7 @@ trait CutscenesWorkspace
                 'Wielders' => ['wielders.mode', 'wielders.roles', 'wielders.characters', 'wielders.tenancy'],
                 'Playback' => ['playback.defaultSpeed', 'playback.allowSkip', 'playback.loopPreview', 'transitionIn.type', 'transitionIn.durationMs', 'transitionIn.color', 'transitionOut.type', 'transitionOut.durationMs', 'transitionOut.color', 'effectTiming.mode', 'effectTiming.cueId', 'effectTiming.frame', 'targetPresentation.mode', 'targetPresentation.showCasterNameBanner'],
                 'Timeline' => ['formatVersion', 'fps', 'lengthFrames', 'restFrame', 'editor', 'commandListTracks', 'commandListCues'],
-                'Stage' => ['stage.canvas', 'stage.startFrame', 'stage.restoreFrame', 'stage.background',
+                'Stage' => ['stage.canvas', 'stage.startFrame', 'stage.restoreFrame', 'stage.restFrame', 'stage.background',
                     'commandList' . ucfirst(CutsceneSchemas::STAGE_SUBJECTS_KEY), 'commandList' . ucfirst(CutsceneSchemas::STAGE_CAMERA_KEY),
                     'commandList' . ucfirst(CutsceneSchemas::STAGE_COVERS_KEY)],
             ],
