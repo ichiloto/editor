@@ -61,7 +61,8 @@ final readonly class MapReferences
     /** Whether a command tree, branches included, transfers to the map. */
     private static function hasTransferTo(array $commands, string $mapId): bool
     {
-        if (($commands['type'] ?? null) === 'transfer' && ($commands['map'] ?? null) === $mapId) {
+        // A transfer through a door names the map the door stands on.
+        if (in_array($commands['type'] ?? null, ['transfer', 'transfer_through_door'], true) && ($commands['map'] ?? null) === $mapId) {
             return true;
         }
 

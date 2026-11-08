@@ -20,6 +20,8 @@ use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\Database\StorybookPlaybackFields;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Maps\MapDoors;
+use Ichiloto\Engine\Field\MapDoorReference;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\ScriptReferenceScope;
@@ -99,6 +101,9 @@ class ProjectValidator
    * project, read once per validation run.
    */
   protected ?InventoryCatalog $inventoryCatalog = null;
+
+  /** @var MapDoors|null The doors scripts leave through, read from this run's maps. */
+  protected ?MapDoors $doors = null;
 
   /**
    * @var array<string, mixed>|null The project's knowledge catalogue, read
@@ -181,6 +186,8 @@ class ProjectValidator
     $this->storybooks = new StorybookValidator($workspace);
     $this->cinematicCommonEventIds = [];
     $this->legacyCommonEventIds = [];
+
+    $this->doors = new MapDoors($workspace);
 
     try {
       $this->inventoryCatalog = InventoryCatalog::fromWorkspace($workspace);
@@ -4136,10 +4143,12 @@ class ProjectValidator
         'play_music' => ['bgm', 'music', 'track'],
         'play_sound' => ['sfx', 'sound', 'sound'],
         'accept_quest' => ['quests', 'id', 'quest'],
-        'transfer' => ['maps', 'map', 'map'],
+        'transfer', 'transfer_through_door' => ['maps', 'map', 'map'],
         'start_battle' => ['troops', 'troop', 'troop'],
         default => null,
       };
+
+      $issues = [...$issues, ...$this->checkDoorTransfer($command, $where, $known)];
 
       if (is_array($named)) {
         [$category, $key, $noun] = $named;
@@ -4260,8 +4269,9 @@ class ProjectValidator
         $context['map'] = ScriptMapState::mergeStates(array_column($branchContexts, 'map'));
       }
 
-      if ($type === 'transfer') {
-        $context['map'] = $context['map']->transferTo(trim(strval($command['map'] ?? '')), $context['npcIdsByMap']);
+      $destination = CommandMapContext::findDestinationMap($command, $this->doors?->createDestinationResolver());
+      if ($destination !== null) {
+        $context['map'] = $context['map']->transferTo($destination, $context['npcIdsByMap']);
       }
     }
 
@@ -4298,6 +4308,7 @@ class ProjectValidator
 
         return $laneEnd;
       },
+      $this->doors?->createDestinationResolver(),
     );
 
     return [$issues, $end];
@@ -5431,6 +5442,29 @@ class ProjectValidator
     }
 
     return $issues;
+  }
+
+  /**
+   * A `transfer_through_door` leaves through a door the Engine's resolver can
+   * read on the maps as they stand: the door owns where it leads, so a
+   * marker that is no door, or a malformed command, leads nowhere. A map the
+   * project lacks is reported as a missing map instead.
+   *
+   * @param array<string, mixed> $command
+   * @param array<string, string[]> $known
+   * @return Issue[]
+   */
+  protected function checkDoorTransfer(array $command, string $where, array $known): array
+  {
+    $map = trim(strval($command['map'] ?? ''));
+    if (($command['type'] ?? null) !== MapDoorReference::COMMAND || $this->doors === null
+      || ($map !== '' && ! in_array($map, $known['maps'] ?? [], true))) {
+      return [];
+    }
+    $door = $this->doors->resolve($command);
+
+    return is_string($door) ? [Issue::error($where, sprintf('It leaves through a door the game cannot use: %s', $door),
+      'Choose the door from the picker, which lists the doors on the named map.')] : [];
   }
 
   protected function checkReference(string $value, string $category, string $noun, string $where, array $known): array

@@ -9,6 +9,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\ConversationFields;
+use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\Database\StorybookPlaybackFields;
@@ -322,7 +323,7 @@ trait CutsceneValidation
                 'cinematic_music' => ['bgm', 'track', 'track'],
                 'play_sound' => ['sfx', 'sound', 'sound'],
                 'accept_quest' => ['quests', 'id', 'quest'],
-                'transfer' => ['maps', 'map', 'map'],
+                'transfer', 'transfer_through_door' => ['maps', 'map', 'map'],
                 'start_battle' => ['troops', 'troop', 'troop'],
                 'common_event' => ['common_events', 'id', 'common event'],
                 'show_animation' => ['animations', 'animation', 'animation'],
@@ -337,6 +338,8 @@ trait CutsceneValidation
             if ($type === 'field_animation') {
                 $issues = [...$issues, ...$this->checkFieldAnimationReference($command, $where, $known)];
             }
+
+            $issues = [...$issues, ...$this->checkDoorTransfer($command, $where, $known)];
 
             if ($type === SkitPlaybackFields::getCommandType()) {
                 $issues = [...$issues, ...$this->checkSkitPlayback($command, $where, $known, $context['map'])];
@@ -435,8 +438,9 @@ trait CutsceneValidation
                 $context['map'] = ScriptMapState::mergeStates([$context['map'], $finishedContext['map']]);
             }
 
-            if ($type === 'transfer') {
-                $context['map'] = $context['map']->transferTo(trim(strval($command['map'] ?? '')), $context['npcIdsByMap']);
+            $destination = CommandMapContext::findDestinationMap($command, $this->doors?->createDestinationResolver());
+            if ($destination !== null) {
+                $context['map'] = $context['map']->transferTo($destination, $context['npcIdsByMap']);
             }
         }
 

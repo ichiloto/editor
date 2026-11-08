@@ -71,6 +71,18 @@ final class ReferenceCatalog
     /** The project's declared world abilities, read through the Engine's WorldAbilityCatalog. */
     public const string WORLD_ABILITIES = 'world_abilities';
 
+    /** What an assigned summons condition may count: the Engine's {@see \Ichiloto\Engine\Core\AssignedSummonScope} values. */
+    public const string ASSIGNED_SUMMON_SCOPES = 'assigned_summon_scopes';
+
+    /**
+     * The doors a `transfer_through_door` command leaves through: the events
+     * the Engine's MapDoorReference resolves to the destination, arrival and
+     * facing they own ({@see \Ichiloto\Editor\Maps\MapDoors}). As an entry choice source, the markers of the map the command's
+     * own `map` names ({@see listEntryChoices()}); as a category, every door
+     * in the project as `map:marker`, which validation checks a command against.
+     */
+    public const string MAP_DOORS = 'map_doors';
+
     /** The tutorials a script may start (`start_tutorial`): those whose start is script, by stable id. */
     public const string SCRIPT_TUTORIALS = 'script_tutorials';
 
@@ -119,12 +131,16 @@ final class ReferenceCatalog
         'income_schedules',
         // The exploration powers the project declares, by stable id, for world_ability conditions and power commands.
         self::WORLD_ABILITIES,
+        // What an assigned summons condition counts, by the Engine's own rule.
+        self::ASSIGNED_SUMMON_SCOPES,
         // The tutorials a script may start, by stable id, unsaved edits included.
         self::SCRIPT_TUTORIALS,
         // The theme's semantic icon roles, which a world power shows.
         self::ICON_ROLES,
         self::INPUT_ACTIONS,
         'maps',
+        // Every door in the project, as map:marker, for transfer_through_door.
+        self::MAP_DOORS,
         'items',
         'weapons',
         'armors',
@@ -314,10 +330,14 @@ final class ReferenceCatalog
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'income_schedules' => array_keys($this->incomeScheduleNames()),
             self::WORLD_ABILITIES => array_keys($this->workspace->getWorldAbilities()->getLabels()),
+            self::ASSIGNED_SUMMON_SCOPES => \Ichiloto\Engine\Core\AssignedSummonScope::values(),
             self::SCRIPT_TUTORIALS => array_map(strval(...), array_keys($this->listScriptTutorials())),
             self::ICON_ROLES => $this->workspace->menuPresentation?->listIconRoles() ?? [],
             self::INPUT_ACTIONS => array_keys(\Ichiloto\Engine\IO\InputManager::getProjectBindings($this->workspace->projectRoot)),
             'maps' => $this->workspace->mapIds,
+            self::MAP_DOORS => array_merge(...array_map(fn(string $mapId): array => array_map(
+                static fn(int|string $marker): string => $mapId . ':' . $marker,
+                array_keys(new \Ichiloto\Editor\Maps\MapDoors($this->workspace)->listDoors($mapId))), $this->workspace->mapIds)),
             // A shop's stock is whatever the engine's ItemStore holds, and
             // that is everything in items.php: items, weapons and armors
             // alike. Offering only the items would refuse a sword a shop is
@@ -747,6 +767,12 @@ final class ReferenceCatalog
 
             return is_string($npcId) && trim($npcId) !== '' ? $this->listNpcPlacements(trim($npcId)) : [];
         }
+        if ($source === self::MAP_DOORS) {
+            $mapId = $selector === null ? null : ($holder[$selector] ?? null);
+
+            return is_string($mapId) && trim($mapId) !== ''
+                ? array_map(strval(...), array_keys(new \Ichiloto\Editor\Maps\MapDoors($this->workspace)->listDoors(trim($mapId)))) : [];
+        }
         if ($source === 'terrain_grounds') {
             // A keyed entry carries its key as its id while edited, and not as stored.
             $self = array_diff_key($holder, ['id' => true]);
@@ -932,7 +958,7 @@ final class ReferenceCatalog
         $mapIds = array_filter([
             is_string($start) ? $start : '',
             ...CommandMapContext::listTransferDestinations([...$cinematic->commands(), ...$finalizer],
-                static fn(string $id): ?array => $scripts[$id] ?? null),
+                static fn(string $id): ?array => $scripts[$id] ?? null, resolveDoor: new \Ichiloto\Editor\Maps\MapDoors($this->workspace)->createDestinationResolver()),
         ], static fn(string $id): bool => $id !== '');
 
         return array_values(array_filter($this->workspace->maps, static fn(ProjectMap $map): bool => in_array($map->mapId, $mapIds, true)));

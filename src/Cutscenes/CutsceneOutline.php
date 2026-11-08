@@ -488,6 +488,7 @@ final class CutsceneOutline
             'move_player' => sprintf('→ %s, %s', strval($command['x'] ?? '?'), strval($command['y'] ?? '?')),
             'move_route' => self::routeSummary($command),
             'transfer' => sprintf('→ %s (%s, %s)', strval($command['map'] ?? '?'), strval($command['x'] ?? '?'), strval($command['y'] ?? '?')),
+            \Ichiloto\Engine\Field\MapDoorReference::COMMAND => sprintf('→ through door %s on %s', strval($command['event'] ?? '?'), strval($command['map'] ?? '?')),
             'start_battle' => strval($command['troop'] ?? ''),
             'branch' => 'if ' . self::conditionSummary($command),
             'sequence' => sprintf('%d commands', count(self::listOf($command['commands'] ?? null))),

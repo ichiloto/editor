@@ -16,6 +16,7 @@ use Ichiloto\Engine\Progression\TutorialProjectReferences;
 use Ichiloto\Engine\Progression\TutorialReferenceSource;
 use Ichiloto\Engine\Progression\TutorialReplayMode;
 use Ichiloto\Engine\Progression\TutorialScreenCatalog;
+use Ichiloto\Engine\Progression\TutorialStartContext;
 use Ichiloto\Engine\Progression\TutorialStartMode;
 use Ichiloto\Engine\Progression\TutorialStep;
 use InvalidArgumentException;
@@ -25,8 +26,11 @@ use InvalidArgumentException;
  * `assets/Data/tutorials.php` returns and the Engine's {@see TutorialCatalog}
  * reads. A tutorial has a stable id the save keeps its phase under, a library
  * category and title, when it starts (from a script, or automatically once its
- * trigger first holds in play), what the Guide offers later, and its ordered
- * steps. A step names the real screen, view and target the player acts on, the
+ * trigger first holds in play), where an automatic one starts (in the field,
+ * the default a record may leave unwritten, or on the screen that owns its
+ * lesson: the Summons library, or a battle's command window, which starts its
+ * one step when the trigger holds there), what the Guide offers later, and its
+ * ordered steps. A step names the real screen, view and target the player acts on, the
  * semantic action whose control is shown, and what completes it: an outcome the
  * owning screen reports (with an optional subject), or one world condition. Its
  * optional line is one short sentence, spoken by an optional speaker.
@@ -78,7 +82,12 @@ final class TutorialFields
                 new RecordField('title', 'Title'),
                 new RecordField('category', 'Category'),
                 new RecordField('start', 'Starts', options: array_column(TutorialStartMode::cases(), 'value')),
-                // Every condition must hold; an automatic tutorial needs at least one.
+                // Absent means the field. Another context belongs to an automatic start, and its first step to the
+                // screen and view that context owns: the Engine's catalogue and references judge both on save.
+                new RecordField('startContext', 'Starts In', options: ['', ...array_values(array_diff(
+                    array_column(TutorialStartContext::cases(), 'value'), [TutorialStartContext::FIELD->value]))],
+                    removeWhenEmpty: true, displayDefault: TutorialStartContext::FIELD->value),
+                // Every condition must hold; an automatic tutorial needs at least one, unless a battle starts it.
                 new RecordField('trigger', 'Trigger', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
                 new RecordField('replay', 'Guide Offers', options: array_column(TutorialReplayMode::cases(), 'value')),
                 RecordField::reference('demo', 'Demonstration', 'stage_timelines', allowsNone: true, noneLabel: '(none)'),

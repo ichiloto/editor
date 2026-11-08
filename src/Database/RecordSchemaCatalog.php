@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Field\MapDoorReference;
 use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
 use Ichiloto\Engine\Animations\EffectScale;
 use Ichiloto\Engine\Battle\Presentation\BattlerContact;
@@ -3004,6 +3005,7 @@ final class RecordSchemaCatalog
                 new RecordField('x', 'X', InputControlType::INTEGER),
                 new RecordField('y', 'Y', InputControlType::INTEGER),
             ],
+            MapDoorReference::COMMAND => self::getDoorTransferFields(),
             'start_battle' => [
                 RecordField::reference('troop', 'Troop', 'troops'),
                 new RecordField('resultVariable', 'Result Variable', removeWhenEmpty: true),
@@ -3027,6 +3029,23 @@ final class RecordSchemaCatalog
      *
      * @return list<string>
      */
+    /**
+     * A `transfer_through_door`'s rows, in field scripts and cinematics alike:
+     * the door owns where the player arrives and faces, so the command names
+     * the door's map and the door, chosen among that map's doors, never
+     * coordinates ({@see \Ichiloto\Editor\Maps\MapDoors}).
+     *
+     * @return list<RecordField>
+     */
+    public static function getDoorTransferFields(): array
+    {
+        return [
+            RecordField::reference('map', 'Door On Map', 'maps'),
+            new RecordField('event', 'Door', options: [''], displayDefault: '(choose a door)',
+                entryChoices: ReferenceCatalog::MAP_DOORS, entryChoicesSelector: 'map'),
+        ];
+    }
+
     public static function getEventCommandTypes(EventExecutionScope $scope = EventExecutionScope::FIELD): array
     {
         return [

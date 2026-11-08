@@ -139,7 +139,15 @@ final class MapLinePlanner
                 $commonEvents[basename($path, '.php')] = ['file' => $path, 'commands' => $payloads[$path]];
             }
         }
-        $inventory = new MapLineInventory($edit, $commonEvents, $subjects, $targetGrid);
+        // A script leaving through a door arrives on the door's destination map, read as the Engine reads the saved door.
+        $resolveDoor = static function (array $command) use ($root): ?string {
+            try {
+                return \Ichiloto\Engine\Field\MapDoorReference::fromCommand($command)->resolveFromProject($root . '/assets')->mapFilename;
+            } catch (\InvalidArgumentException|\Ichiloto\Engine\Exceptions\NotFoundException) {
+                return null;
+            }
+        };
+        $inventory = new MapLineInventory($edit, $commonEvents, $subjects, $targetGrid, $resolveDoor);
         foreach ($dataPaths as $path) {
             if (str_starts_with($path, $root . '/assets/Maps/') && is_array($payloads[$path])) {
                 $inventory->addMapData($path, substr(dirname($path), strlen($root . '/assets/Maps/')), $payloads[$path]);
@@ -195,6 +203,11 @@ final class MapLinePlanner
             // As for save relocations: a map the player reaches nowhere today, such as one not yet joined to the
             // world, holds no save to move.
             $notes[] = 'No save moves: the player reaches this map nowhere today.';
+        } elseif (! self::reachesMovedCells($report, $edit, $width, $height)) {
+            // Only cells at or beyond the line move, or land when removed: a save stands on none the player cannot
+            // reach today, so a step would move no save.
+            $notes[] = sprintf('No save moves: the player reaches nothing at or beyond %s %d today.',
+                $edit->axis === 'y' ? 'row' : 'column', $edit->at + 1);
         } else {
             if ($edit instanceof LineRemoval) {
                 $edit = $edit->withLanding(self::findLanding($report, $edit, $width, $height));
@@ -221,6 +234,22 @@ final class MapLinePlanner
         );
 
         return new MapLinePlan($edit, $sources, $handEdits, $notes, $map->getWidth(), $map->getHeight());
+    }
+
+    /**
+     * Whether the player reaches, today, any cell the edit moves: every cell
+     * at or beyond its line, including removed ones, whose saves land.
+     */
+    private static function reachesMovedCells(MapReachabilityReport $report, MapLineEdit $edit, int $width, int $height): bool
+    {
+        $extent = $edit->axis === 'y' ? $height : $width;
+        if ($edit->at >= $extent) {
+            return false;
+        }
+
+        return $report->isAnyReachable($edit->axis === 'y'
+            ? new Rect(0, $edit->at, max(1, $width), $extent - $edit->at)
+            : new Rect($edit->at, 0, $extent - $edit->at, max(1, $height)));
     }
 
     /**

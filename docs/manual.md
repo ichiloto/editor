@@ -2903,6 +2903,7 @@ Supported command types, matching the engine's interpreter:
 | `move_player` | X, Y |
 | `move_route` | Subject, NPC Id, Wait, Seconds Per Step, Speed, Steps |
 | `transfer` | Map Id, X, Y |
+| `transfer_through_door` | Door On Map, Door (chosen among that map's doors; the door owns where the player arrives and faces) |
 | `start_battle` | Troop, Result Variable, Defeat Policy, Escape Policy |
 | `recover_party` | None |
 | `branch` | Conditions, Then (fixed), Else (fixed) |

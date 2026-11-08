@@ -188,14 +188,16 @@ it('describes the condition and write vocabulary from the editors that build the
 
     expect(array_column($grammar['conditions'], 'type'))->toBe(Ichiloto\Editor\Database\ConditionCodec::types())
         ->and(array_column($grammar['writes'], 'type'))->toBe(Ichiloto\Editor\Database\WorldWriteCodec::TYPES);
-    // Every type's defaults make an entry the codec writes and reads back.
+    // Every type's defaults make an entry the codec writes and reads back, named as an author would name it:
+    // from the type's own list where it has one with entries, else invented.
     foreach (['conditions', 'writes'] as $codec) {
         foreach ($grammar[$codec] as $type) {
-            $entry = ['type' => $type['type'], 'name' => 'something'];
+            $listed = $type['nameCategory'] === null ? [] : array_column($session->listReferences(null, $type['nameCategory']), 'value');
+            $entry = ['type' => $type['type'], 'name' => $listed[0] ?? 'something'];
             foreach ($type['extras'] as $extra) {
                 $entry[$extra['key']] = $extra['default'];
             }
-            expect($session->encodeWorldState($codec, [$entry])['line'])->toStartWith($type['type'] . ':something');
+            expect($session->encodeWorldState($codec, [$entry])['line'])->toStartWith($type['type'] . ':' . $entry['name']);
         }
     }
 });

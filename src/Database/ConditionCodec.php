@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Core\WorldConditionEvaluator;
 use Ichiloto\Engine\Core\WorldConditionType;
 use InvalidArgumentException;
 
@@ -19,8 +20,10 @@ use InvalidArgumentException;
  *
  * Wire form ({@see WorldStateLine}): entries separated by `;`, each
  * `[!]type:name[:extras]`, where extras depend on the type (quest status,
- * switch `false`, item quantity, variable `op:value`, or a map event's marker
- * after its map id). A leading `!` negates. A name or value escapes its `\`,
+ * switch `false`, item quantity, variable `op:value`, a map event's marker
+ * after its map id, or the least number of summons assigned within one of the
+ * Engine's {@see \Ichiloto\Engine\Core\AssignedSummonScope} scopes, which an
+ * assigned summons condition always writes: `assigned_summons:party:2`). A leading `!` negates. A name or value escapes its `\`,
  * `:` and `;` with a backslash, so any name the Engine accepts round-trips.
  * A line is read only as written: a part the type does not take, or a value
  * the Engine would refuse, makes the entry unreadable, never rewritten.
@@ -36,7 +39,9 @@ final class ConditionCodec
         'variable' => ['op', 'value'],
         'item' => ['quantity'],
         'key_item' => ['quantity'],
+        'assigned_summons' => ['quantity'],
     ];
+
 
     /**
      * Why an authored condition list cannot go through the condition line,
@@ -130,6 +135,13 @@ final class ConditionCodec
             case 'key_item':
                 if (intval($condition['quantity'] ?? 1) > 1) {
                     $parts[] = strval(intval($condition['quantity']));
+                }
+
+                break;
+            case 'assigned_summons':
+                // Required, so it is always written: a line without it is refused, never read as a default.
+                if (array_key_exists('quantity', $condition)) {
+                    $parts[] = is_scalar($condition['quantity']) ? strval($condition['quantity']) : '';
                 }
 
                 break;
@@ -243,7 +255,7 @@ final class ConditionCodec
         }
 
         [$extras, $allowed] = [array_slice($parts, 2), match ($type) {
-            'quest', 'switch', 'item', 'key_item' => 1,
+            'quest', 'switch', 'item', 'key_item', 'assigned_summons' => 1,
             'map_event' => 1,
             'variable' => 2,
             default => 0,
@@ -254,6 +266,7 @@ final class ConditionCodec
                     'quest' => 'at most a status (completed or active)',
                     'switch' => 'at most true or false',
                     'item', 'key_item' => 'at most a quantity',
+                    'assigned_summons' => 'only its quantity',
                     'map_event' => 'only its event marker',
                     'variable' => 'at most an operator and a value',
                     default => 'nothing',
@@ -300,6 +313,22 @@ final class ConditionCodec
                 $condition['op'] = $operator;
                 $rawValue = $extras[1] ?? '0';
                 $condition['value'] = is_numeric($rawValue) ? $rawValue + 0 : $rawValue;
+                break;
+            case 'assigned_summons':
+                if (! isset($extras[0])) {
+                    return 'an assigned summons condition needs the least number of assigned summons: assigned_summons:party:2.';
+                }
+                if (filter_var($extras[0], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
+                    return sprintf('a quantity is a whole number above zero, not "%s".', $extras[0]);
+                }
+                $condition['quantity'] = (int) $extras[0];
+                // The Engine owns what it counts: its own validation judges the name.
+                try {
+                    WorldConditionEvaluator::validateAll([$condition], 'condition');
+                } catch (InvalidArgumentException $refusal) {
+                    return sprintf('the Engine refuses it: %s', $refusal->getMessage());
+                }
+
                 break;
             case 'map_event':
                 // A map event is named by its map and its one-shot event marker.

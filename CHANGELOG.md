@@ -4,6 +4,21 @@
 
 ### Added
 
+- `transfer_through_door` (Engine 62e5fdc) in event scripts, cinematics and finalizers: the command names a map
+  and one of its doors, chosen among the events the Engine's `MapDoorReference` resolves on that map, unsaved edits
+  included; the door owns where the player arrives and faces. Validation reports a command whose door the Engine
+  cannot resolve, and every walk that follows a script's current map (NPC checks, NPC placement lifecycles, map
+  line edits, a cinematic's maps) follows it through the door to the door's destination.
+- Tutorial start contexts, as the Engine's `TutorialStartContext` declares them: Database > Tutorials gains
+  **Starts In** (the field when unwritten, the Summons library or a battle's command window). A record that never
+  names a context keeps none. The Engine's catalogue and `TutorialProjectReferences` judge each save, so a context
+  on a script start, a first step off the context's own screen and view, or a battle lesson that is not one
+  `battle/command/summon` step completed by `summon.executed` with Read, Watch or no replay is refused before
+  anything is written.
+- The `assigned_summons` world condition (`assigned_summons:party:2`) in the condition line, the Terminal's
+  condition editor and the condition grammar: its quantity is required and always written, its name is chosen
+  from the Engine's `AssignedSummonScope` values (the party), and a missing or non-positive quantity or another name is refused by
+  the Engine's own validation, never read as a default.
 - Storybook playback, as Engine 78f1f12 plays it through `CinematicCommandSchema::export()['storybookPlayback']`: a
   `play_storybook` command in event scripts, battle event pages and cinematics chooses its storybook in a
   `Storybook` picker over the books the Engine's `StorybookLibrary` discovers under `assets/Data/Storybooks`,
