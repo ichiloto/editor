@@ -4,6 +4,16 @@
 
 ### Added
 
+- Tutorial start contexts, as the Engine's `TutorialStartContext` declares them: Database > Tutorials gains
+  **Starts In** (the field when unwritten, the Summons library or a battle's command window). A record that never
+  names a context keeps none. The Engine's catalogue and `TutorialProjectReferences` judge each save, so a context
+  on a script start, a first step off the context's own screen and view, or a battle lesson that is not one
+  `battle/command/summon` step completed by `summon.executed` with Read, Watch or no replay is refused before
+  anything is written.
+- The `assigned_summons` world condition (`assigned_summons:party:2`) in the condition line, the Terminal's
+  condition editor and the condition grammar: its quantity is required and always written, its name is chosen
+  from what the Engine counts (the party), and a missing or non-positive quantity or another name is refused by
+  the Engine's own validation, never read as a default.
 - Storybook playback, as Engine 78f1f12 plays it through `CinematicCommandSchema::export()['storybookPlayback']`: a
   `play_storybook` command in event scripts, battle event pages and cinematics chooses its storybook in a
   `Storybook` picker over the books the Engine's `StorybookLibrary` discovers under `assets/Data/Storybooks`,

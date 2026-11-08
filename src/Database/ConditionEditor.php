@@ -34,6 +34,16 @@ final class ConditionEditor
         'key_item' => ['Key Item', 'inventory'],
         'map_event' => ['Map Event', 'maps'],
         'world_ability' => ['World Power', ReferenceCatalog::WORLD_ABILITIES],
+        'assigned_summons' => ['Summons Assigned In', ReferenceCatalog::ASSIGNED_SUMMON_SCOPES],
+    ];
+
+    /**
+     * What a type starts with when chosen, where the Engine requires more
+     * than a name the author types: an assigned summons condition counts
+     * the party's assigned summons, and needs at least one.
+     */
+    private const array TYPE_DEFAULTS = [
+        'assigned_summons' => ['name' => ConditionCodec::ASSIGNED_SUMMONS_SCOPES[0], 'quantity' => 1],
     ];
 
     /** The quest statuses a condition can require; the first is the default. */
@@ -72,6 +82,8 @@ final class ConditionEditor
             ],
             'item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
             'key_item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
+            // Always written: the Engine requires it.
+            'assigned_summons' => [['key' => 'quantity', 'label' => 'At Least', 'kind' => 'integer', 'default' => 1]],
             'map_event' => [['key' => 'marker', 'label' => 'Event', 'kind' => 'text', 'default' => 'A',
                 // Chosen from the events of the map the condition names.
                 'category' => 'map_event_markers', 'mapFrom' => 'name']],
@@ -265,7 +277,7 @@ final class ConditionEditor
         $index = is_int($index) ? $index : 0;
         $type = $types[(($index + $step) % count($types) + count($types)) % count($types)];
 
-        $rebuilt = ['type' => $type, 'name' => strval($condition['name'] ?? '')];
+        $rebuilt = ['type' => $type, 'name' => strval($condition['name'] ?? ''), ...(self::TYPE_DEFAULTS[$type] ?? [])];
 
         if (($condition['negate'] ?? false) === true) {
             $rebuilt['negate'] = true;
@@ -312,6 +324,10 @@ final class ConditionEditor
                     unset($condition['quantity']);
                 }
 
+                break;
+            case 'assigned_summons':
+                // Required, so it stays written down to one.
+                $condition['quantity'] = max(1, intval($condition['quantity'] ?? 1) + $step);
                 break;
             case 'variable':
                 $operations = self::VARIABLE_OPERATIONS;
@@ -433,6 +449,7 @@ final class ConditionEditor
             'event' => 'happened',
             'map_event' => sprintf('event %s is done', strval($condition['marker'] ?? '')),
             'world_ability' => 'is unlocked',
+            'assigned_summons' => sprintf('are at least %d', intval($condition['quantity'] ?? 0)),
             default => '',
         };
 

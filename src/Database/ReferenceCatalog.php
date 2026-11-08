@@ -71,6 +71,9 @@ final class ReferenceCatalog
     /** The project's declared world abilities, read through the Engine's WorldAbilityCatalog. */
     public const string WORLD_ABILITIES = 'world_abilities';
 
+    /** What an assigned summons condition may count ({@see ConditionCodec::ASSIGNED_SUMMONS_SCOPES}). */
+    public const string ASSIGNED_SUMMON_SCOPES = 'assigned_summon_scopes';
+
     /** The tutorials a script may start (`start_tutorial`): those whose start is script, by stable id. */
     public const string SCRIPT_TUTORIALS = 'script_tutorials';
 
@@ -119,6 +122,8 @@ final class ReferenceCatalog
         'income_schedules',
         // The exploration powers the project declares, by stable id, for world_ability conditions and power commands.
         self::WORLD_ABILITIES,
+        // What an assigned summons condition counts, by the Engine's own rule.
+        self::ASSIGNED_SUMMON_SCOPES,
         // The tutorials a script may start, by stable id, unsaved edits included.
         self::SCRIPT_TUTORIALS,
         // The theme's semantic icon roles, which a world power shows.
@@ -314,6 +319,7 @@ final class ReferenceCatalog
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'income_schedules' => array_keys($this->incomeScheduleNames()),
             self::WORLD_ABILITIES => array_keys($this->workspace->getWorldAbilities()->getLabels()),
+            self::ASSIGNED_SUMMON_SCOPES => ConditionCodec::ASSIGNED_SUMMONS_SCOPES,
             self::SCRIPT_TUTORIALS => array_map(strval(...), array_keys($this->listScriptTutorials())),
             self::ICON_ROLES => $this->workspace->menuPresentation?->listIconRoles() ?? [],
             self::INPUT_ACTIONS => array_keys(\Ichiloto\Engine\IO\InputManager::getProjectBindings($this->workspace->projectRoot)),
