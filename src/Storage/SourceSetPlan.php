@@ -138,11 +138,13 @@ final class SourceSetPlan
         }
         $this->assertSourcesUnchanged();
 
-        $staging = null;
+        // Nothing is created until the set's transaction has staged these writes.
+        $findCreated = static fn(): array => [];
+
         return new PreparedSave(
             $label,
-            function (FileSetTransaction $transaction) use (&$staging): void {
-                $staging = $transaction;
+            function (FileSetTransaction $transaction) use (&$findCreated): void {
+                $findCreated = $transaction->getCreatedFolders(...);
                 foreach ($this->watched as $path => $source) {
                     $transaction->expectSource($path, $source);
                 }
@@ -162,12 +164,9 @@ final class SourceSetPlan
                     }
                 }
             },
-            function () use (&$staging): void {
-                foreach ($staging->getCreatedFolders() as $folder) {
-                    if (array_any(array_keys($this->proposals), static fn(string $path): bool => str_starts_with($path, $folder . '/'))) {
-                        $this->createdFolders[] = $folder;
-                    }
-                }
+            function () use (&$findCreated): void {
+                $this->createdFolders = array_values(array_filter($findCreated(),
+                    fn(string $folder): bool => array_any(array_keys($this->proposals), static fn(string $path): bool => str_starts_with($path, $folder . '/'))));
                 $this->applied = true;
             },
         );
