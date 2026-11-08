@@ -74,6 +74,9 @@ final class ReferenceCatalog
     /** What an assigned summons condition may count: the Engine's {@see \Ichiloto\Engine\Core\AssignedSummonScope} values. */
     public const string ASSIGNED_SUMMON_SCOPES = 'assigned_summon_scopes';
 
+    /** What a present party size condition may count: the Engine's {@see \Ichiloto\Engine\Core\PresentPartyScope} values. */
+    public const string PRESENT_PARTY_SCOPES = 'present_party_scopes';
+
     /**
      * The doors a `transfer_through_door` command leaves through: the events
      * the Engine's MapDoorReference resolves to the destination, arrival and
@@ -133,6 +136,8 @@ final class ReferenceCatalog
         self::WORLD_ABILITIES,
         // What an assigned summons condition counts, by the Engine's own rule.
         self::ASSIGNED_SUMMON_SCOPES,
+        // What a present party size condition counts, by the Engine's own rule.
+        self::PRESENT_PARTY_SCOPES,
         // The tutorials a script may start, by stable id, unsaved edits included.
         self::SCRIPT_TUTORIALS,
         // The theme's semantic icon roles, which a world power shows.
@@ -331,6 +336,7 @@ final class ReferenceCatalog
             'income_schedules' => array_keys($this->incomeScheduleNames()),
             self::WORLD_ABILITIES => array_keys($this->workspace->getWorldAbilities()->getLabels()),
             self::ASSIGNED_SUMMON_SCOPES => \Ichiloto\Engine\Core\AssignedSummonScope::values(),
+            self::PRESENT_PARTY_SCOPES => \Ichiloto\Engine\Core\PresentPartyScope::values(),
             self::SCRIPT_TUTORIALS => array_map(strval(...), array_keys($this->listScriptTutorials())),
             self::ICON_ROLES => $this->workspace->menuPresentation?->listIconRoles() ?? [],
             self::INPUT_ACTIONS => array_keys(\Ichiloto\Engine\IO\InputManager::getProjectBindings($this->workspace->projectRoot)),

@@ -23,7 +23,9 @@ use InvalidArgumentException;
  * switch `false`, item quantity, variable `op:value`, a map event's marker
  * after its map id, or the least number of summons assigned within one of the
  * Engine's {@see \Ichiloto\Engine\Core\AssignedSummonScope} scopes, which an
- * assigned summons condition always writes: `assigned_summons:party:2`). A leading `!` negates. A name or value escapes its `\`,
+ * assigned summons condition always writes: `assigned_summons:party:2`, or the
+ * exact number of members a present party size condition requires:
+ * `present_party_size:party:4`; a present actor condition names an actor id). A leading `!` negates. A name or value escapes its `\`,
  * `:` and `;` with a backslash, so any name the Engine accepts round-trips.
  * A line is read only as written: a part the type does not take, or a value
  * the Engine would refuse, makes the entry unreadable, never rewritten.
@@ -40,6 +42,17 @@ final class ConditionCodec
         'item' => ['quantity'],
         'key_item' => ['quantity'],
         'assigned_summons' => ['quantity'],
+        'present_actor' => [],
+        'present_party_size' => ['quantity'],
+    ];
+
+    /**
+     * The types whose quantity the Engine requires, so the line always writes it and never reads a default:
+     * what each counts, as the refusal for a missing one says it.
+     */
+    private const array REQUIRED_QUANTITIES = [
+        'assigned_summons' => 'the least number of assigned summons: assigned_summons:party:2',
+        'present_party_size' => 'the exact number of members present: present_party_size:party:4',
     ];
 
 
@@ -139,6 +152,7 @@ final class ConditionCodec
 
                 break;
             case 'assigned_summons':
+            case 'present_party_size':
                 // Required, so it is always written: a line without it is refused, never read as a default.
                 if (array_key_exists('quantity', $condition)) {
                     $parts[] = is_scalar($condition['quantity']) ? strval($condition['quantity']) : '';
@@ -255,7 +269,7 @@ final class ConditionCodec
         }
 
         [$extras, $allowed] = [array_slice($parts, 2), match ($type) {
-            'quest', 'switch', 'item', 'key_item', 'assigned_summons' => 1,
+            'quest', 'switch', 'item', 'key_item', 'assigned_summons', 'present_party_size' => 1,
             'map_event' => 1,
             'variable' => 2,
             default => 0,
@@ -266,7 +280,7 @@ final class ConditionCodec
                     'quest' => 'at most a status (completed or active)',
                     'switch' => 'at most true or false',
                     'item', 'key_item' => 'at most a quantity',
-                    'assigned_summons' => 'only its quantity',
+                    'assigned_summons', 'present_party_size' => 'only its quantity',
                     'map_event' => 'only its event marker',
                     'variable' => 'at most an operator and a value',
                     default => 'nothing',
@@ -315,14 +329,23 @@ final class ConditionCodec
                 $condition['value'] = is_numeric($rawValue) ? $rawValue + 0 : $rawValue;
                 break;
             case 'assigned_summons':
+            case 'present_party_size':
                 if (! isset($extras[0])) {
-                    return 'an assigned summons condition needs the least number of assigned summons: assigned_summons:party:2.';
+                    return sprintf('a %s condition needs %s.', str_replace('_', ' ', $type), self::REQUIRED_QUANTITIES[$type]);
                 }
                 if (filter_var($extras[0], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
                     return sprintf('a quantity is a whole number above zero, not "%s".', $extras[0]);
                 }
                 $condition['quantity'] = (int) $extras[0];
                 // The Engine owns what it counts: its own validation judges the name.
+                try {
+                    WorldConditionEvaluator::validateAll([$condition], 'condition');
+                } catch (InvalidArgumentException $refusal) {
+                    return sprintf('the Engine refuses it: %s', $refusal->getMessage());
+                }
+
+                break;
+            case 'present_actor':
                 try {
                     WorldConditionEvaluator::validateAll([$condition], 'condition');
                 } catch (InvalidArgumentException $refusal) {

@@ -35,6 +35,8 @@ final class ConditionEditor
         'map_event' => ['Map Event', 'maps'],
         'world_ability' => ['World Power', ReferenceCatalog::WORLD_ABILITIES],
         'assigned_summons' => ['Summons Assigned In', ReferenceCatalog::ASSIGNED_SUMMON_SCOPES],
+        'present_actor' => ['Party Member', 'actor_ids'],
+        'present_party_size' => ['Members Present In', ReferenceCatalog::PRESENT_PARTY_SCOPES],
     ];
 
     /**
@@ -48,6 +50,7 @@ final class ConditionEditor
     {
         return match ($type) {
             'assigned_summons' => ['name' => \Ichiloto\Engine\Core\AssignedSummonScope::values()[0], 'quantity' => 1],
+            'present_party_size' => ['name' => \Ichiloto\Engine\Core\PresentPartyScope::values()[0], 'quantity' => 1],
             default => [],
         };
     }
@@ -90,6 +93,7 @@ final class ConditionEditor
             'key_item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
             // Always written: the Engine requires it.
             'assigned_summons' => [['key' => 'quantity', 'label' => 'At Least', 'kind' => 'integer', 'default' => 1]],
+            'present_party_size' => [['key' => 'quantity', 'label' => 'Exactly', 'kind' => 'integer', 'default' => 1]],
             'map_event' => [['key' => 'marker', 'label' => 'Event', 'kind' => 'text', 'default' => 'A',
                 // Chosen from the events of the map the condition names.
                 'category' => 'map_event_markers', 'mapFrom' => 'name']],
@@ -332,6 +336,7 @@ final class ConditionEditor
 
                 break;
             case 'assigned_summons':
+            case 'present_party_size':
                 // Required, so it stays written down to one.
                 $condition['quantity'] = max(1, intval($condition['quantity'] ?? 1) + $step);
                 break;
@@ -456,6 +461,8 @@ final class ConditionEditor
             'map_event' => sprintf('event %s is done', strval($condition['marker'] ?? '')),
             'world_ability' => 'is unlocked',
             'assigned_summons' => sprintf('are at least %d', intval($condition['quantity'] ?? 0)),
+            'present_actor' => 'is present',
+            'present_party_size' => sprintf('number exactly %d', intval($condition['quantity'] ?? 0)),
             default => '',
         };
 
