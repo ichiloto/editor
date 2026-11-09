@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\ScriptMapState;
+use Ichiloto\Engine\Core\EngineStoryEvent;
 use Ichiloto\Engine\Field\NpcPlacementSet;
 use InvalidArgumentException;
 use Throwable;
@@ -45,8 +46,6 @@ use Throwable;
  */
 final class NpcPlacementLifecycle
 {
-    /** Story events the Engine records itself, by prefix: skits seen, quests closed, cinematics finished. */
-    private const array ENGINE_EVENT_PREFIXES = ['skit_seen:', 'quest_completed:', 'quest_declined:', 'cinematic:'];
     /** Keys whose world-state entries are tests, not writes. */
     private const array READ_KEYS = ['conditions', 'revealConditions', 'prerequisites'];
     /** Keys holding a command list a map or cutscene runs. */
@@ -439,7 +438,7 @@ final class NpcPlacementLifecycle
         }
 
         foreach ($proofs as $event => $sites) {
-            if (isset($this->otherWriters[$event]) || array_any(self::ENGINE_EVENT_PREFIXES, static fn(string $prefix): bool => str_starts_with(strval($event), $prefix))) {
+            if (isset($this->otherWriters[$event]) || EngineStoryEvent::usesNamespace((string) $event)) {
                 continue;
             }
 
