@@ -4298,7 +4298,7 @@ final class ProjectRecordDatabase
      * @param mixed $value The value; null removes the key.
      * @return array<string, mixed>
      */
-    private static function writeNested(array $target, array $segments, mixed $value): array
+    private static function writeNested(array $target, array $segments, mixed $value, bool $pruneEmpty = false): array
     {
         $segment = array_shift($segments);
 
@@ -4319,7 +4319,12 @@ final class ProjectRecordDatabase
         }
 
         $child = is_array($target[$key] ?? null) ? $target[$key] : [];
-        $target[$key] = self::writeNested($child, $segments, $value);
+        $written = self::writeNested($child, $segments, $value, $pruneEmpty);
+        if ($pruneEmpty && $written === []) {
+            unset($target[$key]);
+        } else {
+            $target[$key] = $written;
+        }
 
         return $target;
     }
@@ -5082,13 +5087,13 @@ final class ProjectRecordDatabase
 
         foreach ($keys($subList->fieldsFor($before)) as $key) {
             if ($key !== $subList->variantKey && ! in_array($key, $newKeys, true)) {
-                $after = self::writeNested($after, explode('.', $key), null);
+                $after = self::writeNested($after, explode('.', $key), null, pruneEmpty: true);
             }
         }
 
         if ($oldNested !== null && $newNested !== $oldNested) {
             // Another list, even under the same key, holds another shape.
-            $after = self::writeNested($after, explode('.', $oldNested->key), null);
+            $after = self::writeNested($after, explode('.', $oldNested->key), null, pruneEmpty: true);
         }
 
         return $after;

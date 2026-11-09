@@ -455,3 +455,56 @@ it('saves a captured target-group contact rail and previews it only with strip s
         ->and($enabled['diagnostics'])->toBe([])
         ->and($usesStrip($legacyAgain['canvas']))->toBeFalse();
 });
+
+it('authors a graphical tether with the shared asset and pose pickers and reopens it in the battle preview', function () {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $initial = require $path;
+    $category = 'cutscenes/effect';
+    $head = 'Graphics/FixturePose.png';
+    $links = 'Graphics/Effects/dusk-slash.png';
+    writeTilesetTestPng($root . '/assets/' . $head, 8, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/FixtureEnemy.png', 8, 8);
+    $binding = ['actors' => ['Kaelion' => [
+        'artwork' => ['image' => $head],
+        'poses' => ['attack' => ['image' => $head,
+            'attachmentPoints' => [['cell' => 0, 'name' => 'grip', 'point' => ['x' => .5, 'y' => .4]]]]],
+    ]], 'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/FixtureEnemy.png']]]];
+    file_put_contents($root . '/assets/Data/Presentation/battlers.php', '<?php return ' . var_export($binding, true) . ';');
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $session->selectCutscenePresentation($category, $index, 'graphical');
+    $track = $session->describeCutsceneTimeline($category, $index)['tracks'][0]['art']['pivotKey']['frame'];
+    $apply = static function (string $field, string $value) use ($session, $category, $index, $track): void {
+        $row = array_find($session->readDatabaseRecord($category, $index, $track)['rows'],
+            static fn(array $entry): bool => ($entry['key']['field'] ?? null) === 'track0' . $field);
+        expect($row)->not->toBeNull();
+        expect($session->applyDatabaseRecord($category, $index, $row['key'], $value)['changed'])->toBeTrue();
+    };
+    $apply('Type', 'tether');
+    $apply('Grip', 'grip');
+    $apply('Head', $head);
+    $apply('HeadPivot', '0.5, 0.5');
+    $apply('Links', $links);
+    $apply('HeadHeight', '12');
+    $apply('LinkHeight', '8');
+    $apply('LinkSpacing', '8');
+    $type = array_find($session->readDatabaseRecord($category, $index, $track)['rows'],
+        static fn(array $entry): bool => ($entry['key']['field'] ?? null) === 'track0Type');
+    expect($session->addDatabaseItem($category, $index, $type['key'], child: true)['changed'])->toBeTrue();
+    $sampleDuration = array_find($session->readDatabaseRecord($category, $index, $track)['rows'],
+        static fn(array $entry): bool => str_ends_with($entry['key']['field'] ?? '', 'Duration'));
+    expect($sampleDuration)->not->toBeNull()
+        ->and($session->applyDatabaseRecord($category, $index, $sampleDuration['key'], '2')['changed'])->toBeTrue();
+    $session->undo();
+    $session->redo();
+    expect($session->saveAll()['failures'])->toBe([]);
+    $saved = require $path;
+    expect($saved['presentations']['terminal'])->toBe($initial['presentations']['terminal'])
+        ->and($saved['presentations']['graphical']['tracks'][0])
+        ->toMatchArray(['type' => 'tether', 'head' => $head, 'links' => $links, 'grip' => 'grip', 'linkSpacing' => 8.0]);
+    $reopened = EditorSession::open($root);
+    $preview = $reopened->readEffectBattlePreview(findEffectIndex($reopened, 'dusk-slash'), 0, imageRotation: true, authoredFrame: 0);
+    expect($preview['diagnostics'])->toBe([])
+        ->and(array_any($preview['canvas']['images'], static fn(array $image): bool => str_contains($image['id'], '-link-0')))->toBeTrue();
+});

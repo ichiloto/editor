@@ -744,7 +744,7 @@ final class CutsceneSchemas
             singular: 'track',
             fields: [
                 new RecordField('id', 'Id'),
-                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake', ...($graphical ? ['trail'] : [])]),
+                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake', ...($graphical ? ['trail', 'tether'] : [])]),
                 new RecordField('presentation', 'Presentation',
                     options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
                     removeWhenEmpty: true, displayDefault: 'all'),
@@ -762,7 +762,7 @@ final class CutsceneSchemas
                 'text' => $anchors,
                 'flash' => $anchors,
                 'shake' => $anchors,
-                ...($graphical ? ['trail' => self::battleTrailFields()] : []),
+                ...($graphical ? ['trail' => self::battleTrailFields(), 'tether' => self::battleTetherFields()] : []),
             ],
             variantKey: 'type',
             nestedLists: [
@@ -772,10 +772,10 @@ final class CutsceneSchemas
                 'text' => $keyframes,
                 'flash' => $keyframes,
                 'shake' => $keyframes,
-                ...($graphical ? ['trail' => self::battleTrailBands()] : []),
+                ...($graphical ? ['trail' => self::battleTrailBands(), 'tether' => self::battleTetherSamples()] : []),
             ],
             prepareEdit: static function (array $entry, string $field): array {
-                if ($field === 'type' && ($entry['type'] ?? null) === 'trail') {
+                if ($field === 'type' && in_array($entry['type'] ?? null, ['trail', 'tether'], true)) {
                     unset($entry['presentation']);
                 }
 
@@ -853,6 +853,46 @@ final class CutsceneSchemas
             new RecordField('profile.brush.alphaSteps', 'Alpha Steps', InputControlType::INTEGER, removeWhenEmpty: true),
             new RecordField('profile.brush.minimumAlpha', 'Minimum Alpha Step', InputControlType::INTEGER, removeWhenEmpty: true),
         ];
+    }
+
+    /** @return list<RecordField> */
+    private static function battleTetherFields(): array
+    {
+        return [
+            RecordField::reference('grip', 'Grip Pose Point', ReferenceCatalog::BATTLE_POSE_POINTS),
+            RecordField::reference('guide', 'Guide Pose Point', ReferenceCatalog::BATTLE_POSE_POINTS, allowsNone: true),
+            new RecordField('guideGripLift', 'Guide Curve Lift at Grip', InputControlType::FLOAT, removeWhenEmpty: true),
+            new RecordField('guideHandLift', 'Guide Curve Lift at Hand', InputControlType::FLOAT, removeWhenEmpty: true),
+            RecordField::reference('head', 'Head Image', 'png_assets'),
+            new RecordField('headPivot', 'Head Connection Pivot', codec: RecordFieldCodec::NORMALIZED_POINT),
+            RecordField::reference('links', 'Two-cell Link Image', 'png_assets'),
+            new RecordField('headHeight', 'Head Height', InputControlType::FLOAT),
+            new RecordField('linkHeight', 'Link Height', InputControlType::FLOAT),
+            new RecordField('linkSpacing', 'Link Spacing', InputControlType::FLOAT),
+            new RecordField('clearance', 'Bystander Clearance', InputControlType::FLOAT, removeWhenEmpty: true),
+            new RecordField('depth', 'Depth', options: ['behind', 'front'], removeWhenEmpty: true, displayDefault: 'front'),
+        ];
+    }
+
+    private static function battleTetherSamples(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'keyframes',
+            prefix: 'keyframe',
+            singular: 'tether sample',
+            fields: [
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('duration', 'Duration', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+                new RecordField('x', 'Head Offset Toward Target', InputControlType::FLOAT),
+                new RecordField('y', 'Head Vertical Offset', InputControlType::FLOAT),
+                new RecordField('targetWeight', 'Target Attraction', InputControlType::FLOAT),
+                new RecordField('rotation', 'Head Rotation', InputControlType::INTEGER),
+                new RecordField('lift', 'Chain Curve Lift', InputControlType::FLOAT),
+                new RecordField('guideWeight', 'Guide Engagement', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('approach', 'Head Approach Fraction', InputControlType::FLOAT, removeWhenEmpty: true),
+            ],
+            blank: ['frame' => 0, 'x' => 0, 'y' => 0, 'targetWeight' => 0, 'rotation' => 0, 'lift' => 0],
+        );
     }
 
     private static function battleTrailBands(): RecordSubList
