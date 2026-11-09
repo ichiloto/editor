@@ -55,6 +55,7 @@ final class MapValidator
             ...MapGraphicsValidator::validate($map),
             ...MapGraphicsValidator::validateCoverage($map),
             ...BrokenPieceCheck::validate($map),
+            ...SavePointAgreementCheck::validate($map),
             ...PassageAgreementCheck::validate($map),
         ], $map->mapId);
     }
