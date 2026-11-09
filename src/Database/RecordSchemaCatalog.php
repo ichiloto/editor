@@ -612,6 +612,8 @@ final class RecordSchemaCatalog
             },
             subList: new RecordSubList(key: 'variants', prefix: 'variant', singular: 'variant', fields: [
                 RecordField::reference('skill', 'Skill', 'crisis_skills'),
+                RecordField::reference('iconRole', 'Acquisition Icon Role', ReferenceCatalog::ICON_ROLES,
+                    allowsNone: true, noneLabel: '(use ability default)'),
                 new RecordField('conditions', 'World Conditions', codec: RecordFieldCodec::CONDITIONS, removeWhenEmpty: true),
             ], blank: ['skill' => '']),
             saveCheck: static function (array $whole, string $root): ?string {
