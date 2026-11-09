@@ -72,21 +72,30 @@ it('authors tutorials in their own source, with undo and redo byte for byte', fu
 
     expect(tutorialRow($session, 0, 'step1Until'))->toMatchArray(['kind' => 'conditions', 'conditionLimit' => 1, 'value' => 'switch:test_equipped']);
 
+    expect(tutorialRow($session, 0, 'step0Placement')['options'])->toBe(['', 'centered', 'contextual'])
+        ->and(TutorialCatalog::fromProject($root . '/assets')->findTutorial('test.equip')?->steps[0]->placement->value)->toBe('centered');
     applyTutorialRow($session, 0, 'title', 'Equipment');
     applyTutorialRow($session, 0, 'step0Say', 'Choose this one.');
+    applyTutorialRow($session, 0, 'step0Placement', 'contextual');
     $session->saveDatabase(TutorialFields::CATEGORY);
     $edited = (string) file_get_contents($path);
 
     expect($edited)->toContain('// Synthetic guides, written by hand.')
-        ->and(TutorialCatalog::fromProject($root . '/assets')->findTutorial('test.equip')?->steps[0]->say)->toBe('Choose this one.');
+        ->and(TutorialCatalog::fromProject($root . '/assets')->findTutorial('test.equip')?->steps[0]->say)->toBe('Choose this one.')
+        ->and(tutorialRow(EditorSession::open($root), 0, 'step0Placement')['value'])->toBe('contextual');
 
-    foreach (range(1, 2) as $step) { $session->undo(); }
+    foreach (range(1, 3) as $step) { $session->undo(); }
     $session->saveDatabase(TutorialFields::CATEGORY);
     expect(file_get_contents($path))->toBe($original);
 
-    foreach (range(1, 2) as $step) { $session->redo(); }
+    foreach (range(1, 3) as $step) { $session->redo(); }
     $session->saveDatabase(TutorialFields::CATEGORY);
     expect(file_get_contents($path))->toBe($edited);
+
+    applyTutorialRow($session, 0, 'step0Placement', '');
+    $session->saveDatabase(TutorialFields::CATEGORY);
+    expect(file_get_contents($path))->not->toContain("'placement'")
+        ->and(TutorialCatalog::fromProject($root . '/assets')->findTutorial('test.equip')?->steps[0]->placement->value)->toBe('centered');
 });
 
 it('offers what the Engine declares for a step, the project ids it resolves among them', function (): void {

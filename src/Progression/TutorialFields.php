@@ -12,6 +12,7 @@ use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordStorage;
 use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Engine\Progression\TutorialCatalog;
+use Ichiloto\Engine\Progression\TutorialInstructionPlacement;
 use Ichiloto\Engine\Progression\TutorialProjectReferences;
 use Ichiloto\Engine\Progression\TutorialReferenceSource;
 use Ichiloto\Engine\Progression\TutorialReplayMode;
@@ -165,6 +166,9 @@ final class TutorialFields
             new RecordField('say', sprintf('Line (one sentence, up to %d cells)', TutorialStep::MAX_INSTRUCTION_CELLS),
                 removeWhenEmpty: true, displayDefault: '(no line)'),
             RecordField::entryChoice('speaker', 'Speaker', self::SPEAKERS, '(no speaker)'),
+            new RecordField('placement', 'Instruction Placement',
+                options: ['', ...array_column(TutorialInstructionPlacement::cases(), 'value')],
+                removeWhenEmpty: true, displayDefault: TutorialInstructionPlacement::CENTERED->value),
             new RecordField('focus', 'Move Focus To Target', InputControlType::BOOLEAN, removeWhenEmpty: true),
         ];
     }
