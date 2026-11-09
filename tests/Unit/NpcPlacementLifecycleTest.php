@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
+use Ichiloto\Engine\Core\EngineStoryEvent;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 
 /**
@@ -126,6 +127,16 @@ it('refuses the shared default again when anything else can record the arrival o
     'a script writes the guide\'s placement as a variable' => [lifecycleCast(),
         ['T' => [['type' => 'set_variable', 'name' => 'npc-placement:harbour:guide', 'value' => 'default']]]],
 ]);
+
+it('preserves overlap errors when the Engine can record the arrival independently', function (EngineStoryEvent $eventKind): void {
+    $event = $eventKind->getName('synthetic-arrival');
+    $cast = lifecycleCast();
+    $cast[1]['conditions'][0]['name'] = $event;
+    $commands = lifecycleStepAside();
+    $commands[1]['name'] = $event;
+    expect(lifecycleTileIssues(lifecycleHarbour($cast, ['S' => $commands])))
+        ->toBe(['ERROR: It shares tile (4, 1) with NPC Arrival.']);
+})->with(EngineStoryEvent::cases());
 
 it('lets a change set touching the map pass, and keeps authoring to the same rule', function (): void {
     $session = EditorSession::open(lifecycleHarbour([...lifecycleCast(), lifecyclePorter()], ['S' => lifecycleStepAside()]));
