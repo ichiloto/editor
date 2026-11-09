@@ -493,6 +493,11 @@ it('authors a graphical tether with the shared asset and pose pickers and reopen
     $apply('HeadHeight', '12');
     $apply('LinkHeight', '8');
     $apply('LinkSpacing', '8');
+    $apply('GuideGripOffset', '10');
+    $apply('GuideHandOffset', '7');
+    $apply('CurveFirstProgress', '0.29');
+    $apply('CurveSecondProgress', '0.70');
+    $apply('LinkDepth', 'behind');
     $type = array_find($session->readDatabaseRecord($category, $index, $track)['rows'],
         static fn(array $entry): bool => ($entry['key']['field'] ?? null) === 'track0Type');
     expect($session->addDatabaseItem($category, $index, $type['key'], child: true)['changed'])->toBeTrue();
@@ -507,7 +512,9 @@ it('authors a graphical tether with the shared asset and pose pickers and reopen
     expect($saved['presentations']['terminal'])->toBe($initial['presentations']['terminal'])
         ->and($saved['presentations']['graphical']['poseClock'])->toBe('target')
         ->and($saved['presentations']['graphical']['tracks'][0])
-        ->toMatchArray(['type' => 'tether', 'head' => $head, 'links' => $links, 'grip' => 'grip', 'linkSpacing' => 8.0]);
+        ->toMatchArray(['type' => 'tether', 'head' => $head, 'links' => $links, 'grip' => 'grip', 'linkSpacing' => 8.0,
+            'guideGripOffset' => 10.0, 'guideHandOffset' => 7.0, 'curveFirstProgress' => .29,
+            'curveSecondProgress' => .7, 'linkDepth' => 'behind']);
     $reopened = EditorSession::open($root);
     $preview = $reopened->readEffectBattlePreview(findEffectIndex($reopened, 'dusk-slash'), 0, imageRotation: true, authoredFrame: 0);
     expect($preview['diagnostics'])->toBe([])

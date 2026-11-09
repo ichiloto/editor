@@ -867,6 +867,10 @@ final class CutsceneSchemas
             RecordField::reference('guide', 'Guide Pose Point', ReferenceCatalog::BATTLE_POSE_POINTS, allowsNone: true),
             new RecordField('guideGripLift', 'Guide Curve Lift at Grip', InputControlType::FLOAT, removeWhenEmpty: true),
             new RecordField('guideHandLift', 'Guide Curve Lift at Hand', InputControlType::FLOAT, removeWhenEmpty: true),
+            new RecordField('guideGripOffset', 'Guide Curve Offset Toward Target at Grip', InputControlType::FLOAT, removeWhenEmpty: true),
+            new RecordField('guideHandOffset', 'Guide Curve Offset Toward Target at Hand', InputControlType::FLOAT, removeWhenEmpty: true),
+            new RecordField('curveFirstProgress', 'First Main Curve Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
+            new RecordField('curveSecondProgress', 'Second Main Curve Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
             RecordField::reference('head', 'Head Image', 'png_assets'),
             new RecordField('headPivot', 'Head Connection Pivot', codec: RecordFieldCodec::NORMALIZED_POINT),
             RecordField::reference('links', 'Two-cell Link Image', 'png_assets'),
@@ -874,7 +878,8 @@ final class CutsceneSchemas
             new RecordField('linkHeight', 'Link Height', InputControlType::FLOAT),
             new RecordField('linkSpacing', 'Link Spacing', InputControlType::FLOAT),
             new RecordField('clearance', 'Bystander Clearance', InputControlType::FLOAT, removeWhenEmpty: true),
-            new RecordField('depth', 'Depth', options: ['behind', 'front'], removeWhenEmpty: true, displayDefault: 'front'),
+            new RecordField('depth', 'Head Depth', options: ['behind', 'front'], removeWhenEmpty: true, displayDefault: 'front'),
+            new RecordField('linkDepth', 'Link Depth', options: ['behind', 'front'], removeWhenEmpty: true),
         ];
     }
 
