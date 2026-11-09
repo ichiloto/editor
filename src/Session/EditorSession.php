@@ -5567,6 +5567,12 @@ final class EditorSession
         return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->placeObject($id, $x, $y, $coverage));
     }
 
+    /** Applies a coverage selection without changing the covered map cells. */
+    public function setWorldObjectCoverage(string $mapId, int $revision, string $id, array $cells): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->setCoverage($id, $cells));
+    }
+
     /**
      * Sets the graphical tiles a world object presents on one of the map's tile layers, as one undo step: each cell
      * `[x, y, tile]` on a cell the object owns, `0` showing no tile. The terminal, collision and the layer's own

@@ -666,3 +666,48 @@ it('keeps an object presented only by its tiles valid when its last tile goes', 
         ->and($request('map.read', ['map' => 'test-map'])['result']['worldObjects'][0])->toMatchArray(['sprites2d' => null])
         ->and($request('map.read', ['map' => 'test-map'])['result']['worldObjects'][0])->not->toHaveKey('tiles2d');
 });
+
+
+it('sets a wide coverage selection in one host edit and reopens it without touching the map cells', function () {
+    [$root, $file] = createWorldObjectProject();
+    $directory = dirname($file);
+    $gridSource = \Ichiloto\Engine\Field\MapGridSource::class;
+    $width = 34;
+    $height = 11;
+    $blank = implode("\n", array_fill(0, $height, str_repeat(' ', $width)));
+    $terrain = implode("\n", array_fill(0, $height, str_repeat('.', $width)));
+    foreach (['layers/01.terrain.map.php' => $terrain, 'layers/04.buildings.map.php' => $blank,
+        'layers/07.detail.deco.php' => $blank, 'test-map.event.php' => $blank] as $path => $text) {
+        file_put_contents($directory . '/' . $path, $gridSource::buildSource($text, 'GRID'));
+    }
+    foreach (['01.floor.tiles.php' => 2816, '02.decor.tiles.php' => 0] as $path => $tile) {
+        writeTileLayer($directory, $path, implode("\n", array_fill(0, $height, implode(' ', array_fill(0, $width, $tile)))));
+    }
+    $session = EditorSession::open($root);
+    applyWorldObjectRow($session, 'covers.layer', 'terrain');
+    $session->saveMap('test-map');
+    $before = $session->readMap('test-map');
+    $host = new SessionHost(fopen('php://memory', 'r+'), fopen('php://memory', 'r+'), fopen('php://memory', 'r+'));
+    $request = static fn(string $method, array $params): array => $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params]));
+    $request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+    $read = static fn(): array => $request('map.read', ['map' => 'test-map'])['result'];
+    $cells = [];
+    foreach (range(0, 9) as $y) {
+        foreach (range(0, 29) as $x) { $cells[] = [$x, $y]; }
+    }
+    $params = ['map' => 'test-map', 'id' => 'fixture-prop', 'revision' => $read()['revision']];
+    expect($request('worldObjects.setCoverage', [...$params, 'cells' => $cells])['result']['changed'])->toBeTrue()
+        ->and($read()['worldObjects'][0]['covers']['cells'])->toBe($cells)
+        ->and($read()['occupancy'])->toBe($before['occupancy'])
+        ->and($read()['layers'])->toBe($before['layers']);
+    $after = $read();
+    $invalid = $request('worldObjects.setCoverage', [...$params, 'revision' => $after['revision'], 'cells' => [...$cells, [0, 0]]]);
+    expect($invalid)->toHaveKey('error')
+        ->and($read())->toBe($after);
+    $request('history.undo', []);
+    expect($read()['worldObjects'][0]['covers']['cells'])->toBe([[1, 1]]);
+    $request('history.redo', []);
+    $request('map.save', ['map' => 'test-map']);
+    expect(EditorSession::open($root)->readMap('test-map')['worldObjects'][0]['covers']['cells'])->toBe($cells)
+        ->and(file_get_contents($file))->toContain('/* map-owned identity */', "'preserved' => abs(7)");
+});
