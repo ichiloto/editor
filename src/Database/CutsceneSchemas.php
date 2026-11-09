@@ -14,6 +14,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectFlightContact;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
 use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
 use Ichiloto\Engine\Animations\Timelines\EffectImageDepth;
+use Ichiloto\Engine\Animations\Timelines\EffectPoseClock;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageFit;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
@@ -668,6 +669,9 @@ final class CutsceneSchemas
             RecordField::reference('effectTiming.cueId', 'Impact Cue', 'effect_cues', allowsNone: true, noneLabel: '(none)'),
             ...($graphical ? [
                 new RecordField('poseSyncFrame', 'Pose Sync Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
+                new RecordField('poseClock', 'Pose Clock',
+                    options: ['', ...array_map(static fn(EffectPoseClock $clock): string => $clock->value, EffectPoseClock::cases())],
+                    removeWhenEmpty: true, displayDefault: EffectPoseClock::ANNOUNCEMENT->value),
                 new RecordField('rangeTiming.minDistance', 'Far Range Threshold', InputControlType::FLOAT, removeWhenEmpty: true),
                 RecordField::reference('flightTiming.track', 'Flight Track', ReferenceCatalog::EFFECT_FLIGHT_TRACKS,
                     allowsNone: true, noneLabel: '(none)'),

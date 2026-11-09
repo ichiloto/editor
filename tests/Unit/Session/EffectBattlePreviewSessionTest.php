@@ -474,6 +474,10 @@ it('authors a graphical tether with the shared asset and pose pickers and reopen
     $session = EditorSession::open($root);
     $index = findEffectIndex($session, 'dusk-slash');
     $session->selectCutscenePresentation($category, $index, 'graphical');
+    $clock = array_find($session->readDatabaseRecord($category, $index)['rows'],
+        static fn(array $entry): bool => ($entry['key']['field'] ?? null) === 'poseClock');
+    expect($clock)->not->toBeNull()
+        ->and($session->applyDatabaseRecord($category, $index, $clock['key'], 'target')['changed'])->toBeTrue();
     $track = $session->describeCutsceneTimeline($category, $index)['tracks'][0]['art']['pivotKey']['frame'];
     $apply = static function (string $field, string $value) use ($session, $category, $index, $track): void {
         $row = array_find($session->readDatabaseRecord($category, $index, $track)['rows'],
@@ -501,6 +505,7 @@ it('authors a graphical tether with the shared asset and pose pickers and reopen
     expect($session->saveAll()['failures'])->toBe([]);
     $saved = require $path;
     expect($saved['presentations']['terminal'])->toBe($initial['presentations']['terminal'])
+        ->and($saved['presentations']['graphical']['poseClock'])->toBe('target')
         ->and($saved['presentations']['graphical']['tracks'][0])
         ->toMatchArray(['type' => 'tether', 'head' => $head, 'links' => $links, 'grip' => 'grip', 'linkSpacing' => 8.0]);
     $reopened = EditorSession::open($root);
