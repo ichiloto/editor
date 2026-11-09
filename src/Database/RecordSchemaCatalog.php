@@ -2427,6 +2427,7 @@ final class RecordSchemaCatalog
                     fields: [
                         RecordField::reference('animationId', 'Animation', 'animation_ids'),
                         ...array_filter($poseFields, static fn(RecordField $field): bool => $field->key !== 'loop'),
+                        new RecordField('guardFrame', 'Flash-step Guard Cell', InputControlType::INTEGER, removeWhenEmpty: true),
                     ],
                     blank: ['animationId' => '', 'image' => '', 'loop' => false, 'impactFrame' => 0],
                     heading: 'Action Poses',
