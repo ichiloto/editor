@@ -527,6 +527,15 @@ final class CutsceneSchemas
             new RecordField($prefix . '.y', $label . ' Y', InputControlType::INTEGER, removeWhenEmpty: true),
         ];
 
+        $timedText = CinematicCommandSchema::export()['timedTextPresentation'];
+        $timedTextFields = [
+            new RecordField('title', 'Title', removeWhenEmpty: true),
+            new RecordField('text', 'Text', InputControlType::MULTILINE, removeWhenEmpty: true),
+            new RecordField('seconds', 'Seconds', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '2.5'),
+            new RecordField($timedText['field'], 'Display On', options: $timedText['options'],
+                removeWhenEmpty: true, displayDefault: $timedText['default']),
+        ];
+
         return [
             ...$base,
             'move_route' => static fn(array $entry): array => MovementRouteFields::getFields($entry, cinematic: true),
@@ -571,16 +580,7 @@ final class CutsceneSchemas
                     ...$subject('target', 'Target', true, $entry),
                     new RecordField('secondsPerFrame', 'Seconds Per Frame', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '0.12'),
                 ],
-            'title_card' => [
-                new RecordField('title', 'Title', removeWhenEmpty: true),
-                new RecordField('text', 'Text', InputControlType::MULTILINE, removeWhenEmpty: true),
-                new RecordField('seconds', 'Seconds', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '2.5'),
-            ],
-            'narration' => [
-                new RecordField('title', 'Title', removeWhenEmpty: true),
-                new RecordField('text', 'Text', InputControlType::MULTILINE, removeWhenEmpty: true),
-                new RecordField('seconds', 'Seconds', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '2.5'),
-            ],
+            ...array_fill_keys($timedText['commands'], $timedTextFields),
             'transition' => [
                 new RecordField('style', 'Style', options: ['fade', 'wipe', 'none'], removeWhenEmpty: true, displayDefault: 'fade'),
                 new RecordField('direction', 'Direction', options: ['out', 'in']),
