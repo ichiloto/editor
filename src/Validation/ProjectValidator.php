@@ -1840,6 +1840,7 @@ class ProjectValidator
           ...MapGraphicsValidator::validate($map),
           ...MapGraphicsValidator::validateCoverage($map),
           ...BrokenPieceCheck::validate($map),
+          ...SavePointAgreementCheck::validate($map),
           ...PassageAgreementCheck::validate($map),
           ...$this->checkRetiredMapData($map),
           ...MapCompletenessCheck::validate($map, $this->inventoryCatalog),

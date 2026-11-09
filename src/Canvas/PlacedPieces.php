@@ -163,6 +163,7 @@ final class PlacedPieces
             throw new MapSourceRefusal(sprintf('No whole %s stands at %d, %d any more. Nothing was changed.', $piece->name, $x, $y));
         }
         $layer = PiecePlacer::findLayer($map, $piece);
+        $savePoints = SavePointMarks::listMarkedCells($map, $piece, $x, $y);
         $writes = [];
         foreach ($piece->glyphs as $row => $symbols) {
             foreach ($symbols as $column => $symbol) {
@@ -221,8 +222,19 @@ final class PlacedPieces
                     static fn() => $map->setMapDataField($path, $before));
             }
         }
+        try {
+            $cleared = SavePointMarks::clearCollision($map, $savePoints);
+        } catch (MapSourceRefusal $refusal) {
+            foreach (array_reverse($commands) as $command) {
+                $command->undo();
+            }
+            throw new MapSourceRefusal(rtrim($refusal->getMessage(), '.') . '. Nothing was changed.', previous: $refusal);
+        }
+        if ($cleared['command'] !== null) {
+            $commands[] = $cleared['command'];
+        }
 
-        return ['command' => new CommandGroup($label, $commands), 'cells' => $freed];
+        return ['command' => new CommandGroup($label, $commands), 'cells' => $freed + $cleared['cells']];
     }
 
     /**

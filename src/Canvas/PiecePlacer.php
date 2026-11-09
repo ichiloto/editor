@@ -295,9 +295,11 @@ final class PiecePlacer
         $tilesAfter = $map->getTileLayerSources();
         [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, $label);
 
-        return $stroke->hasChanges() || $tilesAfter !== $tilesBefore
+        $stamp = $stroke->hasChanges() || $tilesAfter !== $tilesBefore
             ? CanvasEditor::combineStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter)
             : null;
+
+        return SavePointMarks::addCollision($map, $piece, $stamp, $origins, $label);
     }
 
     /**
