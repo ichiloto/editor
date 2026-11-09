@@ -195,6 +195,8 @@ final class SessionHost
             'worldObjects.place' => $session->placeWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
                 is_bool($params['coverage'] ?? false) ? ($params['coverage'] ?? false) : throw new InvalidRequest('"coverage" must be a boolean.')),
+            'worldObjects.setCoverage' => $session->setWorldObjectCoverage(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireCells($params)),
             'worldObjects.setTiles' => $session->setWorldObjectTiles(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireString($params, 'layer'), self::requireArray($params, 'cells')),
             'worldObjects.unsetTiles' => $session->unsetWorldObjectTiles(self::requireString($params, 'map'), self::requireInt($params, 'revision'),

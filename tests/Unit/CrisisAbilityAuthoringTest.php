@@ -64,6 +64,16 @@ it('round trips the optional crisis acquisition icon through the theme role pick
     $session->applyDatabaseRecord($category, $index, $row['key'], '');
     $session->saveDatabase($category);
     expect($load()->toArray())->not->toHaveKey('iconRole');
+
+    $variant = array_find($session->readDatabaseRecord($category, $index)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'variant0IconRole');
+    expect($variant)->toMatchArray(['reference' => ReferenceCatalog::ICON_ROLES, 'noneLabel' => '(use ability default)']);
+    $session->applyDatabaseRecord($category, $index, $variant['key'], 'progression.surge');
+    $session->saveDatabase($category);
+    expect($load()->variants[0]['iconRole'])->toBe('progression.surge');
+    $session->applyDatabaseRecord($category, $index, $variant['key'], '');
+    $session->saveDatabase($category);
+    expect($load()->variants[0])->not->toHaveKey('iconRole');
 });
 
 it('offers a variant only the skills the Engine accepts for a crisis technique', function () {

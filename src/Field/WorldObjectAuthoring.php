@@ -542,6 +542,17 @@ final readonly class WorldObjectAuthoring
         return $this->writeEntries($entries, $coverage ? 'Toggle world-object coverage' : 'Place world-object anchor');
     }
 
+    /** Replaces the selected coverage cells as one source-preserving edit. */
+    public function setCoverage(string $id, array $cells): ?Command
+    {
+        $entries = self::readEntries($this->map);
+        $index = $this->getIndex($id);
+        if (!isset($entries[$index]['covers'])) { throw new InvalidArgumentException('Select a covered gameplay layer first.'); }
+        $entries[$index]['covers']['cells'] = $cells;
+
+        return $this->writeEntries($entries, 'Set world-object coverage');
+    }
+
     /**
      * Sets the graphical tiles an object presents on a tile layer of the map, each `[x, y, tile]` on a cell the object
      * owns; `0` shows no tile there. A cell it already presents is changed in place, a new one is added, as one undo

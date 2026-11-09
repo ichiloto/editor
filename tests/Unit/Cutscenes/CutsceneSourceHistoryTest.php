@@ -125,3 +125,24 @@ it('still validates proposed source templates before installing restored histori
     expect(fn() => $asset->save())->toThrow(RuntimeException::class)
         ->and(readCutsceneHistorySources($asset))->toBe($written);
 })->with(CutsceneType::cases());
+
+it('authors timed text surface choices from the Engine and preserves them through reopen', function (bool $graphical, string $type) {
+    [, , , $asset] = sourceHistoryCutscene(CutsceneType::CINEMATIC);
+    $contract = \Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema::export()['timedTextPresentation'];
+    $variants = \Ichiloto\Editor\Database\CutsceneSchemas::cinematicCommandVariants($graphical);
+    $field = array_find($variants[$type], static fn($field): bool => $field->key === $contract['field']);
+    expect($field?->options)->toBe($contract['options']);
+
+    $paths = $asset->paths();
+    $data = file_get_contents($paths[0]);
+    $payload = $asset->payload();
+    $cue = ['type' => $type, 'text' => 'Synthetic terminal text.', $contract['field'] => 'terminal'];
+    $payload['commands'][] = $cue;
+    $asset->apply($payload);
+    expect($asset->save())->toBeTrue()->and(file_get_contents($paths[0]))->toBe($data);
+    $reopened = CutsceneAsset::load(CutsceneType::CINEMATIC, dirname($paths[0]));
+    expect($reopened->payload()['commands'])->toContain($cue);
+})->with([
+    'Terminal narration' => [false, 'narration'],
+    'graphical title-card authoring' => [true, 'title_card'],
+]);
