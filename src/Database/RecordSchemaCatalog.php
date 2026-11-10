@@ -337,6 +337,15 @@ final class RecordSchemaCatalog
                 InputControlType::BOOLEAN, removeWhenEmpty: true),
             new RecordField('flashStep.placeTransitOnPoseKeys', 'Hold Position for Each Transit Pose',
                 InputControlType::BOOLEAN, removeWhenEmpty: true),
+            RecordField::reference('flashStep.wake.image', 'Transit Wake Image', 'png_assets', allowsNone: true),
+            new RecordField('flashStep.wake.crop', 'Transit Wake Source Crop', codec: RecordFieldCodec::SOURCE_RECT, removeWhenEmpty: true),
+            new RecordField('flashStep.wake.baseWidth', 'Wake Base Width (Body Units)', InputControlType::FLOAT, removeWhenEmpty: true),
+            new RecordField('flashStep.wake.maxWidth', 'Wake Max Width (Body Units)', InputControlType::FLOAT, removeWhenEmpty: true),
+            new RecordField('flashStep.wake.height', 'Wake Height (Body Units)', InputControlType::FLOAT, removeWhenEmpty: true),
+            new RecordField('flashStep.wake.offsetY', 'Wake Top (Body Units Below Ground)', InputControlType::FLOAT),
+            new RecordField('flashStep.wake.outboundGap', 'Outbound Wake Gap (Body Units)', InputControlType::FLOAT),
+            new RecordField('flashStep.wake.widthPerDistance', 'Wake Width per Horizontal Distance', InputControlType::FLOAT),
+            new RecordField('flashStep.wake.opacityPercent', 'Wake Opacity Samples (%)', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
         ];
         $legacy = [
             new RecordField('position', 'Legacy Position',
@@ -372,6 +381,9 @@ final class RecordSchemaCatalog
             prepareEdit: static function (array $draft, string $field): array {
                 if ($field === 'movement' && ($draft['movement'] ?? null) !== \Ichiloto\Engine\Animations\ActionMovement::FLASH_STEP->value) {
                     unset($draft['flashStep']);
+                }
+                if ($field === 'flashStep.wake.image' && !isset($draft['flashStep']['wake']['image'])) {
+                    unset($draft['flashStep']['wake']);
                 }
 
                 return $draft;
