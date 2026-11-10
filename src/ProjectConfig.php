@@ -6,6 +6,7 @@ namespace Ichiloto\Editor;
 
 use Ichiloto\Engine\Localization\Vocabulary;
 
+use Ichiloto\Editor\Database\BattleInterceptionFields;
 use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Engine\Audio\AudioManager;
 use Ichiloto\Engine\Audio\Enumerations\AudioBus;
@@ -30,13 +31,15 @@ final class ProjectConfig extends ProjectSettingsFile
     public const string ALWAYS_DASH = PlayerDash::CONFIG_ALWAYS_DASH;
     /** Whether tutorials start on their own when their trigger first holds; the player changes it in Config (TutorialDirector). */
     public const string TUTORIAL_PROMPTS = TutorialDirector::CONFIG_AUTOMATIC_PROMPTS;
+    /** The contact effect each state plays when it intercepts an attack, by state id (BattleConditionEffects). */
+    public const string BATTLE_INTERCEPTIONS = 'ui.battle.conditions.interceptions';
 
     /**
      * Settings the engine reads with a default when the file leaves them
      * out, by path, with that default.
      */
     private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM, self::INN_PRESENTATION => null,
-        self::SAVE_POINT_SCRIPT => null, self::ALWAYS_DASH => false, self::TUTORIAL_PROMPTS => true];
+        self::SAVE_POINT_SCRIPT => null, self::ALWAYS_DASH => false, self::TUTORIAL_PROMPTS => true, self::BATTLE_INTERCEPTIONS => null];
 
     /**
      * Settings that name another resource, by path, with the reference kind
@@ -135,8 +138,9 @@ final class ProjectConfig extends ProjectSettingsFile
      * Refuses a value the engine would not accept at a path, before anything
      * changes: a field zoom outside its range, a master, bus or system sound
      * volume outside its range, an inn presentation that is not a timeline
-     * identity, an Always Dash that is not true or false, or a battle
-     * announcement reading time outside its range.
+     * identity, an Always Dash that is not true or false, a battle
+     * announcement reading time outside its range, or interception effects
+     * the Engine's binding boundary refuses.
      *
      * @throws \InvalidArgumentException
      */
@@ -152,6 +156,9 @@ final class ProjectConfig extends ProjectSettingsFile
         }
         if ($path === self::INN_PRESENTATION && $value !== null) {
             InnPresentationFields::assertValid($value, complete: $complete);
+        }
+        if ($path === self::BATTLE_INTERCEPTIONS) {
+            BattleInterceptionFields::assertShape($value, rtrim($this->projectRoot, '/') . '/assets', $complete);
         }
         if ($path === self::ALWAYS_DASH && ! is_bool($value)) {
             throw new \InvalidArgumentException('Always Dash must be true or false.');
@@ -181,25 +188,47 @@ final class ProjectConfig extends ProjectSettingsFile
             || array_any(SystemSound::cases(), static fn(SystemSound $sound): bool => $path === $sound->getVolumeConfigPath());
     }
 
-    /** The inn's rest presentation is one setting, a whole timeline binding. */
+    /** The inn's rest presentation and the interception effects are each one setting, a whole binding. */
     protected function isWholeValue(string $path): bool
     {
-        return $path === self::INN_PRESENTATION;
+        return $path === self::INN_PRESENTATION || $path === self::BATTLE_INTERCEPTIONS;
+    }
+
+    /** Removing the last interception effect removes the group, as a project without any leaves it out. */
+    protected function isRemovedWhenEmpty(string $path): bool
+    {
+        return $path === self::BATTLE_INTERCEPTIONS;
     }
 
     /** One picker key replacement keeps the binding's authored comments and value span. */
     protected function listKeyRenames(string $path, mixed $old, mixed $new): array
     {
-        if (! is_array($old) || ! is_array($new) || ($old['treatment'] ?? null) !== 'leader' || ($new['treatment'] ?? null) !== 'leader'
-            || ! is_array($old['leaders'] ?? null) || ! is_array($new['leaders'] ?? null)) { return []; }
-        $before = array_keys($old['leaders']);
-        $after = array_keys($new['leaders']);
+        if ($path === self::BATTLE_INTERCEPTIONS) {
+            return self::listMapKeyRenames(explode('.', $path), $old, $new);
+        }
+        if (! is_array($old) || ! is_array($new) || ($old['treatment'] ?? null) !== 'leader' || ($new['treatment'] ?? null) !== 'leader') { return []; }
+
+        return self::listMapKeyRenames(['graphics', 'inn', 'presentation', 'leaders'], $old['leaders'] ?? null, $new['leaders'] ?? null);
+    }
+
+    /**
+     * The keys of a map a whole-value edit renames in place: entries whose key alone changed, position by
+     * position, to a key the map did not hold. Any other change is a rewrite.
+     *
+     * @param list<string> $at Where the map is in the file.
+     * @return list<array{path: list<string>, key: string}>
+     */
+    private static function listMapKeyRenames(array $at, mixed $old, mixed $new): array
+    {
+        if (! is_array($old) || ! is_array($new)) { return []; }
+        $before = array_keys($old);
+        $after = array_keys($new);
         if (count($before) !== count($after)) { return []; }
         $renames = [];
         foreach ($before as $index => $key) {
             if ($key === $after[$index]) { continue; }
-            if (array_key_exists($key, $new['leaders']) || array_key_exists($after[$index], $old['leaders'])) { return []; }
-            $renames[] = ['path' => ['graphics', 'inn', 'presentation', 'leaders', $key], 'key' => $after[$index]];
+            if (array_key_exists($key, $new) || array_key_exists($after[$index], $old)) { return []; }
+            $renames[] = ['path' => [...$at, $key], 'key' => $after[$index]];
         }
         return $renames;
     }

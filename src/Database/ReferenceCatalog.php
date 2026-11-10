@@ -23,6 +23,8 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeRecordType;
 use Ichiloto\Engine\Rendering\Presentation\Text\ProjectTextCatalog;
+use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Battle\CounterAttackRule;
 use Ichiloto\Engine\Battle\CrisisAbility;
@@ -252,6 +254,17 @@ final class ReferenceCatalog
     public function getAssetRoot(): string
     {
         return rtrim($this->workspace->projectRoot, '/') . '/assets';
+    }
+
+    /**
+     * An effect timeline as a state's interception plays it, by the Engine's interception rule
+     * ({@see ProjectCatalogs::loadInterceptionTimeline()}).
+     *
+     * @throws \InvalidArgumentException With the Engine's reason when it is missing, unsaved or refused.
+     */
+    public function loadInterceptionTimeline(string $id, EffectPresentation $presentation): CompiledEffectTimeline
+    {
+        return $this->workspace->catalogs->loadInterceptionTimeline($id, $presentation);
     }
 
     public function describeWorldObjectReferences(ProjectMap $map, string $id): array

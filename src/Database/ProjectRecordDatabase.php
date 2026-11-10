@@ -165,6 +165,9 @@ final class ProjectRecordDatabase
             if ($path === ProjectConfig::INN_PRESENTATION) {
                 InnPresentationFields::assertValid($draft->get('value'), $this->authoringReferences, complete: false);
             }
+            if ($path === ProjectConfig::BATTLE_INTERCEPTIONS && $this->authoringReferences !== null) {
+                BattleInterceptionFields::assertChangedBindingsValid($record->get('value'), $draft->get('value'), $this->authoringReferences, complete: false);
+            }
             $this->settings?->assertSourceAcceptsValue($path, $draft->get('value'));
         } elseif (is_array($draft->toArray())) {
             InnPresentationFields::assertChangedCommandsValid((array) $record->toArray(), $draft->toArray(), $this->authoringReferences, complete: false);

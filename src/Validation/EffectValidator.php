@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\BattleInterceptionFields;
 use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\ProjectWorkspace;
@@ -17,6 +18,7 @@ use Ichiloto\Engine\Battle\BattleTurnTimings;
 use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Presentation\PartyStageSelection;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
@@ -28,7 +30,8 @@ use Throwable;
  * each consumer: battle animations' source and target effects in battle;
  * the field presentation's cue and action prompt effects, maps' field
  * effects and tileset pieces' effects on the field; inns' rest stages as a
- * stage of their own. Battle and field effects are compiled for both the
+ * stage of their own; the contact effects states play when they intercept
+ * an attack, by the Engine's interception rule. Battle and field effects are compiled for both the
  * terminal and the graphical presentation, so a sequence that only one
  * renderer would refuse is still found; graphical stages use stage admission,
  * while a paired Terminal sequence retains its own cues and tracks.
@@ -47,6 +50,10 @@ final class EffectValidator
 
         foreach ($uses as $effect => $contexts) {
             foreach ($contexts as $context => $places) {
+                if ($context === 'interception') {
+                    array_push($issues, ...self::checkInterceptionEffect($catalogs, $effect, $places));
+                    continue;
+                }
                 if ($context === 'stage') {
                     try {
                         $catalogs->loadEffectTimeline($effect, forStage: true);
@@ -73,7 +80,55 @@ final class EffectValidator
             }
         }
 
-        return [...$issues, ...self::checkSourceEffectAnchors($workspace)];
+        return [...$issues, ...self::checkSourceEffectAnchors($workspace), ...self::checkInterceptionStates($workspace)];
+    }
+
+    /**
+     * Checks an effect states play when they intercept an attack, by the Engine's interception rule for
+     * each presentation. A timeline with unsaved edits is checked once it is saved, as that rule reads it.
+     *
+     * @param list<string> $places The bindings that name it.
+     * @return Issue[]
+     */
+    private static function checkInterceptionEffect(ProjectCatalogs $catalogs, string $effect, array $places): array
+    {
+        $also = count($places) > 1 ? sprintf(' Also used by %d more.', count($places) - 1) : '';
+        if ($catalogs->hasUnsavedEffectTimeline($effect)) {
+            return [Issue::warning($places[0], sprintf('Effect %s has unsaved edits, so its interception is checked once it is saved.', $effect),
+                'Save the effect timeline to check it as the battle reads it.' . $also)];
+        }
+
+        return array_map(static fn(array $failure): Issue => Issue::error($places[0], $failure['message'],
+            sprintf('Fix assets/Animations/%s, or choose another effect. Until then the interception shows the ordinary miss.%s', $effect, $also)),
+            BattleInterceptionFields::findTimelineFailures($effect, $catalogs->loadInterceptionTimeline(...)));
+    }
+
+    /**
+     * Checks the interception bindings as the Engine's binding boundary reads them, and that each names a
+     * state the project defines: a binding to a renamed or deleted state never plays.
+     *
+     * @return Issue[]
+     */
+    private static function checkInterceptionStates(ProjectWorkspace $workspace): array
+    {
+        $bindings = $workspace->config?->getRecord(ProjectConfig::BATTLE_INTERCEPTIONS)->get('value');
+        $where = 'config.php: ' . ProjectConfig::BATTLE_INTERCEPTIONS;
+        try {
+            BattleInterceptionFields::assertShape($bindings, $workspace->catalogs->getAssetRoot());
+        } catch (Throwable $failure) {
+            return [Issue::error($where, 'Its interception effects are invalid: ' . $failure->getMessage(),
+                'Bind each state by its id to one effect timeline id. Until then no interception plays its effect.')];
+        }
+        $states = new ReferenceCatalog($workspace)->valuesFor('states');
+        $issues = [];
+        foreach ((array) $bindings as $state => $effect) {
+            if (! in_array((string) $state, $states, true)) {
+                $issues[] = Issue::error($where . '.' . $state, sprintf('Its interception effect %s is bound to state %s, which the project does not define.', strval($effect), $state),
+                    'Choose a project state for the binding, or remove it. Until then the binding plays nothing.');
+            }
+        }
+
+        return $issues;
     }
 
     /**
@@ -147,11 +202,12 @@ final class EffectValidator
      * Returns where the project plays each effect, by context: battle
      * animations' source and target effects in battle; the field
      * presentation's cues and action prompt, maps' field effects and tileset
-     * pieces' effects on the field; and the rest stage of Sleep events, `inn`
-     * commands at any depth and the project's default inn presentation.
+     * pieces' effects on the field; the rest stage of Sleep events, `inn`
+     * commands at any depth and the project's default inn presentation; and
+     * the contact effects states play when they intercept an attack.
      *
      * @param Issue[] $issues Receives what could not be read.
-     * @return array<string, array{battle?: list<string>, field?: list<string>, stage?: list<string>}>
+     * @return array<string, array{battle?: list<string>, field?: list<string>, stage?: list<string>, interception?: list<string>}>
      */
     public static function findUses(ProjectWorkspace $workspace, array &$issues = []): array
     {
@@ -166,6 +222,14 @@ final class EffectValidator
 
         foreach (self::findStageUses($workspace, $issues) as $effect => $places) {
             $uses[$effect]['stage'] = $places;
+        }
+
+        // Malformed bindings name no effect here; checkInterceptionStates() reports them.
+        $interceptions = $workspace->config?->getRecord(ProjectConfig::BATTLE_INTERCEPTIONS)->get('value');
+        foreach (is_array($interceptions) ? $interceptions : [] as $state => $effect) {
+            if (is_string($effect) && preg_match(EffectTimelineLibrary::ID_PATTERN, $effect) === 1) {
+                $uses[$effect]['interception'][] = sprintf('config.php: %s.%s', ProjectConfig::BATTLE_INTERCEPTIONS, $state);
+            }
         }
 
         try {

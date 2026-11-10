@@ -238,6 +238,12 @@ abstract class ProjectSettingsFile
         foreach ($this->records as $path => $record) {
             $value = array_key_exists($path, $overrides) ? $overrides[$path] : $record->get('value');
             if ($value === $this->originalValues[$path]) { continue; }
+            if ($value === null && $this->isRemovedWhenEmpty($path)) {
+                // An authored key chosen away is removed, keeping its neighbours and their comments; a whole value too.
+                $this->createFieldEdit($document, $path, '1', $this->isWholeValue($path));
+                $document = $document->withEdits([$document->removeEntryEdit($this->splitPath($path))]);
+                continue;
+            }
             if ($this->isWholeValue($path) && is_array($this->originalValues[$path])) {
                 $this->createFieldEdit($document, $path, '1', true);
                 $old = $this->payload;
@@ -247,12 +253,6 @@ abstract class ProjectSettingsFile
                 $next = $value;
                 unset($next);
                 $document = ArraySourceWriter::rewrite($document, $old, $new, $this->listKeyRenames($path, $this->originalValues[$path], $value));
-                continue;
-            }
-            if ($value === null && $this->isRemovedWhenEmpty($path)) {
-                // An authored key chosen away is removed, keeping its neighbours and their comments.
-                $this->createFieldEdit($document, $path, '1');
-                $document = $document->withEdits([$document->removeEntryEdit($this->splitPath($path))]);
                 continue;
             }
             $edit = $this->createFieldEdit($document, $path, PhpValueExporter::export($value));

@@ -1903,13 +1903,21 @@ final class RecordSchemaCatalog
             labelKey: 'path',
             identityKey: 'path',
             configPath: ['save', 'accessibility', 'ui', 'field', 'graphics', 'audio', 'inn'],
-            subLists: $graphical ? InnPresentationFields::getBindingLists('value') : [],
-            subListsFor: static fn(array $row): array => ($row['path'] ?? null) === ProjectConfig::INN_PRESENTATION
-                && ($list = InnPresentationFields::getBindingList($row['value'] ?? null, 'value')) !== null ? [$list->key] : [],
+            // Interception effects have Terminal and graphical variants, so both editors bind them.
+            subLists: [...($graphical ? InnPresentationFields::getBindingLists('value') : []), BattleInterceptionFields::getBindingList('value')],
+            subListsFor: static fn(array $row): array => match ($row['path'] ?? null) {
+                ProjectConfig::INN_PRESENTATION => ($list = InnPresentationFields::getBindingList($row['value'] ?? null, 'value')) !== null ? [$list->key] : [],
+                ProjectConfig::BATTLE_INTERCEPTIONS => [BattleInterceptionFields::getBindingList('value')->key],
+                default => [],
+            },
             fieldsFor: static function (array $row) use ($graphical): array {
                 if (($row['path'] ?? null) === ProjectConfig::INN_PRESENTATION) {
                     return [new RecordField('path', 'Setting', isReadOnly: true),
                         ...InnPresentationFields::getFields($row['value'] ?? null, 'value', 'Rest Presentation', $graphical)];
+                }
+                // Each binding is chosen in its own rows, a state and the effect it plays.
+                if (($row['path'] ?? null) === ProjectConfig::BATTLE_INTERCEPTIONS) {
+                    return [new RecordField('path', 'Setting', isReadOnly: true)];
                 }
                 // A setting the engine knows is the type of its default, so an
                 // authored value of another type is repaired on edit.
