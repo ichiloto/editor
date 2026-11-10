@@ -120,6 +120,10 @@ it('chooses the action animation and its pose image in the battler editor and pr
     $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0EntryFrames')['key'], '0, 1');
     $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0ExitFrames')['key'], '3, 0');
     $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0GuardFrame')['key'], '1');
+    $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0FarPoseminDistance')['key'], '0.9');
+    $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0FarPoseframes')['key'], '3');
+    $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0FarPosereach')['key'], '0.8, -0.2');
+    $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0FarPosepivot')['key'], '0.45, 0.95');
     $session->undo();
     $session->redo();
     $session->saveDatabase($category);
@@ -128,7 +132,11 @@ it('chooses the action animation and its pose image in the battler editor and pr
         ->and($data['actors']['Kaelion']['actionPoses'][1])->toMatchArray(['impactFrame' => 0, 'loop' => false, 'frames' => [2, 3],
             'entryFrames' => [0, 1], 'exitFrames' => [3, 0], 'guardFrame' => 1]);
     $reopened = BattlerBindings::load($root . '/assets')->actorPoses['Kaelion']->getAnimationPose(1);
-    expect($reopened?->frames)->toBe([2, 3])->and($reopened?->guardFrame)->toBe(1);
+    expect($reopened?->frames)->toBe([2, 3])->and($reopened?->guardFrame)->toBe(1)
+        ->and($reopened?->farPose?->minDistance)->toBe(0.9)
+        ->and($reopened?->farPose?->frames)->toBe([3])
+        ->and($reopened?->farPose?->reach->toArray())->toBe(['x' => 0.8, 'y' => -0.2])
+        ->and($reopened?->farPose?->pivot->toArray())->toBe(['x' => 0.45, 'y' => 0.95]);
     $effect = findEffectIndex($session, 'dusk-slash');
     $impact = $session->readEffectBattlePreview($effect, 0, authoredFrame: 0);
     expect(readAttackCell($session, $effect, $impact['frame']))->toBe(2);
