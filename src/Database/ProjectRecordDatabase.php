@@ -963,9 +963,7 @@ final class ProjectRecordDatabase
             throw new \Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal($issue);
         }
 
-        $subList = $this->schema->subList;
-
-        if ($subList !== null) {
+        foreach ($this->schema->getInlineSubLists($record->toArray()) as $subList) {
             $nestedPattern = '/^'
                 . preg_quote($subList->prefix, '/')
                 . '(\d+)([A-Za-z][A-Za-z0-9]*?)(\d+)([A-Za-z][A-Za-z0-9]*)$/';
@@ -983,11 +981,9 @@ final class ProjectRecordDatabase
                 );
                 return;
             }
-        }
 
-        foreach ($this->schema->getInlineSubLists($record->toArray()) as $inlineList) {
-            if (preg_match('/^' . preg_quote($inlineList->prefix, '/') . '(\d+)([A-Za-z][A-Za-z0-9]*)$/', $fieldId, $matches) === 1) {
-                $this->setSubField($record, $inlineList, intval($matches[1]), $matches[2], $rawValue);
+            if (preg_match('/^' . preg_quote($subList->prefix, '/') . '(\d+)([A-Za-z][A-Za-z0-9]*)$/', $fieldId, $matches) === 1) {
+                $this->setSubField($record, $subList, intval($matches[1]), $matches[2], $rawValue);
                 return;
             }
         }
@@ -1817,9 +1813,9 @@ final class ProjectRecordDatabase
     }
 
     /** Adds an entry to a variant-owned nested list, at the end or at a position. */
-    public function addNestedSubItem(int $index, int $parentIndex, ?array $entry = null, ?int $at = null): ?int
+    public function addNestedSubItem(int $index, int $parentIndex, ?array $entry = null, ?int $at = null, ?string $listKey = null): ?int
     {
-        $context = $this->nestedListForParent($index, $parentIndex);
+        $context = $this->nestedListForParent($index, $parentIndex, $listKey);
 
         if ($context === null || ! $this->isEditable() || ! $context['record']->isEditable()) {
             return null;
@@ -1834,9 +1830,9 @@ final class ProjectRecordDatabase
     }
 
     /** Removes an entry from a variant-owned nested list. */
-    public function removeNestedSubItem(int $index, int $parentIndex, int $nestedIndex): ?array
+    public function removeNestedSubItem(int $index, int $parentIndex, int $nestedIndex, ?string $listKey = null): ?array
     {
-        $context = $this->nestedListForParent($index, $parentIndex);
+        $context = $this->nestedListForParent($index, $parentIndex, $listKey);
 
         if ($context === null || ! $this->isEditable() || ! $context['record']->isEditable()) {
             return null;
@@ -3499,7 +3495,22 @@ final class ProjectRecordDatabase
                 }
 
                 if (preg_match('/^' . preg_quote($inlineList->prefix, '/') . '(\d+)[A-Za-z]/', $fieldId, $matches) === 1) {
-                    return new RecordItem(RecordItem::ENTRY, [], intval($matches[1]), null, $inlineList->singular, listKey: $inlineList->key);
+                    $entryIndex = intval($matches[1]);
+                    $entry = $this->getSubItems($recordIndex, $inlineList->key)[$entryIndex] ?? null;
+                    if (! is_array($entry)) { return null; }
+                    $nested = $inlineList->nestedListFor($entry);
+                    if ($nested !== null) {
+                        $nestedPrefix = $inlineList->prefix . $entryIndex . ucfirst($nested->prefix);
+                        if ($nested->heading !== '' && $fieldId === $nestedPrefix . 'List') {
+                            return new RecordItem(RecordItem::NESTED, [], $entryIndex, null, $nested->singular, listKey: $inlineList->key);
+                        }
+                        if (preg_match('/^' . preg_quote($nestedPrefix, '/') . '(\d+)[A-Za-z]/', $fieldId, $child) === 1) {
+                            return new RecordItem(RecordItem::NESTED, [], $entryIndex, intval($child[1]), $nested->singular, listKey: $inlineList->key);
+                        }
+                    }
+
+                    return new RecordItem(RecordItem::ENTRY, [], $entryIndex, null, $inlineList->singular,
+                        $nested === null ? null : RecordItem::NESTED, $nested?->singular, $inlineList->key);
                 }
             }
         }
@@ -3578,10 +3589,11 @@ final class ProjectRecordDatabase
      * @param int|null $at Where to insert, or null for the end.
      * @return int|null The nested index, or null when nothing was added.
      */
-    public function addFrameNestedItem(int $recordIndex, array $framePath, int $parentIndex, ?array $entry = null, ?int $at = null): ?int
+    public function addFrameNestedItem(int $recordIndex, array $framePath, int $parentIndex, ?array $entry = null, ?int $at = null,
+        ?string $listKey = null): ?int
     {
         if ($framePath === []) {
-            return $this->addNestedSubItem($recordIndex, $parentIndex, $entry, $at);
+            return $this->addNestedSubItem($recordIndex, $parentIndex, $entry, $at, $listKey);
         }
 
         $record = $this->getRecordByIndex($recordIndex);
@@ -3615,10 +3627,10 @@ final class ProjectRecordDatabase
      * @param int $nestedIndex The nested entry.
      * @return array<string, mixed>|null The removed entry.
      */
-    public function removeFrameNestedItem(int $recordIndex, array $framePath, int $parentIndex, int $nestedIndex): ?array
+    public function removeFrameNestedItem(int $recordIndex, array $framePath, int $parentIndex, int $nestedIndex, ?string $listKey = null): ?array
     {
         if ($framePath === []) {
-            return $this->removeNestedSubItem($recordIndex, $parentIndex, $nestedIndex);
+            return $this->removeNestedSubItem($recordIndex, $parentIndex, $nestedIndex, $listKey);
         }
 
         $record = $this->getRecordByIndex($recordIndex);
@@ -3658,12 +3670,12 @@ final class ProjectRecordDatabase
     /**
      * Resolves one parent entry and its schema-owned nested list.
      *
-     * @return array{record: ProjectRecord, entries: array<int, array<string, mixed>>, parentIndex: int, parent: array<string, mixed>, list: RecordSubList}|null
+     * @return array{record: ProjectRecord, entries: array<int, array<string, mixed>>, parentIndex: int, parent: array<string, mixed>, list: RecordSubList, parentList: RecordSubList}|null
      */
-    private function nestedListForParent(int $index, int $parentIndex): ?array
+    private function nestedListForParent(int $index, int $parentIndex, ?string $listKey = null): ?array
     {
         $record = $this->getRecordByIndex($index);
-        $subList = $this->schema->subList;
+        $subList = $this->schema->findInlineSubList($listKey, $record?->toArray());
 
         if (! $record instanceof ProjectRecord || $subList === null) {
             return null;
@@ -3683,27 +3695,22 @@ final class ProjectRecordDatabase
             'parentIndex' => $parentIndex,
             'parent' => $parent,
             'list' => $nestedList,
+            'parentList' => $subList,
         ];
     }
 
     /**
      * Stores a changed nested list back through its owning ProjectRecord.
      *
-     * @param array{record: ProjectRecord, entries: array<int, array<string, mixed>>, parentIndex: int, parent: array<string, mixed>, list: RecordSubList} $context
+     * @param array{record: ProjectRecord, entries: array<int, array<string, mixed>>, parentIndex: int, parent: array<string, mixed>, list: RecordSubList, parentList: RecordSubList} $context
      * @param array<int, array<string, mixed>> $nestedEntries
      */
     private function writeNestedSubList(array $context, array $nestedEntries): void
     {
-        $subList = $this->schema->subList;
-
-        if ($subList === null) {
-            return;
-        }
-
         $entries = $context['entries'];
         $entries[$context['parentIndex']] = self::writeNested($context['parent'], explode('.', $context['list']->key),
             $nestedEntries === [] && $context['list']->removeWhenEmpty ? null : $context['list']->writeEntries($nestedEntries));
-        $this->writeRecordEntries($context['record'], $subList, $entries);
+        $this->writeRecordEntries($context['record'], $context['parentList'], $entries);
         $this->touchState();
     }
 

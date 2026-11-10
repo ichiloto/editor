@@ -224,3 +224,48 @@ it('keeps a pose without an impact entry on its own clock in the command preview
         ->and(readAttackCell($session, $effect, $announce + 6))->toBe(1)
         ->and(readAttackCell($session, $effect, $announce + 18))->toBe(2);
 });
+
+it('edits and validates structured arrival bands under an action pose without changing sibling bindings', function () {
+    $root = actionImpactProject();
+    $path = $root . '/assets/' . BattlerBindings::FILE;
+    $data = require $path;
+    $data['actors']['Kaelion']['actionPoses'][1] = [
+        'image' => 'Graphics/Actors/KaelionAttack.png', 'columns' => 4, 'frames' => [2, 3],
+        'fps' => 20, 'loop' => false, 'impactFrame' => 0, 'reach' => ['x' => .6, 'y' => -.1],
+    ];
+    file_put_contents($path, "<?php\n// Keep the authored battler bindings.\nreturn " . var_export($data, true) . ";\n");
+    $before = (string) file_get_contents($path);
+    $session = EditorSession::open($root);
+    $category = 'battler_actors';
+    $header = readAttackPoseRow($session, 'actionPose0ArrivalPoseList')['key'];
+    $session->addDatabaseItem($category, 0, $header);
+    $session->addDatabaseItem($category, 0, $header);
+    foreach ([
+        '0MinAngle' => '-180', '0MaxAngle' => '-5', '0Frames' => '2', '0Reach' => '0.8, -0.2', '0Pivot' => '0.45, 0.95',
+        '1MinAngle' => '-4', '1MaxAngle' => '180', '1Frames' => '3', '1Reach' => '0.6, -0.1',
+    ] as $field => $value) {
+        $session->applyDatabaseRecord($category, 0, readAttackPoseRow($session, 'actionPose0ArrivalPose' . $field)['key'], $value);
+    }
+    expect(fn() => $session->saveDatabase($category))->toThrow(SessionRefusal::class, 'contiguous')
+        ->and((string) file_get_contents($path))->toBe($before);
+    $boundary = readAttackPoseRow($session, 'actionPose0ArrivalPose1MinAngle')['key'];
+    $session->applyDatabaseRecord($category, 0, $boundary, '-5');
+    $session->removeDatabaseItem($category, 0, $header);
+    expect(readAttackPoseRow($session, 'actionPose0ArrivalPoseList')['value'])->toBe('2');
+    $session->removeDatabaseItem($category, 0, $boundary);
+    expect(readAttackPoseRow($session, 'actionPose0ArrivalPoseList')['value'])->toBe('1');
+    $session->undo();
+    $session->saveDatabase($category);
+
+    $written = require $path;
+    $action = $written['actors']['Kaelion']['actionPoses'][1];
+    expect($written['actors']['Kaelion']['poses'])->toBe($data['actors']['Kaelion']['poses'])
+        ->and(array_diff_key($action, ['arrivalPoses' => true]))->toBe($data['actors']['Kaelion']['actionPoses'][1])
+        ->and((string) file_get_contents($path))->toContain('// Keep the authored battler bindings.');
+    $reopened = EditorSession::open($root);
+    expect(readAttackPoseRow($reopened, 'actionPose0ArrivalPoseList')['value'])->toBe('2');
+    $pose = BattlerBindings::load($root . '/assets')->actorPoses['Kaelion']->getAnimationPose(1);
+    expect($pose?->selectArrivalPose(-5.01)->frames)->toBe([2])
+        ->and($pose?->selectArrivalPose(-5.01)->pivot?->x)->toBe(.45)
+        ->and($pose?->selectArrivalPose(-5)->frames)->toBe([3]);
+});
