@@ -9,6 +9,7 @@ use Ichiloto\Engine\Animations\AnimationLibrary;
 use Ichiloto\Engine\Animations\SourceEffectAnchor;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Battle\Actions\CrisisSkillBattleAction;
 use Ichiloto\Engine\Battle\BattleCommandCatalog;
 use Ichiloto\Engine\Battle\BattleCommandType;
 use Ichiloto\Engine\Battle\BattlePacing;
@@ -30,7 +31,7 @@ use InvalidArgumentException;
  * A battle effect as a battle plays it, frame by frame, for its editors, in
  * one presentation: in an action that actually plays it, found by the
  * Engine's own animation selection among what the battle test party can do
- * (its attacks, skills, magic and items; a summon is previewed as a summon),
+ * (its attacks, skills, magic, items and authored crisis techniques; a summon is previewed as a summon),
  * with the animation's other effect beside it, the action's pose and the
  * project's battle pacing. Nothing is invented: an effect no such action
  * plays has no battle preview. Each frame comes from the production
@@ -96,9 +97,16 @@ final class EffectBattlePreview
             foreach ([BattleCommandType::ATTACK, BattleCommandType::SKILL, BattleCommandType::MAGIC, BattleCommandType::ITEM] as $type) {
                 foreach (BattleCommandCatalog::buildOptions($caster, $battle->party, $type->label(), [], $state) as $option) {
                     // A summon's choreography is previewed as the summon, not through an animation.
-                    if (! $skills->isSummonAction($option->action->name)) {
+                    if (! $option->action instanceof CrisisSkillBattleAction && ! $skills->isSummonAction($option->action->name)) {
                         $candidates[] = $option->action;
                     }
+                }
+            }
+            // Preview the actor's authored forms without changing their health, states or world flags.
+            $crisis = $caster->crisisAbility;
+            if ($crisis !== null && $caster->battleCommandLoadout?->allowsCommand(BattleCommandType::ATTACK) !== false) {
+                foreach ($crisis->getVariantSkills($skills) as $skill) {
+                    $candidates[] = new CrisisSkillBattleAction($skill, $crisis, $caster->actorId);
                 }
             }
             foreach (ActionAnimationResolver::findEffectBindings($effectId, $animations, $caster, $candidates) as $match) {

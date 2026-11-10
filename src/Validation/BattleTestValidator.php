@@ -70,8 +70,9 @@ final class BattleTestValidator
             if (!$items instanceof ItemStore) {
                 return [];
             }
-            $problems = $test->setup->getProblems($workspace->actorDatabase->createActorStore(), $items,
-                $workspace->loadSkillCatalog(), new SummonCutsceneLibrary($workspace->projectRoot . '/assets/Cutscenes/Summons'));
+            $skills = $workspace->loadSkillCatalog();
+            $problems = $test->setup->getProblems($workspace->actorDatabase->createActorStore($skills), $items,
+                $skills, new SummonCutsceneLibrary($workspace->projectRoot . '/assets/Cutscenes/Summons'));
 
             return array_map(static fn(string $problem): Issue => Issue::warning(self::WHERE, $problem,
                 'Fix the member in the Battle Test dialog; the battle test will not start until it can be set up.'), $problems);

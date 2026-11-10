@@ -234,13 +234,13 @@ final class EditorSession
     /**
      * The summon battle previews last built, by presentation, and what each was built from, so seeking reuses them until either changes.
      *
-     * @var array<string, array{key: string, preview: SummonBattlePreview}>
+     * @var array<string, array{key: array{string, list<mixed>}, preview: SummonBattlePreview}>
      */
     private array $summonBattlePreviews = [];
     /**
      * The effect battle previews last built, by presentation, and what each was built from.
      *
-     * @var array<string, array{key: string, preview: EffectBattlePreview}>
+     * @var array<string, array{key: array{string, list<mixed>}, preview: EffectBattlePreview}>
      */
     private array $effectBattlePreviews = [];
     /** Projects terminal pictures into renderer runs, keeping its parsed styles between frames. */
@@ -3727,8 +3727,9 @@ final class EditorSession
         $troop = $this->readPreviewTroop($entry);
         $config = $this->workspace->config?->getRecord('ui.battle')->get('value');
         $battleUi = is_array($config) ? $config : [];
-        $key = hash('xxh128', serialize([$asset->id, $definition->toDataArray(), $graphical?->toArray(), $terminal->toArray(),
-            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $graphic ? $this->readProposedBattlerBindings() : null]));
+        $key = [hash('xxh128', serialize([$asset->id, $definition->toDataArray(), $graphical?->toArray(), $terminal->toArray(),
+            $entry, $troop, $battleUi, $graphic ? $this->readProposedBattlerBindings() : null])),
+            $this->getPreviewPartyDependencies()];
         if (($this->summonBattlePreviews[$presentation->value]['key'] ?? null) !== $key) {
             // The terminal arena needs no graphical layout, and reads no image.
             $catalog = $graphic ? $this->requireBattleLayoutCatalog('preview summons on') : null;
@@ -3802,9 +3803,9 @@ final class EditorSession
         $config = $this->workspace->config?->getRecord('ui.battle')->get('value');
         $battleUi = is_array($config) ? $config : [];
         $graphic = $presentation === EffectPresentation::GRAPHICAL;
-        $key = hash('xxh128', serialize([$asset->id, array_map(static fn(CutsceneAsset $effect): array => $effect->payload(), $effects), $animations,
-            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $binding, $reducedMotion, $targetIndex,
-            $graphic ? $this->readProposedBattlerBindings() : null]));
+        $key = [hash('xxh128', serialize([$asset->id, array_map(static fn(CutsceneAsset $effect): array => $effect->payload(), $effects), $animations,
+            $entry, $troop, $battleUi, $binding, $reducedMotion, $targetIndex,
+            $graphic ? $this->readProposedBattlerBindings() : null])), $this->getPreviewPartyDependencies()];
         if (($this->effectBattlePreviews[$presentation->value]['key'] ?? null) !== $key) {
             $catalog = $graphic ? $this->requireBattleLayoutCatalog('preview effects on') : null;
             $this->effectBattlePreviews[$presentation->value] = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
@@ -3865,6 +3866,32 @@ final class EditorSession
         }
     }
     /**
+     * The party inputs common to effect and summon previews. Database identity
+     * also changes when a source transaction reloads records with fresh versions.
+     *
+     * @return list<mixed>
+     */
+    private function getPreviewPartyDependencies(): array
+    {
+        $actors = $this->workspace->actorDatabase;
+        $skills = $this->workspace->getRecordDatabase('skills');
+        $summons = $this->workspace->cutscenes?->records(CutsceneType::SUMMON);
+
+        return [
+            $this->readStartingPartyReferences(),
+            $this->getBattlePartySize(),
+            $actors, $actors->getContentVersion(),
+            $skills, $skills?->getContentVersion(),
+            $summons, $summons?->getContentVersion(),
+        ];
+    }
+
+    private function getBattlePartySize(): int
+    {
+        return $this->workspace->getSystemField('battle.partySize') ?? \Ichiloto\Engine\Entities\Party::BATTLE_SIZE;
+    }
+
+    /**
      * The battle a preview plays in, built the way the battle test builds it:
      * its party, or the starting party, against its troop, with the skills
      * they know.
@@ -3875,9 +3902,9 @@ final class EditorSession
      */
     private function createPreviewBattle(array $entry, array $troop): array
     {
-        $actors = $this->workspace->actorDatabase->createActorStore();
         $skills = $this->workspace->loadSkillCatalog();
-        $setup = ProjectBattleTest::fromArray($entry)->createSetup($actors, $this->readStartingPartyReferences(), $this->workspace->getSystemField('battle.partySize') ?? \Ichiloto\Engine\Entities\Party::BATTLE_SIZE);
+        $actors = $this->workspace->actorDatabase->createActorStore($skills);
+        $setup = ProjectBattleTest::fromArray($entry)->createSetup($actors, $this->readStartingPartyReferences(), $this->getBattlePartySize());
         $party = $setup->createParty($actors, $this->loadItemStore(), $skills);
         $previousEnemies = ConfigStore::has(EnemyStore::class) ? ConfigStore::get(EnemyStore::class) : null;
         try {
@@ -6481,9 +6508,9 @@ final class EditorSession
         }
 
         return ProjectDirectoryContext::run($this->workspace->projectRoot, function () use ($view, $test): array {
-            $actors = $this->workspace->actorDatabase->createActorStore();
-            $items = $this->loadItemStore();
             $skills = $this->workspace->loadSkillCatalog();
+            $actors = $this->workspace->actorDatabase->createActorStore($skills);
+            $items = $this->loadItemStore();
             $summons = new SummonCutsceneLibrary($this->workspace->projectRoot . '/assets/Cutscenes/Summons');
             $view = [...$view, 'troop' => $test->troop, 'source' => $test->setup === null ? 'starting party' : 'battle test'];
             try {

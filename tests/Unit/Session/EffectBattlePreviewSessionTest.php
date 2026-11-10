@@ -28,6 +28,32 @@ it('previews an effect in the action that plays it, as the battle draws it, for 
         ->and($terminal['terminalLines'])->not->toBe([]);
 });
 
+it('refreshes both battle previews after an unsaved actor edit and history changes', function () {
+    $session = EditorSession::open(effectBattlePreviewProject());
+    $index = findEffectIndex($session, 'dusk-slash');
+    $casters = static function () use ($session, $index): array {
+        $casters = [];
+        foreach (EffectPresentation::cases() as $presentation) {
+            $casters[] = $session->readEffectBattlePreview($index, 0, presentation: $presentation)['caster'];
+            $casters[] = $session->readSummonBattlePreview(0, 0, presentation: $presentation)['caster'];
+        }
+
+        return $casters;
+    };
+
+    $before = $casters();
+    expect($before)->toBe(array_fill(0, 4, 'Kaelion'));
+    $row = array_find($session->readDatabaseRecord('actors', 0)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'name');
+    expect($session->applyDatabaseRecord('actors', 0, $row['key'], 'Travelling Actor')['changed'])->toBeTrue();
+    $edited = array_fill(0, 4, 'Travelling Actor');
+    expect($casters())->toBe($edited);
+    $session->undo();
+    expect($casters())->toBe($before);
+    $session->redo();
+    expect($casters())->toBe($edited);
+});
+
 it('round-trips graphical flight authoring through the shared rows and previews the negotiated heading', function (bool $curved, bool $timed) {
     $root = effectBattlePreviewProject();
     $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
@@ -239,6 +265,22 @@ it('previews the selected combat line from the troop formation in both presentat
         ->and(fn() => $session->readEffectBattlePreview($index, 0, targetIndex: 3))->toThrow(SessionRefusal::class, 'Choose a target')
         ->and($images)->toHaveCount(2)
         ->and($session->listUnsavedChanges())->toBe([]);
+
+    $shape = array_find($session->readDatabaseRecord('skills', 0)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'battleTargeting.shape');
+    foreach (EffectPresentation::cases() as $presentation) {
+        $session->readEffectBattlePreview($index, 0, presentation: $presentation, authoredFrame: 1);
+    }
+    expect($session->applyDatabaseRecord('skills', 0, $shape['key'], BattleTargetShape::BACK_ROW->value)['changed'])->toBeTrue();
+    foreach (EffectPresentation::cases() as $presentation) {
+        expect($session->readEffectBattlePreview($index, 0, presentation: $presentation, authoredFrame: 1)['targets'])
+            ->toBe(['Regular Bat']);
+    }
+    $session->undo();
+    foreach (EffectPresentation::cases() as $presentation) {
+        expect($session->readEffectBattlePreview($index, 0, presentation: $presentation, authoredFrame: 1)['targets'])
+            ->toBe(['Regular Bat', 'Regular Bat']);
+    }
 });
 
 
@@ -519,4 +561,36 @@ it('authors a graphical tether with the shared asset and pose pickers and reopen
     $preview = $reopened->readEffectBattlePreview(findEffectIndex($reopened, 'dusk-slash'), 0, imageRotation: true, authoredFrame: 0);
     expect($preview['diagnostics'])->toBe([])
         ->and(array_any($preview['canvas']['images'], static fn(array $image): bool => str_contains($image['id'], '-link-0')))->toBeTrue();
+});
+
+it('previews each distinct authored crisis technique through the battle test party without activating it', function () {
+    $root = effectBattlePreviewProject();
+    $actorPath = $root . '/assets/Data/Actors/Kaelion.php';
+    $actor = require $actorPath;
+    $actor['data']['crisisAbility'] = 'surge';
+    file_put_contents($actorPath, '<?php return ' . var_export($actor, true) . ';');
+    $abilities = $root . '/assets/Data/crisis-abilities.php';
+    $variants = [];
+    foreach (['first' => 'First strike', 'changed' => 'Second strike', 'later' => 'Second strike'] as $form => $skill) {
+        $variants[] = ['skill' => $skill, 'conditions' => [['type' => 'variable', 'name' => 'form', 'value' => $form]]];
+    }
+    file_put_contents($abilities, '<?php return ' . var_export([[
+        'id' => 'surge', 'name' => 'Surge', 'hpBelowPercent' => 10, 'variants' => $variants,
+    ]], true) . ';');
+    writeSkillRecords($root,
+        new \Ichiloto\Engine\Entities\Skills\SpecialSkill('First strike', '', '', 0, 0, animationId: 1),
+        new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Second strike', '', '', 0, 0, animationId: 1));
+    $before = file_get_contents($actorPath);
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $graphical = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, binding: 2);
+    $terminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL,
+        authoredFrame: 1, binding: 1);
+
+    expect(array_column($graphical['contexts'], 'action'))->toBe(['Attack', 'First strike', 'Second strike'])
+        ->and($graphical)->toMatchArray(['phase' => 'target', 'caster' => 'Kaelion', 'binding' => 2, 'diagnostics' => []])
+        ->and($graphical['canvas']['images'])->not->toBeEmpty()
+        ->and($terminal)->toMatchArray(['phase' => 'target', 'caster' => 'Kaelion', 'binding' => 1, 'diagnostics' => []])
+        ->and($terminal['terminalLines'])->not->toBeEmpty()
+        ->and(file_get_contents($actorPath))->toBe($before);
 });
