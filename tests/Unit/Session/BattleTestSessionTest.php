@@ -122,3 +122,56 @@ it('describes a draft the dialog is editing without writing it', function () {
         ->and($session->describeBattleTest()['source'])->toBe('starting party')
         ->and($session->listUnsavedChanges())->toBe([]);
 });
+
+it('keeps starting conditions and party items through the source-preserving save, and the validator names their problems', function () {
+    $root = battleTestProject();
+    file_put_contents($root . '/assets/Data/states.php', "<?php return [['id' => 'presence', 'name' => 'Presence']];");
+    \Ichiloto\Engine\Entities\States\StateRegistry::reset();
+    $session = EditorSession::open($root);
+    $entry = ['troop' => 'Pair', 'members' => [['actor' => 'Kaelion', 'level' => 3, 'hp' => ['percent' => 9], 'mp' => ['points' => 2],
+        'states' => ['presence']]], 'inventory' => []];
+
+    $test = $session->applyBattleTest($entry);
+    $session->saveDatabase('system');
+    expect($test['problems'])->toBe([])
+        ->and((require $root . '/assets/Data/system.php')[ProjectBattleTest::SYSTEM_KEY] ?? null)->toBe($entry);
+
+    $test = $session->applyBattleTest(['members' => [['actor' => 'Kaelion', 'level' => 3, 'hp' => ['percent' => 0], 'states' => ['frozen']]],
+        'inventory' => [['item' => 'item.missing', 'quantity' => 2]]]);
+    $session->saveDatabase('system');
+    $issues = implode(' ', array_map(static fn($issue): string => $issue->message,
+        new BattleTestValidator()->validate(ProjectWorkspace::fromProject($root))));
+    expect(implode(' ', $test['problems']))->toContain('the project has no state frozen', 'Every member starts knocked out',
+            'Items: the project has no item item.missing')
+        ->and($issues)->toContain('the project has no state frozen', 'Every member starts knocked out', 'Items: the project has no item item.missing')
+        ->and(fn() => $session->applyBattleTest(['members' => [['actor' => 'Kaelion', 'level' => 1, 'hp' => '9%']]]))
+        ->toThrow(SessionRefusal::class, 'percent or points');
+
+    // A form the member does not have is an unknown story value the validator names.
+    $session->applyBattleTest(['members' => [['actor' => 'Kaelion', 'level' => 3,
+        'world' => ['variables' => ['kaelion_curse_state' => 'werewolf']]]]]);
+    $session->saveDatabase('system');
+    $issues = implode(' ', array_map(static fn($issue): string => $issue->message,
+        new BattleTestValidator()->validate(ProjectWorkspace::fromProject($root))));
+    expect($issues)->toContain('Kaelion curse state: Werewolf is not one of its forms');
+    \Ichiloto\Engine\Entities\States\StateRegistry::reset();
+});
+
+it('validates saved test inventory with the default party and preserves explicitly empty stock', function () {
+    $root = battleTestProject();
+    $session = EditorSession::open($root);
+    $entry = ['troop' => 'Pair', 'inventory' => [['item' => 'item.missing', 'quantity' => 1]]];
+    $draft = $session->applyBattleTest($entry);
+    expect($draft['problems'])->toContain('Items: the project has no item item.missing.');
+
+    $session->saveDatabase('system');
+    $validate = static fn (): array => array_map(static fn ($issue): string => $issue->message,
+        new BattleTestValidator()->validate(ProjectWorkspace::fromProject($root)));
+    expect($validate())->toContain('Items: the project has no item item.missing.');
+
+    $entry['inventory'] = [];
+    $session->applyBattleTest($entry);
+    $session->saveDatabase('system');
+    expect(EditorSession::open($root)->describeBattleTest()['battleTest'])->toBe($entry)
+        ->and($validate())->toBe([]);
+})->skip(fn (): bool => !property_exists(ProjectBattleTest::class, 'inventory'), 'Requires the Engine Battle Test inventory contract.');

@@ -8,6 +8,7 @@ use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
+use Ichiloto\Engine\Exceptions\UnresolvedSaveReferenceException;
 use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Stores\ItemStore;
@@ -60,7 +61,7 @@ final class BattleTestValidator
                     'Choose one of its arenas, or none for its default.');
             }
         }
-        if ($test->setup === null) {
+        if ($test->setup === null && !isset($test->inventory)) {
             return $issues;
         }
 
@@ -71,11 +72,18 @@ final class BattleTestValidator
                 return [];
             }
             $skills = $workspace->loadSkillCatalog();
-            $problems = $test->setup->getProblems($workspace->actorDatabase->createActorStore($skills), $items,
-                $skills, new SummonCutsceneLibrary($workspace->projectRoot . '/assets/Cutscenes/Summons'));
+            $actors = $workspace->actorDatabase->createActorStore($skills);
+            $starting = $workspace->getSystemField('startingParty');
+            try {
+                $setup = $test->createSetup($actors, is_array($starting) ? array_values($starting) : []);
+                $problems = $setup->getProblems($actors, $items, $skills,
+                    new SummonCutsceneLibrary($workspace->projectRoot . '/assets/Cutscenes/Summons'));
+            } catch (InvalidArgumentException|UnresolvedSaveReferenceException $invalid) {
+                $problems = [$invalid->getMessage()];
+            }
 
             return array_map(static fn(string $problem): Issue => Issue::warning(self::WHERE, $problem,
-                'Fix the member in the Battle Test dialog; the battle test will not start until it can be set up.'), $problems);
+                'Fix the Battle Test setup; the battle test will not start until it can be set up.'), $problems);
         })];
     }
 }
