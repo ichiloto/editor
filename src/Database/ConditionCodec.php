@@ -79,6 +79,21 @@ final class ConditionCodec
             }
 
             $type = strval($condition['type'] ?? '');
+            if ($type === self::GROUP_TYPE) {
+                // A group carries only its members and negation; each member is judged as any condition is.
+                $extra = array_diff(array_keys($condition), ['type', 'conditions', 'negate']);
+                if ($extra !== []) {
+                    return sprintf('condition %d carries "%s", which the condition editor would drop', $index + 1, implode('", "', array_map(strval(...), $extra)));
+                }
+                $memberIssue = self::findCarryIssue($condition['conditions'] ?? null);
+                if ($memberIssue !== null) {
+                    return sprintf('condition %d (any of) has a member that cannot be carried: %s', $index + 1, $memberIssue);
+                }
+                if (self::decode(self::encode($condition)) === null) {
+                    return sprintf('condition %d holds a shape the condition editor cannot carry', $index + 1);
+                }
+                continue;
+            }
             if ($type === 'quest' && ! in_array($condition['status'] ?? 'completed', ['completed', 'active'], true)) {
                 return sprintf('condition %d has a quest status the condition editor would rewrite', $index + 1);
             }
@@ -104,6 +119,21 @@ final class ConditionCodec
     public static function types(): array
     {
         return WorldConditionType::values();
+    }
+
+    /** The Engine's any-of group: `[!]any(member; member)`, its members written as any condition line is. */
+    public const string GROUP_TYPE = 'any';
+
+    /**
+     * The types a single condition takes: every Engine type but the group,
+     * which holds conditions rather than naming something. An editor that
+     * builds one condition at a time offers these.
+     *
+     * @return list<string>
+     */
+    public static function getLeafTypes(): array
+    {
+        return array_values(array_filter(self::types(), static fn(string $type): bool => $type !== self::GROUP_TYPE));
     }
 
     /**
@@ -132,6 +162,12 @@ final class ConditionCodec
     public static function encode(array $condition): string
     {
         $type = strval($condition['type'] ?? '');
+        $negate = ($condition['negate'] ?? false) === true ? '!' : '';
+        if ($type === self::GROUP_TYPE) {
+            $members = is_array($condition['conditions'] ?? null) ? $condition['conditions'] : [];
+
+            return sprintf('%s%s(%s)', $negate, self::GROUP_TYPE, self::encodeAll($members));
+        }
         $parts = [$type, strval($condition['name'] ?? '')];
 
         switch ($type) {
@@ -167,8 +203,6 @@ final class ConditionCodec
                 $parts[] = strval($condition['marker'] ?? '');
                 break;
         }
-
-        $negate = ($condition['negate'] ?? false) === true ? '!' : '';
 
         return $negate . WorldStateLine::joinParts($parts);
     }
@@ -253,6 +287,9 @@ final class ConditionCodec
         if ($negate) {
             $segment = ltrim(substr($segment, 1));
         }
+        if (preg_match('/^' . self::GROUP_TYPE . '\s*\((.*)\)$/is', $segment, $group) === 1) {
+            return self::parseGroup($group[1], $negate);
+        }
         try {
             $parts = WorldStateLine::splitParts($segment);
         } catch (InvalidArgumentException $error) {
@@ -261,8 +298,11 @@ final class ConditionCodec
         $type = strtolower($parts[0]);
         $name = $parts[1] ?? '';
 
-        if (! in_array($type, self::types(), true)) {
-            return sprintf('write [!]type:name[:extras] with a type of %s.', implode(', ', self::types()));
+        if ($type === self::GROUP_TYPE) {
+            return 'an any-of group is written any(condition; condition), its members inside the parentheses.';
+        }
+        if (! in_array($type, self::getLeafTypes(), true)) {
+            return sprintf('write [!]type:name[:extras] with a type of %s, or any(condition; condition) for a group.', implode(', ', self::getLeafTypes()));
         }
         if ($name === '') {
             return sprintf('the %s condition needs a name.', $type);
@@ -368,5 +408,41 @@ final class ConditionCodec
         }
 
         return $condition;
+    }
+
+    /**
+     * Reads the members inside `any(...)` exactly as written, each as a whole
+     * condition entry, then lets the Engine judge the group's size and depth.
+     *
+     * @return array<string, mixed>|string The group, or why it cannot be read.
+     */
+    private static function parseGroup(string $inside, bool $negate): array|string
+    {
+        $members = [];
+        foreach (WorldStateLine::splitEntries($inside) as $number => $segment) {
+            if (trim($segment) === '') {
+                continue;
+            }
+            $member = self::parse($segment);
+            if (is_string($member)) {
+                return sprintf('member %d of the any-of group: %s', $number + 1, $member);
+            }
+            $members[] = $member;
+        }
+        if ($members === []) {
+            return 'an any-of group needs at least one condition inside any(...).';
+        }
+
+        $group = ['type' => self::GROUP_TYPE, 'conditions' => $members];
+        if ($negate) {
+            $group['negate'] = true;
+        }
+        try {
+            WorldConditionEvaluator::validateAll([$group], 'condition');
+        } catch (InvalidArgumentException $refusal) {
+            return sprintf('the Engine refuses it: %s', $refusal->getMessage());
+        }
+
+        return $group;
     }
 }

@@ -56,7 +56,7 @@ it('builds both conditions a part at a time, as the grammar describes them', fun
     $editor = new ConditionEditor();
     $editor->open('conditions', 'Conditions', []);
     $editor->add();
-    $types = ConditionCodec::types();
+    $types = ConditionCodec::getLeafTypes();
     $editor->cycleType(array_search('present_party_size', $types, true) - array_search('switch', $types, true));
     expect($editor->encoded())->toBe('present_party_size:party:1');
     foreach (range(1, 3) as $step) { $editor->cycleExtra(1); }

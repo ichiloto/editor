@@ -105,7 +105,13 @@ final class ConditionEditor
             'nameCategory' => self::NAMES[$type][1] ?? null,
             'negatable' => true,
             'extras' => $extras[$type] ?? [],
-        ], ConditionCodec::types());
+        ], ConditionCodec::getLeafTypes());
+    }
+
+    /** Whether a condition is the Engine's any-of group rather than one named condition. */
+    public static function isGroup(array $condition): bool
+    {
+        return strval($condition['type'] ?? '') === ConditionCodec::GROUP_TYPE;
     }
     private bool $isOpen = false;
     private string $fieldId = '';
@@ -278,11 +284,12 @@ final class ConditionEditor
     {
         $condition = $this->selected();
 
-        if ($condition === null) {
+        // A group's members are edited in its line; cycling it to one condition would drop them.
+        if ($condition === null || self::isGroup($condition)) {
             return;
         }
 
-        $types = ConditionCodec::types();
+        $types = ConditionCodec::getLeafTypes();
         $index = array_search(strval($condition['type'] ?? ''), $types, true);
         $index = is_int($index) ? $index : 0;
         $type = $types[(($index + $step) % count($types) + count($types)) % count($types)];
@@ -363,7 +370,7 @@ final class ConditionEditor
     {
         $condition = $this->selected();
 
-        if ($condition === null) {
+        if ($condition === null || self::isGroup($condition)) {
             return;
         }
 
@@ -445,6 +452,11 @@ final class ConditionEditor
      */
     public static function describe(array $condition): string
     {
+        if (self::isGroup($condition)) {
+            $members = array_map(self::describe(...), array_values(array_filter((array) ($condition['conditions'] ?? []), is_array(...))));
+
+            return sprintf('%sANY OF (%s)', ($condition['negate'] ?? false) === true ? 'NOT ' : '', implode('; ', $members));
+        }
         $type = strval($condition['type'] ?? '');
         $name = strval($condition['name'] ?? '');
         $name = $name === '' ? '(unnamed)' : $name;
