@@ -9,6 +9,12 @@
 
 ### Added
 
+- State badge icon roles (Engine 78cab3e): Menu Theme offers `status.state.<id>` and `status.state.<id>.pending`
+  for every state, from the Engine's `BattlerConditions::listStateIconRoles`, beside the roles the theme binds and
+  the atlas marker roles, so a theme can bind a badge image for a state it does not bind yet. States added on the
+  States page are offered before they are saved. An unbound badge shows `(state icon or label)`, and choosing it
+  removes the binding. These roles join the icon roles a world power or Super Move technique may name.
+
 - Cinematic field planes (Engine aa0e5b8): `field_animation` commands, `stage_actor` commands (inline or wrapped in
   `actor`) and staged cast members author **Draw Plane** (`plane`), offered from the Engine schema's `fieldPlane`
   export (`field`, the default, or `aboveCover`), in both editors, through the existing rows, saves and undo.

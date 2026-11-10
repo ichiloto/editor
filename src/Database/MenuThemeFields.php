@@ -12,7 +12,7 @@ use Ichiloto\Engine\UI\Presentation\MapAtlasTheme;
  * Menu Theme: the settings of the game's shared menu presentation catalog, one row per setting by its path, as
  * Configuration edits config.php. It offers the minimap atlas (the compact and larger corner sizes, their margin,
  * the marker size, the frame the atlas is drawn in and the corner map's opacity) and the icon bindings, among them a marker per atlas role
- * and place category. These are graphical presentation, so the category is the graphical editor's; the Terminal's
+ * and place category and a badge per state and pending state. These are graphical presentation, so the category is the graphical editor's; the Terminal's
  * maps keep their own symbols.
  * MenuPresentationSettings owns the file, its defaults and the values the Engine accepts.
  */
@@ -57,7 +57,7 @@ final class MenuThemeFields
             match (true) {
                 // An icon is a project image chosen with the shared picker; none leaves the Engine's own treatment.
                 MenuPresentationSettings::isIcon($path) => RecordField::reference('value', 'Image', 'png_assets', allowsNone: true,
-                    noneLabel: array_key_exists('default', $row) ? '(Engine pictogram)' : '(none)'),
+                    noneLabel: is_string($row['unbound'] ?? null) ? $row['unbound'] : '(none)'),
                 ($row['path'] ?? null) === MenuPresentationSettings::ATLAS . '.frameRole'
                     => new RecordField('value', 'Value', options: MapAtlasTheme::FRAME_ROLES, displayDefault: $default),
                 is_int($kind) => new RecordField('value', self::describeRange((string) ($row['path'] ?? '')),

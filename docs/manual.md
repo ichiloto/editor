@@ -1746,7 +1746,7 @@ skill's effects, a quest's rewards) listed under them.
 | Battle Arenas | `assets/Data/Presentation/arenas.php` (`arenas`) | Not shown: graphical battle presentation | One record per arena, keyed by its stable id (set when it is created): name, background image and optional crop, and the ground its picture shows: far edge (`Ground Far Edge`, just below the horizon or walkable edge), near edge and far-edge scale, each defaulting to the battle theme's. Every troop's formation stands on the chosen arena's ground. `Terrain Variants` name the arena drawn for each encounter terrain a random battle on this arena starts on (`variants`, terrain => arena), the arena itself when its picture already shows that terrain |
 | Default Battle Arena | `assets/Data/Presentation/arenas.php` (`default`) | Not shown | The arena a battle that names none is fought on |
 | Text Roles | `assets/Data/Presentation/text.php` (`roles`) | Not shown: graphical text | One record per text role: the project's fonts, first choice first, a size and a colour |
-| Menu Theme | `assets/Data/Presentation/menus.php` (`atlas`, `icons`) | Not shown: graphical presentation | One row per setting: the minimap atlas's corner sizes, margin, marker size and frame, and an image per icon role |
+| Menu Theme | `assets/Data/Presentation/menus.php` (`atlas`, `icons`) | Not shown: graphical presentation | One row per setting: the minimap atlas's corner sizes, margin, marker size and frame, and an image per icon role, atlas markers and state badges included |
 | Actor Battle Art, Enemy Battle Art, Battle Scale | `assets/Data/Presentation/battlers.php` | Not shown: graphical battle art | Editable from the actor's or enemy's own page (see Battle Art) |
 
 Player Field Appearance edits only `graphicalSubject` and `sprites2d`, preserving
@@ -1776,7 +1776,12 @@ bound: `map.player`, each landmark kind, and `map.category.<id>` for each place
 category, the project's own included as soon as its Place Categories record
 exists. Each is a project image chosen with the shared picker; `(Engine
 pictogram)` leaves the Engine's generic marker, and choosing it for a bound
-role removes the binding. An image the Engine cannot draw is refused. The
+role removes the binding. Every state also offers its battle badge roles, as
+the Engine lists them: `status.state.<id>` and `status.state.<id>.pending` for
+the badge of a pending state, each state's own included as soon as its States
+record has an id. `(state icon or label)` leaves the badge the Engine draws
+from the state itself, and choosing it for a bound role removes the binding.
+An image the Engine cannot draw is refused. The
 Terminal's maps keep their own symbols, so the Terminal editor does not list
 this category.
 

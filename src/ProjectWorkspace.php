@@ -86,6 +86,8 @@ final readonly class ProjectWorkspace
         $this->getRecordDatabase(WorldAbilityFields::CATEGORY)?->useDeletionReferences($worldAbilityUses);
         // Marker roles follow the place categories as their page holds them, unsaved edits included.
         $this->menuPresentation?->useCategoryCatalog(fn(): \Ichiloto\Engine\Field\MapCategoryCatalog => new ReferenceCatalog($this)->getMapCategoryCatalog());
+        // State badge roles follow the states as their page holds them, unsaved edits included.
+        $this->menuPresentation?->useStateIds(fn(): array => array_values(array_map(strval(...), new ReferenceCatalog($this)->valuesFor('states'))));
         // A place category stays while a landmark names it.
         $this->getRecordDatabase(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY)?->useDeletionReferences(
             fn(string $category): array => \Ichiloto\Editor\Field\MapLandmarks::describeCategoryReferences($this->maps, $category),

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor;
 
 use Closure;
+use Ichiloto\Engine\Battle\Presentation\BattlerConditions;
 use Ichiloto\Engine\Field\MapCategoryCatalog;
 use Ichiloto\Engine\Rendering\Sprites\PngAssetPreflight;
 use Ichiloto\Engine\UI\Presentation\MapAtlasPresentation;
@@ -15,8 +16,9 @@ use Ichiloto\Engine\UI\Presentation\MenuPresentationCatalog;
 /**
  * One source owner for the game's menu presentation catalog, the shared theme every menu and HUD draws with
  * (Engine MenuPresentationCatalog). Its settings are edited by path like config.php's. It offers the minimap atlas
- * and the icon bindings: every role the catalogue binds, and every atlas marker role the Engine draws (the player,
- * each landmark kind, each place category, the project's own included), each an image or none. The palette, frames
+ * and the icon bindings: every role the catalogue binds, every atlas marker role the Engine draws (the player,
+ * each landmark kind, each place category, the project's own included), and every state badge role (each project
+ * state's own and its pending badge's), each an image or none. The palette, frames
  * and other groups join it as the Engine exposes their rules. Defaults and the values the Engine accepts are the
  * Engine's own, read from its theme types, never restated here.
  */
@@ -29,8 +31,15 @@ final class MenuPresentationSettings extends ProjectSettingsFile
     /** Icon bindings by semantic role, whose keys hold dots of their own (map.category.bsa). */
     public const string ICONS = 'icons';
 
+    /** What an atlas marker the theme leaves unbound shows. */
+    private const string UNBOUND_MARKER = '(Engine pictogram)';
+    /** What a state badge the theme leaves unbound shows ({@see BattlerConditions::listStateIconRoles()}). */
+    private const string UNBOUND_STATE = '(state icon or label)';
+
     /** @var (Closure(): MapCategoryCatalog)|null The project's place categories, unsaved edits included. */
     private ?Closure $categories = null;
+    /** @var (Closure(): list<string>)|null The project's state ids, unsaved edits included. */
+    private ?Closure $stateIds = null;
 
     public function __construct(string $projectRoot)
     {
@@ -49,8 +58,21 @@ final class MenuPresentationSettings extends ProjectSettingsFile
     }
 
     /**
-     * Every atlas setting with the default the Engine's MapAtlasTheme reads when the catalog leaves it out, and every
-     * atlas marker role, which shows the Engine's own pictogram until the theme binds an image.
+     * Reads the project's state ids as its States page holds them, so their badge roles are offered before they are
+     * saved. The workspace supplies them; the theme file itself names no states.
+     *
+     * @param Closure(): list<string> $stateIds
+     */
+    public function useStateIds(Closure $stateIds): void
+    {
+        $this->stateIds = $stateIds;
+    }
+
+    /**
+     * Every atlas setting with the default the Engine's MapAtlasTheme reads when the catalog leaves it out, every
+     * atlas marker role, which shows the Engine's own pictogram until the theme binds an image, and every state
+     * badge role the Engine draws, which shows the state's icon or label until the theme binds one. Each icon role
+     * carries what it shows while unbound.
      */
     protected function listEngineSettings(): array
     {
@@ -59,7 +81,10 @@ final class MenuPresentationSettings extends ProjectSettingsFile
             $settings[self::ATLAS . '.' . $key] = ['default' => $default];
         }
         foreach ($this->listMarkerRoles() as $role) {
-            $settings[self::ICONS . '.' . $role] = ['default' => null];
+            $settings[self::ICONS . '.' . $role] = ['default' => null, 'unbound' => self::UNBOUND_MARKER];
+        }
+        foreach (BattlerConditions::listStateIconRoles($this->stateIds === null ? [] : ($this->stateIds)()) as $role) {
+            $settings[self::ICONS . '.' . $role] = ['default' => null, 'unbound' => self::UNBOUND_STATE];
         }
 
         return $settings;
@@ -85,7 +110,8 @@ final class MenuPresentationSettings extends ProjectSettingsFile
 
     /**
      * The semantic icon roles the theme offers, as this file holds them, unsaved edits included: every role it
-     * binds and every atlas marker role the Engine draws. A world power or Super Move technique names one of these.
+     * binds, every atlas marker role the Engine draws and every state badge role. A world power or Super Move
+     * technique names one of these.
      *
      * @return list<string>
      */
