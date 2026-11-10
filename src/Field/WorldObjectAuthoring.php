@@ -255,8 +255,8 @@ final readonly class WorldObjectAuthoring
             },
             subLists: [$variants, $cells, $tiles],
             // Any placement, inline or of a resource, may present map-owned tiles on the cells it owns.
-            subListsFor: static fn(array $entry): array => [...(array_key_exists('resource', $entry) ? [] : ['variants']),
-                ...(isset($entry['covers']) ? ['covers.cells'] : []), WorldObjectTileFields::DATA_KEY],
+            subListsFor: static fn(array $entry): array => [...(array_key_exists('resource', $entry) ? [] : [$variants->prefix]),
+                ...(isset($entry['covers']) ? [$cells->prefix] : []), $tiles->prefix],
             prepareEdit: function (array $entry, string $field) use ($signs): array {
                 if ($field === 'resource') {
                     // A sign placement needs its label and only a sign accepts one; the board's name starts it.
