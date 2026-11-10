@@ -75,7 +75,7 @@ it('authors flash-step timing through the animation record and preserves its sou
     $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('animations');
     $database->setField(0, 'movement', 'flash-step');
     $timing = ['fps' => 24, 'guardFrames' => 20, 'advanceFrames' => 3, 'holdFrames' => 10,
-        'returnFrames' => 3, 'settleFrames' => 7, 'echoes' => 0, 'overlapEffectTail' => true];
+        'returnFrames' => 3, 'settleFrames' => 7, 'echoes' => 0, 'overlapEffectTail' => true, 'placeTransitOnPoseKeys' => true];
     foreach ($timing as $field => $value) {
         $database->setField(0, 'flashStep.' . $field, $value === true ? 'true' : (string) $value);
     }

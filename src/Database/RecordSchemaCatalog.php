@@ -335,6 +335,8 @@ final class RecordSchemaCatalog
             new RecordField('flashStep.echoes', 'Transit Echoes', InputControlType::INTEGER),
             new RecordField('flashStep.overlapEffectTail', 'Effects Continue During Return',
                 InputControlType::BOOLEAN, removeWhenEmpty: true),
+            new RecordField('flashStep.placeTransitOnPoseKeys', 'Hold Position for Each Transit Pose',
+                InputControlType::BOOLEAN, removeWhenEmpty: true),
         ];
         $legacy = [
             new RecordField('position', 'Legacy Position',
