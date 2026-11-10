@@ -5236,6 +5236,20 @@ class ProjectValidator
         continue;
       }
 
+      // An any-of group holds conditions rather than naming one: the Engine judges its shape,
+      // and each member is checked here as any condition in this list would be.
+      if ($type === WorldConditionType::ANY->value) {
+        try {
+          \Ichiloto\Engine\Core\WorldConditionEvaluator::validateAll([$condition], 'condition');
+        } catch (\InvalidArgumentException $refusal) {
+          $issues[] = Issue::error($where, sprintf('It has a malformed any-of condition group: %s', $refusal->getMessage()),
+            'Write the group as any(condition; condition) with one to the Engine\'s limit of members.');
+          continue;
+        }
+        array_push($issues, ...$this->checkConditions((array) $condition['conditions'], $where, $known, $questPrerequisites));
+        continue;
+      }
+
       $nameValue = $condition['name'] ?? null;
 
       if (! is_string($nameValue)) {

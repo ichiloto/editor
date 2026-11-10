@@ -1187,3 +1187,33 @@ it('reads keys in long array syntax as nested, as var_export writes them, and st
     file_put_contents($path, str_replace("'region' =>", "'name' => array ( 0 => 'Shadowed' ),\n  'region' =>", (string) file_get_contents($path)));
     expect(array_map(static fn(Issue $issue): string => $issue->message, $duplicates()))->toBe(['"name" is declared 2 times (lines 4, 5).']);
 });
+
+it('checks an any-of group by its members, not as one named condition', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/Skits/group-banter.php', <<<'PHP'
+    <?php
+
+    return [
+      'id' => 'group-banter',
+      'title' => 'Group Banter',
+      'where' => 'test-map',
+      'conditions' => [
+        ['type' => 'any', 'conditions' => [
+          ['type' => 'switch', 'name' => 'kitchen_visited', 'negate' => true],
+          ['type' => 'quest', 'name' => 'no-such-grouped-quest', 'status' => 'active'],
+        ]],
+        ['type' => 'any', 'conditions' => []],
+      ],
+      'beats' => [
+        ['speaker' => 'Liora', 'text' => 'Either way works.'],
+      ],
+    ];
+    PHP);
+
+    $issues = validateProject($root);
+
+    // A group is never a nameless condition; its members are judged as any condition is.
+    expect(issuesMentioning($issues, 'malformed condition name'))->toBe([])
+        ->and(issuesMentioning($issues, 'no-such-grouped-quest'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'malformed any-of condition group'))->toHaveCount(1);
+});
