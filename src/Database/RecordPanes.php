@@ -281,6 +281,15 @@ final class RecordPanes
             $parts[] = sprintf('±%d%%', (int) round(floatval($effect['variance']) * 100));
         }
 
+        if (isset($effect['trigger'])) {
+            $parts[] = sprintf('applies: %s', strval($effect['trigger']));
+        }
+
+        if (isset($effect['delayTurns'])) {
+            $turns = intval($effect['delayTurns']);
+            $parts[] = sprintf('pending %d %s', $turns, $turns === 1 ? 'turn' : 'turns');
+        }
+
         return sprintf('%s: %s', ucfirst(str_replace('_', ' ', strval($effect['type'] ?? 'effect'))), implode(' · ', $parts));
     }
 

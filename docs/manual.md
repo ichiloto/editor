@@ -1980,7 +1980,14 @@ each a type with that type's own values (a formula with its element and
 variance for damage and recovery, a state for adding one, the states to
 remove, a stat and its stages, or what a reveal uncovers about a foe and
 its chance). A reveal's facts are picked from the Engine's own list: `hp`,
-`mp`, `stats` and `affinities` (the element that strikes the foe hardest). Changing an effect's type, or a skill's
+`mp`, `stats` and `affinities` (the element that strikes the foe hardest). An
+`add_state` effect also offers **Applies** (`trigger`), chosen from the Engine's
+own values: `always`, the default, or `landedHit`, which applies the state only
+to a surviving target the action's damage hit; place it after the damaging
+effect. **Pending Turns** (`delayTurns`) keeps the state pending for that many
+of the bearer's turns before it takes effect for its whole duration; the Engine
+refuses a delay on a skill that can be used outside battle, and the save is
+refused before anything is written. Changing an effect's type, or a skill's
 kind, drops the values only the old one read. Files are numbered
 (`0001-attack.php`) because menus list skills in file order; a new or copied
 skill takes the next number and goes last. `skills.php` is the barrel that
@@ -2103,9 +2110,11 @@ Status effects, read by the engine's `StateRegistry`.
 Fields: `Id`, `Name`, `Icon`, `Description`, `Duration Turns`, `Tick Formula`,
 `Prevents Action`, `Persists After Battle`, `Disposition` (`harmful`, the
 default, `beneficial` or `neutral`: whether it harms or enhances its bearer,
-which battle poses follow), and `Confusion Chance %` (0 to 100: the chance
+which battle poses follow), `Confusion Chance %` (0 to 100: the chance
 each turn that the bearer attacks a random battler of either side instead of
-acting as it chose).
+acting as it chose), and `Physical Damage Dealt Rate` (`physicalDamageDealtRate`:
+a non-negative multiplier on the physical damage the bearer deals while the
+state is active; `0.8` deals 80%, and leaving it out keeps damage unchanged).
 
 `Id` is the only field the engine requires. Optional fields disappear from the
 file when you clear them, so a state with no duration lasts until it is cured

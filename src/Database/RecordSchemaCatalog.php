@@ -66,6 +66,7 @@ use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Entities\Skills\SkillDraft;
 use Ichiloto\Engine\Entities\Skills\SkillRecord;
 use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
+use Ichiloto\Engine\Entities\Skills\SkillSecondaryTrigger;
 use Ichiloto\Engine\Field\MapAtlasTerrain;
 use Ichiloto\Engine\Rendering\Tilesets\TerrainKind;
 use Ichiloto\Engine\Rendering\Tilesets\TerrainPassage;
@@ -253,6 +254,9 @@ final class RecordSchemaCatalog
                 new RecordField('atbRate', 'ATB Fill Rate', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
                 new RecordField('accuracyModifier', 'Accuracy Modifier (Points)', InputControlType::INTEGER,
                     removeWhenEmpty: true, displayDefault: '0 (unchanged)'),
+                // Scales the physical damage the bearer deals while active (0.8 deals 80%).
+                new RecordField('physicalDamageDealtRate', 'Physical Damage Dealt Rate', InputControlType::FLOAT,
+                    removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
                 // Cover: the bearer takes the single-target hits meant for its weakest ally.
                 RecordField::boolean('coversAllies', 'Covers Allies'),
                 // Confusion: the chance each turn that the bearer attacks a random battler of either side instead.
@@ -1707,6 +1711,11 @@ final class RecordSchemaCatalog
             RecordField::reference('stateId', 'State', 'states'),
             new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
             new RecordField('guaranteed', 'Guaranteed', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
+            // When the state is rolled: always, or only on a surviving target the action's earlier damage hit.
+            new RecordField('trigger', 'Applies', options: array_map(static fn(SkillSecondaryTrigger $trigger): string => $trigger->value,
+                SkillSecondaryTrigger::cases()), removeWhenEmpty: true, displayDefault: SkillSecondaryTrigger::ALWAYS->value),
+            // Battle only: the bearer's turns the state stays pending before it takes effect for its whole duration.
+            new RecordField('delayTurns', 'Pending Turns', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0 (at once)'),
         ];
         $variants['prepare_counter'] = [
             RecordField::reference('skill', 'Response Skill', 'counter_skills'),

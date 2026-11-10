@@ -9,6 +9,13 @@
 
 ### Added
 
+- Landed-hit and pending state effects (Engine dc8ffe7, 9911a88): a skill's `add_state` effect authors **Applies**
+  (`trigger`), offered from the Engine's `SkillSecondaryTrigger` values, and **Pending Turns** (`delayTurns`), and a
+  state authors **Physical Damage Dealt Rate** (`physicalDamageDealtRate`), through the existing rows, saves and undo.
+  Each drops out of the record when cleared. The Engine's record readers refuse a delay on a skill usable outside
+  battle, a negative delay and a negative rate before anything is written. The Effects pane shows the trigger and
+  delay.
+
 - Straight flight fallback and arena impact (Engine 71c5714, 6a48757): a caster flight's **Straight Flight Fallback**
   (`flight.fallback`, the Engine's `horizontal-exit`) is authored beside its contact mode, and an effect sequence's
   **Impact Timing** and a summon's **Effect Timing** offer `arena`, through the existing rows, saves and undo; the
