@@ -17,11 +17,15 @@ Runtime membership and persistence are owned by Engine Party, rather than a
 second Editor state. Native editor consumers have not been launched for this
 change; headless authoring and source round trips are the validation surface.
 
-## Crisis technique authoring — in progress, 29 October 2026
+## Super Move authoring, in progress since 29 October 2026 (renamed 10 November 2026)
 
-The shared Crisis Abilities database category authors activation thresholds,
-state references and guarded skill variants. Actor pages select a crisis resource
-through the existing reference picker. Save validation uses Engine's definition
+The shared Super Moves database category authors activation thresholds,
+state references and guarded skill variants. Actor pages select a Super Move
+through the existing reference picker. The Editor writes the Engine's canonical
+`super-moves.php` and actor `superMove` key, reads the earlier
+`crisis-abilities.php` and `crisisAbility` read-only, and moves a project to
+the canonical shape with Migrate to Super Moves in one transaction and one undo
+step. Validation reports two catalogues and disagreeing actor keys. Save validation uses Engine's definition
 contract; incomplete activation is refused before writing. State pickers now
 store stable state IDs and show display names beside them, removing the previous
 display-name storage behavior. Headless round trips cover these surfaces. Full

@@ -351,7 +351,7 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        return sprintf('%s entry %d', $this->schema->relativePath, $positions[$index] + 1);
+        return sprintf('%s entry %d', $this->getLoadedRelativePath(), $positions[$index] + 1);
     }
 
     /**
@@ -1992,7 +1992,8 @@ final class ProjectRecordDatabase
             $path,
             $records,
             $file,
-            readOnlyReason: self::resolveReadOnlyReason($schema, $file, $records),
+            readOnlyReason: ($projectRoot === null ? null : $schema->findLocationReadOnlyReason($projectRoot))
+                ?? self::resolveReadOnlyReason($schema, $file, $records),
             projectRoot: $projectRoot,
         );
     }
@@ -5196,13 +5197,22 @@ final class ProjectRecordDatabase
      */
     private function resolveProjectRoot(): ?string
     {
-        $suffix = DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $this->schema->relativePath);
+        $suffix = DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $this->getLoadedRelativePath());
 
         if (str_ends_with($this->path, $suffix)) {
             return substr($this->path, 0, -strlen($suffix));
         }
 
         return null;
+    }
+
+    /** The project-relative file this category was read from: its current file, or the legacy one it still uses. */
+    private function getLoadedRelativePath(): string
+    {
+        $legacy = $this->schema->legacyRelativePath;
+
+        return $legacy !== null && str_ends_with($this->path, DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $legacy))
+            ? $legacy : $this->schema->relativePath;
     }
 
     /**

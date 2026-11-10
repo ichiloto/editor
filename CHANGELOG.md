@@ -9,6 +9,17 @@
 
 ### Added
 
+- Super Moves (Engine 01a0883): Database > Super Moves and the actor page's **Super Move** picker write the Engine's
+  canonical `assets/Data/super-moves.php` and actor `superMove` key. A project still keeping the earlier
+  `crisis-abilities.php` shows its records read-only, and its actors' `crisisAbility` keys read through the Engine's
+  own rule. **Migrate to Super Moves** (command palette, or `superMoves.migrate` through the editor session) asks,
+  then moves the catalogue byte for byte and renames every actor key in place in one transaction and one undo step,
+  and refuses without writing when the project holds both catalogues, the game cannot read the catalogue or an
+  actor's reference, or an actor's data is built in code. Validation reports both catalogues and disagreeing actor
+  keys. A file set can now remove a file reversibly, and a Database category can declare an earlier file it is read
+  from until a project migrates. The Database category and reference keys `crisis_abilities` and `crisis_skills` are
+  renamed `super_moves` and `super_move_skills`.
+
 - Project validation reports a staged actor the Engine's stage would refuse (`CinematicStageManager::validateBinding`)
   at the owning script, in Common Events and map scripts, for the flat command and the wrapped `actor` form, through
   nested sequences. The Engine owns the rule; the source stays as authored.

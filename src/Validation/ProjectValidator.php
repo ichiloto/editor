@@ -23,6 +23,7 @@ use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Maps\MapDoors;
 use Ichiloto\Engine\Field\MapDoorReference;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
+use Ichiloto\Editor\Database\SuperMoveFields;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\ScriptReferenceScope;
 use Ichiloto\Editor\Events\ScriptReferenceSource;
@@ -168,6 +169,10 @@ class ProjectValidator
 
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
   protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
+  /** A project holding both the current and the earlier Super Move catalogue. */
+  public const string SUPER_MOVE_CATALOGUES_AMBIGUOUS = 'super_move.catalogues.ambiguous';
+  /** An actor whose current and earlier Super Move keys name different Super Moves. */
+  public const string ACTOR_SUPER_MOVE_KEYS_DISAGREE = 'actor.super_move.keys_disagree';
 
   /**
    * Checks a whole project.
@@ -208,7 +213,7 @@ class ProjectValidator
       ...$this->checkTroops($workspace),
       ...$this->checkBattleEntryRules($workspace),
       ...$this->checkSkillCatalog($workspace),
-      ...$this->checkCrisisAbilities($workspace),
+      ...$this->checkSuperMoves($workspace),
       ...$this->checkTutorialFollowOns($workspace),
       ...$this->checkItemCatalog($workspace),
       ...$this->checkSummons($workspace),
@@ -336,7 +341,7 @@ class ProjectValidator
 
     // What an actor's Attack command may use, by the rule its picker offers.
     $attackSkills = new ReferenceCatalog($workspace)->valuesFor('attack_skills');
-    $crisisAbilities = new ReferenceCatalog($workspace)->valuesFor('crisis_abilities');
+    $superMoves = new ReferenceCatalog($workspace)->valuesFor(SuperMoveFields::CATEGORY);
 
     foreach ($workspace->actorDatabase->getActors() as $actor) {
       $where = sprintf('actor %s', $actor->getName());
@@ -375,11 +380,7 @@ class ProjectValidator
       }
 
       $variants = $actor->getNaturalVariants();
-      $crisis = $actor->getData()['crisisAbility'] ?? null;
-      if ($crisis !== null && (!is_string($crisis) || !in_array($crisis, $crisisAbilities, true))) {
-        $issues[] = Issue::error($where, 'Its crisis ability reference does not resolve.',
-          'Choose a current crisis ability on the actor page.');
-      }
+      $issues = [...$issues, ...$this->checkActorSuperMove($actor, $where, $superMoves)];
       $default = $actor->getDefaultNaturalVariantId();
 
       if ($variants !== [] && ($default === null || ! isset($variants[$default]))) {
@@ -1492,7 +1493,6 @@ class ProjectValidator
     );
   }
 
-  /** Validates current crisis resources against the same skill and state identities runtime consumes. */
   /**
    * One concept per tutorial, started when it comes into play: a tutorial's follow-on cinematic carries the story
    * on, so one that starts another tutorial chains lessons back to back and is warned of.
@@ -1526,11 +1526,26 @@ class ProjectValidator
     return $issues;
   }
 
-  private function checkCrisisAbilities(ProjectWorkspace $workspace): array
+  /**
+   * Validates the project's Super Moves against the same skill and state identities the runtime consumes, and
+   * reports a project that holds both the current and the earlier catalogue, which the Engine refuses.
+   *
+   * @return Issue[]
+   */
+  private function checkSuperMoves(ProjectWorkspace $workspace): array
   {
+    $issues = [];
+    if (is_file($workspace->projectRoot . '/' . SuperMoveFields::CATALOGUE)
+      && is_file($workspace->projectRoot . '/' . SuperMoveFields::LEGACY_CATALOGUE)) {
+      $issues[] = Issue::error(SuperMoveFields::CATALOGUE,
+        sprintf('Both %s and %s declare Super Moves. The game refuses a project with both.',
+          SuperMoveFields::CATALOGUE, SuperMoveFields::LEGACY_CATALOGUE),
+        sprintf('Keep one of them. %s is the file the Editor writes.', SuperMoveFields::CATALOGUE),
+        self::SUPER_MOVE_CATALOGUES_AMBIGUOUS);
+    }
+    $database = $workspace->getRecordDatabase(SuperMoveFields::CATEGORY);
     try {
-      $entries = array_map(static fn($record): array => (array) $record->toArray(),
-        $workspace->getRecordDatabase('crisis_abilities')?->getRecords() ?? []);
+      $entries = array_map(static fn($record): array => (array) $record->toArray(), $database?->getRecords() ?? []);
       $catalog = new \Ichiloto\Engine\Battle\CrisisAbilityCatalog($entries);
       $catalog->validateVariantConditions();
       $states = new ReferenceCatalog($workspace)->valuesFor('states');
@@ -1538,15 +1553,55 @@ class ProjectValidator
         $ability->validateSkills($workspace->loadSkillCatalog());
         foreach ($ability->states as $state) {
           if (!in_array($state, $states, true)) {
-            throw new InvalidArgumentException(sprintf('Crisis "%s" references unknown activation state "%s".', $id, $state));
+            throw new InvalidArgumentException(sprintf('Super Move "%s" references unknown activation state "%s".', $id, $state));
           }
         }
       }
-      return [];
     } catch (InvalidArgumentException $error) {
-      return [Issue::error('assets/Data/crisis-abilities.php', $error->getMessage(),
-        'Correct the activation, variant conditions or resource references in Crisis Abilities.')];
+      $issues[] = Issue::error($database?->schema->resolveRelativePath($workspace->projectRoot) ?? SuperMoveFields::CATALOGUE,
+        $error->getMessage(), 'Correct the activation, variant conditions or resource references in Super Moves.');
     }
+
+    return $issues;
+  }
+
+  /**
+   * Reports an actor's Super Move reference as the Engine reads it: one that is not an id, one the project does not
+   * declare, or the current and earlier actor keys naming different Super Moves.
+   *
+   * @param list<string> $superMoves The project's Super Move ids.
+   * @return Issue[]
+   */
+  private function checkActorSuperMove(ProjectActor $actor, string $where, array $superMoves): array
+  {
+    try {
+      $superMove = $actor->getSuperMove();
+    } catch (InvalidArgumentException) {
+      $data = $actor->getData();
+      $named = array_map(static function (string $key) use ($data): ?string {
+        try {
+          return \Ichiloto\Engine\Battle\CrisisAbilityCatalog::requireReference($data[$key] ?? null, $key);
+        } catch (InvalidArgumentException) {
+          return null;
+        }
+      }, [SuperMoveFields::ACTOR_KEY, SuperMoveFields::LEGACY_ACTOR_KEY]);
+      $disagree = array_key_exists(SuperMoveFields::ACTOR_KEY, $data) && array_key_exists(SuperMoveFields::LEGACY_ACTOR_KEY, $data)
+        && ($named[0] !== null || $data[SuperMoveFields::ACTOR_KEY] === null)
+        && ($named[1] !== null || $data[SuperMoveFields::LEGACY_ACTOR_KEY] === null);
+
+      return [$disagree
+        ? Issue::error($where, sprintf('Its %s and %s keys name different Super Moves (%s and %s).',
+            SuperMoveFields::ACTOR_KEY, SuperMoveFields::LEGACY_ACTOR_KEY, $named[0] ?? 'none', $named[1] ?? 'none'),
+            'Choose its Super Move on the actor page, which keeps only the superMove key.', self::ACTOR_SUPER_MOVE_KEYS_DISAGREE)
+        : Issue::error($where, 'Its Super Move reference is not a Super Move id.',
+            'Choose a current Super Move on the actor page.')];
+    }
+    if ($superMove !== null && !in_array($superMove, $superMoves, true)) {
+      return [Issue::error($where, sprintf('Its Super Move "%s" is not one the project declares.', $superMove),
+        'Choose a current Super Move on the actor page.')];
+    }
+
+    return [];
   }
 
   /**

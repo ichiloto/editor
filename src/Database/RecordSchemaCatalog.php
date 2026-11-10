@@ -152,7 +152,7 @@ final class RecordSchemaCatalog
             self::troops(),
             self::animations(),
             self::battleEntryRules(),
-            self::crisisAbilities(),
+            SuperMoveFields::getSchema(),
             \Ichiloto\Editor\Progression\WorldAbilityFields::getSchema(),
             \Ichiloto\Editor\Progression\TutorialFields::getSchema(),
             self::items(),
@@ -597,47 +597,6 @@ final class RecordSchemaCatalog
                 ],
                 blank: ['type' => 'stat_stage', 'actor' => '', 'stat' => 'attack', 'delta' => 1],
             ),
-        );
-    }
-
-    /** Crisis activation and form-dependent technique references, shared by both editors. */
-    private static function crisisAbilities(): RecordSchema
-    {
-        return new RecordSchema(
-            key: 'crisis_abilities', entryNoun: 'crisis ability', storage: RecordStorage::LIST_FILE,
-            relativePath: 'assets/' . \Ichiloto\Engine\Battle\CrisisAbilityCatalog::FILE,
-            fields: [new RecordField('id', 'Id'), new RecordField('name', 'Name'),
-                new RecordField('label', 'Badge Label', removeWhenEmpty: true),
-                new RecordField('description', 'Description', removeWhenEmpty: true),
-                RecordField::reference('iconRole', 'Acquisition Icon Role', ReferenceCatalog::ICON_ROLES,
-                    allowsNone: true, noneLabel: '(actor portrait)'),
-                new RecordField('hpBelowPercent', 'HP Below %', InputControlType::FLOAT, removeWhenEmpty: true),
-                new RecordField('states', 'Activation States', reference: 'states', codec: RecordFieldCodec::CSV_LIST,
-                    removeWhenEmpty: true)],
-            labelKey: 'id', identityKey: 'id',
-            // The Engine reads a crisis only with an activation and a technique, so a new one starts
-            // active below 10% HP (the Engine documentation's example) on the project's first
-            // battle-usable basic or special skill; without one there is no technique to offer.
-            // That skill is the first the variant picker offers, from the same source.
-            makeBlank: static function (string $name, string $root): array {
-                $skill = ReferenceCatalog::getCrisisSkillNames(
-                    \Ichiloto\Engine\Entities\Skills\SkillCatalog::load($root . '/assets'))[0]
-                    ?? throw new RecordRefusal('A new crisis ability offers the project\'s first battle-usable basic or special skill. Add one under Skills first.');
-
-                return ['id' => 'new-crisis', 'name' => $name, 'hpBelowPercent' => 10.0, 'variants' => [['skill' => $skill]]];
-            },
-            subList: new RecordSubList(key: 'variants', prefix: 'variant', singular: 'variant', fields: [
-                RecordField::reference('skill', 'Skill', 'crisis_skills'),
-                RecordField::reference('iconRole', 'Acquisition Icon Role', ReferenceCatalog::ICON_ROLES,
-                    allowsNone: true, noneLabel: '(use ability default)'),
-                new RecordField('conditions', 'World Conditions', codec: RecordFieldCodec::CONDITIONS, removeWhenEmpty: true),
-            ], blank: ['skill' => '']),
-            saveCheck: static function (array $whole, string $root): ?string {
-                try {
-                    new \Ichiloto\Engine\Battle\CrisisAbilityCatalog($whole)->validateVariantConditions();
-                } catch (\InvalidArgumentException $error) { return $error->getMessage(); }
-                return null;
-            },
         );
     }
 

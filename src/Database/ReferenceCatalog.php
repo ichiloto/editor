@@ -105,15 +105,20 @@ final class ReferenceCatalog
     /** Named points declared by the project's current battle pose cells. */
     public const string BATTLE_POSE_POINTS = 'battle_pose_points';
 
+    /** The project's Super Moves by stable id: the Database category and what an actor's Super Move picks from. */
+    public const string SUPER_MOVES = 'super_moves';
+
+    /** The skills a Super Move's variant may use, by the Engine's own rule ({@see getSuperMoveSkillNames()}). */
+    public const string SUPER_MOVE_SKILLS = 'super_move_skills';
+
     public const array CATEGORIES = [
         'actors',
         'actor_ids',
         'classes',
         'attack_skills',
         'counter_skills',
-        'crisis_abilities',
-        // What a crisis ability's variant may use, by the Engine's own rule.
-        'crisis_skills',
+        self::SUPER_MOVES,
+        self::SUPER_MOVE_SKILLS,
         'resolution_kinds',
         'piece_connections',
         'resolution_scopes',
@@ -308,8 +313,8 @@ final class ReferenceCatalog
             'attack_skills' => $this->attackSkillNames(),
             // What a counter attack may respond with, by the Engine's own rule.
             'counter_skills' => $this->counterSkillNames(),
-            'crisis_skills' => self::getCrisisSkillNames($this->workspace->loadSkillCatalog()),
-            'crisis_abilities', 'states' => array_values(array_filter(array_map(
+            self::SUPER_MOVE_SKILLS => self::getSuperMoveSkillNames($this->workspace->loadSkillCatalog()),
+            self::SUPER_MOVES, 'states' => array_values(array_filter(array_map(
                 static fn(ProjectRecord $record): mixed => $record->get('id'),
                 $this->workspace->getRecordDatabase($category)?->getRecords() ?? []),
                 static fn(mixed $id): bool => is_string($id) && $id !== '')),
@@ -581,14 +586,14 @@ final class ReferenceCatalog
     }
 
     /**
-     * The skills a crisis ability's variant may use: those the Engine's
+     * The skills a Super Move's variant may use: those the Engine's
      * CrisisAbility accepts (a battle-usable basic or special skill that is
      * not a summon), in catalogue order. A one-variant probe asks the Engine
      * itself, so the rule has one owner.
      *
      * @return list<string>
      */
-    public static function getCrisisSkillNames(SkillCatalog $catalog): array
+    public static function getSuperMoveSkillNames(SkillCatalog $catalog): array
     {
         $names = [];
         foreach (array_keys($catalog->getSkills()) as $name) {
@@ -1168,7 +1173,7 @@ final class ReferenceCatalog
             }
             return $labels;
         }
-        if (in_array($category, ['states', 'crisis_abilities'], true)) {
+        if (in_array($category, ['states', self::SUPER_MOVES], true)) {
             $labels = [];
             foreach ($this->workspace->getRecordDatabase($category)?->getRecords() ?? [] as $record) {
                 $id = $record->get('id');

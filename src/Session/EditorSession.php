@@ -45,6 +45,8 @@ use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\MasteryAdoption;
+use Ichiloto\Editor\Database\SuperMoveFields;
+use Ichiloto\Editor\Database\SuperMoveMigration;
 use Ichiloto\Editor\Database\MasteryAuthoring;
 use Ichiloto\Editor\Database\MasteryFields;
 use Ichiloto\Editor\Database\SkillReferences;
@@ -5326,6 +5328,34 @@ final class EditorSession
         $result = $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels(), $confirm);
 
         return [...$result, 'nodes' => $adoption['nodes']];
+    }
+
+    /**
+     * Moves the project from the earlier Super Move shape to the current one
+     * at once and as one undo step: `crisis-abilities.php` becomes
+     * `super-moves.php` and every actor's `crisisAbility` key becomes
+     * `superMove`, with every id, label, activation and variant kept. Asks
+     * before writing, as every file set does.
+     *
+     * @return array<string, mixed> The question, or what was written (`changed` false when nothing needs moving).
+     * @throws SessionRefusal When edits are pending, the project holds both catalogues, or a file cannot take it.
+     */
+    public function migrateSuperMoves(?string $answer = null, ?string $confirm = null): array
+    {
+        $records = fn(): array => $this->requireCategory(SuperMoveFields::CATEGORY)->getRecordLabels();
+        if ($answer === null && $this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal('Save or undo pending edits before migrating to Super Moves. No files were changed.');
+        }
+        try {
+            $required = SuperMoveMigration::describe($this->workspace->projectRoot);
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($required === null) {
+            return ['changed' => false, 'records' => $records()];
+        }
+
+        return $this->writeSourceSet($required, $answer, $records, $confirm);
     }
 
     /**

@@ -10,10 +10,12 @@ use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Editor\Database\SuperMoveFields;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\PreparedSave;
 use Ichiloto\Editor\Storage\SaveSet;
 
+use Ichiloto\Engine\Battle\CrisisAbilityCatalog;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 use InvalidArgumentException;
 use RuntimeException;
@@ -251,6 +253,18 @@ final class ProjectActor
     public function getCurrentExp(): int
     {
         return (int) ($this->getData()['currentExp'] ?? 0);
+    }
+
+    /**
+     * Returns the Super Move this actor references, read by the Engine's own
+     * rule from `superMove` or the earlier `crisisAbility`.
+     *
+     * @return string|null The Super Move id, or null when the actor has none.
+     * @throws InvalidArgumentException When a reference is not an id, or the two keys name different Super Moves.
+     */
+    public function getSuperMove(): ?string
+    {
+        return CrisisAbilityCatalog::getActorReference($this->getData());
     }
 
     /** Returns the actor's authored starting summon assignments verbatim. */
@@ -663,13 +677,9 @@ final class ProjectActor
             return;
         }
 
-        if ($field === 'crisisAbility') {
+        if ($field === SuperMoveFields::ACTOR_KEY) {
             $reference = trim((string) $value);
-            if ($reference === '') {
-                unset($this->payload['data']['crisisAbility']);
-            } else {
-                $this->payload['data']['crisisAbility'] = $reference;
-            }
+            $this->payload['data'] = self::withSuperMove($this->payload['data'], $reference === '' ? null : $reference);
             $this->touchState();
             return;
         }
@@ -772,6 +782,36 @@ final class ProjectActor
             $this->payload['data']['stats'][$field] = (int) $value;
             $this->touchState();
         }
+    }
+
+    /**
+     * Returns actor data naming a Super Move under the one key the Editor
+     * writes, `superMove`, in the place the actor's first Super Move key held,
+     * so the source keeps its order. The earlier `crisisAbility` goes with
+     * it. No Super Move is the absence of both keys.
+     *
+     * @param array<string, mixed> $data The actor data.
+     * @param string|null $reference The Super Move id, or null for none.
+     * @return array<string, mixed> The data.
+     */
+    public static function withSuperMove(array $data, ?string $reference): array
+    {
+        $keys = [SuperMoveFields::ACTOR_KEY, SuperMoveFields::LEGACY_ACTOR_KEY];
+        $result = [];
+        $placed = $reference === null;
+        foreach ($data as $key => $value) {
+            if (! in_array($key, $keys, true)) {
+                $result[$key] = $value;
+            } elseif (! $placed) {
+                $result[SuperMoveFields::ACTOR_KEY] = $reference;
+                $placed = true;
+            }
+        }
+        if (! $placed) {
+            $result[SuperMoveFields::ACTOR_KEY] = $reference;
+        }
+
+        return $result;
     }
 
     /**

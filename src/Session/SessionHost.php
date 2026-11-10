@@ -631,6 +631,8 @@ final class SessionHost
                 self::requireString($params, 'node'), self::requireString($params, 'requires')),
             'mastery.adopt' => $session->adoptMasterySkills(self::requireString($params, 'actor'),
                 self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm')),
+            'superMoves.migrate' => $session->migrateSuperMoves(self::readOptionalString($params, 'answer'),
+                self::readOptionalString($params, 'confirm')),
             'skills.retire' => $session->retireSkill(self::requireInt($params, 'index'), self::readOptionalString($params, 'replacement'),
                 self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm')),
             'database.move' => $session->moveDatabaseRecord(

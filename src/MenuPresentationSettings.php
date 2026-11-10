@@ -85,7 +85,7 @@ final class MenuPresentationSettings extends ProjectSettingsFile
 
     /**
      * The semantic icon roles the theme offers, as this file holds them, unsaved edits included: every role it
-     * binds and every atlas marker role the Engine draws. A world power or crisis technique names one of these.
+     * binds and every atlas marker role the Engine draws. A world power or Super Move technique names one of these.
      *
      * @return list<string>
      */

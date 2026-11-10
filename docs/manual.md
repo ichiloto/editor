@@ -1712,7 +1712,7 @@ skill's effects, a quest's rewards) listed under them.
 | Enemies | `assets/Data/Enemies/*.php` | Editable - one data record per file, which `enemies.php` loads | Same |
 | Troops | `assets/Data/troops.php` | Editable | Same |
 | Battle Entry | `assets/Data/battle-entry-rules.php` | Editable | Same |
-| Crisis Abilities | `assets/Data/crisis-abilities.php` | Editable - one record per stable id: name, badge label, description, the HP percentage and states that activate it, and its variants, each a skill with the world conditions that choose it | Same |
+| Super Moves | `assets/Data/super-moves.php` | Editable - one record per stable id: name, badge label, description, the HP percentage and states that activate it, and its variants, each a skill with the world conditions that choose it. A project still keeping them in `assets/Data/crisis-abilities.php` shows them read-only until **Migrate to Super Moves** | Same |
 | Tutorials | `assets/Data/tutorials.php` | Editable - one record per stable id: title, Guide category, how it starts, its trigger, what the Guide offers and its follow-on script, and its ordered steps, each a screen, view, target, action, what completes it and an optional line | Same |
 | States | `assets/Data/states.php` | Editable | Same |
 | Animations | `assets/Data/animations.php` | Editable | Same |
@@ -2276,10 +2276,10 @@ left out. A state grants it while active, and a skill once learned; spells
 do not grant one. Validation reports a grant the Engine would refuse, with
 the Engine's own reason.
 
-### Crisis Abilities
+### Super Moves
 
-A crisis ability is a project resource an actor page selects as its
-**Crisis Ability**. It is active for a conscious actor whose HP is below
+A Super Move is a project resource an actor page selects as its
+**Super Move**. It is active for a conscious actor whose HP is below
 **HP Below %** or who has any of its **Activation States**; a record needs
 at least one of the two. Each variant names a battle-usable basic or special
 skill and the **World Conditions** that choose it, and exactly one variant
@@ -2288,7 +2288,7 @@ Engine accepts there; summons and skills used only outside battle are left
 out. The **Badge Label** is the battle condition badge; left
 empty, the game shows the name's first three letters in capitals.
 
-A new crisis ability is active below 10% HP and has one variant: the
+A new Super Move is active below 10% HP and has one variant: the
 project's first battle-usable basic or special skill. Without such a skill,
 creation is refused and says so. Saves are checked by the Engine's own
 reading, and validation reports a variant skill or activation state the
@@ -2302,8 +2302,29 @@ conditions differ but can hold at once are caught by the battle when it
 meets them.
 
 The **Acquisition Icon Role** is the theme icon the game shows when the party
-first gains the crisis ability, chosen from the theme's icon roles;
+first gains the Super Move, chosen from the theme's icon roles;
 `(actor portrait)` shows the actor's portrait instead.
+
+The Editor writes Super Moves to `assets/Data/super-moves.php` and an actor's
+choice under its `superMove` key. Picking an actor's Super Move replaces an
+earlier `crisisAbility` key in the same place, and choosing none removes both.
+
+A project made before Super Moves keeps them in
+`assets/Data/crisis-abilities.php` and names them on actors under
+`crisisAbility`. The game still reads that, and the Database shows the
+records read-only. **Migrate to Super Moves** in the command palette (or
+`superMoves.migrate` through the editor session) asks first, then writes
+every file at once: the catalogue moves to `super-moves.php` byte for byte,
+and each actor's `crisisAbility` becomes `superMove` where it stands. Ids,
+names, labels, activations and variants are unchanged, saves are untouched,
+and Ctrl+Z restores every file in one step. It writes nothing and says why
+when the project holds both catalogues, when the game cannot read the
+catalogue or an actor's reference, or when an actor's data is built in PHP
+code rather than written as an array.
+
+Validation reports a project holding both catalogue files, which the game
+refuses, and an actor whose `superMove` and `crisisAbility` keys name
+different Super Moves.
 
 ### Battle Art
 

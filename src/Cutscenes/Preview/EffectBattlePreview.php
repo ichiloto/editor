@@ -31,7 +31,7 @@ use InvalidArgumentException;
  * A battle effect as a battle plays it, frame by frame, for its editors, in
  * one presentation: in an action that actually plays it, found by the
  * Engine's own animation selection among what the battle test party can do
- * (its attacks, skills, magic, items and authored crisis techniques; a summon is previewed as a summon),
+ * (its attacks, skills, magic, items and authored Super Move techniques; a summon is previewed as a summon),
  * with the animation's other effect beside it, the action's pose and the
  * project's battle pacing. Nothing is invented: an effect no such action
  * plays has no battle preview. Each frame comes from the production
@@ -103,10 +103,10 @@ final class EffectBattlePreview
                 }
             }
             // Preview the actor's authored forms without changing their health, states or world flags.
-            $crisis = $caster->crisisAbility;
-            if ($crisis !== null && $caster->battleCommandLoadout?->allowsCommand(BattleCommandType::ATTACK) !== false) {
-                foreach ($crisis->getVariantSkills($skills) as $skill) {
-                    $candidates[] = new CrisisSkillBattleAction($skill, $crisis, $caster->actorId);
+            $superMove = $caster->crisisAbility;
+            if ($superMove !== null && $caster->battleCommandLoadout?->allowsCommand(BattleCommandType::ATTACK) !== false) {
+                foreach ($superMove->getVariantSkills($skills) as $skill) {
+                    $candidates[] = new CrisisSkillBattleAction($skill, $superMove, $caster->actorId);
                 }
             }
             foreach (ActionAnimationResolver::findEffectBindings($effectId, $animations, $caster, $candidates) as $match) {

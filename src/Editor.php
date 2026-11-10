@@ -72,6 +72,8 @@ use Ichiloto\Editor\History\CommandHistory;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\PaintStrokeCommand;
 use Ichiloto\Editor\History\SourceSetCommand;
+use Ichiloto\Editor\History\SourceSetRequired;
+use Ichiloto\Editor\Database\SuperMoveMigration;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InspectorListEdit;
 use Ichiloto\Editor\Inspector\InspectorRefusal;
@@ -5609,6 +5611,7 @@ final class Editor
             new PaletteItem('Playtest Selected Map', 'Ctrl+T', fn() => $this->startPlaytest()),
             new PaletteItem('Reload Workspace', 'Ctrl+R', fn() => $this->requestReload()),
             new PaletteItem('Repair Actor Identities and References', '', fn() => $this->openActorReferenceMigration()),
+            new PaletteItem(SuperMoveMigration::LABEL, '', fn() => $this->openSuperMoveMigration()),
             new PaletteItem('Tool: Map Mode', 'm', function (): void {
                 $this->closeDatabaseIfOpen();
                 $this->setEditingMode(self::MODE_MAP);
@@ -7540,6 +7543,12 @@ final class Editor
             if (($field['actorReferenceMigration'] ?? null) instanceof ActorIdentityMigrationPlan) {
                 if ($selectedEntry['value'] === 'preview') { return; }
                 $this->confirmActorReferenceMigration($field['actorReferenceMigration'], $selectedEntry['value'] === 'migrate');
+                return;
+            }
+
+            if (($field['superMoveMigration'] ?? null) instanceof SourceSetRequired) {
+                if ($selectedEntry['value'] === 'preview') { return; }
+                $this->confirmSuperMoveMigration($field['superMoveMigration'], $selectedEntry['value'] === 'migrate');
                 return;
             }
 
@@ -9773,6 +9782,68 @@ final class Editor
         } catch (Throwable $failure) {
             $this->closeEventOptionDialog('');
             $this->setErrorStatus($failure, 'Actor reference migration');
+        }
+    }
+
+    /**
+     * Asks before moving the project to the current Super Move shape: the
+     * catalogue file and every actor's key together, written at once and
+     * undone as one step.
+     */
+    private function openSuperMoveMigration(): void
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) { return; }
+        if ($this->workspace->hasUnsavedChanges()) {
+            $this->setStatus('Save or undo pending edits before migrating to Super Moves. No files were changed.', StatusLevel::WARN);
+            return;
+        }
+        try {
+            $required = SuperMoveMigration::describe($this->projectRoot);
+            if ($required === null) {
+                $this->setStatus('This project already uses Super Moves; nothing needs moving.');
+                return;
+            }
+            $this->optionDialogField = ['superMoveMigration' => $required];
+            $this->eventOptionDialogMarker = null;
+            $this->eventOptionDialogPath = null;
+            $this->eventOptionDialogTitle = SuperMoveMigration::LABEL;
+            $this->eventOptionDialogEntries = [
+                ['label' => 'Cancel', 'value' => 'cancel', 'description' => 'Leave all files unchanged.'],
+                ['label' => sprintf('Write %d files now', count($required->paths)), 'value' => 'migrate',
+                    'description' => 'Writes now, not on Save. Ctrl+Z restores files.'],
+                ...array_map(static fn(string $path): array => [
+                    'label' => $path, 'value' => 'preview',
+                    'description' => 'Migration preview only. Select Write to apply all files.',
+                ], $required->paths),
+            ];
+            $this->selectedEventOptionIndex = 0;
+            $this->dialogFilter->clear();
+            $this->isEventOptionDialogOpen = true;
+            $this->statusMessage = $required->question;
+            $this->renderSelectionDependentArea();
+        } catch (Throwable $failure) {
+            $this->setErrorStatus($failure, 'Super Move migration');
+        }
+    }
+
+    private function confirmSuperMoveMigration(SourceSetRequired $required, bool $confirmed): void
+    {
+        if (! $confirmed || ! $this->workspace instanceof ProjectWorkspace) {
+            $this->closeEventOptionDialog('Super Move migration cancelled. No files were changed.');
+            return;
+        }
+        try {
+            $command = new SourceSetCommand($required->label, $required->subject, $required->plan, $this->workspace,
+                fn(): ?ProjectWorkspace => $this->workspace,
+                function (ProjectWorkspace $workspace): void { $this->workspace = $workspace; },
+            );
+            $command->execute();
+            $this->recordCommand($command);
+            $this->closeEventOptionDialog('Migrated to Super Moves. Ctrl+Z restores the original files.');
+            $this->requestFullRender();
+        } catch (Throwable $failure) {
+            $this->closeEventOptionDialog('');
+            $this->setErrorStatus($failure, 'Super Move migration');
         }
     }
 
