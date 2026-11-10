@@ -9089,7 +9089,7 @@ final class Editor
         // end of the record's own list.
         $fieldId = $this->getSelectedDatabaseFieldId();
         $item = $database->locateItem($recordIndex, [], $fieldId);
-        $subList = $database->schema->findInlineSubList($item?->listKey) ?? $subList;
+        $subList = $database->schema->findInlineSubList($item?->listKey, $database->getRecordByIndex($recordIndex)?->toArray()) ?? $subList;
         $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $item === null
             ? $authoring->addEntry($database, $recordIndex, [])
             : $authoring->addItem($database, $recordIndex, [], $fieldId));
@@ -9238,7 +9238,7 @@ final class Editor
         // last entry of the record's own list.
         $item = $database->locateItem($recordIndex, [], $this->getSelectedDatabaseFieldId());
         $listKey = $item?->kind === RecordItem::ENTRY ? $item->listKey : null;
-        $subList = $database->schema->findInlineSubList($listKey) ?? $subList;
+        $subList = $database->schema->findInlineSubList($listKey, $database->getRecordByIndex($recordIndex)?->toArray()) ?? $subList;
         $entryIndex = $item?->kind === RecordItem::ENTRY ? $item->entryIndex : $database->countSubItems($recordIndex) - 1;
 
         if ($entryIndex < 0) {

@@ -1903,11 +1903,13 @@ final class RecordSchemaCatalog
             labelKey: 'path',
             identityKey: 'path',
             configPath: ['save', 'accessibility', 'ui', 'field', 'graphics', 'audio', 'inn'],
-            // Interception effects have Terminal and graphical variants, so both editors bind them.
-            subLists: [...($graphical ? InnPresentationFields::getBindingLists('value') : []), BattleInterceptionFields::getBindingList('value')],
-            subListsFor: static fn(array $row): array => match ($row['path'] ?? null) {
-                ProjectConfig::INN_PRESENTATION => ($list = InnPresentationFields::getBindingList($row['value'] ?? null, 'value')) !== null ? [$list->key] : [],
-                ProjectConfig::BATTLE_INTERCEPTIONS => [BattleInterceptionFields::getBindingList('value')->key],
+            // Battle condition effects have Terminal and graphical variants, so both editors bind them.
+            subLists: [...($graphical ? InnPresentationFields::getBindingLists('value') : []),
+                ...array_map(static fn(BattleConditionGroup $group): RecordSubList => $group->getBindingList('value'), BattleConditionGroup::cases())],
+            subListsFor: static fn(array $row): array => match (true) {
+                ($row['path'] ?? null) === ProjectConfig::INN_PRESENTATION
+                    => ($list = InnPresentationFields::getBindingList($row['value'] ?? null, 'value')) !== null ? [$list->prefix] : [],
+                ($group = BattleConditionGroup::findByConfigPath(strval($row['path'] ?? ''))) !== null => [$group->getBindingList('value')->prefix],
                 default => [],
             },
             fieldsFor: static function (array $row) use ($graphical): array {
@@ -1915,8 +1917,8 @@ final class RecordSchemaCatalog
                     return [new RecordField('path', 'Setting', isReadOnly: true),
                         ...InnPresentationFields::getFields($row['value'] ?? null, 'value', 'Rest Presentation', $graphical)];
                 }
-                // Each binding is chosen in its own rows, a state and the effect it plays.
-                if (($row['path'] ?? null) === ProjectConfig::BATTLE_INTERCEPTIONS) {
+                // Each binding is chosen in its own rows: a state or stat and the effect it plays.
+                if (BattleConditionGroup::findByConfigPath(strval($row['path'] ?? '')) !== null) {
                     return [new RecordField('path', 'Setting', isReadOnly: true)];
                 }
                 // A setting the engine knows is the type of its default, so an

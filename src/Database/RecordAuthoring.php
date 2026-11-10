@@ -536,7 +536,9 @@ final readonly class RecordAuthoring
         $this->requireRecord($database, $index);
         $this->requireFrame($database, $index, $framePath);
 
-        return ($framePath === [] && $listKey !== null ? $database->schema->findInlineSubList($listKey) : $database->getFrameSubList($framePath))
+        // The record's shape selects its lists, so the record says which list a key names.
+        return ($framePath === [] && $listKey !== null
+            ? $database->schema->findInlineSubList($listKey, $database->getRecordByIndex($index)?->toArray()) : $database->getFrameSubList($framePath))
             ?? throw new RecordRefusal(sprintf('A %s has no list of its own to add to.', $database->schema->entryNoun));
     }
 

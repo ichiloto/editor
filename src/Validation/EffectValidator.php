@@ -6,7 +6,8 @@ namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
-use Ichiloto\Editor\Database\BattleInterceptionFields;
+use Ichiloto\Editor\Database\BattleConditionEffectFields;
+use Ichiloto\Editor\Database\BattleConditionGroup;
 use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\ProjectWorkspace;
@@ -30,8 +31,8 @@ use Throwable;
  * each consumer: battle animations' source and target effects in battle;
  * the field presentation's cue and action prompt effects, maps' field
  * effects and tileset pieces' effects on the field; inns' rest stages as a
- * stage of their own; the contact effects states play when they intercept
- * an attack, by the Engine's interception rule. Battle and field effects are compiled for both the
+ * stage of their own; the effects battle conditions play, by the Engine's
+ * rule for their group, as the editor holds them, unsaved edits included. Battle and field effects are compiled for both the
  * terminal and the graphical presentation, so a sequence that only one
  * renderer would refuse is still found; graphical stages use stage admission,
  * while a paired Terminal sequence retains its own cues and tracks.
@@ -39,6 +40,9 @@ use Throwable;
 final class EffectValidator
 {
     private const string FIELD_PRESENTATION = 'assets/Data/Presentation/field.php';
+
+    /** The use context of an effect a battle condition group binds, followed by the group ({@see findUses()}). */
+    public const string CONDITION_CONTEXT = 'condition:';
 
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
@@ -50,8 +54,9 @@ final class EffectValidator
 
         foreach ($uses as $effect => $contexts) {
             foreach ($contexts as $context => $places) {
-                if ($context === 'interception') {
-                    array_push($issues, ...self::checkInterceptionEffect($catalogs, $effect, $places));
+                if (str_starts_with($context, self::CONDITION_CONTEXT)) {
+                    $group = BattleConditionGroup::from(substr($context, strlen(self::CONDITION_CONTEXT)));
+                    array_push($issues, ...self::checkConditionEffect($catalogs, $group, $effect, $places));
                     continue;
                 }
                 if ($context === 'stage') {
@@ -80,51 +85,51 @@ final class EffectValidator
             }
         }
 
-        return [...$issues, ...self::checkSourceEffectAnchors($workspace), ...self::checkInterceptionStates($workspace)];
+        return [...$issues, ...self::checkSourceEffectAnchors($workspace), ...self::checkConditionBindings($workspace)];
     }
 
     /**
-     * Checks an effect states play when they intercept an attack, by the Engine's interception rule for
-     * each presentation. A timeline with unsaved edits is checked once it is saved, as that rule reads it.
+     * Checks an effect a battle condition group binds, by the Engine's rule for the group in each presentation.
      *
      * @param list<string> $places The bindings that name it.
      * @return Issue[]
      */
-    private static function checkInterceptionEffect(ProjectCatalogs $catalogs, string $effect, array $places): array
+    private static function checkConditionEffect(ProjectCatalogs $catalogs, BattleConditionGroup $group, string $effect, array $places): array
     {
         $also = count($places) > 1 ? sprintf(' Also used by %d more.', count($places) - 1) : '';
-        if ($catalogs->hasUnsavedEffectTimeline($effect)) {
-            return [Issue::warning($places[0], sprintf('Effect %s has unsaved edits, so its interception is checked once it is saved.', $effect),
-                'Save the effect timeline to check it as the battle reads it.' . $also)];
-        }
+        $fallback = $group->isLooping() ? 'the condition shows only its badge' : 'the interception shows the ordinary miss';
 
         return array_map(static fn(array $failure): Issue => Issue::error($places[0], $failure['message'],
-            sprintf('Fix assets/Animations/%s, or choose another effect. Until then the interception shows the ordinary miss.%s', $effect, $also)),
-            BattleInterceptionFields::findTimelineFailures($effect, $catalogs->loadInterceptionTimeline(...)));
+            sprintf('Fix assets/Animations/%s, or choose another effect. Until then %s.%s', $effect, $fallback, $also)),
+            BattleConditionEffectFields::findTimelineFailures($group, $effect,
+                static fn(string $id, EffectPresentation $presentation): mixed => $catalogs->loadConditionTimeline($id, $presentation, $group)));
     }
 
     /**
-     * Checks the interception bindings as the Engine's binding boundary reads them, and that each names a
-     * state the project defines: a binding to a renamed or deleted state never plays.
+     * Checks each battle condition group as the Engine's binding boundary reads it, and that each state binding
+     * names a state the project defines: a binding to a renamed or deleted state never plays.
      *
      * @return Issue[]
      */
-    private static function checkInterceptionStates(ProjectWorkspace $workspace): array
+    private static function checkConditionBindings(ProjectWorkspace $workspace): array
     {
-        $bindings = $workspace->config?->getRecord(ProjectConfig::BATTLE_INTERCEPTIONS)->get('value');
-        $where = 'config.php: ' . ProjectConfig::BATTLE_INTERCEPTIONS;
-        try {
-            BattleInterceptionFields::assertShape($bindings, $workspace->catalogs->getAssetRoot());
-        } catch (Throwable $failure) {
-            return [Issue::error($where, 'Its interception effects are invalid: ' . $failure->getMessage(),
-                'Bind each state by its id to one effect timeline id. Until then no interception plays its effect.')];
-        }
         $states = new ReferenceCatalog($workspace)->valuesFor('states');
         $issues = [];
-        foreach ((array) $bindings as $state => $effect) {
-            if (! in_array((string) $state, $states, true)) {
-                $issues[] = Issue::error($where . '.' . $state, sprintf('Its interception effect %s is bound to state %s, which the project does not define.', strval($effect), $state),
-                    'Choose a project state for the binding, or remove it. Until then the binding plays nothing.');
+        foreach (BattleConditionGroup::cases() as $group) {
+            $bindings = $workspace->config?->getRecord($group->getConfigPath())->get('value');
+            try {
+                BattleConditionEffectFields::assertShape($group, $bindings, $workspace->catalogs->getAssetRoot());
+            } catch (Throwable $failure) {
+                $issues[] = Issue::error('config.php: ' . $group->getConfigPath(), 'Its battle condition effects are invalid: ' . $failure->getMessage(),
+                    'Choose each binding from the pickers in Configuration. Until then none of the group\'s effects play.');
+                continue;
+            }
+            if ($group === BattleConditionGroup::STAT_STAGES) { continue; }
+            foreach ((array) $bindings as $state => $effect) {
+                if (! in_array((string) $state, $states, true)) {
+                    $issues[] = Issue::error($group->describeBinding((string) $state, null), sprintf('Its effect %s is bound to state %s, which the project does not define.',
+                        strval($effect), $state), 'Choose a project state for the binding, or remove it. Until then the binding plays nothing.');
+                }
             }
         }
 
@@ -204,10 +209,10 @@ final class EffectValidator
      * presentation's cues and action prompt, maps' field effects and tileset
      * pieces' effects on the field; the rest stage of Sleep events, `inn`
      * commands at any depth and the project's default inn presentation; and
-     * the contact effects states play when they intercept an attack.
+     * the effects battle conditions play, by group.
      *
      * @param Issue[] $issues Receives what could not be read.
-     * @return array<string, array{battle?: list<string>, field?: list<string>, stage?: list<string>, interception?: list<string>}>
+     * @return array<string, array{battle?: list<string>, field?: list<string>, stage?: list<string>, 'condition:states'?: list<string>, 'condition:statStages'?: list<string>, 'condition:interceptions'?: list<string>}>
      */
     public static function findUses(ProjectWorkspace $workspace, array &$issues = []): array
     {
@@ -224,11 +229,12 @@ final class EffectValidator
             $uses[$effect]['stage'] = $places;
         }
 
-        // Malformed bindings name no effect here; checkInterceptionStates() reports them.
-        $interceptions = $workspace->config?->getRecord(ProjectConfig::BATTLE_INTERCEPTIONS)->get('value');
-        foreach (is_array($interceptions) ? $interceptions : [] as $state => $effect) {
-            if (is_string($effect) && preg_match(EffectTimelineLibrary::ID_PATTERN, $effect) === 1) {
-                $uses[$effect]['interception'][] = sprintf('config.php: %s.%s', ProjectConfig::BATTLE_INTERCEPTIONS, $state);
+        // Malformed bindings name no effect here; checkConditionBindings() reports them.
+        foreach (BattleConditionGroup::cases() as $group) {
+            foreach ($group->listBindings($workspace->config?->getRecord($group->getConfigPath())->get('value')) as $binding) {
+                if (is_string($binding['effect']) && preg_match(EffectTimelineLibrary::ID_PATTERN, $binding['effect']) === 1) {
+                    $uses[$binding['effect']][self::CONDITION_CONTEXT . $group->value][] = $group->describeBinding($binding['subject'], $binding['role']);
+                }
             }
         }
 

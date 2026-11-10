@@ -6,7 +6,8 @@ namespace Ichiloto\Editor;
 
 use Ichiloto\Engine\Localization\Vocabulary;
 
-use Ichiloto\Editor\Database\BattleInterceptionFields;
+use Ichiloto\Editor\Database\BattleConditionEffectFields;
+use Ichiloto\Editor\Database\BattleConditionGroup;
 use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Engine\Audio\AudioManager;
 use Ichiloto\Engine\Audio\Enumerations\AudioBus;
@@ -31,15 +32,13 @@ final class ProjectConfig extends ProjectSettingsFile
     public const string ALWAYS_DASH = PlayerDash::CONFIG_ALWAYS_DASH;
     /** Whether tutorials start on their own when their trigger first holds; the player changes it in Config (TutorialDirector). */
     public const string TUTORIAL_PROMPTS = TutorialDirector::CONFIG_AUTOMATIC_PROMPTS;
-    /** The contact effect each state plays when it intercepts an attack, by state id (BattleConditionEffects). */
-    public const string BATTLE_INTERCEPTIONS = 'ui.battle.conditions.interceptions';
 
     /**
      * Settings the engine reads with a default when the file leaves them
      * out, by path, with that default.
      */
     private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM, self::INN_PRESENTATION => null,
-        self::SAVE_POINT_SCRIPT => null, self::ALWAYS_DASH => false, self::TUTORIAL_PROMPTS => true, self::BATTLE_INTERCEPTIONS => null];
+        self::SAVE_POINT_SCRIPT => null, self::ALWAYS_DASH => false, self::TUTORIAL_PROMPTS => true];
 
     /**
      * Settings that name another resource, by path, with the reference kind
@@ -91,6 +90,10 @@ final class ProjectConfig extends ProjectSettingsFile
     protected function listEngineSettings(): array
     {
         $settings = array_map(static fn(mixed $default): array => ['default' => $default], self::ENGINE_DEFAULTS);
+        // The effects battle conditions play are offered as groups even where the project binds none.
+        foreach (BattleConditionGroup::cases() as $group) {
+            $settings[$group->getConfigPath()] = ['default' => null];
+        }
         // The volumes the game starts at: the master volume, and beneath it each bus's (Music, Sound Effects, Voice).
         // The player changes them in Options and Config; their choices stay in player settings.
         $settings[AudioManager::CONFIG_MASTER_VOLUME] = ['default' => AudioManager::DEFAULT_MASTER_VOLUME];
@@ -139,8 +142,8 @@ final class ProjectConfig extends ProjectSettingsFile
      * changes: a field zoom outside its range, a master, bus or system sound
      * volume outside its range, an inn presentation that is not a timeline
      * identity, an Always Dash that is not true or false, a battle
-     * announcement reading time outside its range, or interception effects
-     * the Engine's binding boundary refuses.
+     * announcement reading time outside its range, or battle condition
+     * effects the Engine's binding boundary refuses.
      *
      * @throws \InvalidArgumentException
      */
@@ -157,8 +160,8 @@ final class ProjectConfig extends ProjectSettingsFile
         if ($path === self::INN_PRESENTATION && $value !== null) {
             InnPresentationFields::assertValid($value, complete: $complete);
         }
-        if ($path === self::BATTLE_INTERCEPTIONS) {
-            BattleInterceptionFields::assertShape($value, rtrim($this->projectRoot, '/') . '/assets', $complete);
+        if (($group = BattleConditionGroup::findByConfigPath($path)) !== null) {
+            BattleConditionEffectFields::assertShape($group, $value, rtrim($this->projectRoot, '/') . '/assets', $complete);
         }
         if ($path === self::ALWAYS_DASH && ! is_bool($value)) {
             throw new \InvalidArgumentException('Always Dash must be true or false.');
@@ -188,22 +191,22 @@ final class ProjectConfig extends ProjectSettingsFile
             || array_any(SystemSound::cases(), static fn(SystemSound $sound): bool => $path === $sound->getVolumeConfigPath());
     }
 
-    /** The inn's rest presentation and the interception effects are each one setting, a whole binding. */
+    /** The inn's rest presentation and each group of battle condition effects are one setting, a whole binding. */
     protected function isWholeValue(string $path): bool
     {
-        return $path === self::INN_PRESENTATION || $path === self::BATTLE_INTERCEPTIONS;
+        return $path === self::INN_PRESENTATION || BattleConditionGroup::findByConfigPath($path) !== null;
     }
 
-    /** Removing the last interception effect removes the group, as a project without any leaves it out. */
+    /** Removing a group's last battle condition effect removes the group, as a project without any leaves it out. */
     protected function isRemovedWhenEmpty(string $path): bool
     {
-        return $path === self::BATTLE_INTERCEPTIONS;
+        return BattleConditionGroup::findByConfigPath($path) !== null;
     }
 
     /** One picker key replacement keeps the binding's authored comments and value span. */
     protected function listKeyRenames(string $path, mixed $old, mixed $new): array
     {
-        if ($path === self::BATTLE_INTERCEPTIONS) {
+        if (BattleConditionGroup::findByConfigPath($path) !== null) {
             return self::listMapKeyRenames(explode('.', $path), $old, $new);
         }
         if (! is_array($old) || ! is_array($new) || ($old['treatment'] ?? null) !== 'leader' || ($new['treatment'] ?? null) !== 'leader') { return []; }

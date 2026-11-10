@@ -1708,8 +1708,9 @@ trait CutscenesWorkspace
             if ($this->workspace instanceof ProjectWorkspace) {
                 $uses = EffectValidator::findUses($this->workspace)[$asset->id] ?? [];
                 $scripts = EffectValidator::findScriptUses($this->workspace, $this->cutsceneLibrary()?->assets(CutsceneType::CINEMATIC) ?? []);
+                $conditions = array_filter($uses, static fn(string $context): bool => str_starts_with($context, EffectValidator::CONDITION_CONTEXT), ARRAY_FILTER_USE_KEY);
                 $references = [...($uses['battle'] ?? []), ...($uses['field'] ?? []), ...($uses['stage'] ?? []),
-                    ...($uses['interception'] ?? []), ...($scripts[$asset->id] ?? [])];
+                    ...array_merge(...array_values($conditions)), ...($scripts[$asset->id] ?? [])];
             }
         } else {
             foreach ($this->workspace?->actorDatabase->getActors() ?? [] as $actor) {

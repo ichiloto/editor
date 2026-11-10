@@ -91,7 +91,10 @@ final readonly class RecordSchema
         public ?Closure $saveCheck = null,
         public bool $identityGiven = false,
         public ?Closure $commandListsFor = null,
-        /** @var Closure(array<string, mixed>): list<string>|null Selects the inline lists offered by this record's shape. */
+        /**
+         * @var Closure(array<string, mixed>): list<string>|null Selects the inline lists offered by this record's shape, by
+         *   prefix: lists offered by different shapes may hold the same payload key (each configuration binding's `value`).
+         */
         public ?Closure $subListsFor = null,
         /** Exclusive source owners refuse external edits rather than merging a stale snapshot. */
         public bool $requireUnchangedSource = false,
@@ -138,7 +141,7 @@ final readonly class RecordSchema
         $lists = $this->subList === null ? $this->subLists : [$this->subList, ...$this->subLists];
         if ($payload === null || $this->subListsFor === null) { return $lists; }
         $keys = ($this->subListsFor)((array) $payload);
-        return array_values(array_filter($lists, static fn(RecordSubList $list): bool => in_array($list->key, $keys, true)));
+        return array_values(array_filter($lists, static fn(RecordSubList $list): bool => in_array($list->prefix, $keys, true)));
     }
 
     /** The inline list held under a payload key; the record's own when the key is null. */

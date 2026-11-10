@@ -15,7 +15,6 @@ use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Battle\Presentation\BattleArenaBindings;
-use Ichiloto\Engine\Battle\Presentation\BattleConditionEffects;
 use Ichiloto\Engine\Battle\Presentation\BattlerBindings;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
@@ -486,31 +485,17 @@ final readonly class ProjectCatalogs
     }
 
     /**
-     * An effect timeline as a state's interception plays it, checked by the Engine's own interception rule
-     * ({@see BattleConditionEffects::loadInterceptionTimeline()}): fixed rate, played once, attached to the
-     * defender, with a visible reduced-motion rest frame. That rule reads the saved timeline, so a timeline
-     * with unsaved edits is refused until it is saved, rather than checked as it was.
+     * An effect timeline as a battle condition plays it: compiled for battle as the Cutscenes workspace holds it,
+     * unsaved edits included, then checked by the Engine's rule for the group ({@see BattleConditionGroup}).
      *
-     * @throws InvalidArgumentException With the Engine's reason when it is missing, unsaved or refused.
+     * @throws InvalidArgumentException With the Engine's reason when it is missing or refused.
      */
-    public function loadInterceptionTimeline(string $id, EffectPresentation $presentation): CompiledEffectTimeline
+    public function loadConditionTimeline(string $id, EffectPresentation $presentation, BattleConditionGroup $group): CompiledEffectTimeline
     {
-        EffectTimelineLibrary::assertId($id);
-        if ($this->hasUnsavedEffectTimeline($id)) {
-            throw new InvalidArgumentException("Effect timeline {$id} has unsaved edits. Save it first, so it is checked as the battle reads it.");
-        }
-        $effects = new BattleConditionEffects(new EffectTimelineLibrary($this->getAssetRoot()));
+        $timeline = $this->loadEffectTimeline($id, true, $presentation);
+        $group->validateTimeline($timeline);
 
-        return ProjectDirectoryContext::run($this->workspace->projectRoot,
-            static fn(): CompiledEffectTimeline => $effects->loadInterceptionTimeline($id, $presentation));
-    }
-
-    /** Whether the Cutscenes workspace holds edits to an effect timeline, its deletion included, that are not saved yet. */
-    public function hasUnsavedEffectTimeline(string $id): bool
-    {
-        EffectTimelineLibrary::assertId($id);
-
-        return $this->readCurrent(EffectTimelineLibrary::DIRECTORY . "/{$id}/{$id}.timeline.php") !== null;
+        return $timeline;
     }
 
     /**

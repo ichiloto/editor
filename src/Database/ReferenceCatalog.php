@@ -61,6 +61,9 @@ final class ReferenceCatalog
     /** The encounter terrains the project's terrain kinds meet ({@see \Ichiloto\Engine\Rendering\Tilesets\TerrainKind::$encounters}). */
     public const string ENCOUNTER_TERRAINS = 'encounter_terrains';
 
+    /** The stats that have battle stages, as the Engine names them ({@see \Ichiloto\Engine\Entities\Character::buffableStats()}). */
+    public const string STAGED_STATS = 'staged_stats';
+
     /** The entry choice source of a tileset's tile layers ({@see listEntryChoices()}). */
     public const string TILESET_TILE_LAYERS = 'tileset_tile_layers';
 
@@ -219,6 +222,7 @@ final class ReferenceCatalog
         'animation_roles',
         'battle_arenas',
         self::ENCOUNTER_TERRAINS,
+        self::STAGED_STATS,
         // The dialogue catalogue's identities, actor and non-actor, whose artwork lines show.
         'dialogue_identities',
     ];
@@ -257,14 +261,14 @@ final class ReferenceCatalog
     }
 
     /**
-     * An effect timeline as a state's interception plays it, by the Engine's interception rule
-     * ({@see ProjectCatalogs::loadInterceptionTimeline()}).
+     * An effect timeline as a battle condition plays it, by the Engine's rule for the group
+     * ({@see ProjectCatalogs::loadConditionTimeline()}).
      *
-     * @throws \InvalidArgumentException With the Engine's reason when it is missing, unsaved or refused.
+     * @throws \InvalidArgumentException With the Engine's reason when it is missing or refused.
      */
-    public function loadInterceptionTimeline(string $id, EffectPresentation $presentation): CompiledEffectTimeline
+    public function loadConditionTimeline(string $id, EffectPresentation $presentation, BattleConditionGroup $group): CompiledEffectTimeline
     {
-        return $this->workspace->catalogs->loadInterceptionTimeline($id, $presentation);
+        return $this->workspace->catalogs->loadConditionTimeline($id, $presentation, $group);
     }
 
     public function describeWorldObjectReferences(ProjectMap $map, string $id): array
@@ -445,6 +449,7 @@ final class ReferenceCatalog
             'battle_arenas' => array_map(strval(...), array_keys($this->loadArenaNames())),
             // The encounter terrains the project's tilesets' kinds meet, each an arena may draw a variant for.
             self::ENCOUNTER_TERRAINS => $this->loadEncounterTerrains(),
+            self::STAGED_STATS => \Ichiloto\Engine\Entities\Character::buffableStats(),
             // A region is the display name the game shows for where the party
             // is; choosing from the names the maps already use keeps one
             // region spelled one way.
