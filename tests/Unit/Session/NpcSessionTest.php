@@ -186,7 +186,7 @@ it('describes the condition and write vocabulary from the editors that build the
     $grammar = EditorSession::open(npcSessionProject([]))->describeWorldStateGrammar();
     $session = EditorSession::open(npcSessionProject([]));
 
-    expect(array_column($grammar['conditions'], 'type'))->toBe(Ichiloto\Editor\Database\ConditionCodec::types())
+    expect(array_column($grammar['conditions'], 'type'))->toBe(Ichiloto\Editor\Database\ConditionCodec::getLeafTypes())
         ->and(array_column($grammar['writes'], 'type'))->toBe(Ichiloto\Editor\Database\WorldWriteCodec::TYPES);
     // Every type's defaults make an entry the codec writes and reads back, named as an author would name it:
     // from the type's own list where it has one with entries, else invented.

@@ -213,7 +213,7 @@ it('builds an assigned summons condition a part at a time, as the grammar descri
     $editor = new ConditionEditor();
     $editor->open('trigger', 'Trigger', []);
     $editor->add();
-    $types = ConditionCodec::types();
+    $types = ConditionCodec::getLeafTypes();
     $editor->cycleType(array_search('assigned_summons', $types, true) - array_search('switch', $types, true));
     expect($editor->encoded())->toBe('assigned_summons:party:1')
         ->and($editor->nameReference())->toBe(['label' => 'Summons Assigned In', 'category' => ReferenceCatalog::ASSIGNED_SUMMON_SCOPES]);

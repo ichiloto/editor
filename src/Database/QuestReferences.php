@@ -169,9 +169,16 @@ final class QuestReferences
     private function conditionsName(array $conditions, string $questId): bool
     {
         foreach ($conditions as $condition) {
+            if (! is_array($condition)) {
+                continue;
+            }
+            // An any-of group names whatever its members name.
+            if (ConditionEditor::isGroup($condition)
+                && $this->conditionsName((array) ($condition['conditions'] ?? []), $questId)) {
+                return true;
+            }
             if (
-                is_array($condition)
-                && strval($condition['type'] ?? '') === 'quest'
+                strval($condition['type'] ?? '') === 'quest'
                 && strval($condition['name'] ?? '') === $questId
             ) {
                 return true;
