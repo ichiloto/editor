@@ -124,6 +124,37 @@ final class StagedActorFields
             });
     }
 
+    /**
+     * Refuses a plane the Engine's stage binding refuses for the actor as it stands, such as `aboveCover` on a world
+     * object takeover, whose art draws in the field. Choosing the plane or the bound subject is checked; the
+     * Engine's validator judges the entry with and without its plane, so only a refusal the plane causes stops the
+     * edit, and an entry still being completed (a subject without its id) waits for the save and validation.
+     *
+     * @throws \InvalidArgumentException In the Engine's words.
+     */
+    public static function preparePlaneEdit(array $entry, string $field): array
+    {
+        if (($entry['type'] ?? null) === 'stage_actor' && is_array($entry['actor'] ?? null) && str_starts_with($field, 'actor.')) {
+            self::preparePlaneEdit($entry['actor'], substr($field, strlen('actor.')));
+
+            return $entry;
+        }
+        $plane = CinematicCommandSchema::export()['fieldPlane']['field'];
+        if (! in_array($field, [$plane, 'subject.kind', 'subject.id'], true) || ! array_key_exists($plane, $entry)
+            || ! self::isStagedActorEntry($entry)) {
+            return $entry;
+        }
+        $actor = array_diff_key($entry, ['type' => true]);
+        try {
+            CinematicStageManager::validateBinding(array_diff_key($actor, [$plane => true]));
+        } catch (\InvalidArgumentException) {
+            return $entry;
+        }
+        CinematicStageManager::validateBinding($actor);
+
+        return $entry;
+    }
+
     /** Wearing a map NPC's look clears the actor's own look, which the Engine refuses beside it; both editors share this. */
     public static function prepareAppearanceEdit(array $entry, string $field): array
     {

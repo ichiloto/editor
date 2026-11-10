@@ -9,6 +9,13 @@
 
 ### Added
 
+- Cinematic field planes (Engine aa0e5b8): `field_animation` commands, `stage_actor` commands (inline or wrapped in
+  `actor`) and staged cast members author **Draw Plane** (`plane`), offered from the Engine schema's `fieldPlane`
+  export (`field`, the default, or `aboveCover`), in both editors, through the existing rows, saves and undo.
+  Clearing it removes the key. Choosing `aboveCover` for a world object takeover, or binding a lifted actor to a
+  world object, is refused before anything changes, by the Engine's `CinematicStageManager::validateBinding`, and
+  the existing validation reports an unknown plane or a lifted takeover in a script.
+
 - Response-window warnings (Engine 27d2ac6): a skill's `prepare_response_window` effect authors **Follow-up Skill**
   (`skill`), picked from the skills the Engine's `BattleReactions` resolves as a follow-up, and **Response Turns**
   (`responseTurns`), through the existing rows, saves and undo. Picking a follow-up the Engine refuses (missing,

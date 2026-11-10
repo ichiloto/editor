@@ -3297,8 +3297,8 @@ reduced-motion policy), **Script** (the command list, opened as a frame),
 **Skip** (policy, checkpoints, the finalizer as a frame), **Metadata**
 (authoring), **Conversation** and **Cast**. Cast rows are `player`, `party_actor`, `npc` (a
 stable map-local id on the start map) or `staged_actor` with every engine
-field: id, sprite or asset, x and y, facing, visible, collision and
-directional sprites. `Shift+O` on a cast row adds a member; `Delete` removes
+field: id, sprite or asset, x and y, facing, visible, collision, Draw Plane
+and directional sprites. `Shift+O` on a cast row adds a member; `Delete` removes
 one.
 
 **Conversation** authors the field conversation the Engine turns speakers by
@@ -3354,7 +3354,7 @@ Lane 2`). `Esc` pops exactly one frame.
 | `camera` | Operation (`detach`, `attach`, `reset`, `focus`, `pan`, `route`, `track`, `shake`, `restore`), Target (kind, id or x/y), Seconds, Magnitude; a `route` owns Points |
 | `stage_actor` | the staged-actor fields |
 | `show_actor`, `hide_actor`, `remove_actor` | Actor (from the cast) |
-| `field_animation` | Effect (picker), or Animation and Seconds Per Frame; Target (kind, id or x/y) |
+| `field_animation` | Effect (picker), or Animation and Seconds Per Frame; Target (kind, id or x/y); Draw Plane |
 | `title_card`, `narration` | Title, Text (multiline), Seconds |
 | `transition` | Style (`fade`, `wipe`, `none`), Direction (`in`, `out`), Seconds |
 | `clear_presentation` | none |
@@ -3368,6 +3368,20 @@ and Seconds Per Frame rows and their values; clearing the Effect brings them
 back. Validation plays the effect through the Engine for both presentations
 and reports one that is missing, cannot be read, or loops: the command waits
 for its effect to end, and loops belong to a map's own field effects.
+
+**Draw Plane** (`plane`), on a `field_animation`, a `stage_actor` command and a
+staged cast member, chooses where the graphical art draws, from the Engine's
+own values. `field`, the default, keeps it in the field world, under cinematic
+covers such as a stage dim. `aboveCover` lifts its current image over the
+field, the active stage cover and any transition cover at full strength, below
+cinematic text, map transfer covers and notifications. Terminal glyphs,
+placement, timing, collision, events and saves are the same on either plane,
+so both editors offer the choice. Clearing it removes the key and the field
+plane applies. The Engine refuses `aboveCover` on a staged actor bound to a
+world object, whose art draws in the field: choosing that plane for such a
+takeover, or completing that binding on a lifted actor, is refused before
+anything changes, and validation reports an unknown plane or a lifted takeover
+already in a script.
 
 Every other type from the Common Events table is available too, with the
 same rows. `Shift+O` adds: on a route, lane or point row, another step, lane

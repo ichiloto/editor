@@ -354,8 +354,8 @@ final class CutsceneSchemas
             nestedLists: $graphical ? ['staged_actor' => StagedActorFields::getSuppressionList(...)] : [],
             // The Engine stages a cast member that names no kind.
             variantDefault: 'staged_actor',
-            prepareEdit: static fn(array $entry, string $field): array => StagedActorFields::preparePositionEdit(
-                StagedActorFields::prepareAppearanceEdit($graphical ? StagedActorFields::prepareEdit($entry, $field) : $entry, $field), $field),
+            prepareEdit: static fn(array $entry, string $field): array => StagedActorFields::preparePlaneEdit(StagedActorFields::preparePositionEdit(
+                StagedActorFields::prepareAppearanceEdit($graphical ? StagedActorFields::prepareEdit($entry, $field) : $entry, $field), $field), $field),
         );
     }
 
@@ -385,6 +385,7 @@ final class CutsceneSchemas
                 facingDefault: ($entry['replace'] ?? false) === true && ! isset($entry['subject']) ? '(keep current facing)' : 'south'),
             RecordField::boolean('visible', 'Visible', removeWhenEmpty: false, displayDefault: 'true'),
             RecordField::boolean('collision', 'Collision'),
+            self::getFieldPlaneField(),
             new RecordField('sprites.north', 'Sprite North', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             new RecordField('sprites.south', 'Sprite South', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             new RecordField('sprites.east', 'Sprite East', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
@@ -416,6 +417,19 @@ final class CutsceneSchemas
         }
 
         return [...$fields, ...StagedActorFields::getFields($entry)];
+    }
+
+    /**
+     * Where a `field_animation` effect or a staged actor's graphical art draws, as the Engine's cinematic schema
+     * exports the choice (`fieldPlane`): its field, values and default are the Engine's. The plane is graphical
+     * presentation only; Terminal glyphs, placement, collision and saves are the same on either.
+     */
+    public static function getFieldPlaneField(): RecordField
+    {
+        $plane = CinematicCommandSchema::export()['fieldPlane'];
+
+        return new RecordField($plane['field'], 'Draw Plane', options: $plane['options'], removeWhenEmpty: true,
+            displayDefault: $plane['default']);
     }
 
     /**
@@ -457,6 +471,7 @@ final class CutsceneSchemas
                 $entry = $graphical ? StagedActorFields::prepareEdit($entry, $field) : $entry;
                 $entry = StagedActorFields::prepareAppearanceEdit($entry, $field);
                 $entry = StagedActorFields::preparePositionEdit($entry, $field);
+                $entry = StagedActorFields::preparePlaneEdit($entry, $field);
                 return MovementRouteFields::prepareEdit($entry, $field);
             },
         );
@@ -576,12 +591,14 @@ final class CutsceneSchemas
                 ? [
                     new RecordField('effect', 'Effect', reference: 'effects', removeWhenEmpty: true, allowsNone: true, displayDefault: '(legacy animation)'),
                     ...$subject('target', 'Target', true, $entry),
+                    self::getFieldPlaneField(),
                 ]
                 : [
                     new RecordField('effect', 'Effect', reference: 'effects', removeWhenEmpty: true, allowsNone: true, displayDefault: '(legacy animation)'),
                     RecordField::reference('animation', 'Animation', 'animations'),
                     ...$subject('target', 'Target', true, $entry),
                     new RecordField('secondsPerFrame', 'Seconds Per Frame', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '0.12'),
+                    self::getFieldPlaneField(),
                 ],
             ...array_fill_keys($timedText['commands'], $timedTextFields),
             'transition' => [
