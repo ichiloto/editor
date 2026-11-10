@@ -121,3 +121,28 @@ it('authors the straight flight fallback through the shared rows with undo, and 
     expect($refusal)->toContain('flight fallback requires a straight route')
         ->and(file_get_contents($path))->toBe($before);
 });
+
+it('reserves spaced fallback hit time for each previewed target as the battle does', function () {
+    $reaction = static function (array $placements, bool $spaced): array {
+        $root = straightFlightProject(['fallback' => 'horizontal-exit'], $placements);
+        $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+        $timeline = require $path;
+        // The impact lands as the flight arrives, so each target beyond the first gets its own spaced hit.
+        $timeline['presentations']['graphical']['cues'] = [['id' => 'hit', 'type' => 'applyEffect', 'frame' => 1]];
+        if ($spaced) { $timeline['presentations']['graphical']['fallbackHitSpacingFrames'] = 1; }
+        file_put_contents($path, '<?php return ' . var_export($timeline, true) . ';');
+        $session = EditorSession::open($root);
+        $preview = $session->readEffectBattlePreview(findEffectIndex($session, 'dusk-slash'), 0);
+
+        return [count($preview['targets']), $preview['phases']['reaction']['length']];
+    };
+
+    [$targets, $spaced] = $reaction(STRAIGHT_FLIGHT_UNREACHABLE, true);
+    [, $unspaced] = $reaction(STRAIGHT_FLIGHT_UNREACHABLE, false);
+    expect($targets)->toBe(2)->and($spaced)->toBeGreaterThan($unspaced);
+
+    $alone = [STRAIGHT_FLIGHT_UNREACHABLE[0]];
+    [$targets, $spaced] = $reaction($alone, true);
+    [, $unspaced] = $reaction($alone, false);
+    expect($targets)->toBe(1)->and($spaced)->toBe($unspaced);
+});

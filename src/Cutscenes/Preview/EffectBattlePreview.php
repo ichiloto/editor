@@ -174,7 +174,7 @@ final class EffectBattlePreview
             movePose: $movementPoses ? $poses?->getPose(BattlePoseRole::MOVE) : null,
             returnPose: $movementPoses ? $poses?->getPose(BattlePoseRole::RETURNING) : null,
             projectedRange: isset($target->defaults['rangeTiming']) ? $graphical?->measureActionRange($caster, $targets) : null,
-            actionPoseOverride: $actionPoseOverride, flashStep: $flashStep);
+            actionPoseOverride: $actionPoseOverride, flashStep: $flashStep, targetCount: count($targets));
 
         return new self(
             new BattleCommandPreview($battle, $plan, $caster, $targets, $role,
