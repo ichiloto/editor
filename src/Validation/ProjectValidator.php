@@ -221,6 +221,7 @@ class ProjectValidator
       ...$this->checkReferences($workspace),
       ...new AnimationReferenceValidator()->validate($workspace),
       ...new CounterAttackValidator()->validate($workspace),
+      ...new ResponseWindowValidator()->validate($workspace),
       ...new InitialEquipmentValidator()->validate($workspace),
       ...new TroopFormationValidator()->validate($workspace),
       ...new BattleTestValidator()->validate($workspace),

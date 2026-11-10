@@ -263,6 +263,8 @@ final class RecordPanes
     {
         $parts = match (true) {
             isset($effect['formula']) => [strval($effect['formula'])],
+            isset($effect['responseTurns']) => [sprintf('%s after %d response %s', strval($effect['skill'] ?? '?'),
+                intval($effect['responseTurns']), intval($effect['responseTurns']) === 1 ? 'turn' : 'turns')],
             isset($effect['stateId']) => [sprintf('%s, %d%%', strval($effect['stateId']), intval($effect['chancePercent'] ?? 100))],
             isset($effect['stateIds']) && is_array($effect['stateIds']) => [implode(', ', array_map('strval', $effect['stateIds']))],
             isset($effect['facts']) && is_array($effect['facts']) => [sprintf('%s, %d%%',

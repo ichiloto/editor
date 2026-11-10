@@ -9,6 +9,13 @@
 
 ### Added
 
+- Response-window warnings (Engine 27d2ac6): a skill's `prepare_response_window` effect authors **Follow-up Skill**
+  (`skill`), picked from the skills the Engine's `BattleReactions` resolves as a follow-up, and **Response Turns**
+  (`responseTurns`), through the existing rows, saves and undo. Picking a follow-up the Engine refuses (missing,
+  incompatible, another warning, or the warning itself) is refused before anything changes; the skill save check
+  runs the Engine's `SkillRecord` reader, and project validation reports a warning whose follow-up the Engine would
+  refuse. The Effects pane shows the follow-up and its response turns.
+
 - Landed-hit and pending state effects (Engine dc8ffe7, 9911a88): a skill's `add_state` effect authors **Applies**
   (`trigger`), offered from the Engine's `SkillSecondaryTrigger` values, and **Pending Turns** (`delayTurns`), and a
   state authors **Physical Damage Dealt Rate** (`physicalDamageDealtRate`), through the existing rows, saves and undo.

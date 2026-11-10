@@ -26,6 +26,7 @@ use Ichiloto\Engine\Rendering\Presentation\Text\ProjectTextCatalog;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Battle\BattleReactions;
 use Ichiloto\Engine\Battle\CounterAttackRule;
 use Ichiloto\Engine\Battle\CrisisAbility;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
@@ -116,12 +117,19 @@ final class ReferenceCatalog
     /** The skills a Super Move's variant may use, by the Engine's own rule ({@see getSuperMoveSkillNames()}). */
     public const string SUPER_MOVE_SKILLS = 'super_move_skills';
 
+    /**
+     * The skills a response-window warning (`prepare_response_window`) may schedule, by the Engine's own rule
+     * ({@see assertResponseSkill()}).
+     */
+    public const string RESPONSE_SKILLS = 'response_skills';
+
     public const array CATEGORIES = [
         'actors',
         'actor_ids',
         'classes',
         'attack_skills',
         'counter_skills',
+        self::RESPONSE_SKILLS,
         self::SUPER_MOVES,
         self::SUPER_MOVE_SKILLS,
         'resolution_kinds',
@@ -330,6 +338,7 @@ final class ReferenceCatalog
             'attack_skills' => $this->attackSkillNames(),
             // What a counter attack may respond with, by the Engine's own rule.
             'counter_skills' => $this->counterSkillNames(),
+            self::RESPONSE_SKILLS => $this->listResponseSkillNames(),
             self::SUPER_MOVE_SKILLS => self::getSuperMoveSkillNames($this->workspace->loadSkillCatalog()),
             self::SUPER_MOVES, 'states' => array_values(array_filter(array_map(
                 static fn(ProjectRecord $record): mixed => $record->get('id'),
@@ -601,6 +610,41 @@ final class ReferenceCatalog
         }
 
         return $names;
+    }
+
+    /**
+     * The skills a response-window warning may schedule, in catalogue order: those the Engine's battle reactions
+     * resolve as a follow-up ({@see assertResponseSkill()}).
+     *
+     * @return list<string>
+     */
+    private function listResponseSkillNames(): array
+    {
+        $catalog = $this->workspace->loadSkillCatalog();
+        $reactions = new BattleReactions($catalog);
+        $names = [];
+        foreach (array_keys($catalog->getSkills()) as $name) {
+            try {
+                $reactions->resolveResponseSkill((string) $name);
+                $names[] = (string) $name;
+            } catch (InvalidArgumentException) {
+                continue;
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * Refuses a skill a response-window warning may not schedule, in the Engine's words: one the skills as edited do
+     * not hold, or one that is not a battle-only follow-up targeting all living opponents, or is itself a warning
+     * (which also refuses a warning naming itself). The Engine's BattleReactions owns the rule.
+     *
+     * @throws InvalidArgumentException
+     */
+    public function assertResponseSkill(string $name): void
+    {
+        new BattleReactions($this->workspace->loadSkillCatalog())->resolveResponseSkill($name);
     }
 
     /**

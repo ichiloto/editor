@@ -1721,6 +1721,12 @@ final class RecordSchemaCatalog
             RecordField::reference('skill', 'Response Skill', 'counter_skills'),
             RecordField::reference('stateId', 'Stance State', 'states'),
         ];
+        // Battle only and the warning's sole effect: the follow-up it schedules, picked from the skills the Engine
+        // resolves as one, and how many turns each living opponent gets to respond before it lands.
+        $variants['prepare_response_window'] = [
+            RecordField::reference('skill', 'Follow-up Skill', ReferenceCatalog::RESPONSE_SKILLS),
+            new RecordField('responseTurns', 'Response Turns', InputControlType::INTEGER),
+        ];
         $variants['reset_atb'] = [];
         $variants['change_formation'] = [new RecordField('operation', 'Formation Change', options: array_map(
             static fn(\Ichiloto\Engine\Battle\Formation\BattleFormationChange $operation): string => $operation->value,

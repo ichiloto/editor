@@ -127,6 +127,10 @@ final class ProjectRecordDatabase
                 }
             }
         }
+        if ($references !== null && $field->reference === ReferenceCatalog::RESPONSE_SKILLS && $value !== null) {
+            // The Engine's battle reactions say why a skill cannot follow a warning, a warning naming itself included.
+            $references->assertResponseSkill(strval($value));
+        }
         $scoped = $references !== null && $field->reference !== null && $value !== null ? $references->listScopedChoices($field->reference) : null;
         foreach ($scoped === null ? [] : (is_array($value) ? $value : [$value]) as $selected) {
             if (! in_array($selected, $scoped, true)) {

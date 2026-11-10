@@ -1987,7 +1987,17 @@ to a surviving target the action's damage hit; place it after the damaging
 effect. **Pending Turns** (`delayTurns`) keeps the state pending for that many
 of the bearer's turns before it takes effect for its whole duration; the Engine
 refuses a delay on a skill that can be used outside battle, and the save is
-refused before anything is written. Changing an effect's type, or a skill's
+refused before anything is written. A `prepare_response_window` effect makes a
+warning: the skill's sole effect, on a battle-only skill scoped Enemy / All /
+Alive. It offers **Follow-up Skill** (`skill`), the separate skill that lands
+after the warning, picked from the skills the Engine's battle reactions accept
+as one: battle-only, targeting all living opponents, and not a warning itself,
+so a warning never names itself. **Response Turns** (`responseTurns`) is how
+many completed turns each living opponent gets before the follow-up lands, a
+whole number of at least 1. A follow-up the Engine refuses is refused as you
+pick it, a warning of the wrong shape or with no response turn is refused on
+save, and project validation reports a warning whose follow-up later goes
+missing or changes. Changing an effect's type, or a skill's
 kind, drops the values only the old one read. Files are numbered
 (`0001-attack.php`) because menus list skills in file order; a new or copied
 skill takes the next number and goes last. `skills.php` is the barrel that
