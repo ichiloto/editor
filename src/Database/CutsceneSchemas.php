@@ -12,6 +12,8 @@ use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightContact;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
+use Ichiloto\Engine\Animations\Timelines\EffectImpactTimingMode;
+use Ichiloto\Engine\Animations\Timelines\EffectStraightFlightFallback;
 use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
 use Ichiloto\Engine\Animations\Timelines\EffectImageDepth;
 use Ichiloto\Engine\Animations\Timelines\EffectPoseClock;
@@ -664,7 +666,9 @@ final class CutsceneSchemas
                 displayDefault: EffectCadence::FIXED->value,
             ),
             // Battle only: when the command's result lands.
-            new RecordField('effectTiming.mode', 'Impact Timing', options: ['end', 'frame', 'cue'], removeWhenEmpty: true, displayDefault: '(omitted)'),
+            // Arena resolves at its frame on the restored battlefield, after a staged target effect's restore frame.
+            new RecordField('effectTiming.mode', 'Impact Timing', options: array_column(EffectImpactTimingMode::cases(), 'value'),
+                removeWhenEmpty: true, displayDefault: '(omitted)'),
             new RecordField('effectTiming.frame', 'Impact Frame', InputControlType::INTEGER, removeWhenEmpty: true),
             RecordField::reference('effectTiming.cueId', 'Impact Cue', 'effect_cues', allowsNone: true, noneLabel: '(none)'),
             ...($graphical ? [
@@ -824,6 +828,10 @@ final class CutsceneSchemas
                     removeWhenEmpty: true, displayDefault: EffectFlightRoute::WAYPOINTS->value),
                 new RecordField('flight.contact', 'Straight Flight Contact', options: ['', ...array_column(EffectFlightContact::cases(), 'value')],
                     removeWhenEmpty: true, displayDefault: EffectFlightContact::EDGE->value),
+                // What a straight flight does when no single ray reaches every selected target, by the Engine's policies.
+                new RecordField('flight.fallback', 'Straight Flight Fallback',
+                    options: ['', ...array_column(EffectStraightFlightFallback::cases(), 'value')],
+                    removeWhenEmpty: true, displayDefault: '(none)'),
                 ...($trail ? [] : [new RecordField('flight.tipX', 'Tip X', InputControlType::FLOAT, removeWhenEmpty: true)]),
                 new RecordField('flight.curve.launchProgress', 'Curve Launch Control Progress', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('flight.curve.launchOffsetY', 'Curve Launch Control Y Offset', InputControlType::FLOAT, removeWhenEmpty: true),

@@ -3593,7 +3593,11 @@ An effect is edited like a summon's timeline, over the keys the engine's
 effect library reads and nothing else. The record pane groups **Identity**
 (the id), **Sequence**, **Timing** (FPS, length in frames, playback `once`
 or `loop`, loop from, rest frame), **Impact (battle)** (when a battle
-command's result lands: at the `end`, a `frame` or a `cue`) and
+command's result lands: at the `end`, a `frame`, a `cue`, or `arena`: at its
+frame on the restored battlefield, on the selected battlers, for a staged
+target effect whose graphical frame is at or after the stage's restore frame;
+the Terminal sequence chooses its own frame, and the Engine refuses an arena
+frame before the restore frame or beside a cue) and
 **Timeline** (the Tracks and Cues frames). Tracks are `glyph`, `text`,
 `image`, `flash` or `shake`, each with its `Presentation` (`all`,
 `terminal` or `graphical`), an anchor (`target`, `caster` or `screen`) and,
@@ -3623,6 +3627,21 @@ payload. Cues are `playSound` on the field and any battle cue in battle.
 Impact timing, facing, image attachment, flips, flashes and shakes
 are battle-only;
 validation names the place that uses an effect where they are refused.
+
+In the GUI, a caster image or trail track that flies to its targets has a
+**Straight Flight Fallback** beside **Straight Flight Contact**: with a
+`straight` route, `horizontal-exit` runs one level line off the screen edge
+toward the opponents whenever no single straight line reaches every selected
+target, and hits only the targets; `(none)` leaves the key out. The Engine
+refuses a fallback on any other route. The editor session's
+`effects.flightRoutes` checks every troop the project fights, with the
+battle's own route planning over each troop's projected bodies, and reports a
+flight that reaches a troop's targets only through its fallback as a warning
+and one that cannot reach them without a fallback as an error. A missing pose
+point or unreadable artwork is reported apart, with the Engine's reason.
+
+A summon's **Effect Timing** offers the same `arena` mode, checked by the same
+validator against its graphical stage's restore frame.
 
 **Sequence** says how the effect is drawn. A flat effect has one sequence
 for the terminal and graphical renderers alike, and stays flat unless you

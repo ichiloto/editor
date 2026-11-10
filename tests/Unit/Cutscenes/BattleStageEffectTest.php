@@ -345,3 +345,39 @@ it('chooses each consumer by the shared rule and offers only consumers that can 
         ->and(EffectPreviewContext::BATTLE->acceptsStageDeclaration(true))->toBeTrue()
         ->and(EffectPreviewContext::BATTLE->createStage(EffectPresentation::TERMINAL))->toBeInstanceOf(EffectPreviewStage::class);
 });
+
+it('authors arena impact timing on a staged sequence, refused before the restore frame by the Engine, beside the existing modes', function () {
+    $root = battleStageProject(true);
+    $session = EditorSession::open($root);
+    $index = battleStageIndex($session);
+    $session->selectCutscenePresentation('cutscenes/effect', $index, 'graphical');
+    $mode = battleStageRows($session, $index)['Impact Timing'];
+    expect(json_encode($mode))->toContain('"arena"', '"end"', '"frame"', '"cue"');
+    $apply = static fn(string $label, string $value) => $session->applyDatabaseRecord('cutscenes/effect', $index,
+        battleStageRows($session, $index)[$label]['key'], $value);
+    $before = file_get_contents(battleStagePath($root));
+
+    $apply('Impact Timing', 'arena');
+    try {
+        $apply('Impact Frame', '5');
+        $refusal = implode(' ', array_map('json_encode', $session->saveAll()['failures']));
+    } catch (SessionRefusal $failure) {
+        $refusal = $failure->getMessage();
+    }
+    expect($refusal)->toContain('arena impact requires a once-playing stage and a frame at or after battlefield restoration')
+        ->and(file_get_contents(battleStagePath($root)))->toBe($before);
+
+    $apply('Impact Frame', '10');
+    // The Terminal sequence chooses its own frame.
+    $session->selectCutscenePresentation('cutscenes/effect', $index, 'terminal');
+    $apply('Impact Timing', 'arena');
+    $apply('Impact Frame', '2');
+    expect($session->saveAll()['failures'])->toBe([]);
+    $saved = require battleStagePath($root);
+    expect($saved['presentations']['graphical']['effectTiming'])->toBe(['mode' => 'arena', 'frame' => 10])
+        ->and($saved['presentations']['terminal']['effectTiming'])->toBe(['mode' => 'arena', 'frame' => 2])
+        ->and(file_get_contents(battleStagePath($root)))->toContain('// Keep the authored cut-in comment.');
+
+    $session->undo();
+    expect(battleStageRows($session, $index)['Impact Frame']['value'])->not->toBe('2');
+});

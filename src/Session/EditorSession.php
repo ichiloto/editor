@@ -51,6 +51,8 @@ use Ichiloto\Editor\Database\MasteryAuthoring;
 use Ichiloto\Editor\Database\MasteryFields;
 use Ichiloto\Editor\Database\SkillReferences;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
+use Ichiloto\Engine\Animations\Timelines\EffectStraightFlightFallback;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
@@ -167,6 +169,7 @@ use Ichiloto\Engine\Entities\Troop;
 use Ichiloto\Engine\Scenes\Battle\BattleConfig;
 use Ichiloto\Editor\Cutscenes\Preview\SummonBattlePreview;
 use Ichiloto\Editor\Cutscenes\Preview\EffectBattlePreview;
+use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Engine\Animations\Animation;
 use Ichiloto\Engine\Animations\AnimationLibrary;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
@@ -207,6 +210,13 @@ use WeakReference;
  */
 final class EditorSession
 {
+    /** A straight flight that reaches a troop's targets only through its authored fallback. */
+    public const string FLIGHT_ROUTE_FALLBACK_USED = 'effect.flight.fallback_used';
+    /** A straight flight that cannot reach a troop's targets and has no fallback. */
+    public const string FLIGHT_ROUTE_UNREACHABLE = 'effect.flight.unreachable';
+    /** A straight flight the battle cannot plan for a reason other than geometry. */
+    public const string FLIGHT_ROUTE_UNPLANNED = 'effect.flight.unplanned';
+
     use MapPlacementSession;
     use AssetImportSession;
     use TilesetArtSession;
@@ -3831,6 +3841,150 @@ final class EditorSession
     }
 
     /**
+     * Checks every straight caster flight of a battle effect against every
+     * troop the project fights: for each action of the battle test party
+     * that plays it and each target the action can choose, the graphical
+     * battle captures the route at release with the Engine's own straight
+     * route planning over the troop's projected bodies. A route that reaches
+     * the targets only through its fallback is a warning; one that cannot
+     * reach them and has no fallback is an error. A flight the battle cannot
+     * plan for another reason (a missing pose point, unreadable artwork) is
+     * reported with the Engine's reason. Nothing is drawn or written.
+     *
+     * @return array{issues: list<array<string, mixed>>} The issues, as {@see Issue::describe()} gives them.
+     * @throws SessionRefusal When the effect is unknown, no action of the party plays it, or the battle cannot be set up.
+     */
+    public function checkEffectFlightRoutes(int $index): array
+    {
+        $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
+        // Diagnosis asks the Engine for the fallback route wherever a direct one fails, so a reachable
+        // formation and an unreachable one are told apart; the authored fallback decides the severity.
+        [$probe, $authored] = self::withProbeFallbacks($asset->partner());
+        if ($authored === []) {
+            return ['issues' => []];
+        }
+        $animations = array_values(array_map(static fn($record): mixed => $record->toArray(), $this->requireRecordDatabase('animations')->getRecords()));
+        $entry = $this->readBattleTestEntry();
+        $config = $this->workspace->config?->getRecord('ui.battle')->get('value');
+        $pacing = BattlePacing::fromBattleUiConfig(is_array($config) ? $config : []);
+        $catalog = $this->requireBattleLayoutCatalog('check flight routes on');
+        $root = $this->workspace->projectRoot;
+        $compile = function (string $id, EffectPresentation $presentation) use ($asset, $probe, $root): CompiledEffectTimeline {
+            if ($id === $asset->id) {
+                return CutsceneHydration::compileEffect($id, $probe, $presentation, true, $root);
+            }
+            $effect = $this->workspace->cutscenes?->find(CutsceneType::EFFECT, $id)
+                ?? throw new SessionRefusal(sprintf('The animation plays the effect %s, which does not exist.', $id));
+
+            return $effect->compiledEffect($presentation, true);
+        };
+        $library = self::createAnimationLibrary($animations);
+
+        $issues = [];
+        foreach ($this->requireRecordDatabase('troops')->getRecords() as $record) {
+            $data = $record->toArray();
+            $name = is_array($data) ? trim(strval($data['name'] ?? '')) : '';
+            if ($name === '') {
+                continue;
+            }
+            $issues = [...$issues, ...ProjectDirectoryContext::run($root, fn(): array => $this->checkTroopFlightRoutes(
+                $asset->id, $authored, ['name' => $name, 'data' => $data], $entry, $library, $pacing, $catalog, $compile))];
+        }
+
+        // Target choices that select the same targets meet the same route once.
+        return ['issues' => array_values(array_unique(array_map(static fn(Issue $issue): array => $issue->describe(), $issues), SORT_REGULAR))];
+    }
+
+    /**
+     * @param array<string, ?string> $authored Each straight caster flight track's authored fallback, by track id.
+     * @param array{name: string, data: array<string, mixed>} $troop
+     * @return list<Issue>
+     */
+    private function checkTroopFlightRoutes(string $effectId, array $authored, array $troop, array $entry, AnimationLibrary $library,
+        BattlePacing $pacing, BattlePresentationCatalog $catalog, Closure $compile): array
+    {
+        $assets = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
+        $create = function (int $binding, ?int $target) use ($effectId, $troop, $entry, $library, $pacing, $catalog, $compile, $assets): EffectBattlePreview {
+            [$battle, $skills] = $this->createPreviewBattle($entry, $troop);
+
+            return EffectBattlePreview::create($effectId, $battle, $skills, $library, $pacing, $catalog, $assets,
+                EffectPresentation::GRAPHICAL, $compile, $binding, false, $target);
+        };
+        try {
+            $first = $create(0, null);
+        } catch (SessionRefusal $refusal) {
+            throw $refusal;
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be checked in battle against %s: %s', $effectId, $troop['name'], $failure->getMessage()),
+                previous: $failure);
+        }
+        $issues = [];
+        foreach (array_keys($first->contexts) as $binding) {
+            $preview = $binding === 0 ? $first : $create($binding, null);
+            $targets = $preview->targetOptions === [] ? [null] : array_keys($preview->targetOptions);
+            foreach ($targets as $target) {
+                $shown = $target === null || $target === $preview->targetIndex ? $preview : $create($binding, $target);
+                $where = sprintf('effect %s', $effectId);
+                $situation = sprintf('%s\'s %s against %s in troop %s', $shown->caster, $shown->contexts[$binding]['action'],
+                    implode(', ', $shown->targets), $troop['name']);
+                foreach ($shown->findStraightFlightRoutes() as $route) {
+                    if ($route['failure'] !== null) {
+                        $issues[] = Issue::error($where, sprintf('Track %s cannot plan its straight flight for %s: %s', $route['track'], $situation,
+                            $route['failure']), 'Correct the pose point or the battler artwork the flight starts from or reaches.',
+                            self::FLIGHT_ROUTE_UNPLANNED);
+                    } elseif ($route['fallback'] !== null && ($authored[$route['track']] ?? null) !== null) {
+                        $issues[] = new Issue(Severity::WARNING, $where, sprintf('Track %s cannot reach every target directly for %s, so it uses its %s fallback.',
+                            $route['track'], $situation, $route['fallback']),
+                            'Expected where the formation needs it; change the release point or the formation for a direct line.',
+                            self::FLIGHT_ROUTE_FALLBACK_USED);
+                    } elseif ($route['fallback'] !== null) {
+                        $issues[] = Issue::error($where, sprintf('Track %s cannot reach every target in one straight line for %s, and it has no fallback.',
+                            $route['track'], $situation),
+                            'Choose a Straight Flight Fallback for the track, or change the release point or the formation.',
+                            self::FLIGHT_ROUTE_UNREACHABLE);
+                    }
+                }
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * The timeline with the horizontal-exit fallback on every straight caster
+     * flight that has none, and each such track's authored fallback.
+     *
+     * @param array<string, mixed> $timeline The effect's timeline file as it stands.
+     * @return array{0: array<string, mixed>, 1: array<string, ?string>}
+     */
+    private static function withProbeFallbacks(array $timeline): array
+    {
+        $authored = [];
+        $probe = static function (array $sequence) use (&$authored): array {
+            foreach ($sequence['tracks'] ?? [] as $position => $track) {
+                if (! is_array($track) || ($track['anchor'] ?? null) !== 'caster' || ! is_array($track['flight'] ?? null)
+                    || ($track['flight']['route'] ?? null) !== EffectFlightRoute::STRAIGHT->value) {
+                    continue;
+                }
+                $fallback = $track['flight']['fallback'] ?? null;
+                $authored[strval($track['id'] ?? $position)] = is_string($fallback) ? $fallback : null;
+                $sequence['tracks'][$position]['flight']['fallback'] = is_string($fallback) ? $fallback
+                    : EffectStraightFlightFallback::HORIZONTAL_EXIT->value;
+            }
+
+            return $sequence;
+        };
+        $graphical = EffectPresentation::GRAPHICAL->value;
+        if (is_array($timeline['presentations'][$graphical] ?? null)) {
+            $timeline['presentations'][$graphical] = $probe($timeline['presentations'][$graphical]);
+        } elseif (! isset($timeline['presentations'])) {
+            $timeline = $probe($timeline);
+        }
+
+        return [$timeline, $authored];
+    }
+
+    /**
      * The battle an effect preview plays in, and the effect played in it.
      *
      * @param list<mixed> $animations The animation records as they stand.
@@ -3842,14 +3996,7 @@ final class EditorSession
         ?BattlePresentationCatalog $catalog, EffectPresentation $presentation, int $binding, bool $reducedMotion,
         ?int $targetIndex): EffectBattlePreview
     {
-        // The animations as authored now; an entry the Engine would not read plays nothing, as in battle.
-        $library = AnimationLibrary::createFromAnimations(array_values(array_filter(array_map(static function (mixed $data): ?Animation {
-            try {
-                return is_array($data) ? Animation::fromArray($data) : null;
-            } catch (Throwable) {
-                return null;
-            }
-        }, $animations))));
+        $library = self::createAnimationLibrary($animations);
         $compile = function (string $id, EffectPresentation $presentation): CompiledEffectTimeline {
             $effect = $this->workspace->cutscenes?->find(CutsceneType::EFFECT, $id)
                 ?? throw new SessionRefusal(sprintf('The animation plays the effect %s, which does not exist.', $id));
@@ -3867,6 +4014,22 @@ final class EditorSession
             throw new SessionRefusal(sprintf('%s cannot be previewed in battle: %s', $effectId, $failure->getMessage()), previous: $failure);
         }
     }
+    /**
+     * The animations as authored now; an entry the Engine would not read plays nothing, as in battle.
+     *
+     * @param list<mixed> $animations The animation records as they stand.
+     */
+    private static function createAnimationLibrary(array $animations): AnimationLibrary
+    {
+        return AnimationLibrary::createFromAnimations(array_values(array_filter(array_map(static function (mixed $data): ?Animation {
+            try {
+                return is_array($data) ? Animation::fromArray($data) : null;
+            } catch (Throwable) {
+                return null;
+            }
+        }, $animations))));
+    }
+
     /**
      * The party inputs common to effect and summon previews. Database identity
      * also changes when a source transaction reloads records with fresh versions.

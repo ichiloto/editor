@@ -9,6 +9,14 @@
 
 ### Added
 
+- Straight flight fallback and arena impact (Engine 71c5714, 6a48757): a caster flight's **Straight Flight Fallback**
+  (`flight.fallback`, the Engine's `horizontal-exit`) is authored beside its contact mode, and an effect sequence's
+  **Impact Timing** and a summon's **Effect Timing** offer `arena`, through the existing rows, saves and undo; the
+  Engine's validator refuses a fallback off a straight route and an arena frame before the stage restore frame.
+  `effects.flightRoutes` checks each straight caster flight against every troop with the battle's own capture and
+  `BattleStraightShot::planRoute`: reaching a troop's targets only through the fallback is a warning, not reaching
+  them without one is an error, and a flight the battle cannot plan for another reason is reported apart.
+
 - Super Moves (Engine 01a0883): Database > Super Moves and the actor page's **Super Move** picker write the Engine's
   canonical `assets/Data/super-moves.php` and actor `superMove` key. A project still keeping the earlier
   `crisis-abilities.php` shows its records read-only, and its actors' `crisisAbility` keys read through the Engine's

@@ -234,3 +234,32 @@ it('refuses a stage rest frame outside the active stage on the source-saving pat
     expect($refusal)->toContain('stage.restFrame')
         ->and(file_get_contents($path))->toBe($before);
 });
+
+it('authors arena effect timing on a staged summon through the same validator, refused before its restore frame', function () {
+    $root = stagedSummonProject();
+    $data = $root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.data.php';
+    $session = EditorSession::open($root);
+    $session->setCutsceneStage('cutscenes/summon', 0, true);
+    $session->selectCutscenePresentation('cutscenes/summon', 0, 'graphical');
+    placeStagedSummonArt($session);
+    expect($session->saveAll()['failures'])->toBe([]);
+    $restore = (int) stageRows($session)['Stage Restore Frame']['value'];
+    $before = file_get_contents($data);
+    $apply = static fn(string $label, string $value) => $session->applyDatabaseRecord('cutscenes/summon', 0, stageRows($session)[$label]['key'], $value);
+
+    $apply('Effect Timing', 'arena');
+    // Arena impact names a frame, so the cue the summon resolved on before is cleared.
+    $apply('Effect Cue', '');
+    try {
+        $apply('Effect Frame', (string) ($restore - 1));
+        $refusal = implode(' ', array_map('json_encode', $session->saveAll()['failures']));
+    } catch (SessionRefusal $failure) {
+        $refusal = $failure->getMessage();
+    }
+    expect($refusal)->toContain('arena impact requires')
+        ->and(file_get_contents($data))->toBe($before);
+
+    $apply('Effect Frame', (string) $restore);
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and((require $data)['effectTiming'])->toMatchArray(['mode' => 'arena', 'frame' => $restore]);
+});
