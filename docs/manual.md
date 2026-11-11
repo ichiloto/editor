@@ -753,6 +753,15 @@ which glyphs:
   was removed outside the editor is reported, and so is a copy partly painted
   over. Tiles no piece draws, such as a house's walls over blank cells, are
   not judged;
+- wall tiles under furniture (`graphics.wall-under-furniture`): a cell where a
+  glyph plays a piece whose art is in place, such as a bed, over a tile the
+  tileset's `shadows` name raised (a wall top or face on a casting layer),
+  so the furniture stands on a wall. A cell whose glyph plays a piece that
+  draws a raised tile there, or keeps that layer beneath it like a window on
+  its wall, is a wall and is not judged. Collision comes from the terminal
+  layers; a wall tile never stands in for furniture's solid ground. Wall art
+  on walkable floor is a walk-through, reported by the passage agreement
+  rule below;
 - cells showing the tileset's missing-art placeholder (its `missingArt`
   tile), which mark art nobody could yet infer.
 - cells whose ground tiles (the A1 to A5 sheets) can show the background

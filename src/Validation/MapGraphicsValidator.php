@@ -108,8 +108,111 @@ final class MapGraphicsValidator
         }
         [$tileset, $layers, , $graphics] = $coverage;
 
-        return [...self::checkUnplacedPieceTiles($map, $graphics), ...self::checkMissingArtTiles($map, $tileset, $layers),
-            ...self::checkSeeThroughGround($map, $tileset, $layers)];
+        return [...self::checkUnplacedPieceTiles($map, $graphics), ...self::checkRaisedArtUnderFurniture($map, $graphics),
+            ...self::checkMissingArtTiles($map, $tileset, $layers), ...self::checkSeeThroughGround($map, $tileset, $layers)];
+    }
+
+    /**
+     * Whether a tile on a tile layer is raised structure, such as a wall top
+     * or face: a tile the tileset's shadows name as casting from that layer
+     * ({@see \Ichiloto\Engine\Rendering\Tilesets\TilesetShadows}), drawn
+     * beneath characters. Raised art presents a wall, so it belongs only on
+     * cells the terminal layers make a wall. A tileset whose shadows name no
+     * casters declares no raised tiles.
+     */
+    private static function isRaisedTile(Tileset $tileset, string $tileLayer, int $id): bool
+    {
+        return $id !== TileId::EMPTY && $tileset->shadows !== null && $tileset->shadows->canCastFromLayer($tileLayer)
+            && $tileset->shadows->isCaster($id) && ! $tileset->isAbove($id);
+    }
+
+    /**
+     * Warns for raised tiles ({@see isRaisedTile()}) under furniture: a cell
+     * where a gameplay glyph plays a tileset piece whose art is in place,
+     * such as a bed, while a wall tile is drawn beneath it, so the furniture
+     * stands on a wall in the graphical field. Collision comes from the
+     * terminal layers alone; a wall tile never stands in for a piece's solid
+     * ground. A cell where any glyph plays a piece that draws a raised tile
+     * there, or keeps that tile layer's underlay there (a window on its
+     * wall), is a wall and is not judged. Tiles from a sheet the Engine
+     * cannot draw show nothing and are not judged. Wall art on walkable
+     * floor is a walk-through, the Engine's passage agreement rule's to
+     * report ({@see PassageAgreementCheck}); furniture is solid, so that
+     * rule cannot see a wall under it.
+     *
+     * @return list<Issue>
+     */
+    private static function checkRaisedArtUnderFurniture(ProjectMap $map, MapGraphics $graphics): array
+    {
+        $tileset = $graphics->tileset;
+        $usable = $tileset->getUsableSheets($map->getAssetRoot())['sheets'] ?? [];
+        if ($tileset->shadows === null || $usable === []) {
+            return [];
+        }
+        $entries = [];
+        foreach ($graphics->layers as $layer) {
+            $entries[$layer->name] = $layer->getEntries();
+        }
+        $tileAt = static fn(string $tileLayer, int $x, int $y): string => $entries[$tileLayer][$y][$x] ?? (string) TileId::EMPTY;
+        $placements = $tileset->getPlacements($map->isPaintedInKinds());
+        $stackLayers = $tileset->getStackLayers();
+
+        // The cells where a glyph plays a piece, split into structure (it draws a raised tile there) and furniture.
+        $furniture = $structure = $kept = [];
+        foreach ($map->getLayers() as $layer) {
+            if ($layer['id'] === MapLayers::EVENT || $layer['decoration']) {
+                continue;
+            }
+            $planner = GlyphTilePlanner::fromPieces($placements, $layer['name'], $stackLayers);
+            for ($y = 0; $y < $map->getHeight(); $y++) {
+                for ($x = 0; $x < $map->getWidth(); $x++) {
+                    if (! $map->hasLayerCell($layer['id'], $x, $y) || ($glyph = $map->getLayerSymbol($layer['id'], $x, $y)) === ' '
+                        || ($role = $planner->findPlayedRole($glyph, $x, $y, $tileAt)) === null) {
+                        continue;
+                    }
+                    if (array_any($role->getOwnEntries(), static fn(string $entry, string $tileLayer): bool =>
+                        self::isRaisedTile($tileset, $tileLayer, (int) $entry))) {
+                        $structure[$y][$x] = true;
+
+                        continue;
+                    }
+                    $furniture[$y][$x] = true;
+                    foreach ($role->keeps as $tileLayer => $cells) {
+                        foreach ($cells as $cell) {
+                            if ($cell['dx'] === 0 && $cell['dy'] === 0) {
+                                $kept[$y][$x][$tileLayer] = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        $issues = [];
+        foreach ($graphics->layers as $layer) {
+            $cells = $named = [];
+            for ($y = 0; $y < $layer->height; $y++) {
+                foreach ($layer->getRowTiles($y) as $x => $id) {
+                    if (isset($furniture[$y][$x]) && ! isset($structure[$y][$x]) && ! isset($kept[$y][$x][$layer->name])
+                        && isset($usable[TileId::getSheet($id)?->value ?? '']) && self::isRaisedTile($tileset, $layer->name, $id)) {
+                        $cells[] = [$x, $y];
+                        $named[] = "({$x}, {$y})";
+                    }
+                }
+            }
+            if ($cells === []) {
+                continue;
+            }
+            $rest = count($named) - self::CELLS_NAMED;
+            $issues[] = new Issue(Severity::WARNING, $map->mapId,
+                sprintf('%d %s on the %s tile layer %s a wall tile under furniture the terminal layers place there, so the furniture stands on a wall in the graphical field: %s%s.',
+                    count($cells), count($cells) === 1 ? 'cell' : 'cells', $layer->name, count($cells) === 1 ? 'has' : 'have',
+                    implode(', ', array_slice($named, 0, self::CELLS_NAMED)), $rest > 0 ? " and {$rest} more" : ''),
+                'Remove the wall tiles and paint the room\'s floor under the furniture in the GUI editor. Collision comes from the terminal layers; tile layers only present it.',
+                'graphics.wall-under-furniture', $map->mapId, $cells);
+        }
+
+        return $issues;
     }
 
     /**

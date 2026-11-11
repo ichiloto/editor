@@ -122,10 +122,11 @@ map's role is not one its own map's role leads to (`map.role-destination`;
 see Map Roles in the manual), or a map naming a role the project does not have
 (`map.role`).
 
-Warnings never refuse a change: tiles a piece draws whose glyph is gone, the
-missing-art placeholder, see-through ground, a map nothing reaches yet, an
-entrance whose icon is not its destination's place type's (`place.icon`) or a
-place icon over a way into a map naming no place type (`place.untyped`). A map
+Warnings never refuse a change: tiles a piece draws whose glyph is gone, wall
+tiles under furniture (`graphics.wall-under-furniture`), the missing-art
+placeholder, see-through ground, a map nothing reaches yet, an entrance
+whose icon is not its destination's place type's (`place.icon`) or a place
+icon over a way into a map naming no place type (`place.untyped`). A map
 naming a place type the project does not have is an error (`map.place-type`).
 
 A change to a map that already has an error is refused until that error is
