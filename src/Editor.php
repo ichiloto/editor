@@ -124,6 +124,7 @@ use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Entities\Skills\SkillRecord;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\LootType;
+use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
@@ -1691,7 +1692,8 @@ final class Editor
             return;
         }
 
-        if (preg_match('/^\X$/u', $input) !== 1) {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes === false || count($graphemes) !== 1) {
             return;
         }
 
@@ -1839,11 +1841,16 @@ final class Editor
      */
     private function handleNormalModeTypedInput(string $input): void
     {
-        if (str_contains($input, "\033") || preg_match('/^\X/u', $input, $matches) !== 1) {
+        if (str_contains($input, "\033")) {
             return;
         }
 
-        $symbol = $matches[0];
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes === false || $graphemes === []) {
+            return;
+        }
+
+        $symbol = $graphemes[0];
 
         if ($symbol === "\n" || $symbol === "\r" || $symbol === "\t") {
             return;
@@ -3865,11 +3872,12 @@ final class Editor
             return;
         }
 
-        if (preg_match('/^\X/u', $input, $matches) !== 1) {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes === false || $graphemes === []) {
             return;
         }
 
-        $symbol = $matches[0];
+        $symbol = $graphemes[0];
 
         if ($symbol === "\n" || $symbol === "\r" || $symbol === "\t") {
             return;
@@ -5583,7 +5591,8 @@ final class Editor
             return;
         }
 
-        if (preg_match('/^\X$/u', $input) === 1 && $input !== "\n" && $input !== "\r") {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes !== false && count($graphemes) === 1 && $input !== "\n" && $input !== "\r") {
             $this->commandPalette->type($input);
             $this->renderOverlays();
         }
@@ -5950,7 +5959,8 @@ final class Editor
             return;
         }
 
-        if (preg_match('/^\X$/u', $input) !== 1) {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes === false || count($graphemes) !== 1) {
             return;
         }
 
@@ -7085,7 +7095,8 @@ final class Editor
                 return true;
             }
 
-            if (preg_match('/^\X$/u', $input) === 1) {
+            $graphemes = TerminalText::splitGraphemes($input);
+            if ($graphemes !== false && count($graphemes) === 1) {
                 $this->dialogFilter->type($input);
                 $this->syncDialogSelectionToFilter();
                 $this->renderOverlays();

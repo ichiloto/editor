@@ -351,3 +351,36 @@ it('fingerprints a map after each paint at a cost that does not grow with the ro
         // With every earlier row recomposed on each paint, the last paints cost tens of times the first.
         ->and($median(array_slice($costs, -12)))->toBeLessThan(3 * $median(array_slice($costs, 0, 12)) + 2_000_000);
 });
+
+it('reads adjacent pictographs in a styled map row as separate cells and keeps them separate through a paint and save', function (string $pictograph) {
+    // Some PCRE builds join consecutive Extended_Pictographic characters in
+    // one \X match, which read such rows too narrow. The Editor's reader,
+    // its painted-symbol normalization and its written rows must all keep
+    // one pictograph per cell.
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Maps/test-map/test-map.map.php';
+    $row = "#<fg=green>{$pictograph}{$pictograph}</>........#";
+    file_put_contents($path, preg_replace('/^#          #$/m', $row, (string) file_get_contents($path), 1, $count));
+    $load = static fn(): ProjectMap => array_find(\Ichiloto\Editor\ProjectWorkspace::fromProject($root)->maps,
+        static fn(ProjectMap $map): bool => $map->mapId === 'test-map');
+    $symbols = static fn(ProjectMap $map): array => array_map(static fn(int $x): string => $map->getTileSymbol($x, 2), range(0, 11));
+
+    $map = $load();
+    expect($count)->toBe(1)
+        ->and($map->getGridSourceIssue())->toBeNull()
+        ->and($symbols($map))->toBe(['#', $pictograph, $pictograph, '.', '.', '.', '.', '.', '.', '.', '.', '#'])
+        ->and($map->getTileCellStyle(2, 2))->toBe(['prefix' => '<fg=green>', 'suffix' => '</>'])
+        ->and(ProjectMap::normalizeSymbol($pictograph . $pictograph))->toBe($pictograph);
+
+    // A typed pair paints one cell, so the written row reads back at its width.
+    $map->setTileSymbol(3, 2, $pictograph . $pictograph);
+    $map->save();
+    $expected = ['#', $pictograph, $pictograph, $pictograph, '.', '.', '.', '.', '.', '.', '.', '#'];
+    expect($symbols($map))->toBe($expected)
+        ->and($symbols($load()))->toBe($expected)
+        ->and($load()->getWidth())->toBe(12);
+})->with([
+    'clubs' => ['♣'],
+    'hearts' => ['♥'],
+    'emoji' => ['😀'],
+]);

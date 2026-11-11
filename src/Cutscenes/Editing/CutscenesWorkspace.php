@@ -29,6 +29,7 @@ use Ichiloto\Editor\UI\SettingsPaneLayout;
 use Ichiloto\Editor\Validation\EffectValidator;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\IO\Console\TerminalText;
 use Throwable;
 
 /**
@@ -799,7 +800,8 @@ trait CutscenesWorkspace
             return;
         }
 
-        if (preg_match('/^\X$/u', $input) === 1 && ! ctype_cntrl($input)) {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes !== false && count($graphemes) === 1 && ! ctype_cntrl($input)) {
             $this->cutsceneFilter->type($input);
             $this->syncCutsceneSelectionToFilter();
             $this->renderCutscenesArea();

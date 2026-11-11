@@ -3322,20 +3322,19 @@ final class ProjectMap
     }
 
     /**
-     * Splits a line into Unicode grapheme symbols.
+     * Splits a line into Unicode grapheme symbols through the Engine's
+     * splitter ({@see TerminalText::splitGraphemes()}), so adjacent
+     * pictographs such as ♣♣ stay separate cells on every PCRE build.
+     * Malformed UTF-8 holds no symbol, as it always has here.
      *
      * @param string $line The line to split.
      * @return string[]
      */
     private static function toSymbols(string $line): array
     {
-        if ($line === '') {
-            return [];
-        }
+        $symbols = TerminalText::splitGraphemes($line);
 
-        preg_match_all('/\X/u', $line, $matches);
-
-        return $matches[0] ?? [];
+        return $symbols === false ? [] : $symbols;
     }
 
     /**

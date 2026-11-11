@@ -77,8 +77,9 @@ final class TilesetPieceAuthoring
         if (! isset($rows[$y])) {
             throw new InvalidArgumentException("The piece has no row {$y}.");
         }
-        if ($symbol === '' || TerminalText::symbolCount($symbol) !== 1 || TerminalText::displayWidth($symbol) !== 1
-            || preg_match('/\A\X\z/u', $symbol) !== 1) {
+        $graphemes = TerminalText::splitGraphemes($symbol);
+        if ($graphemes === false || count($graphemes) !== 1
+            || TerminalText::symbolCount($symbol) !== 1 || TerminalText::displayWidth($symbol) !== 1) {
             throw new InvalidArgumentException('A cell holds one character that fills one terminal cell.');
         }
         $cells = TerminalText::parseSourceCells($rows[$y]);

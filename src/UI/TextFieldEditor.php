@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\UI;
 
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Engine\IO\Console\TerminalText;
 
 /**
  * The one inline edit buffer shared by the inspector and the Database
@@ -124,11 +125,12 @@ final class TextFieldEditor
             return TextFieldKeyResult::IGNORED;
         }
 
-        if (preg_match('/^\X/u', $input, $matches) !== 1) {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes === false || $graphemes === []) {
             return TextFieldKeyResult::IGNORED;
         }
 
-        $symbol = $matches[0];
+        $symbol = $graphemes[0];
 
         if (! $control instanceof InputControl || ! $control->acceptsTypedInput() || ! $control->acceptsSymbol($symbol, $this->value)) {
             return TextFieldKeyResult::IGNORED;
