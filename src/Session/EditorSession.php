@@ -141,6 +141,7 @@ use Ichiloto\Editor\Validation\ProjectValidator;
 use Ichiloto\Editor\Validation\SaveCompatibilityValidator;
 use Ichiloto\Editor\Validation\Severity;
 use Ichiloto\Engine\IO\Console\TerminalPresentationComposer;
+use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
@@ -2069,15 +2070,18 @@ final class EditorSession
 
     /**
      * Paints a rectangle of glyphs from its rows, one terminal cell per
-     * character with its top-left at x, y, and the tiles that follow each
-     * glyph, as one undo step: a room's rows rewritten in one edit. A space
-     * paints a blank cell. Questions and colours are answered as by
-     * {@see paint()}, `$choices` keyed by glyph.
+     * grapheme with its top-left at x, y, and the tiles that follow each
+     * glyph, as one undo step: a room's rows rewritten in one edit. Rows are
+     * split by the Engine's grapheme splitter
+     * ({@see TerminalText::splitGraphemes()}), as map rows are read, so a
+     * glyph with a combining mark or a multi-code-point emoji paints one
+     * cell. A space paints a blank cell. Questions and colours are answered
+     * as by {@see paint()}, `$choices` keyed by glyph.
      *
      * @param list<string> $rows The glyph rows, top to bottom.
      * @param array<string, ?string> $choices
      * @return array{status: 'applied', changed: int, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
-     * @throws SessionRefusal When the map is unknown, stale or refuses the edit, or a row leaves the map.
+     * @throws SessionRefusal When the map is unknown, stale or refuses the edit, a row is not valid UTF-8, or a row leaves the map.
      */
     public function paintRegion(string $mapId, int $revision, string $layerId, int $x, int $y, array $rows, ?string $color = null,
         array $choices = [], string $label = 'Paint region'): array
@@ -2091,7 +2095,11 @@ final class EditorSession
         }
         $writes = [];
         foreach (array_values($rows) as $dy => $row) {
-            foreach (mb_str_split($row) as $dx => $symbol) {
+            $symbols = TerminalText::splitGraphemes($row);
+            if ($symbols === false) {
+                throw new SessionRefusal(sprintf('Row %d is not valid UTF-8; nothing was painted.', $dy + 1));
+            }
+            foreach ($symbols as $dx => $symbol) {
                 [$cellX, $cellY] = [$x + $dx, $y + $dy];
                 if ($cellX < 0 || $cellY < 0 || $cellX >= $map->getWidth() || $cellY >= $map->getHeight()) {
                     throw new SessionRefusal(sprintf('Row %d reaches %d, %d, outside %s (%d x %d); nothing was painted.',
