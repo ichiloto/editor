@@ -3210,6 +3210,9 @@ final class EditorSession
                 if ($name !== 'sourceFrame') {
                     $tracks[(int) $match[1]]['keyframes'][(int) $match[2]][$name . 'Key'] = $row['key'];
                 }
+            } elseif (preg_match('/^track(\d+)Keyframe(\d+)Asset$/', $field, $match) === 1) {
+                // The row that picks the keyframe's own image; what it shows is read from the authored track below.
+                $tracks[(int) $match[1]]['keyframes'][(int) $match[2]]['assetKey'] = $row['key'];
             }
         }
         foreach ($this->readDatabaseRecord($category, $index, ['cues'])['rows'] as $row) {
@@ -3231,6 +3234,12 @@ final class EditorSession
         unset($track);
         $payload = $asset->payload();
         $stageContext = $this->findStageContext($asset);
+        foreach ($tracks as $position => &$track) {
+            if (isset($track['art'])) {
+                $track = $this->describeImageKeyframeArt($track, $payload['tracks'][$position] ?? null);
+            }
+        }
+        unset($track);
 
         return [
             // An effect or summon with separate terminal and graphical sequences names the one shown; others name none.
@@ -4119,6 +4128,31 @@ final class EditorSession
      * @param array<string, mixed> $art
      * @return array<string, mixed>
      */
+    /**
+     * An image track's default image and each keyframe's image as authored,
+     * never as their rows read when unset: the track's art names its default
+     * (empty when it has none), and each keyframe the image it shows, its
+     * own or else the track's default, with that image's size. A keyframe
+     * that names an image of its own says so.
+     *
+     * @param array<string, mixed> $described
+     * @return array<string, mixed>
+     */
+    private function describeImageKeyframeArt(array $described, mixed $authored): array
+    {
+        $authored = is_array($authored) ? $authored : [];
+        $default = is_string($authored['asset'] ?? null) ? $authored['asset'] : '';
+        $described['art']['asset'] = $default;
+        foreach ($described['keyframes'] ?? [] as $index => $keyframe) {
+            $frame = is_array($authored['keyframes'][$index] ?? null) ? $authored['keyframes'][$index] : [];
+            $own = array_key_exists('asset', $frame);
+            $image = $this->measureTrackArt(['asset' => $own && is_string($frame['asset']) ? $frame['asset'] : $default]);
+            $described['keyframes'][$index] = [...$keyframe, ...$image, 'ownsAsset' => $own];
+        }
+
+        return $described;
+    }
+
     private function measureTrackArt(array $art): array
     {
         $root = realpath($this->workspace->projectRoot . '/assets');

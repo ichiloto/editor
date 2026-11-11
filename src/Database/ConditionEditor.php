@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Core\PlayStatistic;
+use InvalidArgumentException;
+
 /**
  * Building a condition list a part at a time.
  *
@@ -37,12 +40,21 @@ final class ConditionEditor
         'assigned_summons' => ['Summons Assigned In', ReferenceCatalog::ASSIGNED_SUMMON_SCOPES],
         'present_actor' => ['Party Member', 'actor_ids'],
         'present_party_size' => ['Members Present In', ReferenceCatalog::PRESENT_PARTY_SCOPES],
+        'play_statistic' => ['Play Statistic', ReferenceCatalog::PLAY_STATISTICS],
+    ];
+
+    /** What a type's typed value is called, for the types that compare with one. */
+    private const array VALUE_LABELS = [
+        'variable' => 'Value',
+        'play_statistic' => 'Count',
     ];
 
     /**
      * What a type starts with when chosen, where the Engine requires more
      * than a name the author types: an assigned summons condition counts
-     * within the first scope the Engine declares, and needs at least one.
+     * within the first scope the Engine declares, and needs at least one; a
+     * play statistic starts on the first counter the Engine declares, at
+     * least one.
      *
      * @return array<string, mixed>
      */
@@ -51,6 +63,8 @@ final class ConditionEditor
         return match ($type) {
             'assigned_summons' => ['name' => \Ichiloto\Engine\Core\AssignedSummonScope::values()[0], 'quantity' => 1],
             'present_party_size' => ['name' => \Ichiloto\Engine\Core\PresentPartyScope::values()[0], 'quantity' => 1],
+            'play_statistic' => ['name' => PlayStatistic::values()[0], 'op' => self::PLAY_STATISTIC_DEFAULT_OPERATION,
+                'value' => self::PLAY_STATISTIC_DEFAULT_COUNT],
             default => [],
         };
     }
@@ -60,6 +74,10 @@ final class ConditionEditor
 
     /** How a variable condition compares; the first is the default. */
     public const array VARIABLE_OPERATIONS = ['==', '!=', '>', '>=', '<', '<='];
+
+    /** How a new play statistic condition compares, and with what: at least one. */
+    private const string PLAY_STATISTIC_DEFAULT_OPERATION = '>=';
+    private const int PLAY_STATISTIC_DEFAULT_COUNT = 1;
 
     /**
      * @var array<int, array<string, mixed>> The conditions being edited.
@@ -88,6 +106,12 @@ final class ConditionEditor
                 ['key' => 'op', 'label' => 'Compare', 'kind' => 'options', 'default' => self::VARIABLE_OPERATIONS[0],
                     'options' => $choices(self::VARIABLE_OPERATIONS, self::VARIABLE_OPERATIONS)],
                 ['key' => 'value', 'label' => 'Value', 'kind' => 'text', 'default' => 0],
+            ],
+            // A counter compares with a whole count from zero up.
+            'play_statistic' => [
+                ['key' => 'op', 'label' => 'Compare', 'kind' => 'options', 'default' => self::PLAY_STATISTIC_DEFAULT_OPERATION,
+                    'options' => $choices(self::VARIABLE_OPERATIONS, self::VARIABLE_OPERATIONS)],
+                ['key' => 'value', 'label' => self::VALUE_LABELS['play_statistic'], 'kind' => 'integer', 'default' => self::PLAY_STATISTIC_DEFAULT_COUNT],
             ],
             'item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
             'key_item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
@@ -348,6 +372,7 @@ final class ConditionEditor
                 $condition['quantity'] = max(1, intval($condition['quantity'] ?? 1) + $step);
                 break;
             case 'variable':
+            case 'play_statistic':
                 $operations = self::VARIABLE_OPERATIONS;
                 $index = array_search(strval($condition['op'] ?? '=='), $operations, true);
                 $index = is_int($index) ? $index : 0;
@@ -398,20 +423,41 @@ final class ConditionEditor
     }
 
     /**
-     * Sets a variable condition's value.
+     * What the selected condition's typed value is called, or null when its
+     * type compares with none: a variable's value, a play statistic's count.
+     */
+    public function getValueLabel(): ?string
+    {
+        return self::VALUE_LABELS[strval(($this->selected() ?? [])['type'] ?? '')] ?? null;
+    }
+
+    /**
+     * Sets the value the selected condition compares with, read as the
+     * condition line reads it: a variable's number or text, a play
+     * statistic's whole count from zero up.
      *
      * @param string $value The value as typed.
      * @return void
+     * @throws InvalidArgumentException When a play statistic's count is not a whole number from zero up; nothing changes.
      */
     public function setValue(string $value): void
     {
         $condition = $this->selected();
+        $type = strval(($condition ?? [])['type'] ?? '');
 
-        if ($condition === null || strval($condition['type'] ?? '') !== 'variable') {
+        if ($condition === null || ! array_key_exists($type, self::VALUE_LABELS)) {
             return;
         }
 
-        $condition['value'] = is_numeric($value) ? intval($value) : $value;
+        $value = trim($value);
+        if ($type === 'play_statistic') {
+            if (filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) === false) {
+                throw new InvalidArgumentException(sprintf('A count is a whole number from zero up, not "%s".', $value));
+            }
+            $condition['value'] = (int) $value;
+        } else {
+            $condition['value'] = is_numeric($value) ? $value + 0 : $value;
+        }
         $this->conditions[$this->selectedIndex()] = $condition;
     }
 
@@ -475,8 +521,13 @@ final class ConditionEditor
             'assigned_summons' => sprintf('are at least %d', intval($condition['quantity'] ?? 0)),
             'present_actor' => 'is present',
             'present_party_size' => sprintf('number exactly %d', intval($condition['quantity'] ?? 0)),
+            'play_statistic' => sprintf('%s %s', strval($condition['op'] ?? '=='), strval($condition['value'] ?? '')),
             default => '',
         };
+        if ($type === 'play_statistic') {
+            // A counter reads by the Engine's own label.
+            $name = PlayStatistic::tryFrom(trim($name))?->getLabel() ?? $name;
+        }
 
         $prefix = ($condition['negate'] ?? false) === true ? 'NOT ' : '';
 

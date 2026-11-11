@@ -26,7 +26,7 @@ use InvalidArgumentException;
  * Database > Tutorials: the project's guided tutorials, the list
  * `assets/Data/tutorials.php` returns and the Engine's {@see TutorialCatalog}
  * reads. A tutorial has a stable id the save keeps its phase under, a library
- * category and title, when it starts (from a script, or automatically once its
+ * category and title, an optional summary, when it starts (from a script, or automatically once its
  * trigger first holds in play), where an automatic one starts (in the field,
  * the default a record may leave unwritten, or on the screen that owns its
  * lesson: the Summons library, or a battle's command window, which starts its
@@ -82,6 +82,8 @@ final class TutorialFields
                 new RecordField('id', 'Id'),
                 new RecordField('title', 'Title'),
                 new RecordField('category', 'Category'),
+                // Optional text, trimmed and never empty, as the Engine's TutorialDefinition reads it: left out, it writes no key; cleared, it is removed.
+                new RecordField('summary', 'Summary', removeWhenEmpty: true),
                 new RecordField('start', 'Starts', options: array_column(TutorialStartMode::cases(), 'value')),
                 // Absent means the field. Another context belongs to an automatic start, and its first step to the
                 // screen and view that context owns: the Engine's catalogue and references judge both on save.

@@ -220,3 +220,32 @@ function applyTutorialRowThroughDatabase(\Ichiloto\Editor\Database\ProjectRecord
 {
     $database->setField(0, $field, $value);
 }
+
+it('authors a tutorial\'s optional summary: none written until given, trimmed, and removed when cleared', function (): void {
+    $root = makeTemporaryProject();
+    $path = writeSyntheticTutorials($root);
+    $original = (string) file_get_contents($path);
+    $session = EditorSession::open($root);
+
+    // An omitted summary reads as unset and a save writes no key for it.
+    expect(tutorialRow($session, 0, 'summary')['value'])->toBe('');
+    applyTutorialRow($session, 0, 'title', 'Equipment');
+    $session->saveDatabase(TutorialFields::CATEGORY);
+    expect((require $path)[0])->not->toHaveKey('summary');
+
+    applyTutorialRow($session, 0, 'summary', '  Change what a party member wears.  ');
+    $session->saveDatabase(TutorialFields::CATEGORY);
+    expect((require $path)[0]['summary'])->toBe('Change what a party member wears.')
+        ->and(TutorialCatalog::fromProject($root . '/assets')->findTutorial('test.equip')?->summary)->toBe('Change what a party member wears.')
+        ->and(file_get_contents($path))->toContain('// Synthetic guides, written by hand.');
+
+    // A blank entry removes it again.
+    applyTutorialRow($session, 0, 'summary', '   ');
+    $session->saveDatabase(TutorialFields::CATEGORY);
+    expect((require $path)[0])->not->toHaveKey('summary')
+        ->and(TutorialCatalog::fromProject($root . '/assets')->findTutorial('test.equip')?->summary)->toBeNull();
+
+    foreach (range(1, 3) as $step) { $session->undo(); }
+    $session->saveDatabase(TutorialFields::CATEGORY);
+    expect(file_get_contents($path))->toBe($original);
+});

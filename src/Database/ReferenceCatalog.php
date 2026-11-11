@@ -83,6 +83,9 @@ final class ReferenceCatalog
     /** What a present party size condition may count: the Engine's {@see \Ichiloto\Engine\Core\PresentPartyScope} values. */
     public const string PRESENT_PARTY_SCOPES = 'present_party_scopes';
 
+    /** The counters a play statistic condition compares: the Engine's {@see \Ichiloto\Engine\Core\PlayStatistic} values, read by their labels. */
+    public const string PLAY_STATISTICS = 'play_statistics';
+
     /**
      * The doors a `transfer_through_door` command leaves through: the events
      * the Engine's MapDoorReference resolves to the destination, arrival and
@@ -156,6 +159,8 @@ final class ReferenceCatalog
         self::ASSIGNED_SUMMON_SCOPES,
         // What a present party size condition counts, by the Engine's own rule.
         self::PRESENT_PARTY_SCOPES,
+        // The counters a play statistic condition compares, by the Engine's own rule.
+        self::PLAY_STATISTICS,
         // The tutorials a script may start, by stable id, unsaved edits included.
         self::SCRIPT_TUTORIALS,
         // The theme's semantic icon roles, which a world power shows.
@@ -368,6 +373,7 @@ final class ReferenceCatalog
             self::WORLD_ABILITIES => array_keys($this->workspace->getWorldAbilities()->getLabels()),
             self::ASSIGNED_SUMMON_SCOPES => \Ichiloto\Engine\Core\AssignedSummonScope::values(),
             self::PRESENT_PARTY_SCOPES => \Ichiloto\Engine\Core\PresentPartyScope::values(),
+            self::PLAY_STATISTICS => \Ichiloto\Engine\Core\PlayStatistic::values(),
             self::SCRIPT_TUTORIALS => array_map(strval(...), array_keys($this->listScriptTutorials())),
             self::ICON_ROLES => $this->workspace->menuPresentation?->listIconRoles() ?? [],
             self::INPUT_ACTIONS => array_keys(\Ichiloto\Engine\IO\InputManager::getProjectBindings($this->workspace->projectRoot)),
@@ -1285,6 +1291,11 @@ final class ReferenceCatalog
 
         if ($category === self::SCRIPT_TUTORIALS) {
             return $this->listScriptTutorials();
+        }
+
+        if ($category === self::PLAY_STATISTICS) {
+            return array_column(array_map(static fn(\Ichiloto\Engine\Core\PlayStatistic $statistic): array => [$statistic->value, $statistic->getLabel()],
+                \Ichiloto\Engine\Core\PlayStatistic::cases()), 1, 0);
         }
 
         if ($category === 'field_resources') {

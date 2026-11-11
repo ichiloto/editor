@@ -1722,7 +1722,8 @@ skill's effects, a quest's rewards) listed under them.
 | Troops | `assets/Data/troops.php` | Editable | Same |
 | Battle Entry | `assets/Data/battle-entry-rules.php` | Editable | Same |
 | Super Moves | `assets/Data/super-moves.php` | Editable - one record per stable id: name, badge label, description, the HP percentage and states that activate it, and its variants, each a skill with the world conditions that choose it. A project still keeping them in `assets/Data/crisis-abilities.php` shows them read-only until **Migrate to Super Moves** | Same |
-| Tutorials | `assets/Data/tutorials.php` | Editable - one record per stable id: title, Guide category, how it starts, its trigger, what the Guide offers and its follow-on script, and its ordered steps, each a screen, view, target, action, what completes it and an optional line | Same |
+| Achievements | `assets/Data/achievements.php` | Editable - one record per stable id: name, description, icon, whether it stays secret until unlocked, points and the world conditions that unlock it | Same |
+| Tutorials | `assets/Data/tutorials.php` | Editable - one record per stable id: title, Guide category, an optional summary, how it starts, its trigger, what the Guide offers and its follow-on script, and its ordered steps, each a screen, view, target, action, what completes it and an optional line | Same |
 | States | `assets/Data/states.php` | Editable | Same |
 | Animations | `assets/Data/animations.php` | Editable | Same |
 | Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, pieces by id with their glyphs and tiles, and place icons (the piece shown for each place type) | Same |
@@ -2538,6 +2539,30 @@ the powers as this page holds them, unsaved edits included. Validation also
 reports a first-use effect that does not play once on the field, and quests
 or items an unlock condition names that the project lacks.
 
+### Achievements
+
+The project's achievements, in `assets/Data/achievements.php`, the file the
+Engine's `AchievementManager` reads. A project without the file declares
+none; saving the first achievement creates it.
+
+Each achievement has:
+
+- an `Id`, which saves keep its unlock under. It is chosen, not derived from
+  the name;
+- a `Name` and `Description`, which players read, and an `Icon` (`🏆` when
+  none is written);
+- `Secret Until Unlocked`, which hides the name and description until the
+  achievement unlocks;
+- `Points`, `0` when none are written;
+- `Unlocks When`, the shared world-condition editor. Every condition must
+  hold. A `play_statistic` condition compares one of the Engine's play
+  counters, such as battles won, with a count.
+
+Edits are written into the file's own source. The Engine's achievement reader
+and world-condition validation read every achievement before anything is
+saved: an achievement without an id, a condition the Engine refuses, or two
+achievements under one id is refused with its reason and nothing is written.
+
 ### Tutorials
 
 The project's guided tutorials, in `assets/Data/tutorials.php`, the file the
@@ -2550,6 +2575,9 @@ Each tutorial has:
 - an `Id`, which saves keep the tutorial's progress under and `start_tutorial`
   names. It is chosen, not derived from the title;
 - a `Title` and a `Category`, which the game's Guide lists it by;
+- an optional `Summary`, one line of text. A tutorial without one writes no
+  `summary` key; the text is saved trimmed, and clearing the row removes the
+  key;
 - `Starts`: `script`, when an event's `start_tutorial` queues it, or
   `automatic`, when its `Trigger` first holds in play;
 - `Trigger`, the shared world-condition editor. Every condition must hold. An
@@ -3178,6 +3206,15 @@ quest:breakfast-duty:active; !switch:door_open:false; item:S-Potion:3
 | `key_item` | `key_item:<name>` |
 | `variable` | `variable:<name>:<op>:<value>` |
 | `world_ability` | `world_ability:<id>` |
+| `play_statistic` | `play_statistic:<counter>:<op>:<count>`, or `play_statistic:<counter>:<count>` for `==` |
+
+A `play_statistic` condition compares one of the Engine's play counters with
+a whole count from zero up. The counter is picked from the Engine's own list,
+read by its label (`Battles Won`); it is never typed. In the Terminal's
+condition editor, `x` steps the operator and `v` types the count; a count
+the Engine would refuse stays on screen with its reason. `v` also types a
+`variable` condition's value. The GUI editor builds the same condition from
+the counter list, an operator choice and a whole-number count.
 
 Unparseable entries are dropped rather than written back as garbage.
 
@@ -3665,7 +3702,15 @@ context when omitted, and labels which it is. While a shared effect's preview
 context is still loading, no default is guessed. Stage images retain their
 centred default. In battle only, `Attachment` selects `center`,
 `head` or `ground` on the battler; empty removes it and uses the centre.
-Field image tracks do not accept battler attachments. Image keyframes give
+Field image tracks do not accept battler attachments. An image track's
+`Default Image` is optional: each image keyframe may pick its own `Image`
+through the same asset picker, or choose `(the track's default image)` to
+show the track's. A keyframe never inherits an earlier keyframe's image, and
+its sheet frame is a cell of the image it shows, on the track's sheet grid.
+A track without a default needs every keyframe to name an image. The Engine
+judges each image on save: a keyframe with no image, or an image that does
+not divide into the sheet grid, is refused with the Engine's reason and
+nothing is written. Image keyframes also give
 the sheet frame, the position and, in battle,
 `Flip Horizontally` and `Flip Vertically` for an authored reverse stroke.
 Glyph and text keyframes give frame, duration, position `x` and `y`,

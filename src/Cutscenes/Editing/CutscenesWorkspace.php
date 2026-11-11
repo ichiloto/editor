@@ -2162,7 +2162,7 @@ trait CutscenesWorkspace
         $help = match (true) {
             $this->referencePicker->isOpen() => $this->fitHelp($layout['settingsWidth'], 'Enter:Choose  Type:Filter  Esc:Cancel', 'Enter:Choose  Esc:Cancel'),
             $this->isDatabaseEditing => 'Enter:Apply  Esc:Cancel',
-            $this->conditionEditor->isOpen() => $this->fitHelp($layout['settingsWidth'], 'a:Add  d:Del  t:Type  n:Name  x:Value  !:Not  Enter:Done  Esc:Cancel', 'a/d:Add/Del  t/n/x:Edit  Enter:Done'),
+            $this->conditionEditor->isOpen() => $this->fitHelp($layout['settingsWidth'], 'a:Add  d:Del  t:Type  n:Name  x:Step  v:Value  !:Not  Enter:Done  Esc:Cancel', 'a/d:Add/Del  t/n/x/v:Edit  Enter:Done'),
             $this->databaseCommandFramePath !== [] => $this->fitHelp($layout['settingsWidth'], 'Enter:Edit/Open  Esc:Back  Shift+O:Add  Shift+X/Del:Remove', 'Enter:Open  Esc:Back  Shift+O/Del', 'Esc:Back'),
             default => $this->fitHelp($layout['settingsWidth'], 'Enter:Edit/Open  Shift+O:Add  Shift+X/Del:Remove', 'Enter:Edit  Shift+O/Del', 'Enter:Edit'),
         };

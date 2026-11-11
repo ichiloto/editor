@@ -39,6 +39,7 @@ use Ichiloto\Editor\Animations\AnimationConversionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ConditionEditor;
+use Ichiloto\Editor\Database\ConditionTypedPart;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
@@ -577,7 +578,8 @@ final class Editor
      * one; the only time an id is ever written after creation.
      */
     private const string NPC_ASSIGN_ID_FIELD = NpcInspector::ASSIGN_ID_FIELD;
-    private bool $isConditionNaming = false;
+    /** The condition part being typed, or null while the condition editor's keys move and choose. */
+    private ?ConditionTypedPart $conditionTypedPart = null;
     private string $conditionNameBuffer = '';
     /**
      * Legacy views over the inspector field editor; the hooks keep the many
@@ -10651,7 +10653,7 @@ final class Editor
      */
     private function handleConditionEditorInput(string $input): void
     {
-        if ($this->isConditionNaming) {
+        if ($this->conditionTypedPart !== null) {
             $this->handleConditionNameInput($input);
 
             return;
@@ -10683,6 +10685,7 @@ final class Editor
             $input === '!' => $this->conditionEditor->toggleNegate(),
             $input === 'n' => $this->beginConditionName(),
             $input === 'e' => $this->beginConditionMarker(),
+            $input === 'v' => $this->beginConditionValue(),
             default => null,
         };
 
@@ -10743,7 +10746,7 @@ final class Editor
         }
 
         if (! is_string($reference['category'])) {
-            $this->isConditionNaming = true;
+            $this->conditionTypedPart = ConditionTypedPart::NAME;
             $this->conditionNameBuffer = strval($condition['name'] ?? '');
             $this->statusMessage = sprintf('Naming the %s.', mb_strtolower($reference['label']));
 
@@ -10769,7 +10772,29 @@ final class Editor
     }
 
     /**
-     * Handles input while a condition's name is being typed.
+     * Starts typing the value the selected condition compares with: a
+     * variable's value or a play statistic's count.
+     *
+     * @return void
+     */
+    private function beginConditionValue(): void
+    {
+        $label = $this->conditionEditor->getValueLabel();
+        $condition = $this->conditionEditor->selected();
+
+        if ($label === null || $condition === null) {
+            $this->setStatus('This condition compares with no value; x steps what it carries.', StatusLevel::WARN);
+
+            return;
+        }
+
+        $this->conditionTypedPart = ConditionTypedPart::VALUE;
+        $this->conditionNameBuffer = is_scalar($condition['value'] ?? null) ? strval($condition['value']) : '';
+        $this->statusMessage = sprintf('Setting the %s.', mb_strtolower($label));
+    }
+
+    /**
+     * Handles input while a condition's name or value is being typed.
      *
      * @param string $input The raw input.
      * @return void
@@ -10777,17 +10802,29 @@ final class Editor
     private function handleConditionNameInput(string $input): void
     {
         if ($input === "\033" || $input === "\x1b") {
-            $this->isConditionNaming = false;
+            $this->statusMessage = $this->conditionTypedPart === ConditionTypedPart::VALUE ? 'Value unchanged.' : 'Name unchanged.';
+            $this->conditionTypedPart = null;
             $this->conditionNameBuffer = '';
-            $this->statusMessage = 'Name unchanged.';
             $this->renderDatabasePanes(['settings']);
 
             return;
         }
 
         if ($input === "\n" || $input === "\r") {
-            $this->conditionEditor->setName(trim($this->conditionNameBuffer));
-            $this->isConditionNaming = false;
+            if ($this->conditionTypedPart === ConditionTypedPart::VALUE) {
+                try {
+                    $this->conditionEditor->setValue($this->conditionNameBuffer);
+                } catch (InvalidArgumentException $refusal) {
+                    // The typed value stays in front of the author to correct.
+                    $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+                    $this->renderDatabasePanes(['settings']);
+
+                    return;
+                }
+            } else {
+                $this->conditionEditor->setName(trim($this->conditionNameBuffer));
+            }
+            $this->conditionTypedPart = null;
             $this->conditionNameBuffer = '';
             $this->statusMessage = 'Building conditions.';
             $this->renderDatabasePanes(['settings']);
@@ -10875,11 +10912,12 @@ final class Editor
     {
         $rows = $this->conditionEditor->rows();
 
-        if ($this->isConditionNaming) {
-            $reference = $this->conditionEditor->nameReference();
+        if ($this->conditionTypedPart !== null) {
+            $label = $this->conditionTypedPart === ConditionTypedPart::VALUE
+                ? $this->conditionEditor->getValueLabel() : $this->conditionEditor->nameReference()['label'] ?? null;
 
             return [
-                sprintf('%s: %s', $reference['label'] ?? 'Name', $this->conditionNameBuffer),
+                sprintf('%s: %s', $label ?? 'Name', $this->conditionNameBuffer),
                 '',
                 '  Enter to accept, Esc to leave it alone.',
             ];
@@ -13653,10 +13691,10 @@ final class Editor
                 ),
                 $this->conditionEditor->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
-                    'a:Add  d:Del  t:Type  n:Name  e:Event  x:Value  !:Not  Enter:Done  Esc:Cancel',
-                    'a:Add  d:Del  t:Type  n:Name  e:Event  x:Value  !:Not  Enter:Done',
-                    'a/d:Add/Del  t:Type  n:Name  e:Event  x:Value  !:Not',
-                    'a/d:Add/Del  t/n/x:Edit  ?:Help',
+                    'a:Add  d:Del  t:Type  n:Name  e:Event  x:Step  v:Value  !:Not  Enter:Done  Esc:Cancel',
+                    'a:Add  d:Del  t:Type  n:Name  e:Event  x:Step  v:Value  !:Not  Enter:Done',
+                    'a/d:Add/Del  t:Type  n:Name  e:Event  x:Step  v:Value  !:Not',
+                    'a/d:Add/Del  t/n/x/v:Edit  ?:Help',
                     '?:Help',
                 ),
                 $this->isDatabaseEditing => 'Enter:Apply  Esc:Cancel',

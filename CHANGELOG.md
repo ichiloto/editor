@@ -9,6 +9,26 @@
 
 ### Added
 
+- Play statistic conditions (Engine 09b3b8f): the shared condition line, the condition grammar and both condition
+  editors author `play_statistic:<counter>:<op>:<count>` (or `play_statistic:<counter>:<count>`, keeping an absent
+  operator absent). The counter is picked from the Engine's `PlayStatistic` cases by their labels, never typed; the
+  operator is stepped and the count is a whole number from zero up. The Engine's world-condition validation judges
+  every line, and a hand-written condition it refuses stays read-only as written. The Terminal's condition editor
+  types a comparison value with `v`, for play statistics and variables alike; `x` steps the operator.
+
+- Database > Achievements: `assets/Data/achievements.php`, authored in its own source with undo: id, name,
+  description, icon, secret, points and the unlock conditions through the shared condition editor. Each save runs
+  the Engine's `Achievement` reader and world-condition validation, and refuses two achievements under one id.
+
+- Tutorial summaries (Engine c1a8ca0): Database > Tutorials authors the optional **Summary**. An omitted summary
+  writes no key, the text is saved trimmed, and a blank entry removes the key.
+
+- Per-keyframe images (Engine dfae912): an image keyframe of an effect or summon track, on a battler or on the
+  stage, picks its own **Image** through the shared asset picker, or `(the track's default image)`. The track's
+  **Default Image** is now optional, with `(none: each keyframe names its image)` as its none choice. Edits keep the
+  authored source; the Engine refuses a save with a keyframe that has no image or an image off the sheet grid,
+  before anything is written. `cutscenes.timeline` names each keyframe's image as authored, with its size.
+
 - State badge icon roles (Engine 78cab3e): Menu Theme offers `status.state.<id>` and `status.state.<id>.pending`
   for every state, from the Engine's `BattlerConditions::listStateIconRoles`, beside the roles the theme binds and
   the atlas marker roles, so a theme can bind a badge image for a state it does not bind yet. States added on the
