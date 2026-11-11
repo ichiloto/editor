@@ -72,3 +72,25 @@ it('exchanges renderer readiness and acknowledgements through the real preview r
         fclose($diagnostics);
     }
 })->with(['cinematic', 'effectField']);
+
+it('names the Engine tool theme file before any project is open', function () {
+    $input = fopen('php://memory', 'r');
+    $output = fopen('php://memory', 'w+');
+    $diagnostics = fopen('php://memory', 'w+');
+    $host = new SessionHost($input, $output, $diagnostics);
+
+    try {
+        $answer = $host->handle(json_encode(['id' => 7, 'method' => 'tools.theme', 'params' => []], JSON_THROW_ON_ERROR));
+        expect($answer['id'])->toBe(7)
+            ->and($answer['result']['path'])->toBe(realpath(Ichiloto\Engine\UI\Presentation\ToolTheme::FILE));
+        // The file named is the one the Engine's own tool screens load.
+        Ichiloto\Engine\UI\Presentation\ToolTheme::load($answer['result']['path']);
+        expect($host->session)->toBeNull();
+        rewind($diagnostics);
+        expect(stream_get_contents($diagnostics))->toBe('');
+    } finally {
+        fclose($input);
+        fclose($output);
+        fclose($diagnostics);
+    }
+});
