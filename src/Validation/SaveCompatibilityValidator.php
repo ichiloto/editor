@@ -411,7 +411,7 @@ final class SaveCompatibilityValidator
             ContentReferenceCategory::STATE => $this->recordIdentities($workspace, 'states'),
             ContentReferenceCategory::ENEMY => $this->recordLabels($workspace, ['enemies']),
             ContentReferenceCategory::ACHIEVEMENT => $this->phpListIdentities(
-                $workspace->projectRoot . '/assets/Data/achievements.php'
+                $workspace->projectRoot . '/' . \Ichiloto\Editor\Progression\AchievementFields::RELATIVE_PATH
             ),
             ContentReferenceCategory::SUMMON => $this->summonIds($workspace),
             ContentReferenceCategory::STORY_EVENT => null,

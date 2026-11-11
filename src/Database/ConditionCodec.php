@@ -25,7 +25,11 @@ use InvalidArgumentException;
  * Engine's {@see \Ichiloto\Engine\Core\AssignedSummonScope} scopes, which an
  * assigned summons condition always writes: `assigned_summons:party:2`, or the
  * exact number of members a present party size condition requires:
- * `present_party_size:party:4`; a present actor condition names an actor id). A leading `!` negates. A name or value escapes its `\`,
+ * `present_party_size:party:4`; a present actor condition names an actor id;
+ * a play statistic condition names one of the Engine's
+ * {@see \Ichiloto\Engine\Core\PlayStatistic} counters and the whole count it
+ * compares with, after an operator when one is authored:
+ * `play_statistic:battles_won:>=:1`). A leading `!` negates. A name or value escapes its `\`,
  * `:` and `;` with a backslash, so any name the Engine accepts round-trips.
  * A line is read only as written: a part the type does not take, or a value
  * the Engine would refuse, makes the entry unreadable, never rewritten.
@@ -39,6 +43,7 @@ final class ConditionCodec
         'event' => [],
         'map_event' => ['marker'],
         'variable' => ['op', 'value'],
+        'play_statistic' => ['op', 'value'],
         'item' => ['quantity'],
         'key_item' => ['quantity'],
         'assigned_summons' => ['quantity'],
@@ -100,6 +105,10 @@ final class ConditionCodec
 
             if (self::decode(self::encode($condition)) === null) {
                 return sprintf('condition %d holds a shape the condition editor cannot carry', $index + 1);
+            }
+            // The line writes a count as a whole number, so a count the Engine refuses would be rewritten, not carried.
+            if ($type === WorldConditionType::PLAY_STATISTIC->value && ! WorldConditionEvaluator::isPlayStatisticConditionValid($condition)) {
+                return sprintf('condition %d holds a play statistic the Engine refuses', $index + 1);
             }
 
             $extra = array_diff(array_keys($condition), ['type', 'name', 'negate', ...(self::CARRIED_KEYS[$type] ?? [])]);
@@ -198,6 +207,16 @@ final class ConditionCodec
             case 'variable':
                 $parts[] = strval($condition['op'] ?? '==');
                 $parts[] = strval($condition['value'] ?? 0);
+                break;
+            case 'play_statistic':
+                // The operator only where it is authored (the Engine reads its absence as ==); the count always.
+                if (array_key_exists('op', $condition)) {
+                    $parts[] = is_scalar($condition['op']) ? strval($condition['op']) : '';
+                }
+                if (array_key_exists('value', $condition)) {
+                    $parts[] = is_scalar($condition['value']) ? strval($condition['value']) : '';
+                }
+
                 break;
             case 'map_event':
                 $parts[] = strval($condition['marker'] ?? '');
@@ -311,7 +330,7 @@ final class ConditionCodec
         [$extras, $allowed] = [array_slice($parts, 2), match ($type) {
             'quest', 'switch', 'item', 'key_item', 'assigned_summons', 'present_party_size' => 1,
             'map_event' => 1,
-            'variable' => 2,
+            'variable', 'play_statistic' => 2,
             default => 0,
         }];
         if (count($extras) > $allowed) {
@@ -323,6 +342,7 @@ final class ConditionCodec
                     'assigned_summons', 'present_party_size' => 'only its quantity',
                     'map_event' => 'only its event marker',
                     'variable' => 'at most an operator and a value',
+                    'play_statistic' => 'an operator and a count',
                     default => 'nothing',
                 }, implode(':', array_slice($extras, $allowed)));
         }
@@ -367,6 +387,30 @@ final class ConditionCodec
                 $condition['op'] = $operator;
                 $rawValue = $extras[1] ?? '0';
                 $condition['value'] = is_numeric($rawValue) ? $rawValue + 0 : $rawValue;
+                break;
+            case 'play_statistic':
+                // One extra is the count alone; two are the operator and the count.
+                [$operator, $count] = count($extras) === 2 ? $extras : [null, $extras[0] ?? null];
+                if ($count === null) {
+                    return 'a play statistic condition needs a count to compare with: play_statistic:battles_won:>=:1.';
+                }
+                if ($operator !== null) {
+                    if (! in_array($operator, self::VARIABLE_OPERATORS, true)) {
+                        return sprintf('a play statistic compares with %s, not "%s".', implode(' ', self::VARIABLE_OPERATORS), $operator);
+                    }
+                    $condition['op'] = $operator;
+                }
+                if (filter_var($count, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) === false) {
+                    return sprintf('a count is a whole number from zero up, not "%s".', $count);
+                }
+                $condition['value'] = (int) $count;
+                // The Engine owns its counters: its own validation judges the name.
+                try {
+                    WorldConditionEvaluator::validateAll([$condition], 'condition');
+                } catch (InvalidArgumentException $refusal) {
+                    return sprintf('the Engine refuses it: %s', $refusal->getMessage());
+                }
+
                 break;
             case 'assigned_summons':
             case 'present_party_size':

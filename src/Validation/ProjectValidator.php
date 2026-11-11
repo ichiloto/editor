@@ -3907,10 +3907,9 @@ class ProjectValidator
   }
 
   /**
-   * Checks manually authored achievement condition records.
-   *
-   * Achievements are not an editor Database category, but their conditions
-   * use the same runtime evaluator and must receive the same validation.
+   * Checks what achievement conditions name, as every other condition list
+   * is checked. Database > Achievements authors them; a hand-written file
+   * is checked the same way.
    *
    * @param ProjectWorkspace $workspace The project.
    * @param array<string, string[]> $known What the project defines.
@@ -3918,7 +3917,7 @@ class ProjectValidator
    */
   protected function checkAchievementReferences(ProjectWorkspace $workspace, array $known): array
   {
-    $path = $workspace->projectRoot . '/assets/Data/achievements.php';
+    $path = $workspace->projectRoot . '/' . \Ichiloto\Editor\Progression\AchievementFields::RELATIVE_PATH;
     $file = ProjectDirectoryContext::run(
       $workspace->projectRoot,
       static fn(): PhpDataFile => PhpDataFile::load($path),

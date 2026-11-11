@@ -77,6 +77,12 @@ final class CutsceneSchemas
 
     public const string RANGE_TIMING_KEYS = 'rangeTiming.keys';
 
+    /** How an image track without a default image reads: each of its keyframes names its own. */
+    public const string TRACK_IMAGE_NONE = '(none: each keyframe names its image)';
+
+    /** How an image keyframe without an image of its own reads: it shows its track's default image. */
+    public const string KEYFRAME_IMAGE_TRACK_DEFAULT = "(the track's default image)";
+
     /** Where a summon image track is placed: on a battler, the screen, or the graphical stage. */
     public const array SUMMON_IMAGE_ANCHORS = ['target', 'caster', 'screen', 'stage'];
 
@@ -986,8 +992,19 @@ final class CutsceneSchemas
     }
 
     /**
-     * Returns the keyframes of an effect's image track: which sheet frame
-     * shows, where, and (battle only) whether it is flipped.
+     * An image keyframe's own image: a PNG under the asset root picked with
+     * the shared asset picker, or none, so the keyframe shows its track's
+     * default. A keyframe never inherits an earlier keyframe's image, and its
+     * sheet frame is a cell of whichever image it shows, on the track's grid.
+     */
+    public static function imageKeyframeAssetField(): RecordField
+    {
+        return RecordField::reference('asset', 'Image', 'png_assets', allowsNone: true, noneLabel: self::KEYFRAME_IMAGE_TRACK_DEFAULT);
+    }
+
+    /**
+     * Returns the keyframes of an effect's image track: which image and
+     * sheet frame show, where, and (battle only) whether it is flipped.
      */
     public static function effectImageKeyframeList(): RecordSubList
     {
@@ -998,6 +1015,7 @@ final class CutsceneSchemas
             fields: [
                 new RecordField('frame', 'Frame', InputControlType::INTEGER),
                 new RecordField('duration', 'Duration', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+                self::imageKeyframeAssetField(),
                 new RecordField('sourceFrame', 'Sheet Frame', InputControlType::INTEGER),
                 new RecordField('position.x', 'Position X', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
                 new RecordField('position.y', 'Position Y', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
@@ -1043,7 +1061,8 @@ final class CutsceneSchemas
     public static function imageTrackFields(bool $sharedWithField = false, bool $subjectOrder = false): array
     {
         return [
-            RecordField::reference('asset', 'Image', 'png_assets'),
+            // The default image for keyframes that name none; a track whose keyframes each name one needs no default.
+            RecordField::reference('asset', 'Default Image', 'png_assets', allowsNone: true, noneLabel: self::TRACK_IMAGE_NONE),
             new RecordField('sheet.columns', 'Sheet Columns', InputControlType::INTEGER, displayDefault: '1'),
             new RecordField('sheet.rows', 'Sheet Rows', InputControlType::INTEGER, displayDefault: '1'),
             new RecordField('cells.width', 'Cell Width', InputControlType::INTEGER, displayDefault: '1'),
@@ -1166,6 +1185,7 @@ final class CutsceneSchemas
             fields: [
                 new RecordField('frame', 'Frame', InputControlType::INTEGER),
                 new RecordField('duration', 'Duration', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+                self::imageKeyframeAssetField(),
                 new RecordField('sourceFrame', 'Sheet Frame', InputControlType::INTEGER),
                 new RecordField('position', 'Offset', codec: RecordFieldCodec::COORDINATES, removeWhenEmpty: true, displayDefault: '0, 0'),
                 new RecordField('opacity', 'Opacity', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1'),

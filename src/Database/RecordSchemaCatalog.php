@@ -156,6 +156,7 @@ final class RecordSchemaCatalog
             SuperMoveFields::getSchema(),
             \Ichiloto\Editor\Progression\WorldAbilityFields::getSchema(),
             \Ichiloto\Editor\Progression\TutorialFields::getSchema(),
+            \Ichiloto\Editor\Progression\AchievementFields::getSchema(),
             self::items(),
             self::weapons(),
             self::armors(),
