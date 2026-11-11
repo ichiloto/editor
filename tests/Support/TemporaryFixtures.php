@@ -88,6 +88,15 @@ final class TemporaryFixtures
     }
 
     /**
+     * Returns where this process's diagnostics go: a folder inside its run
+     * directory, so the logs a run writes leave with the run.
+     */
+    public static function getDiagnosticsDirectory(): string
+    {
+        return self::getRunDirectory() . '/logs';
+    }
+
+    /**
      * Owns a path a test lays out itself, so it is removed with the rest.
      *
      * @param string $path A file or directory under the temporary directory.
@@ -272,7 +281,7 @@ final class TemporaryFixtures
     }
 
     /**
-     * Removes every run directory whose lock no live process holds.
+     * Removes every run directory no live process owns.
      *
      * @return list<string> What could not be removed, and why.
      */
@@ -294,6 +303,15 @@ final class TemporaryFixtures
             }
 
             array_push($problems, ...self::removeRun(substr($lockPath, 0, -strlen('.lock')), $handle));
+        }
+
+        // A run takes its lock before it makes its directory and gives the
+        // lock up only after removing it, so a run directory without a lock
+        // is one something wrote into after its owner had cleaned up.
+        foreach (glob(self::getTemporaryDirectory() . '/' . self::RUN_PREFIX . '*', GLOB_ONLYDIR) ?: [] as $directory) {
+            if (! file_exists($directory . '.lock')) {
+                array_push($problems, ...self::removePath($directory));
+            }
         }
 
         return $problems;

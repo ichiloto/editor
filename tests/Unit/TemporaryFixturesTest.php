@@ -155,3 +155,29 @@ it('makes every fixture inside the run directory of the process that owns it', f
         ->and(file_exists($reserved))->toBeFalse()
         ->and(is_file($run . '.lock'))->toBeTrue();
 });
+
+it('removes a run directory something wrote into after its owner had cleaned up', function () {
+    $orphan = rtrim(sys_get_temp_dir(), '/') . '/' . uniqid('ichiloto-editor-fixtures-', true);
+    mkdir($orphan . '/logs', 0o777, true);
+    file_put_contents($orphan . '/logs/warning.log', 'written after the run ended');
+
+    [, $errors, $status] = runWithTestHelpers('makeTemporaryDirectory("ichiloto-script-");');
+
+    expect($status)->toBe(0)
+        ->and($errors)->toBe('')
+        ->and(file_exists($orphan))->toBeFalse();
+});
+
+it('keeps the Engine\'s and the Editor\'s diagnostics with the run, before and after a field preview', function () {
+    $logs = TemporaryFixtures::getDiagnosticsDirectory();
+    $root = makeTemporaryProject('ichiloto-diagnostics-');
+    Ichiloto\Engine\Util\Debug::warn('before the preview');
+    $field = Ichiloto\Editor\Cutscenes\Preview\PreviewField::open($root, 'test-map', new Ichiloto\Engine\Core\Vector2(1, 1), 20, 8, static fn(): float => 0.0);
+    $field->dispose();
+    Ichiloto\Engine\Util\Debug::warn('after the preview');
+    Ichiloto\Editor\Debug\Debug::warn('from the Editor');
+
+    expect(dirname($logs))->toStartWith(rtrim(sys_get_temp_dir(), '/') . '/ichiloto-editor-fixtures-')
+        ->and(file_get_contents($logs . '/warning.log'))->toContain('before the preview')->toContain('after the preview')
+        ->and(file_get_contents($logs . '/debug.log'))->toContain('from the Editor');
+});
