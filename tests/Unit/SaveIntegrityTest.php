@@ -23,7 +23,7 @@ function disposableGameCopy(): ?string
         return null;
     }
 
-    $root = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('save-integrity-', true));
+    $root = reserveTemporaryPath('save-integrity-');
     mkdir($root, 0o777, true);
 
     // The game's map files construct classes from the project's own

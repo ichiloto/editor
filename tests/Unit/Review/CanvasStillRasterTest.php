@@ -21,7 +21,7 @@ use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 /** A throwaway asset root with one two-colour synthetic image: red left half, blue right half. */
 function canvasStillAssets(): string
 {
-    $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-canvas-still-' . bin2hex(random_bytes(5)));
+    $root = reserveTemporaryPath('ichiloto-canvas-still-');
     mkdir($root . '/Art', 0777, true);
     $image = imagecreatetruecolor(20, 10);
     imagefilledrectangle($image, 0, 0, 9, 9, imagecolorallocate($image, 255, 0, 0));

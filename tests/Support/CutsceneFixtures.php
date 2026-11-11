@@ -399,7 +399,7 @@ function disposableLastLegend(string $prefix = 'last-legend-cutscenes-'): ?strin
         return null;
     }
 
-    $root = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid($prefix, true));
+    $root = reserveTemporaryPath($prefix);
     mkdir($root . '/assets', 0o777, true);
 
     foreach (scandir($game . '/assets') ?: [] as $entry) {

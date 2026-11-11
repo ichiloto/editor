@@ -40,7 +40,7 @@ function silentAuditionPlayer(float $seconds): AudioBackendInterface
 /** A project with one music track, `theme.ogg`, and one sound the stand-in player cannot play. */
 function auditionProject(): string
 {
-    $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-audition-' . bin2hex(random_bytes(4)));
+    $root = reserveTemporaryPath('ichiloto-audition-');
     mkdir($root . '/assets/Audio/BGM', 0o777, true);
     mkdir($root . '/assets/Audio/SFX', 0o777, true);
     touch($root . '/assets/Audio/BGM/theme.ogg');

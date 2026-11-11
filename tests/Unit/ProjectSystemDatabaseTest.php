@@ -8,7 +8,7 @@ use Ichiloto\Editor\Session\EditorSession;
 
 function scratchSystemProject(): string
 {
-    $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-system-' . uniqid());
+    $root = reserveTemporaryPath('ichiloto-system-');
     mkdir($root . '/assets/Data', 0777, true);
 
     return $root;

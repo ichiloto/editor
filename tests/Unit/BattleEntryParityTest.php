@@ -48,9 +48,7 @@ function hydrateThroughAcceptedEngine(string $engineRoot, string $ruleFile, stri
  */
 function parityActorsDirectory(array $actors): string
 {
-    // Registered, so the suite removes it after the test whatever its outcome.
-    $directory = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-parity-actors-' . bin2hex(random_bytes(4)));
-    mkdir($directory, 0755, true);
+    $directory = makeTemporaryDirectory('ichiloto-parity-actors-');
 
     foreach ($actors as $fileStem => [$name, $id]) {
         $idLine = $id === null ? '' : sprintf("    'id' => %s,\n", var_export($id, true));
@@ -149,8 +147,7 @@ it('matches the accepted engine verdict and first diagnostic for the whole corpu
         return;
     }
 
-    $directory = sys_get_temp_dir() . '/ichiloto-parity-' . bin2hex(random_bytes(4));
-    mkdir($directory, 0755, true);
+    $directory = makeTemporaryDirectory('ichiloto-parity-');
 
     try {
         foreach (parityRuleCorpus() as $case => $body) {
@@ -199,8 +196,7 @@ it('resolves actor identities exactly as the accepted engine store does', functi
         return;
     }
 
-    $directory = sys_get_temp_dir() . '/ichiloto-parity-' . bin2hex(random_bytes(4));
-    mkdir($directory, 0755, true);
+    $directory = makeTemporaryDirectory('ichiloto-parity-');
 
     try {
         $ruleFile = $directory . '/rules.php';

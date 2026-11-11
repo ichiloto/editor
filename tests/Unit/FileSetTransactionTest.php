@@ -24,7 +24,7 @@ use Ichiloto\Editor\Storage\FileSetTransactionFailure;
  */
 function transactionFolder(bool $withPair = true): array
 {
-    $folder = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('paired-transaction-', true)) . '/asset';
+    $folder = reserveTemporaryPath('paired-transaction-') . '/asset';
 
     if ($withPair) {
         mkdir($folder, 0o777, true);
@@ -120,6 +120,54 @@ it('reserves read dependencies until the proposal has finished', function () {
     $competing->commit();
     expect(file_get_contents($dataPath))->toBe($loaded . '// Concurrent proposal')
         ->and(is_dir($destination))->toBeFalse();
+});
+
+/** The lock file that reserves one directory for this account's transactions. */
+function reservationLockPath(string $directory): string
+{
+    $owner = fstat(tmpfile())['uid'];
+
+    return sys_get_temp_dir() . '/ichiloto-editor-file-set-locks-' . $owner . '/' . hash('sha256', $directory) . '.lock';
+}
+
+it('keeps a directory\'s lock file only while a transaction reserves the directory', function () {
+    [$folder, $dataPath] = transactionFolder();
+    $lock = reservationLockPath($folder);
+    $rolledBack = new FileSetTransaction($folder);
+    $rolledBack->write($dataPath, "<?php\n\nreturn ['id' => 'rolled back'];\n");
+    $rolledBack->stage();
+    $held = is_file($lock);
+    $rolledBack->rollBack();
+    $afterRollBack = is_file($lock);
+    $committed = new FileSetTransaction($folder);
+    $committed->write($dataPath, "<?php\n\nreturn ['id' => 'committed'];\n");
+    $committed->commit();
+
+    expect($held)->toBeTrue()
+        ->and($afterRollBack)->toBeFalse()
+        ->and(is_file($lock))->toBeFalse();
+});
+
+it('reserves a directory afresh when an earlier lock file was removed under a waiting handle', function () {
+    [$folder, $dataPath] = transactionFolder();
+    $first = new FileSetTransaction($folder);
+    $first->write($dataPath, 'first');
+    $first->stage();
+    // A process that opened the lock file just before the first transaction
+    // let go now locks a file that is no longer at the lock path.
+    $stale = fopen(reservationLockPath($folder), 'c+');
+    $first->rollBack();
+    expect(flock($stale, LOCK_EX | LOCK_NB))->toBeTrue();
+
+    $second = new FileSetTransaction($folder);
+    $second->write($dataPath, 'second');
+    $second->stage();
+    $third = new FileSetTransaction($folder);
+    $third->write($dataPath, 'third');
+
+    expect(fn() => $third->stage())->toThrow(FileSetTransactionFailure::class, 'Another file transaction');
+    $second->rollBack();
+    fclose($stale);
 });
 
 it('installs a new pair only when both files land, and leaves no folder when the second cannot', function () {

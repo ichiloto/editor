@@ -258,7 +258,7 @@ it('names the step a batch was refused at, and writes nothing of it', function (
 });
 
 it('reads a batch file as a list of changes or as {"changes": [...]}', function () {
-    $directory = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-batch-' . bin2hex(random_bytes(4)));
+    $directory = reserveTemporaryPath('ichiloto-batch-');
     mkdir($directory);
     file_put_contents($directory . '/list.json', '[{"method": "maps.list", "params": {}}]');
     file_put_contents($directory . '/object.json', '{"changes": [{"method": "maps.list", "params": {}}]}');

@@ -66,8 +66,9 @@ final class FileSetTransaction
     private array $createdFolders = [];
 
     /**
-     * @var list<resource> Locks for every source/destination directory and
-     *   their shared boundary, held through validation and rollback.
+     * @var array<string, resource> Locks for every source/destination
+     *   directory and their shared boundary, keyed by lock file and held
+     *   through validation and rollback.
      */
     private array $reservationHandles = [];
 
@@ -603,19 +604,53 @@ final class FileSetTransaction
 
         foreach ($reservedDirectories as $directory) {
             $lockPath = $lockRoot . DIRECTORY_SEPARATOR . hash('sha256', str_replace('\\', '/', $directory)) . '.lock';
-            $handle = @fopen($lockPath, 'c+');
+            $handle = self::lockReservation($lockPath);
 
-            if ($handle === false || ! @flock($handle, LOCK_EX | LOCK_NB)) {
-                if (is_resource($handle)) {
-                    fclose($handle);
-                }
-
+            if ($handle === null) {
                 $this->releaseReservations();
 
                 throw new FileSetTransactionFailure(sprintf('Another file transaction is using %s', $directory));
             }
 
-            $this->reservationHandles[] = $handle;
+            $this->reservationHandles[$lockPath] = $handle;
+        }
+    }
+
+    /**
+     * Takes the lock file of one reserved directory without waiting.
+     *
+     * A holder removes its lock file as it lets go, so lock files last only
+     * as long as a reservation. A handle opened just before that removal
+     * locks a file no other process can find any more; the reservation
+     * then belongs to the file now at the path, so it is opened afresh.
+     *
+     * @return resource|null The held lock, or null when another transaction holds it.
+     */
+    private static function lockReservation(string $lockPath): mixed
+    {
+        while (true) {
+            $handle = @fopen($lockPath, 'c+');
+
+            if ($handle === false) {
+                return null;
+            }
+
+            if (! @flock($handle, LOCK_EX | LOCK_NB)) {
+                fclose($handle);
+
+                return null;
+            }
+
+            clearstatcache(true, $lockPath);
+            $held = fstat($handle);
+            $current = @stat($lockPath);
+
+            if (is_array($held) && is_array($current) && $held['dev'] === $current['dev'] && $held['ino'] === $current['ino']) {
+                return $handle;
+            }
+
+            flock($handle, LOCK_UN);
+            fclose($handle);
         }
     }
 
@@ -646,7 +681,12 @@ final class FileSetTransaction
 
     private function releaseReservations(): void
     {
-        foreach (array_reverse($this->reservationHandles) as $handle) {
+        foreach (array_reverse($this->reservationHandles, true) as $lockPath => $handle) {
+            // Removed while still held, so no process can lock this file
+            // after the holder lets go and believe it holds the directory.
+            // A filesystem that refuses to remove an open file keeps it;
+            // the next reservation of the directory reuses it.
+            @unlink($lockPath);
             @flock($handle, LOCK_UN);
             fclose($handle);
         }

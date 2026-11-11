@@ -221,7 +221,7 @@ it('prefers the console the project itself installed', function (): void {
 });
 
 it('finds a console installed globally, on PATH', function (): void {
-    $binDirectory = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('ichiloto-bin-', true));
+    $binDirectory = reserveTemporaryPath('ichiloto-bin-');
     mkdir($binDirectory, 0o777, true);
     touch($binDirectory . '/ichiloto');
 
@@ -254,7 +254,7 @@ it('discovers consoles from installed package locations', function (): void {
 });
 
 it('says where it looked when there is no console to find', function (): void {
-    $emptyBinDirectory = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('ichiloto-empty-bin-', true));
+    $emptyBinDirectory = reserveTemporaryPath('ichiloto-empty-bin-');
     mkdir($emptyBinDirectory, 0o777, true);
     $previousPath = (string) getenv('PATH');
     putenv('PATH=' . $emptyBinDirectory);
@@ -291,7 +291,7 @@ function writeFakeConsole(string $directory, ?int $exitCode = null): string
 /** A throwaway directory for a playtest's stand-in console, removed after the test whatever its outcome. */
 function playtestScratch(): string
 {
-    $scratch = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('ichiloto-console-', true));
+    $scratch = reserveTemporaryPath('ichiloto-console-');
     mkdir($scratch);
 
     return $scratch;

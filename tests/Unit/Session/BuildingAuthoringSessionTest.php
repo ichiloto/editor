@@ -408,7 +408,7 @@ it('writes a review page of a map as the game draws it, unsaved edits included, 
     defineHutPiece($root, $request);
     expectAnswer($request('pieces.place', ['map' => 'town', 'revision' => readTown($request)['revision'], 'piece' => 'hut',
         'from' => [2, 1], 'to' => [2, 1], 'footprint' => true]));
-    $out = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('editor-building-review-', true));
+    $out = reserveTemporaryPath('editor-building-review-');
     $before = sourceHashTree($root . '/assets');
 
     $review = expectAnswer($request('map.review', ['map' => 'town', 'directory' => $out, 'region' => [1, 0, 5, 4], 'player' => [3, 3]]));
