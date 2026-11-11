@@ -61,10 +61,11 @@ final class SavePointAgreementCheck
         $rows = $map->getResolvedCollisionMap();
         $layers = $map->getLayerSet();
         $grid = $layers->getComposedGrid();
+        $resolveGlyph = $map->createGlyphCollisionResolver();
         $graphics = MapGraphicsValidator::readGraphics($map);
         $art = [];
         foreach ($graphics?->tileset->pieces ?? [] as $piece) {
-            $cells = SavePointMarks::listPieceCells($map, $piece);
+            $cells = SavePointMarks::listPieceCells($map, $piece, $resolveGlyph);
             if ($cells === []) {
                 continue;
             }
@@ -80,7 +81,7 @@ final class SavePointAgreementCheck
             foreach ($row as $x => $collision) {
                 $saves = $collision === CollisionType::SAVE_POINT->value;
                 $glyph = TerminalText::stripAnsi($grid[$y][$x] ?? ' ');
-                $marked = trim($glyph) !== '' && $map->lookUpGlyphCollision($layers->getGameplayLayerAt($x, $y)->name, $glyph) === CollisionType::SAVE_POINT;
+                $marked = trim($glyph) !== '' && $resolveGlyph($layers->getGameplayLayerAt($x, $y)->name, $glyph) === CollisionType::SAVE_POINT;
                 if (! $saves && ($marked || isset($art[$y][$x]))) {
                     $inert[] = [$x, $y];
                 } elseif ($saves && ! $marked) {

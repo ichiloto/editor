@@ -1329,11 +1329,29 @@ final class ProjectMap
      */
     public function lookUpGlyphCollision(string $layerName, string $glyph): CollisionType
     {
-        $dictionary = $this->loadCollisionDictionary();
-        $section = $dictionary[$layerName] ?? [];
-        $plain = array_filter($dictionary, static fn(mixed $value): bool => $value instanceof CollisionType);
+        return ($this->createGlyphCollisionResolver())($layerName, $glyph);
+    }
 
-        return MapCollisionResolver::lookUp((is_array($section) ? $section : []) + $plain, $glyph);
+    /**
+     * Shares a fresh dictionary snapshot across a batch of glyph lookups.
+     * The dictionary is read on the first lookup so empty batches still do no I/O.
+     *
+     * @return Closure(string, string): CollisionType
+     */
+    public function createGlyphCollisionResolver(): Closure
+    {
+        $sections = null;
+        $plain = [];
+
+        return function (string $layerName, string $glyph) use (&$sections, &$plain): CollisionType {
+            if ($sections === null) {
+                $dictionary = $this->loadCollisionDictionary();
+                $plain = array_filter($dictionary, static fn(mixed $value): bool => $value instanceof CollisionType);
+                $sections = array_map(static fn(array $section): array => $section + $plain, array_filter($dictionary, is_array(...)));
+            }
+
+            return MapCollisionResolver::lookUp($sections[$layerName] ?? $plain, $glyph);
+        };
     }
 
     /**

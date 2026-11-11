@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Canvas;
 
+use Closure;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
@@ -68,9 +69,10 @@ final class PieceArtFootprint
         } catch (\Throwable $error) {
             throw new MapSourceRefusal('Pieces are unavailable: ' . $error->getMessage(), previous: $error);
         }
+        $resolveGlyph = $map->createGlyphCollisionResolver();
         $misfits = [];
         foreach ($origins as $index => $origin) {
-            $misfit = self::findMisfit($map, $piece, $origin, $collision, $tileset);
+            $misfit = self::findMisfit($piece, $origin, $collision, $tileset, $resolveGlyph);
             if ($misfit !== null) {
                 $misfits[$index] = $misfit;
             }
@@ -84,8 +86,9 @@ final class PieceArtFootprint
      *
      * @param array{x: int, y: int} $origin
      * @param array<int, array<int, int>> $collision The map's resolved collision, by row and column.
+     * @param Closure(string, string): CollisionType $resolveGlyph
      */
-    private static function findMisfit(ProjectMap $map, TilesetPiece $piece, array $origin, array $collision, ?Tileset $tileset): ?string
+    private static function findMisfit(TilesetPiece $piece, array $origin, array $collision, ?Tileset $tileset, Closure $resolveGlyph): ?string
     {
         ['x' => $left, 'y' => $top] = $origin;
         for ($row = 0; $row < $piece->height; $row++) {
@@ -106,7 +109,7 @@ final class PieceArtFootprint
                     }
                     continue;
                 }
-                $expected = self::findGroundCollision($map, $piece, $row, $column);
+                $expected = self::findGroundCollision($piece, $row, $column, $resolveGlyph);
                 if ($expected !== null && $expected !== $current) {
                     return sprintf('%s at (%d, %d) needs %s collision at (%d, %d), where the map has %s; place the piece whole to change its footprint. Nothing was changed.',
                         $piece->name, $left, $top + $piece->overhang, self::describe($expected), $x, $y, self::describe($current));
@@ -117,8 +120,12 @@ final class PieceArtFootprint
         return null;
     }
 
-    /** The collision a ground cell of the piece gives, or null when the piece leaves that cell's collision alone. */
-    private static function findGroundCollision(ProjectMap $map, TilesetPiece $piece, int $row, int $column): ?CollisionType
+    /**
+     * The collision a ground cell of the piece gives, or null when the piece leaves that cell's collision alone.
+     *
+     * @param Closure(string, string): CollisionType $resolveGlyph
+     */
+    private static function findGroundCollision(TilesetPiece $piece, int $row, int $column, Closure $resolveGlyph): ?CollisionType
     {
         if ($piece->occupancy !== null) {
             return $piece->occupancy[$row][$column];
@@ -127,7 +134,7 @@ final class PieceArtFootprint
         if ($glyph === ' ') {
             return null;
         }
-        $type = $map->lookUpGlyphCollision($piece->layer, $glyph);
+        $type = $resolveGlyph($piece->layer, $glyph);
 
         return $type === CollisionType::PASS_THROUGH ? null : $type;
     }

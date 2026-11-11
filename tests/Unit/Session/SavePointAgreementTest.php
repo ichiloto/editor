@@ -138,6 +138,20 @@ it('reports a save point mark whose cell does not save', function () {
     expect(readSavePointFindings($session))->toBe([SavePointAgreementCheck::INERT => [[2, 1]]]);
 });
 
+it('reads current layer-specific glyph meanings on each validation', function () {
+    $root = savePointProject(fixtures: "    \n  ? ", decor: "0 0 0 0\n0 0 11 0");
+    $session = EditorSession::open($root);
+    $path = $root . '/assets/Maps/collisions.php';
+    $dictionary = require $path;
+
+    expect(readSavePointFindings($session))->toBe([SavePointAgreementCheck::INERT => [[2, 1]]]);
+
+    $dictionary['fixtures'] = ['?' => CollisionType::NONE];
+    file_put_contents($path, "<?php\nreturn " . var_export($dictionary, true) . ";\n");
+
+    expect(readSavePointFindings($session))->toBe([]);
+});
+
 it('reports a cell that saves with no terminal mark', function () {
     $none = CollisionType::NONE;
     $save = CollisionType::SAVE_POINT;

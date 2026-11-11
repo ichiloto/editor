@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Canvas;
 
+use Closure;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\History\GenericCommand;
@@ -42,12 +43,13 @@ final class SavePointMarks
      */
     public static function addCollision(ProjectMap $map, TilesetPiece $piece, ?Command $stamp, array $origins, string $label): ?Command
     {
-        if (! $map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY])) {
+        if ($origins === [] || ! $map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY])) {
             return $stamp;
         }
+        $pieceCells = self::listPieceCells($map, $piece);
         $writes = [];
         foreach ($origins as ['x' => $x, 'y' => $y]) {
-            foreach (self::listPieceCells($map, $piece) as [$column, $row]) {
+            foreach ($pieceCells as [$column, $row]) {
                 $writes[] = [$x + $column, $y + $row, CollisionType::SAVE_POINT];
             }
         }
@@ -119,17 +121,19 @@ final class SavePointMarks
      * Where a piece marks a save point: each [column, row] whose glyph the
      * project's collision dictionary reads as one on the piece's layer.
      *
+     * @param (Closure(string, string): CollisionType)|null $resolveGlyph
      * @return list<array{0: int, 1: int}>
      */
-    public static function listPieceCells(ProjectMap $map, TilesetPiece $piece): array
+    public static function listPieceCells(ProjectMap $map, TilesetPiece $piece, ?Closure $resolveGlyph = null): array
     {
         if ($piece->connects !== null) {
             return [];
         }
+        $resolveGlyph ??= $map->createGlyphCollisionResolver();
         $cells = [];
         foreach ($piece->glyphs as $row => $symbols) {
             foreach ($symbols as $column => $symbol) {
-                if ($symbol !== ' ' && $map->lookUpGlyphCollision($piece->layer, $symbol) === CollisionType::SAVE_POINT) {
+                if ($symbol !== ' ' && $resolveGlyph($piece->layer, $symbol) === CollisionType::SAVE_POINT) {
                     $cells[] = [$column, $row];
                 }
             }
