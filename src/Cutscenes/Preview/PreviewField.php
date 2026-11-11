@@ -23,7 +23,6 @@ use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Config\PlaySettings;
 use Ichiloto\Engine\Util\Config\ProjectConfig;
-use Ichiloto\Engine\Util\Debug;
 use Ichiloto\Engine\Util\Interfaces\ConfigInterface;
 use Throwable;
 
@@ -453,9 +452,8 @@ final class PreviewField
             'width' => $this->screenWidth,
             'height' => $this->screenHeight,
         ]));
-
-        $logDirectory = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ichiloto-editor-preview-logs';
-        Debug::configure(['log_level' => Debug::ERROR, 'log_directory' => $logDirectory]);
+        // Where the Engine writes its diagnostics belongs to the process
+        // running the Editor, so the field leaves it as it found it.
         $this->configured = true;
     }
 }

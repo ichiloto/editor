@@ -18,6 +18,11 @@ function gameSourceRoot(): ?string
 
 require_once __DIR__ . '/Support/TemporaryFixtures.php';
 
+// The Engine's and the Editor's diagnostics from this process go with its
+// fixtures, never into a log another run or the author keeps.
+Ichiloto\Engine\Util\Debug::configure(['log_directory' => TemporaryFixtures::getDiagnosticsDirectory()]);
+Ichiloto\Editor\Debug\Debug::setLogDirectory(TemporaryFixtures::getDiagnosticsDirectory());
+
 /**
  * Removes every throwaway fixture a test made, whether it passed or not.
  *
