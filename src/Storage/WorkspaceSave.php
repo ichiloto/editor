@@ -205,7 +205,7 @@ final class WorkspaceSave
                 continue;
             }
 
-            $issues = MapValidator::validate($map, $mapsById, $inventory);
+            $issues = MapValidator::validate($map, $mapsById, $inventory, $workspace->config);
             foreach (MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING)) as $warning) {
                 $warnings[] = sprintf('%s: %s', $map->mapId, $warning);
             }

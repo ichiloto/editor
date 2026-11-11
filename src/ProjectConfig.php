@@ -28,6 +28,9 @@ final class ProjectConfig extends ProjectSettingsFile
     public const string INN_PRESENTATION = 'graphics.inn.presentation';
     /** The event script a save point runs, else the Engine's save point notice (SaveFeatures). */
     public const string SAVE_POINT_SCRIPT = 'save.point_script';
+    /** The most save points one map holds, 0 for no limit; validation reports a map with more (SavePointLimitCheck). */
+    public const string SAVE_POINTS_PER_MAP = 'save.points_per_map';
+    public const int DEFAULT_SAVE_POINTS_PER_MAP = 1;
     /** Always Dash's first value; the player changes it in Options and Config (PlayerDash). */
     public const string ALWAYS_DASH = PlayerDash::CONFIG_ALWAYS_DASH;
     /** Whether tutorials start on their own when their trigger first holds; the player changes it in Config (TutorialDirector). */
@@ -90,6 +93,9 @@ final class ProjectConfig extends ProjectSettingsFile
     protected function listEngineSettings(): array
     {
         $settings = array_map(static fn(mixed $default): array => ['default' => $default], self::ENGINE_DEFAULTS);
+        // An authoring rule rather than a runtime one: the Engine plays any number, and validation holds the project to it.
+        $settings[self::SAVE_POINTS_PER_MAP] = ['default' => self::DEFAULT_SAVE_POINTS_PER_MAP,
+            'description' => 'The most save points one map holds; validation reports a map with more. 0 allows any number.'];
         // The effects battle conditions play are offered as groups even where the project binds none.
         foreach (BattleConditionGroup::cases() as $group) {
             $settings[$group->getConfigPath()] = ['default' => null];
