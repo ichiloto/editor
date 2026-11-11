@@ -16,7 +16,7 @@ use Ichiloto\Engine\Entities\Enumerations\ActionConditionType;
  */
 function enemyRecordProject(array $records = []): string
 {
-    $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-enemy-records-' . bin2hex(random_bytes(4)));
+    $root = reserveTemporaryPath('ichiloto-enemy-records-');
     mkdir($root . '/assets/Data/Enemies', 0777, true);
     mkdir($root . '/assets/Graphics/Enemies', 0777, true);
     file_put_contents($root . '/assets/Graphics/Enemies/blob.txt', "(o)\n");

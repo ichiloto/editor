@@ -97,7 +97,7 @@ it('opens and validates a project whose Engine adds a reference kind this Editor
     ]];
     PHP);
     file_put_contents($root . '/assets/Events/oracle.php', "<?php\n\nreturn [['type' => 'consult_oracle', 'oracle' => 'delphi']];\n");
-    $scratch = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-future-reference-' . bin2hex(random_bytes(4)));
+    $scratch = reserveTemporaryPath('ichiloto-future-reference-');
     mkdir($scratch, 0o777, true);
 
     $output = (string) shell_exec(sprintf('%s -d memory_limit=512M %s %s %s %s 2>&1', escapeshellarg(PHP_BINARY),

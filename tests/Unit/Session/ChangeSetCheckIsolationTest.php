@@ -23,10 +23,10 @@ function hashProjectFiles(string $root): array
     return $files;
 }
 
-/** An importable PNG outside the project. */
+/** An importable PNG outside the project, owned by the running test. */
 function writeIncomingPng(): string
 {
-    $path = sys_get_temp_dir() . '/' . uniqid('ichiloto-incoming-', true) . '.png';
+    $path = makeTemporaryFile('ichiloto-incoming-', '.png');
     $image = imagecreatetruecolor(48, 48);
     imagepng($image, $path);
 
@@ -44,7 +44,6 @@ it('leaves the project byte-identical after a checked change set that imports an
 
     expect($outcome['status'])->toBe('checked')
         ->and(hashProjectFiles($root))->toBe($before);
-    unlink($source);
 });
 
 it('leaves the project byte-identical when the process dies part way through a check', function () {
@@ -52,7 +51,7 @@ it('leaves the project byte-identical when the process dies part way through a c
     $source = writeIncomingPng();
     $before = hashProjectFiles($root);
     $bootstrap = dirname(__DIR__, 2) . '/bootstrap.php';
-    $script = sys_get_temp_dir() . '/' . uniqid('ichiloto-check-dies-', true) . '.php';
+    $script = makeTemporaryFile('ichiloto-check-dies-', '.php');
     file_put_contents($script, '<?php require ' . var_export($bootstrap, true) . ';'
         . ' $dies = new class implements JsonSerializable { public function jsonSerialize(): mixed { exit(9); } };'
         . ' Ichiloto\Editor\Session\ChangeBatch::apply(' . var_export($root, true) . ', ['
@@ -64,8 +63,6 @@ it('leaves the project byte-identical when the process dies part way through a c
 
     expect($status)->toBe(9)
         ->and(hashProjectFiles($root))->toBe($before);
-    unlink($script);
-    unlink($source);
 });
 
 it('still writes an applied change set to the project itself', function () {
@@ -78,7 +75,6 @@ it('still writes an applied change set to the project itself', function () {
 
     expect($outcome['status'])->toBe('saved')
         ->and(is_file($root . '/assets/Graphics/Applied.png'))->toBeTrue();
-    unlink($source);
 });
 
 it('redirects an internal asset link into the scratch project during preview', function () {
@@ -103,16 +99,14 @@ it('redirects an internal asset link into the scratch project during preview', f
             ->and(is_file($physical . '/Checked.png'))->toBeFalse();
     } finally {
         unlink($link);
-        unlink($source);
     }
 });
 
 it('refuses a project link outside scratch ownership before a checked import runs', function () {
     $root = mapGraphicsProject();
     $source = writeIncomingPng();
-    $external = sys_get_temp_dir() . '/' . uniqid('ichiloto-scratch-external-', true);
+    $external = makeTemporaryDirectory('ichiloto-scratch-external-');
     $link = $root . '/assets/Graphics/Linked';
-    mkdir($external);
     symlink($external, $link);
 
     try {
@@ -127,8 +121,6 @@ it('refuses a project link outside scratch ownership before a checked import run
             ->and(scandir($external))->toBe(['.', '..']);
     } finally {
         unlink($link);
-        unlink($source);
-        rmdir($external);
     }
 });
 
@@ -149,7 +141,6 @@ it('only removes directories created by an asset import when undoing the import'
         $nested->revert();
         expect(is_dir($root . '/assets/Graphics/Incoming'))->toBeFalse();
     } finally {
-        unlink($source);
     }
 });
 
@@ -181,7 +172,6 @@ it('checks and previews an absolute project asset destination before applying th
         expect(ChangeBatch::apply($root, $changes)['status'])->toBe('saved')
             ->and(file_get_contents($target))->toBe(file_get_contents($source));
     } finally {
-        unlink($source);
     }
 });
 
@@ -215,7 +205,7 @@ it('isolates links the same way when the project is copied file by file', functi
     mkdir($physical, 0777, true);
     symlink($physical, $root . '/assets/Graphics/Linked');
     $bootstrap = dirname(__DIR__, 2) . '/bootstrap.php';
-    $script = sys_get_temp_dir() . '/' . uniqid('ichiloto-check-copies-', true) . '.php';
+    $script = makeTemporaryFile('ichiloto-check-copies-', '.php');
     file_put_contents($script, '<?php require ' . var_export($bootstrap, true) . ';'
         . ' echo json_encode(Ichiloto\Editor\Session\ChangeBatch::preview(' . var_export($root, true) . ', ['
         . " ['method' => 'assets.import', 'params' => ['source' => " . var_export($source, true) . ", 'destination' => 'Graphics/Linked/Checked.png']],"
@@ -228,6 +218,4 @@ it('isolates links the same way when the project is copied file by file', functi
         ->and(json_decode(implode('', $output), true))->toBe(['status' => 'previewed', 'result' => true])
         ->and(is_file($physical . '/Checked.png'))->toBeFalse();
     unlink($root . '/assets/Graphics/Linked');
-    unlink($script);
-    unlink($source);
 });

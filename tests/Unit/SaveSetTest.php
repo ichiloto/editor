@@ -15,8 +15,7 @@ use Ichiloto\Editor\Storage\SaveSetRefusal;
 /** A folder holding a.txt and b.txt, with c.txt yet to be written. @return array{string, array<string, string>} */
 function saveSetFolder(): array
 {
-    $folder = sys_get_temp_dir() . '/ichiloto-save-set-' . bin2hex(random_bytes(4));
-    mkdir($folder);
+    $folder = makeTemporaryDirectory('ichiloto-save-set-');
     file_put_contents($folder . '/a.txt', "a\n");
     file_put_contents($folder . '/b.txt', "b\n");
 

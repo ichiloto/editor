@@ -167,8 +167,7 @@ it('renders a batch\'s changes before they are written, and writes nothing', fun
 it('writes each view\'s pictures and a review page that sets every view\'s Terminal picture beside its still', function () {
     $root = mapReviewGraphicsProject();
     $session = EditorSession::open($root);
-    $out = sys_get_temp_dir() . '/' . uniqid('ichiloto-map-review-', true);
-    rememberTemporaryProject($out);
+    $out = reserveTemporaryPath('ichiloto-map-review-');
     $writer = new MapReviewWriter($out, new FieldStillRaster($root . '/assets'), 0.5);
     $views = [new MapRenderView('test-map', label: 'The whole map'),
         new MapRenderView('test-map', ['x' => 0, 'y' => 0, 'width' => 2, 'height' => 2], label: 'Its west half')];
@@ -339,7 +338,7 @@ function reviewRenderers(string $executable): Ichiloto\Engine\Rendering\Launch\R
 /** An executable PHP script in a throwaway directory of its own, removed after the test. */
 function writeReviewExecutable(string $name, string $php): string
 {
-    $directory = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('ichiloto-review-renderer-', true));
+    $directory = reserveTemporaryPath('ichiloto-review-renderer-');
     mkdir($directory);
     $path = $directory . '/' . $name;
     file_put_contents($path, '#!' . PHP_BINARY . "\n<?php " . $php . "\n");

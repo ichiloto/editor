@@ -30,8 +30,7 @@ PHP);
 }
 
 it('creates a project through the console, passing what the author chose', function () {
-    $root = sys_get_temp_dir() . '/ichiloto-new-' . bin2hex(random_bytes(4));
-    mkdir($root);
+    $root = makeTemporaryDirectory('ichiloto-new-');
     $creator = new ProjectCreator(fakeConsole($root));
 
     $created = $creator->createProject('Lake Legend', $root . '/lake-legend', 'Mira', 'active_time');
