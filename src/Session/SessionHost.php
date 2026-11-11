@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Session;
 
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
+use Ichiloto\Engine\UI\Presentation\ToolTheme;
 use Ichiloto\Editor\Canvas\PieceOwnership;
 use Ichiloto\Editor\Console\ConsoleBinary;
 use Ichiloto\Editor\Console\ProjectCreator;
@@ -24,7 +25,10 @@ use Throwable;
  * `refusal` for an edit or read the session will not make (the author reads
  * the message), `request` for a malformed or unknown request, `failure` for
  * anything unexpected. The first request must be `hello`, which opens the
- * project and agrees the protocol version.
+ * project and agrees the protocol version. Two requests need no project:
+ * `project.create`, and `tools.theme`, which names the file holding the
+ * Engine's tool chrome so a native editor draws the same tool palette as
+ * the Engine's own tool screens.
  */
 final class SessionHost
 {
@@ -116,6 +120,11 @@ final class SessionHost
             $this->session = EditorSession::open(self::requireString($params, 'project'));
 
             return ['protocol' => self::PROTOCOL, 'project' => $this->session->describeProject()];
+        }
+
+        // The tool palette is the Engine's, the same for every game: the file this host's Engine reads.
+        if ($method === 'tools.theme') {
+            return ['path' => self::locateToolTheme()];
         }
 
         // Creating a project needs none open: an editor with no project offers it.
@@ -841,6 +850,21 @@ final class SessionHost
         }
 
         return $selectors;
+    }
+
+    /**
+     * The Engine's tool theme file, as the Engine loaded in this host names
+     * it. The file itself is read and validated by whoever draws with it.
+     *
+     * @throws SessionRefusal When the loaded Engine has no tool theme.
+     */
+    private static function locateToolTheme(): string
+    {
+        if (! class_exists(ToolTheme::class)) {
+            throw new SessionRefusal(sprintf('The Engine this host loaded has no tool theme (%s). Update the Engine.', ToolTheme::class));
+        }
+
+        return realpath(ToolTheme::FILE) ?: ToolTheme::FILE;
     }
 
     /** @param array<string, mixed> $params */
