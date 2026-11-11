@@ -6792,7 +6792,7 @@ final class Editor
             return;
         }
 
-        $issues = MapValidator::validate($selectedMap, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
+        $issues = MapValidator::validate($selectedMap, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace), $this->workspace->config);
         $errors = MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::ERROR));
         $warnings = MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING));
         $step = null;

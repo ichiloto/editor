@@ -6514,7 +6514,7 @@ final class EditorSession
                 throw new SessionRefusal('The map or the save manifest changed since the save relocations were shown, so nothing was written. Review them again.');
             }
         }
-        $issues = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
+        $issues = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace), $this->workspace->config);
         $failures = [];
         $step = $relocation?->apply();
 
@@ -7047,7 +7047,7 @@ final class EditorSession
     public function validateMap(string $mapId): array
     {
         $map = $this->requireMap($mapId);
-        $issues = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
+        $issues = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace), $this->workspace->config);
 
         return [
             'map' => $map->mapId,

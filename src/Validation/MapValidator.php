@@ -10,6 +10,7 @@ use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\Inspector\MapLandmarkFields;
 use Ichiloto\Editor\Inspector\MapTerrainFields;
+use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use InvalidArgumentException;
@@ -38,9 +39,10 @@ final class MapValidator
      * @param array<string, ProjectMap> $mapsById Every workspace map keyed by map id.
      * @param InventoryCatalog|null $inventory The project's inventory, for what its chests give; null when it
      *     could not be read ({@see readInventoryCatalog()}), which is itself reported.
+     * @param ProjectConfig|null $config The project's settings, for its rules such as how many save points a map holds.
      * @return list<Issue> What is wrong, each naming the map; empty when the map is clean.
      */
-    public static function validate(ProjectMap $map, array $mapsById, ?InventoryCatalog $inventory): array
+    public static function validate(ProjectMap $map, array $mapsById, ?InventoryCatalog $inventory, ?ProjectConfig $config = null): array
     {
         return Issue::attributeToMap([
             ...MapCompletenessCheck::validate($map, $inventory),
@@ -56,6 +58,7 @@ final class MapValidator
             ...MapGraphicsValidator::validateCoverage($map),
             ...BrokenPieceCheck::validate($map),
             ...SavePointAgreementCheck::validate($map),
+            ...SavePointLimitCheck::validate($map, $config),
             ...PassageAgreementCheck::validate($map),
         ], $map->mapId);
     }
