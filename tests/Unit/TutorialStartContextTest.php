@@ -137,7 +137,7 @@ it('refuses a context or a lesson shape the Engine would refuse, before writing 
     expect(fn() => $session->saveDatabase(TutorialFields::CATEGORY))->toThrow(SessionRefusal::class, $reason)
         ->and(file_get_contents($path))->toBe($original);
 })->with([
-    'a library start from a script' => [0, 'start', 'script', 'valid automatic start context'],
+    'a library start from a script' => [0, 'start', 'script', 'requires a valid start context'],
     'a battle lesson practised in the Guide' => [1, 'replay', 'practice', 'Read, Watch or no replay'],
     'a battle lesson completed by anything but the committed action' => [1, 'step0Until', 'switch:test_chosen', 'committed battle action'],
     'a battle lesson off the command window' => [1, 'step0Targetscreen', 'summons', 'owning screen and view'],
@@ -242,6 +242,6 @@ it('chooses a start context in the Terminal among those the Engine declares', fu
 
     // A context the Engine does not declare never reaches the source.
     $database->setField(2, 'startContext', 'library');
-    expect(fn() => $database->save())->toThrow(RuntimeException::class, 'valid automatic start context')
+    expect(fn() => $database->save())->toThrow(RuntimeException::class, 'requires a valid start context')
         ->and(file_get_contents($path))->toBe($saved);
 });
