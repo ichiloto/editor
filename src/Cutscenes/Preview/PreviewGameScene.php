@@ -59,6 +59,9 @@ final class PreviewGameScene extends GameScene
         string $initialMapId,
     ) {
         $this->sceneManager = $previewSceneManager;
+        // The preview's scene manager owns this one scene, so it is the current, running scene that stage
+        // presentations and other scene-owned work require, as the game's field is in its scene manager.
+        $previewSceneManager->currentScene = $this;
         $this->gameState = new GameState();
         $this->hasDeferredAutoSave = false;
         $this->currentMapId = $initialMapId;
@@ -125,6 +128,14 @@ final class PreviewGameScene extends GameScene
         $session->playback->seek($frame);
         $session->playback->pause();
         $presentation->presentEffect($session);
+    }
+
+    /** The preview game this scene belongs to, with its silent audio and its notice queue. */
+    public function getPreviewGame(): PreviewGame
+    {
+        $game = $this->previewSceneManager->game;
+
+        return $game instanceof PreviewGame ? $game : throw new \LogicException('The preview scene lost its preview game.');
     }
 
     public function installPlayer(PreviewPlayer $player): void

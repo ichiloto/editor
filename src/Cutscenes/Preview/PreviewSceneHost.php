@@ -127,6 +127,7 @@ final class PreviewSceneHost
         $this->context = null;
         $this->replaced = null;
         $this->dialogue->pageLayout = null;
+        $this->dialogue->graphicalGrid = null;
         $this->client->shutdown();
     }
 
@@ -148,5 +149,6 @@ final class PreviewSceneHost
         }
         $width = $this->grid->columns * $this->grid->cellWidth;
         $this->dialogue->pageLayout = fn(string $speaker, $context, string $help) => $this->composer->getDialoguePageLayout($speaker, $context, $help, $width);
+        $this->dialogue->graphicalGrid = $this->grid;
     }
 }

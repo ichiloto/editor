@@ -126,6 +126,8 @@ use Ichiloto\Editor\Review\MapRendering;
 use Ichiloto\Editor\Review\MapRenderView;
 use Ichiloto\Editor\Review\MapRenderSubject;
 use Ichiloto\Editor\Review\MapReviewWriter;
+use Ichiloto\Editor\Review\CinematicCaptureWriter;
+use Ichiloto\Editor\Review\SceneFrameRaster;
 use Ichiloto\Editor\Review\FieldStillRaster;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
@@ -178,6 +180,7 @@ use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Localization\Vocabulary;
 use Ichiloto\Engine\Progression\Mastery\MasteryVocabulary;
+use Ichiloto\Editor\Cutscenes\Preview\CinematicCapture;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewOrigin;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewField;
@@ -3486,6 +3489,50 @@ final class EditorSession
         }
 
         return $this->describeCinematicPreview();
+    }
+
+    /**
+     * Captures a cinematic as it stands, unsaved edits included, as a moving
+     * review of the game's graphical window, and writes it into an empty or
+     * new folder ({@see CinematicCaptureWriter}): numbered PNG frames at the
+     * frame rate and `capture.json`. It starts where the preview starts, is
+     * presented graphically from its first command, and reads each waiting
+     * dialogue page, choice and notice for the reading time before
+     * acknowledging it, a choice by its first option. The project's files
+     * never change.
+     *
+     * @return array{frames: int, manifest: string, finished: bool, diagnostics: list<string>}
+     * @throws SessionRefusal When the cinematic is unknown or does not compile, or the capture cannot be written.
+     */
+    public function writeCinematicCapture(int $index, string $directory, int $width, int $height, float $fps,
+        float $readingSeconds, float $maxSeconds): array
+    {
+        $type = CutsceneType::CINEMATIC;
+        $id = $this->workspace->cutscenes?->ids($type)[$index] ?? null;
+        $asset = ($id === null ? null : $this->workspace->cutscenes?->find($type, $id))
+            ?? throw new SessionRefusal(sprintf('There is no %s %d.', $type->noun(), $index));
+        try {
+            $definition = $asset->cinematicDefinition();
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $origin = CinematicPreviewOrigin::locate($this->workspace, $asset, $definition->startMap);
+        $assets = rtrim($this->workspace->projectRoot, '/') . '/assets';
+        try {
+            $preview = CinematicPreviewSession::startCapture($this->workspace->projectRoot, $definition, SceneFrameRaster::supports(...), [
+                'mapId' => $origin['mapId'], 'x' => $origin['x'], 'y' => $origin['y'], 'width' => max(20, $width), 'height' => max(8, $height),
+            ]);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be captured: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        try {
+            return new CinematicCaptureWriter($directory, new SceneFrameRaster($assets))
+                ->write(new CinematicCapture($preview, $fps, $readingSeconds, $maxSeconds), $preview->getSceneGrid());
+        } catch (InvalidArgumentException|RuntimeException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        } finally {
+            $preview->dispose();
+        }
     }
 
     /**

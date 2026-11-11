@@ -12,6 +12,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\IO\Console\Console;
+use Ichiloto\Engine\Progression\WorldAbilityCatalog;
 use Ichiloto\Engine\Rendering\FieldViewport;
 use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposer;
 use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposition;
@@ -42,7 +43,14 @@ use Throwable;
  * field declares them: its Terminal screen, with the field's own dialogue
  * and clock, from the moment the scene exists, and a graphical presentation
  * only while a still is composed or the window's view is attached, each of
- * which gives back the presentation it replaced.
+ * which gives back the presentation it replaced. A capture holds a graphical
+ * presentation for the field's whole run instead ({@see beginCapture()}), so
+ * everything the run starts is presented graphically from its first command.
+ *
+ * The Engine configuration it installs is the project's, as the game
+ * installs it before a campaign: the preview's play and project settings,
+ * and the project's world abilities, which world conditions and power
+ * showcases read.
  */
 final class PreviewField
 {
@@ -59,6 +67,15 @@ final class PreviewField
     private ?PreviewSceneHost $sceneHost = null;
     /** @var array<string, ConfigInterface> */
     private array $previousConfigs = [];
+    /** @var list<string> Why project configuration the field installs could not be read. */
+    private array $configurationDiagnostics = [];
+    /** The graphical presentation a capture holds, while one does. */
+    private ?ScenePresentationContext $capture = null;
+    /** The presentation the capture replaced. */
+    private ?ScenePresentationContext $captureReplaced = null;
+    private ?SceneFrameComposer $captureComposer = null;
+    /** @var (Closure(string): bool)|null The capture's renderer capabilities. */
+    private ?Closure $captureSupports = null;
     private bool $configured = false;
     /** The field's screen in Terminal cells, which the graphical view's camera viewport never changes. */
     private int $screenWidth;
@@ -92,7 +109,8 @@ final class PreviewField
             $field->scene = new PreviewGameScene(new PreviewSceneManager(), $field->screenWidth, $field->screenHeight, $mapId);
             $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
             $camera = $field->scene->previewCamera();
-            $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight);
+            $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight, $field->projectRoot . '/assets');
+            $field->scene->getPreviewGame()->notices->presentOn($field->presentation);
             $field->presentTerminal();
             $player = new PreviewPlayer($field->scene, $spawn);
             $field->scene->installPlayer($player);
@@ -125,7 +143,8 @@ final class PreviewField
             $field->scene = new PreviewGameScene(new PreviewSceneManager(), $field->screenWidth, $field->screenHeight, $map->mapId);
             $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
             $camera = $field->scene->previewCamera();
-            $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight);
+            $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight, $field->projectRoot . '/assets');
+            $field->scene->getPreviewGame()->notices->presentOn($field->presentation);
             $field->presentTerminal();
             $player = $spawn === null ? null : new PreviewPlayer($field->scene, $spawn, heading: $heading, appearance: $appearance);
             if ($player !== null) {
@@ -214,6 +233,94 @@ final class PreviewField
         });
 
         return $composition ?? throw new \LogicException('The field composed no graphical picture.');
+    }
+
+    /**
+     * Presents the field graphically from now until the capture ends
+     * ({@see endCapture()}), as the editor window's graphical view does while
+     * attached, for a renderer of the given capabilities with no window: the
+     * graphical field's grid, its effects drawn as sprites, dialogue and
+     * notices paged for that screen. Everything the field runs meanwhile is
+     * started graphically, as it is in the game's graphical window, and each
+     * composed frame ({@see composeCapturedFrame()}) is the scene at the
+     * owner's clock. The window's view cannot be attached while a capture
+     * holds the field.
+     *
+     * @param Closure(string): bool $supports The capture renderer's capabilities.
+     * @param TextPreparationProviderInterface|null $textPreparation Where project labels are measured; without one
+     *     the field composes no labels.
+     * @throws \LogicException When the field is already captured or the window's view is attached.
+     */
+    public function beginCapture(Closure $supports, ?TextPreparationProviderInterface $textPreparation = null): void
+    {
+        if ($this->capture !== null || $this->sceneHost !== null) {
+            throw new \LogicException('The field is already presented graphically; end that presentation first.');
+        }
+        $this->captureSupports = new PreviewPresentationCapabilities($supports)->supportsFeature(...);
+        $assetRoot = $this->projectRoot . '/assets';
+        $grid = $this->getSceneGrid();
+        $this->run(function () use ($assetRoot, $grid, $textPreparation): void {
+            $this->captureReplaced = $this->scene->getPresentationContext();
+            $this->scene->setPresentationContext($this->capture = new ScenePresentationContext($grid, $this->captureSupports,
+                collectPresentations: fn(): array => $this->presentation->getActivePresentations(), readTime: $this->readTime,
+                assetRoot: $assetRoot, textPreparation: $textPreparation));
+            $this->scene->installFieldEffects(EffectPresentation::GRAPHICAL);
+            $composer = $this->captureComposer = new SceneFrameComposer($assetRoot);
+            $width = $grid->columns * $grid->cellWidth;
+            $this->presentation->pageLayout = static fn(string $speaker, $context, string $help) =>
+                $composer->getDialoguePageLayout($speaker, $context, $help, $width);
+            $this->presentation->graphicalGrid = $grid;
+        });
+    }
+
+    /** Whether a capture holds the field's presentation. */
+    public function isCaptured(): bool
+    {
+        return $this->capture !== null;
+    }
+
+    /**
+     * The scene as the captured graphical field shows it now: the retained
+     * world, its sprites, the camera's viewport, the field's Terminal text,
+     * the screen's dialogue and notices and the cinematic overlays, the
+     * stage plane and what is lifted above its cover included, composed by
+     * the Engine as for the game's graphical window.
+     *
+     * @throws \LogicException When no capture holds the field.
+     */
+    public function composeCapturedFrame(): SceneFrameComposition
+    {
+        $composer = $this->captureComposer;
+        $supports = $this->captureSupports;
+        if ($this->capture === null || $composer === null || $supports === null) {
+            throw new \LogicException('Begin a capture before composing its frames.');
+        }
+        $grid = $this->getSceneGrid();
+        $composition = null;
+        $this->run(function () use ($composer, $supports, $grid, &$composition): void {
+            $composition = $composer->composeFrame($this->scene, $grid, $supports,
+                fn(array $excluded, array $worldLayers) => Console::capturePresentation($grid->columns, $grid->rows,
+                    $this->renderScene(...), $excluded, $worldLayers, $this->scene->getPresentationWorld() !== null));
+        });
+
+        return $composition ?? throw new \LogicException('The captured field composed no picture.');
+    }
+
+    /** Gives the field back the presentation the capture replaced, with its Terminal dialogue and notice pages. */
+    public function endCapture(): void
+    {
+        if ($this->capture === null) {
+            return;
+        }
+        $this->run(function (): void {
+            if ($this->scene->getPresentationContext() === $this->capture) {
+                $this->scene->restorePresentation($this->captureReplaced);
+            }
+            $this->presentation->pageLayout = null;
+            $this->presentation->graphicalGrid = null;
+        });
+        $this->capture = $this->captureReplaced = $this->captureComposer = null;
+        $this->captureSupports = null;
     }
 
     /**
@@ -306,8 +413,8 @@ final class PreviewField
      */
     public function exchangeScene(array $events, ?string $sessionId = null): array
     {
-        // Check ownership before allocating a host or decoding old READY/ACK/error lines.
-        if ($sessionId !== $this->sessionId) {
+        // Check ownership before allocating a host or decoding old READY/ACK/error lines; a capture owns the presentation.
+        if ($sessionId !== $this->sessionId || $this->capture !== null) {
             return [];
         }
         $grid = $this->getSceneGrid();
@@ -328,10 +435,10 @@ final class PreviewField
             RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT);
     }
 
-    /** @return list<string> Why the current field has no usable map, if it does not. */
+    /** @return list<string> Why the current field has no usable map, and project configuration it could not read. */
     public function getDiagnostics(): array
     {
-        return $this->scene->previewMap->getDiagnostics();
+        return [...$this->configurationDiagnostics, ...$this->scene->previewMap->getDiagnostics()];
     }
 
     /** Ends the editor window's graphical view of the field, if one is attached. */
@@ -361,6 +468,9 @@ final class PreviewField
      */
     public function resize(int $width, int $height): void
     {
+        if ($this->capture !== null) {
+            throw new \LogicException('A captured field keeps its screen until the capture ends.');
+        }
         // The graphical view's grid is the screen's, so a new size starts it again.
         $previousSessionId = $this->sessionId;
         $this->detachScene();
@@ -380,12 +490,13 @@ final class PreviewField
      */
     public function dispose(): void
     {
+        $this->endCapture();
         $this->detachScene();
         if (! $this->configured) {
             return;
         }
 
-        foreach ([ProjectConfig::class, PlaySettings::class] as $class) {
+        foreach ([ProjectConfig::class, PlaySettings::class, WorldAbilityCatalog::class] as $class) {
             if (isset($this->previousConfigs[$class])) {
                 ConfigStore::put($class, $this->previousConfigs[$class]);
             } else {
@@ -433,7 +544,7 @@ final class PreviewField
             return;
         }
 
-        foreach ([ProjectConfig::class, PlaySettings::class] as $class) {
+        foreach ([ProjectConfig::class, PlaySettings::class, WorldAbilityCatalog::class] as $class) {
             if (ConfigStore::has($class)) {
                 $this->previousConfigs[$class] = ConfigStore::get($class);
             }
@@ -452,6 +563,14 @@ final class PreviewField
             'width' => $this->screenWidth,
             'height' => $this->screenHeight,
         ]));
+        // The project's world abilities, as the game installs them before a campaign; a source that cannot be read
+        // leaves none installed and says why, so a condition or showcase that needs them reports it in its own words.
+        ConfigStore::remove(WorldAbilityCatalog::class);
+        try {
+            ConfigStore::put(WorldAbilityCatalog::class, WorldAbilityCatalog::fromProject($this->projectRoot . '/assets'));
+        } catch (Throwable $failure) {
+            $this->configurationDiagnostics[] = 'The project\'s world abilities could not be read: ' . $failure->getMessage();
+        }
         // Where the Engine writes its diagnostics belongs to the process
         // running the Editor, so the field leaves it as it found it.
         $this->configured = true;
