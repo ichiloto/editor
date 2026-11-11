@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\IO;
 
+use Ichiloto\Engine\IO\Console\TerminalText;
+
 /**
  * Non-blocking terminal input decoder.
  *
@@ -35,6 +37,16 @@ final class InputDecoder
    * Whether the current buffer tail already survived a poll unchanged.
    */
   private bool $pendingEscapeHeld = false;
+
+  /**
+   * The graphemes of the plain run at the head of the buffer, last first so
+   * each token pops one. The run is segmented once rather than once per
+   * token, and arriving bytes clear it because they can extend its last
+   * grapheme.
+   *
+   * @var list<string>
+   */
+  private array $plainGraphemes = [];
 
   /**
    * Switches STDIN to non-blocking mode. Call once at boot, after the
@@ -73,6 +85,7 @@ final class InputDecoder
 
     $this->buffer .= $bytes;
     $this->pendingEscapeHeld = false;
+    $this->plainGraphemes = [];
   }
 
   /**
@@ -161,8 +174,17 @@ final class InputDecoder
       return $this->consume($byte);
     }
 
-    if (preg_match('/^\X/u', $this->buffer, $match) === 1) {
-      return $this->consume($match[0]);
+    if ($this->plainGraphemes === []) {
+      // A control byte always ends a grapheme (UAX #29), so the run before
+      // the next one segments exactly as the whole buffer would. Malformed
+      // or incomplete UTF-8 in the run yields no grapheme.
+      preg_match('/\A[^\x00-\x1F\x7F]+/', $this->buffer, $run);
+      $graphemes = TerminalText::splitGraphemes($run[0]);
+      $this->plainGraphemes = $graphemes === false ? [] : array_reverse($graphemes);
+    }
+
+    if ($this->plainGraphemes !== []) {
+      return $this->consume(array_pop($this->plainGraphemes));
     }
 
     // Incomplete multi-byte UTF-8 tail: wait for the rest, unless it has
