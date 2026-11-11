@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
-use Ichiloto\Engine\Core\WorldConditionType;
+use Ichiloto\Engine\Core\WorldConditionEvaluator;
 use Ichiloto\Engine\Entities\Character;
 use Ichiloto\Engine\Entities\Stats\StatKey;
 use InvalidArgumentException;
@@ -330,51 +330,10 @@ final class BattleEntryRuleContract
         $problems = [];
 
         foreach ($conditions as $index => $condition) {
-            $conditionSource = sprintf('%s[%d]', $source, $index);
-
-            if (! is_array($condition)) {
-                $problems[] = sprintf('%s must be an array.', $conditionSource);
-
-                continue;
-            }
-
-            $typeValue = $condition['type'] ?? null;
-            $type = is_string($typeValue) ? WorldConditionType::tryFrom(trim($typeValue)) : null;
-
-            if (! $type instanceof WorldConditionType) {
-                $problems[] = sprintf(
-                    '%s field "type" has unsupported world condition "%s".',
-                    $conditionSource,
-                    is_scalar($typeValue) ? strval($typeValue) : get_debug_type($typeValue),
-                );
-
-                continue;
-            }
-
-            if (! is_string($condition['name'] ?? null) || trim($condition['name']) === '') {
-                $problems[] = sprintf('%s field "name" must be non-empty.', $conditionSource);
-            }
-
-            if (isset($condition['negate']) && ! is_bool($condition['negate'])) {
-                $problems[] = sprintf('%s field "negate" must be boolean.', $conditionSource);
-            }
-
-            if ($type === WorldConditionType::VARIABLE) {
-                $operator = strval($condition['op'] ?? '==');
-
-                if (! in_array($operator, ['==', '!=', '>', '>=', '<', '<='], true)) {
-                    $problems[] = sprintf(
-                        '%s field "op" has unsupported variable operator "%s".',
-                        $conditionSource,
-                        $operator,
-                    );
-                }
-            }
-
-            if ($type === WorldConditionType::ITEM
-                && isset($condition['quantity'])
-                && (! is_int($condition['quantity']) || $condition['quantity'] < 1)) {
-                $problems[] = sprintf('%s field "quantity" must be a positive integer.', $conditionSource);
+            try {
+                WorldConditionEvaluator::validateAll([$index => $condition], $source);
+            } catch (InvalidArgumentException $exception) {
+                $problems[] = $exception->getMessage();
             }
         }
 

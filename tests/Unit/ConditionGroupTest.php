@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
+use Ichiloto\Editor\Database\WorldWriteCodec;
 use Ichiloto\Engine\Core\WorldConditionEvaluator;
 
 it('round-trips an any-of group between the line and the Engine shape', function () {
@@ -62,4 +63,39 @@ it('describes a group and keeps the cursor editor from flattening it', function 
         ->and(ConditionEditor::describe($editor->conditions()[0]))
         ->toBe('NOT ANY OF (Story Event a happened; Quest b is active)')
         ->and(array_column(ConditionEditor::getGrammar(), 'type'))->not->toContain('any');
+});
+
+it('preserves legacy flat condition and write boundaries around parentheses', function () {
+    $line = 'event:opened (again; event:returned; event:closed)';
+    $expected = [
+        ['type' => 'event', 'name' => 'opened (again'],
+        ['type' => 'event', 'name' => 'returned'],
+        ['type' => 'event', 'name' => 'closed)'],
+    ];
+
+    expect(ConditionCodec::decodeAllStrictly($line))->toBe($expected)
+        ->and(ConditionCodec::decodeAll($line))->toBe($expected)
+        ->and(WorldWriteCodec::decodeAllStrictly($line))->toBe($expected)
+        ->and(WorldWriteCodec::decodeAll($line))->toBe($expected);
+});
+
+it('keeps a grouped condition after a flat name containing a literal parenthesis', function () {
+    $line = 'event:opened (; ! ANY (event:one; any(switch:two:false; event:three\(again\))); event:done';
+
+    expect(ConditionCodec::decodeAllStrictly($line))->toBe([
+        ['type' => 'event', 'name' => 'opened ('],
+        ['type' => 'any', 'conditions' => [
+            ['type' => 'event', 'name' => 'one'],
+            ['type' => 'any', 'conditions' => [
+                ['type' => 'switch', 'name' => 'two', 'value' => false],
+                ['type' => 'event', 'name' => 'three(again)'],
+            ]],
+        ], 'negate' => true],
+        ['type' => 'event', 'name' => 'done'],
+    ]);
+});
+
+it('refuses a group with a missing closing delimiter', function () {
+    expect(fn() => ConditionCodec::decodeAllStrictly('event:before; any(event:one; event:two'))
+        ->toThrow(InvalidArgumentException::class, 'cannot be read');
 });

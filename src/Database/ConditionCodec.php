@@ -219,7 +219,7 @@ final class ConditionCodec
     {
         $conditions = [];
 
-        foreach (WorldStateLine::splitEntries($value) as $segment) {
+        foreach (WorldStateLine::splitEntries($value, self::GROUP_TYPE) as $segment) {
             $condition = self::decode($segment);
 
             if ($condition !== null) {
@@ -243,7 +243,7 @@ final class ConditionCodec
     {
         $conditions = [];
 
-        foreach (WorldStateLine::splitEntries($value) as $segment) {
+        foreach (WorldStateLine::splitEntries($value, self::GROUP_TYPE) as $segment) {
             if (trim($segment) === '') {
                 continue;
             }
@@ -419,7 +419,7 @@ final class ConditionCodec
     private static function parseGroup(string $inside, bool $negate): array|string
     {
         $members = [];
-        foreach (WorldStateLine::splitEntries($inside) as $number => $segment) {
+        foreach (WorldStateLine::splitEntries($inside, self::GROUP_TYPE) as $number => $segment) {
             if (trim($segment) === '') {
                 continue;
             }

@@ -11,9 +11,8 @@ use InvalidArgumentException;
  * separated by `;`, each made of parts separated by `:`. The Engine accepts
  * any non-empty name, colons included (a completion flag such as
  * `deckers:won`), so a name or value is written with its `\`, `:`, `;`, `(`
- * and `)` escaped by a backslash, and the line splits only on unescaped
- * separators outside parentheses: a condition group keeps its members, with
- * their own separators, inside `any(...)`.
+ * and `)` escaped by a backslash. Conditions opt in to grouping at the entry
+ * boundary. World writes and individual parts use flat separators.
  * {@see ConditionCodec} and {@see WorldWriteCodec} read their types' parts
  * from it.
  */
@@ -24,13 +23,14 @@ final class WorldStateLine
     }
 
     /**
-     * Splits a line into its entries, each still escaped, at every unescaped `;`.
+     * Splits a line at unescaped semicolons, keeping an opted-in group whole.
+     * The group type must start the entry, with optional whitespace and negation.
      *
      * @return list<string>
      */
-    public static function splitEntries(string $line): array
+    public static function splitEntries(string $line, ?string $groupType = null): array
     {
-        return self::splitAt($line, ';');
+        return self::splitAt($line, ';', $groupType);
     }
 
     /**
@@ -62,11 +62,14 @@ final class WorldStateLine
     }
 
     /** @return list<string> */
-    private static function splitAt(string $text, string $separator): array
+    private static function splitAt(string $text, string $separator, ?string $groupType = null): array
     {
         $pieces = [];
         $current = '';
         $depth = 0;
+        $groupPrefix = $groupType === null
+            ? null
+            : '/^\s*(?:!\s*)?' . preg_quote($groupType, '/') . '\s*$/iD';
         $length = strlen($text);
         for ($index = 0; $index < $length; $index++) {
             $character = $text[$index];
@@ -75,8 +78,7 @@ final class WorldStateLine
                 $current .= $character . $text[++$index];
                 continue;
             }
-            // A group's members stay whole: only a separator outside every parenthesis splits.
-            if ($character === '(') {
+            if ($character === '(' && ($depth > 0 || ($groupPrefix !== null && preg_match($groupPrefix, $current) === 1))) {
                 $depth++;
             } elseif ($character === ')' && $depth > 0) {
                 $depth--;
