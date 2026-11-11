@@ -356,6 +356,49 @@ Remaining, waiting on the Engine taking caller-supplied data:
   `KnowledgeCatalog::fromProject()` and `PlayerPresentationConfig::load()` read
   the project from disk.
 
+### Cinematic capture (12 November 2026)
+
+`CinematicPreviewSession::startCapture()` presents a cinematic graphically
+from its first command (effects compile graphically, stages begin, dialogue
+and notices are paged for the graphical screen), and `composeFrame()` gives
+the Engine's `SceneFrameComposition` at the session's clock. `CinematicCapture`
+records it at a fixed rate, reading each waiting page for a reading time;
+`SceneFrameRaster` draws a frame (field still, screen text grid, screen canvas
+with its overlay, the stage plane and above-cover art included) and
+`CinematicCaptureWriter` writes numbered PNG frames and `capture.json`, served
+as `EditorSession::writeCinematicCapture()` / `cutscenes.cinematicCapture`.
+The preview game now delivers the Engine's notices to the preview's screen and
+holds the scene while one is shown, the preview scene is its scene manager's
+current scene, and the field installs the project's `WorldAbilityCatalog`.
+This closes the four preview findings of the Hybrid reveal review
+(10 November: no frame export, Terminal-compiled effects, no current scene,
+no world-ability catalog).
+
+Remaining, waiting on the Engine:
+- [ ] Campaign restoration for previews. `GameScene::configureCampaign()`
+  restores a `GameConfig` (project-state snapshot, world state, party and its
+  recruitment ownership, quests, achievements, income, knowledge, bestiary,
+  tutorials) together with the field, UI, player and interpreter it installs,
+  so a preview scene cannot restore a save or new game without copying that
+  order. Needed: an Engine-owned restoration of the campaign facts alone,
+  with its release, that `configureCampaign()` also uses. Until then a
+  preview runs on its own empty party and world state, so a scene that needs
+  the assembled party (a power showcase naming an actor) cannot be captured
+  from real campaign state, and a player who follows the party leader shows no
+  graphical art.
+- [ ] Per-game new-game loading. `GameLoader::getInstance()` keeps the first
+  Game and the actor and item stores it found, for the life of the process;
+  a host that opens several projects or previews needs a loader for its own
+  Game and the project's current stores.
+- [ ] Notice pages. `PagedAlertModal` pages a notice inside its constructor
+  and turns pages only from its blocking input loop. `PreviewNoticeOwner`
+  mirrors its two paging rules through the Engine's public `MenuTextWrap` and
+  `TerminalText`; an Engine page model that a non-blocking host can read and
+  turn would let the preview drop that mirror.
+- [ ] Capture labels. The session's capture composes no sign labels; the map
+  review prepares them through the packaged renderer (`StillLabelPreparation`),
+  which a capture could share.
+
 ### Camera preview clock (remaining integration, 1 November 2026)
 
 Runtime Engine pans/routes can send a retained `camera_motion` destination while

@@ -858,6 +858,20 @@ unsaved artwork/resource edits, and writes it as
 review of the open map there and opens its page. See Rendering
 Maps For Review in [Change Maps From A Script](guides/change-maps-from-a-script.md).
 
+A cinematic is captured the same way, as a moving review of the game's graphical
+window: `EditorSession::writeCinematicCapture()`, served as
+`cutscenes.cinematicCapture`, plays it through the Engine where its preview
+starts, presented graphically from its first command, and writes numbered PNG
+frames at the frame rate asked for, with `capture.json` naming each frame's
+capture and scene times, what waited on the player and what the frames could
+not draw. Each waiting dialogue page, choice and notice stays on screen for the
+reading time and is then acknowledged; while a notice is shown the scene holds,
+as the game's notice window holds it. A video encoder reads the frames in order,
+for example `ffmpeg -framerate 30 -i frame-%06d.png review.mp4`. The capture
+starts from the preview's own empty campaign: a scene that needs a real party
+or saved progress cannot be captured from those until the Engine offers the
+campaign restoration it needs (see the roadmap).
+
 **Pending, not implemented:** richer renderers will use a separate,
 RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.
 The planned `ichiloto edit` entry point will offer a TUI/GUI choice; that choice

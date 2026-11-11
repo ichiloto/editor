@@ -13,16 +13,21 @@ use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePageLayout;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePaginationBuilder;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
+use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\UI\Interfaces\LayeredPresentationInterface;
+use Ichiloto\Engine\UI\Modal\NoticeContent;
 
 /**
- * Dialogue and choices as the preview pane presents them.
+ * Dialogue, choices and notices as the preview pane presents them.
  *
  * The interpreter hands over text and choice prompts exactly as it would to
  * the field's windows. A line is paged as the game pages it
  * ({@see DialoguePaginationBuilder}) and each page waits for the author
  * (Enter to continue, ↑/↓ and Enter to choose) unless the session is told to
  * advance on its own, which a run to completion or a skip comparison does.
+ * A notice the Engine delivers ({@see PreviewNoticeManager}) waits the same
+ * way, page by page ({@see PreviewNoticeOwner}); while it is on screen the
+ * scene is held, as the game's blocking notice window holds its frame loop.
  * What is on screen is offered to the Engine's scene composer as the game's
  * own windows are ({@see getActivePresentations()}), so a graphical preview
  * draws it the game's way, and is drawn into the Terminal picture on its own
@@ -37,6 +42,7 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
 {
     private ?PreviewDialogueOwner $dialogue = null;
     private ?PreviewChoiceOwner $choice = null;
+    private ?PreviewNoticeOwner $notice = null;
     private ?int $result = null;
     private bool $confirmed = false;
     public bool $autoAdvance = false;
@@ -46,6 +52,8 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
      * @var (Closure(string, DialogueContext, string): ?DialoguePageLayout)|null
      */
     public ?Closure $pageLayout = null;
+    /** The graphical screen a notice is paged on while a graphical preview is attached; null pages for the terminal. */
+    public ?RendererGridConfig $graphicalGrid = null;
     /** @var array<int, array{kind: string, text: string, speaker: string}> */
     public array $log = [];
 
@@ -53,7 +61,7 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
      * @param int $screenWidth The preview's text screen, in columns.
      * @param int $screenHeight The preview's text screen, in rows.
      */
-    public function __construct(private int $screenWidth, private int $screenHeight)
+    public function __construct(private int $screenWidth, private int $screenHeight, private readonly string $assetRoot = '')
     {
     }
 
@@ -89,11 +97,30 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
         $this->log[] = ['kind' => 'choice', 'text' => $prompt, 'speaker' => $title];
     }
 
+    /**
+     * Puts a delivered notice or alert on screen, after whatever waited
+     * there; it waits for the author's acknowledgement page by page. A notice
+     * names its artwork and control hints; an alert has none.
+     */
+    public function beginNotice(?NoticeContent $notice, string $title, string $message): void
+    {
+        $this->notice = new PreviewNoticeOwner($notice, $title, $message, $this->screenWidth, $this->screenHeight,
+            $this->graphicalGrid, $this->assetRoot);
+        $this->log[] = ['kind' => 'notice', 'text' => $message, 'speaker' => $title];
+    }
+
+    /** Whether a notice is on screen, holding the scene until it is acknowledged. */
+    public function isNoticeShown(): bool
+    {
+        return $this->notice !== null;
+    }
+
     public function update(): void
     {
         if (! $this->autoAdvance) {
             return;
         }
+        $this->notice = null;
         if ($this->choice !== null && $this->result === null) {
             $this->result = 0;
         }
@@ -104,6 +131,9 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
 
     public function render(): void
     {
+        if ($this->notice !== null) {
+            PresentationLayerPolicy::ui($this->notice, fn() => $this->drawNotice($this->notice));
+        }
         if ($this->isComplete()) {
             return;
         }
@@ -137,6 +167,10 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
      */
     public function getActivePresentations(): array
     {
+        if ($this->notice !== null) {
+            return [$this->notice];
+        }
+
         return $this->isWaiting() ? array_values(array_filter([$this->choice, $this->dialogue])) : [];
     }
 
@@ -145,17 +179,19 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
      */
     public function isWaiting(): bool
     {
-        return ($this->dialogue !== null || $this->choice !== null) && ! $this->confirmed;
+        return $this->notice !== null || (($this->dialogue !== null || $this->choice !== null) && ! $this->confirmed);
     }
 
     /**
-     * What the author answers now: `choice` (move the highlight, then
-     * confirm), `dialogue` (confirm), or null when nothing waits.
+     * What the author answers now: `notice` (acknowledge), `choice` (move
+     * the highlight, then confirm), `dialogue` (confirm), or null when
+     * nothing waits.
      */
     public function getWaitKind(): ?string
     {
         return match (true) {
             ! $this->isWaiting() => null,
+            $this->notice !== null => 'notice',
             $this->choice !== null => 'choice',
             default => 'dialogue',
         };
@@ -168,6 +204,14 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
     {
         if (! $this->isWaiting()) {
             return null;
+        }
+
+        if ($this->notice !== null) {
+            $pages = count($this->notice->pages);
+
+            return $pages > 1
+                ? sprintf('Notice waiting (page %d of %d): Enter to acknowledge', $this->notice->getPage() + 1, $pages)
+                : 'Notice waiting: Enter to acknowledge';
         }
 
         if ($this->choice !== null) {
@@ -189,6 +233,14 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
     {
         if (! $this->isWaiting()) {
             return false;
+        }
+
+        if ($this->notice !== null) {
+            if (! $this->notice->turnPage()) {
+                $this->notice = null;
+            }
+
+            return true;
         }
 
         if ($this->dialogue?->turnPage()) {
@@ -254,6 +306,28 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
         $y = max(0, $this->screenHeight - count($rows) - 1);
         foreach (array_slice($rows, 0, $this->screenHeight) as $index => $row) {
             Console::write(TerminalText::truncateToWidth($row, $this->screenWidth - $x), $x, min($y + $index, $this->screenHeight - 1));
+        }
+    }
+
+    /** The Terminal notice window: its title, the page shown and its button, centred on the text screen. */
+    private function drawNotice(PreviewNoticeOwner $notice): void
+    {
+        $bounds = $notice->getPresentationBounds();
+        $inner = $bounds->getWidth() - 4;
+        $title = $notice->getTitle();
+        $border = '+' . str_repeat('-', $bounds->getWidth() - 2) . '+';
+        $top = $title === '' ? $border : TerminalText::truncateToWidth('+-' . $title . str_repeat('-', max(0, $bounds->getWidth() - 3
+            - TerminalText::displayWidth($title))) . '+', $bounds->getWidth());
+        $rows = [$top];
+        foreach ($notice->getTerminalRows($notice->pages[$notice->getPage()], $inner) as $line) {
+            $rows[] = '| ' . TerminalText::padRight($line, $inner) . ' |';
+        }
+        $button = '[ ' . ($notice->hasNextPage() ? 'Next' : 'OK') . ' ]';
+        $rows[] = '| ' . TerminalText::padRight(str_repeat(' ', max(0, intdiv($inner - TerminalText::displayWidth($button), 2))) . $button, $inner) . ' |';
+        $rows[] = $border;
+        foreach (array_slice($rows, 0, $this->screenHeight) as $index => $row) {
+            Console::write(TerminalText::truncateToWidth($row, $this->screenWidth - $bounds->getX()), $bounds->getX(),
+                min($bounds->getY() + $index, $this->screenHeight - 1));
         }
     }
 
