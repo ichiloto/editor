@@ -1179,18 +1179,6 @@ it('validates NPCs the editor created, not only hand-written ones', function () 
 // -- Engine ----------------------------------------------------------------
 
 it('loads an editor-written map through the engine\'s own NPC configuration', function () {
-    $game = gameSourceRoot();
-
-    if ($game === null || ! is_file($game . '/vendor/autoload.php')) {
-        $this->markTestSkipped('The engine is not reachable from this checkout.');
-    }
-
-    require_once $game . '/vendor/autoload.php';
-
-    if (! class_exists(\Ichiloto\Engine\Field\NpcManager::class)) {
-        $this->markTestSkipped('The engine is not reachable from this checkout.');
-    }
-
     [$root, $path] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
     $editor = npcEditor($root);
     createNpcThroughCanvas($editor, 8, 3, 'Gate Guard');
@@ -1224,7 +1212,8 @@ it('loads an editor-written map through the engine\'s own NPC configuration', fu
         ->and($guard->wanders)->toBeTrue()
         ->and($guard->wanderArea)->toBe(['x' => 7, 'y' => 2, 'width' => 3, 'height' => 2])
         ->and($guard->sprite)->toBe('<fg=#ffaf00>@</>')
-        ->and($guard->dialogue)->toBe([['text' => 'Halt, traveller.']])
+        ->and($guard->isTalkable)->toBeTrue()
+        ->and($guard->currentPage?->lines)->toBe([['text' => 'Halt, traveller.']])
         ->and($guard->sets)->toBe([['type' => 'switch', 'name' => 'met_guard']])
         ->and($guard->allowsWanderTo(7, 2))->toBeTrue()
         ->and($guard->allowsWanderTo(6, 2))->toBeFalse()
