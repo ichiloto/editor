@@ -23,6 +23,15 @@
   samples in the Timeline pane and has no rows for them. For an effect or summon with separate sequences the samples
   are authored in the graphical one.
 
+- Region budget for stills (Engine fe238189): map stills, canvas stills and cinematic capture frames name
+  `canvas_region_budget` beside `canvas_group_color`, as the Engine pairs them, so a still meets the Engine's
+  terms for a group's colour treatment as the graphical window does. A still's canvases are admitted together through
+  the Engine's image preflight before any is drawn: an image costs the crop it is drawn from, and a still whose
+  images exceed the Engine's limits (64 MiB and 4096 prepared regions) is refused with the Engine's account of them
+  instead of being drawn. The stills keep the crops they draw, up to the same 64 MiB, and no longer keep every whole
+  picture they read. A composition whose whole pictures exceed 64 MiB while its crops fit is admitted for a still,
+  where the Engine refused it before. Stills drawn before keep their bytes.
+
 - Group colour treatments (Engine fe238189): map stills, canvas stills and cinematic capture frames draw a canvas
   group's colour treatment. The group's flattened drawing, composites and nested groups included, has its colour
   turned through the treatment's matrix and offset once, before it is blended onto what is beneath it; coverage is

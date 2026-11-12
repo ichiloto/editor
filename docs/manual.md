@@ -845,7 +845,10 @@ writes the Terminal field's characters and colours (`.ans` and a page of its
 own), a native-size PNG of the graphical field as the game composes it (tiles,
 sprites, world canvases such as a bed and its sleeper, and the field text of
 subjects shown by their glyph), and a `review.html` with the two side by side
-for every view. Sign labels are measured and drawn by the installed GPUI
+for every view. The world canvases of one still are held to the image budget
+the game's graphical window gives one frame (64 MiB of the crops they draw); a
+still over it is refused with the Engine's account of the largest pictures,
+and a smaller region can be rendered instead. Sign labels are measured and drawn by the installed GPUI
 renderer without a window (`--prepare-text`), so a sign reads as it does in
 play; a renderer that is missing or too old to have that mode leaves each
 sign out, and the view names every one it left out and why. `--player X,Y[,HEADING]` stands the player
@@ -869,7 +872,10 @@ reading time and is then acknowledged; while a notice is shown the scene holds,
 as the game's notice window holds it. A canvas group, a drawing the game
 places as one piece, is drawn where its origin puts it, inside its clip, and
 in its colour treatment (an inversion or a tint of the whole group) when the
-game gives it one. A video encoder reads the frames in order,
+game gives it one. Each frame's canvases are admitted on the terms the game's
+graphical window admits them: an image costs the crop it is drawn from, and a
+frame whose images exceed the Engine's budget ends the capture with the
+Engine's account of them. A video encoder reads the frames in order,
 for example `ffmpeg -framerate 30 -i frame-%06d.png review.mp4`. The capture
 starts from the preview's own empty campaign unless it is given a save
 (`campaignSave`, an absolute path): the scene then plays in that save's
