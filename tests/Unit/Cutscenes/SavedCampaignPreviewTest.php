@@ -6,6 +6,8 @@ use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewField;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
+use Ichiloto\Engine\IO\SaveCompatibility\ContentMigrationResolution;
+use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
 use Ichiloto\Engine\IO\SaveManager;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Stores\ActorStore;
@@ -36,9 +38,10 @@ function writeHarbourSave(string $root, int $x, int $y): string
     $field = PreviewField::open($root, 'harbour', new Vector2($x, $y), 40, 12, static fn(): float => 0.0);
     $path = null;
     try {
-        $field->run(function () use ($field, &$path): void {
+        $field->run(function () use ($field, $root, &$path): void {
             $field->scene->gameState->setSwitch('lanterns_lit', true);
-            $manager = new SaveManager($field->scene->getGame());
+            $manager = new SaveManager($field->scene->getGame(), compatibilityManifest: SaveCompatibilityManifest::fromProjectRoot(
+                $root, migrationResolution: ContentMigrationResolution::WHEN_REQUIRED));
             $manager->save($field->scene, 1);
             $path = $manager->getSlotPath(1);
         });
@@ -112,5 +115,45 @@ it('refuses a save that cannot be read and leaves nothing installed', function (
 
     expect(fn() => PreviewField::openSavedCampaign($root, $root . '/no-such-save.iedata', 40, 12, static fn(): float => 0.0))
         ->toThrow(InvalidArgumentException::class, 'could not be read')
+        ->and(readInstalledStores())->toBe($stores);
+});
+
+/**
+ * Declares the project's save history: one migration class per content step, none of which the Editor can load,
+ * as a real project's classes never are.
+ */
+function writeHarbourSaveHistory(string $root, int $contentVersion): void
+{
+    $migrations = [];
+    for ($from = 0; $from < $contentVersion; $from++) {
+        $migrations[] = ['from' => $from, 'to' => $from + 1, 'class' => sprintf('Synthetic\\Harbour\\Save\\Step%dTo%d', $from, $from + 1)];
+    }
+    file_put_contents($root . '/assets/Data/save-compatibility.php',
+        "<?php\n\nreturn " . var_export(['contentVersion' => $contentVersion, 'migrations' => $migrations], true) . ";\n");
+}
+
+it('restores a save at the project\'s current content version without the project\'s migration classes', function () {
+    $root = cutsceneProject();
+    writeHarbourSaveHistory($root, 2);
+    $save = writeHarbourSave($root, 3, 1);
+
+    $field = PreviewField::openSavedCampaign($root, $save, 40, 12, static fn(): float => 0.0);
+    try {
+        expect($field->scene->gameState->getSwitch('lanterns_lit'))->toBeTrue()
+            ->and(class_exists('Synthetic\\Harbour\\Save\\Step1To2', false))->toBeFalse();
+    } finally {
+        $field->dispose();
+    }
+});
+
+it('refuses a save that needs a migration class the Editor cannot load, naming the class', function () {
+    $root = cutsceneProject();
+    writeHarbourSaveHistory($root, 1);
+    $save = writeHarbourSave($root, 3, 1);
+    writeHarbourSaveHistory($root, 2);
+    $stores = readInstalledStores();
+
+    expect(fn() => PreviewField::openSavedCampaign($root, $save, 40, 12, static fn(): float => 0.0))
+        ->toThrow('Step1To2", which is unavailable in this host')
         ->and(readInstalledStores())->toBe($stores);
 });

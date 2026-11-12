@@ -374,7 +374,7 @@ This closes the four preview findings of the Hybrid reveal review
 (10 November: no frame export, Terminal-compiled effects, no current scene,
 no world-ability catalog).
 
-Done on Engine `156840cd` (12 November):
+Done on Engine `156840cd` and `06ecb262` (12 November):
 - [x] Campaign restoration for previews. A preview or capture given a save
   (`campaignSave`) plays in that save's campaign:
   `PreviewField::openSavedCampaign()` reads the save through the Engine's
@@ -389,13 +389,11 @@ Done on Engine `156840cd` (12 November):
   `NoticePageModel`.
 
 Remaining, waiting on the Engine:
-- [ ] Decoding a save without the project's classes. `SaveCompatibilityManifest`
-  resolves every project migration class when it is built, and the Editor
-  never loads a project's PHP classes, so a project whose manifest names
-  migration classes cannot have any save decoded here, even one already at
-  its current content version. Needed: an Engine-supported way to build the
-  save pipeline without those classes (for example resolving a migration
-  class when its step runs).
+- [x] Decoding a save without the project's classes (Engine `06ecb262`). The
+  preview builds its save pipeline with
+  `ContentMigrationResolution::WHEN_REQUIRED`, so a save at the project's
+  current content version restores without the project's migration classes,
+  and an older save is refused naming the class it needs.
 - [ ] GUI: choosing the save a preview or capture starts from.
 - [ ] Capture labels. The session's capture composes no sign labels; the map
   review prepares them through the packaged renderer (`StillLabelPreparation`),

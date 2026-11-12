@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Engine\Core\Campaign\CampaignSession;
+use Ichiloto\Engine\IO\SaveCompatibility\ContentMigrationResolution;
+use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
 use Ichiloto\Engine\IO\SaveManager;
 use Ichiloto\Engine\Scenes\Game\GameConfig;
 use Ichiloto\Engine\Scenes\Game\GameLoader;
@@ -20,7 +22,8 @@ use InvalidArgumentException;
  *
  * Nothing here decodes or restores by itself. The save is read through the
  * Engine's save pipeline ({@see SaveManager::loadSaveFile()}) with the
- * project's compatibility manifest, and its facts are restored by the
+ * project's compatibility manifest, whose migration classes are resolved
+ * only when a save needs them, and its facts are restored by the
  * Engine's {@see CampaignSession}, which the game's own field uses. The save
  * file is only read; the preview keeps the campaign for its life and gives
  * the project state back when it is released.
@@ -53,8 +56,12 @@ final class PreviewCampaign
         }
         $assetRoot = $projectRoot . '/assets';
         $game->bindGameLoader(new GameLoader($game, $actors, $items, $assetRoot));
-        // This Game's own save pipeline, never the process-wide one: it reads the one file it is given.
-        $config = (new SaveManager($game))->loadSaveFile($path)->config;
+        // This Game's own save pipeline, never the process-wide one: it reads the one file it is given. The Editor
+        // never loads a project's PHP classes, so the manifest resolves a migration class only when the save needs
+        // that step; a save that does is refused by the Engine, naming the class it could not find.
+        $manifest = SaveCompatibilityManifest::fromProjectRoot($projectRoot,
+            migrationResolution: ContentMigrationResolution::WHEN_REQUIRED);
+        $config = (new SaveManager($game, compatibilityManifest: $manifest))->loadSaveFile($path)->config;
         $config->party->inventory->bindItemStore($items);
 
         return new self(CampaignSession::restore($game, $config, $assetRoot), $config);
