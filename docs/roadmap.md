@@ -397,11 +397,6 @@ Remaining, waiting on the Engine:
   save pipeline without those classes (for example resolving a migration
   class when its step runs).
 - [ ] GUI: choosing the save a preview or capture starts from.
-- [ ] Notice pages. `PagedAlertModal` pages a notice inside its constructor
-  and turns pages only from its blocking input loop. `PreviewNoticeOwner`
-  mirrors its two paging rules through the Engine's public `MenuTextWrap` and
-  `TerminalText`; an Engine page model that a non-blocking host can read and
-  turn would let the preview drop that mirror.
 - [ ] Capture labels. The session's capture composes no sign labels; the map
   review prepares them through the packaged renderer (`StillLabelPreparation`),
   which a capture could share.
