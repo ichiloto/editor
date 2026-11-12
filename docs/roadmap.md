@@ -354,6 +354,47 @@ Remaining for the GUI editor:
   battle preview takes none of these flags: the Engine refuses both tracks in
   a summon timeline.
 
+Reduced-motion samples and motion scopes (status, 12 November 2026, Engine
+`e1438b34`): an effect's or a summon's `reducedMotionSamples` and each track's
+`motion` are kept as written by every edit and save: values, omitted keys,
+key order, comments and a clearing sample's `'sourceFrame' => null`. Before
+this they were kept by saves and shown nowhere. The graphical editor authors
+both through the shared record rows. **Reduced Motion Samples** is a list of
+the sequence: each sample's frame, duration and source frame. The source frame
+row reads `(clears the picture)` for a sample whose source frame is `null`;
+that text or an empty value written to the row keeps the key with `null`, a
+number holds that frame, zero included, and a row's own text written back
+changes nothing. Removing the last sample takes the key from the file. Each
+track has a **Motion** row with the Engine's `EffectMotionScope` values; a
+track that names none reads `all` and stays without the key, and the empty
+choice removes it. For an effect or summon with separate sequences the list is
+offered in the graphical sequence, where the Engine reads it; a terminal
+sequence that already holds one still lists it. `cutscenes.timeline` gives
+each track's `motion` and the sequence's `reducedMotionSamples`, a clearing
+sample's source frame as `null`, with the row keys that edit them. The TUI
+lists both in the Timeline pane (`· reduced motion only` on a track,
+`Reduced motion (n samples)` with `holds frame n` or `clears the picture`
+under it) and has no row and no outline operation for either. Each save
+compiles through the Engine, which judges that the samples run from frame
+zero to the last frame without gap or overlap, their source frames, the
+fixed once-playing timeline, and that a motion-specific track is graphical and
+moves neither the field nor a battler under reduced motion alone.
+Previews: `cutscenes.effectBattlePreview` and `cutscenes.battlePreview`
+already take `reducedMotion`; with it the Engine draws each frame's held
+drawing and the reduced-motion tracks, and nothing where a sample clears. The
+timeline previews and the stage canvas play with motion and leave out the
+tracks drawn for reduced motion alone.
+Remaining for the GUI editor:
+- Visual controls for the samples, such as dragging a hold's edges on the
+  timeline or picking its source frame from the playhead; today each value is
+  typed in its row, and the Engine refuses a gap on save.
+- A reduced-motion view of the timeline preview, the effect on the field and
+  the standalone stage canvas. None of them takes a reduced-motion input, so
+  held drawings are seen only in the two battle previews.
+- The **Presentation** row of a motion-specific track that names no
+  presentation reads `all`; the Engine draws such a track in the graphical
+  presentation alone, as it does a `trail` or a motion track.
+
 Battle effect orientation and weapon roles (Engine contract in progress,
 2026-10): a battle track may declare `facing` (`east` or `west`), the
 direction its stroke is drawn in; playback mirrors it for an attack the other

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
 use Ichiloto\Engine\Animations\Timelines\EffectPlaybackSession;
 use Ichiloto\Engine\IO\Console\TerminalText;
 
@@ -261,13 +262,15 @@ final class TimelinePreviewSession
     }
 
     /**
-     * The segments drawn on a frame.
+     * The segments drawn on a frame. The preview plays with motion, so a
+     * track drawn for reduced motion alone is left out, as the Engine leaves
+     * it out before it composes a frame ({@see EffectMotionScope}).
      *
      * @return array<int, array<string, mixed>>
      */
     public function activeSegments(?int $frame = null): array
     {
-        return $this->session->getActiveSegments($frame);
+        return EffectMotionScope::filterSegments($this->session->getActiveSegments($frame), false);
     }
 
     /**

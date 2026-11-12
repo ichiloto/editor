@@ -3180,11 +3180,13 @@ final class EditorSession
     /**
      * A summon's or effect's timeline as a timeline editor lays it out: its
      * frames per second and length, each track with its keyframes' frames and
-     * durations, and the cues, each value with the record row key that edits
-     * it through `database.apply`, as the record grid edits it. A cinematic is
-     * a command tree, not a timeline.
+     * durations and the motion setting it is drawn in, the cues, and the
+     * reduced-motion samples the sequence holds, each value with the record
+     * row key that edits it through `database.apply`, as the record grid
+     * edits it. A sample that clears the picture has a null source frame.
+     * A cinematic is a command tree, not a timeline.
      *
-     * @return array{fps: int, lengthFrames: int, tracks: list<array<string, mixed>>, cues: list<array<string, mixed>>}
+     * @return array{fps: int, lengthFrames: int, tracks: list<array<string, mixed>>, cues: list<array<string, mixed>>, reducedMotionSamples: list<array<string, mixed>>}
      * @throws SessionRefusal When the record is not a summon or effect the project has.
      */
     public function describeCutsceneTimeline(string $category, int $index): array
@@ -3193,8 +3195,11 @@ final class EditorSession
         $tracks = $cues = [];
         foreach ($this->readDatabaseRecord($category, $index, ['tracks'])['rows'] as $row) {
             $field = (string) ($row['key']['field'] ?? '');
-            if (preg_match('/^track(\d+)(Id|Type|Presentation)$/', $field, $match) === 1) {
+            if (preg_match('/^track(\d+)(Id|Type|Presentation|Motion)$/', $field, $match) === 1) {
                 $tracks[(int) $match[1]][strtolower($match[2])] = (string) $row['value'];
+                if ($match[2] === 'Motion') {
+                    $tracks[(int) $match[1]]['motionKey'] = $row['key'];
+                }
             } elseif (preg_match('/^track(\d+)(Asset|Sheetcolumns|Sheetrows|Fit|Attachment|Pivot|Anchor|Placementsubject|Placementattachment)$/', $field, $match) === 1) {
                 // An image track's art, and the keys that edit how it fills its cells and where it sits on its
                 // anchor: a battler point, or on the stage a subject and a named point on it.
@@ -3236,6 +3241,20 @@ final class EditorSession
         }
         unset($track);
         $payload = $asset->payload();
+        // The samples are read as authored, so one that clears keeps its null; their rows give the keys that edit them.
+        $reducedSamples = [];
+        if (array_key_exists(CutsceneSchemas::REDUCED_MOTION_SAMPLES_KEY,
+            $this->workspace->cutscenes?->schemaFor($asset->type, graphical: true)->commandListsFor($payload) ?? [])) {
+            $authored = array_values((array) ($payload[CutsceneSchemas::REDUCED_MOTION_SAMPLES_KEY] ?? []));
+            foreach ($this->readDatabaseRecord($category, $index, [CutsceneSchemas::REDUCED_MOTION_SAMPLES_KEY])['rows'] as $row) {
+                if (preg_match('/^reducedSample(\d+)(Frame|Duration|SourceFrame)$/', (string) ($row['key']['field'] ?? ''), $match) === 1) {
+                    $name = lcfirst($match[2]);
+                    $sample = $authored[(int) $match[1]] ?? null;
+                    $reducedSamples[(int) $match[1]][$name] = is_array($sample) ? ($sample[$name] ?? null) : null;
+                    $reducedSamples[(int) $match[1]][$name . 'Key'] = $row['key'];
+                }
+            }
+        }
         $stageContext = $this->findStageContext($asset);
         foreach ($tracks as $position => &$track) {
             if (isset($track['art'])) {
@@ -3255,6 +3274,7 @@ final class EditorSession
                     'pivotDefaults' => self::getTimelinePivotDefaults($asset->type, $payload['tracks'][$position] ?? []),
                 ]] : [])], $payload['tracks'][$position] ?? null), $tracks, array_keys($tracks))),
             'cues' => array_values($cues),
+            'reducedMotionSamples' => array_values($reducedSamples),
             // A declared stage's consumer survives switching to an independent Terminal sequence:
             // battle when an action animation binds the effect, else the caller that owns the stage.
             'ownedStage' => $stageContext?->isOwnedStage() ?? false,

@@ -16,6 +16,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightContact;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
 use Ichiloto\Engine\Animations\Timelines\EffectImpactTimingMode;
+use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
 use Ichiloto\Engine\Animations\Timelines\EffectStraightFlightFallback;
 use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
 use Ichiloto\Engine\Animations\Timelines\EffectImageDepth;
@@ -86,6 +87,12 @@ final class CutsceneSchemas
 
     public const string RANGE_TIMING_KEYS = 'rangeTiming.keys';
 
+    /** The payload key a timeline's reduced-motion samples are edited under, by the Engine's name for them. */
+    public const string REDUCED_MOTION_SAMPLES_KEY = 'reducedMotionSamples';
+
+    /** How a reduced-motion sample that clears the picture reads: its source frame is the Engine's explicit null. */
+    public const string REDUCED_MOTION_CLEAR = '(clears the picture)';
+
     /** How an image track without a default image reads: each of its keyframes names its own. */
     public const string TRACK_IMAGE_NONE = '(none: each keyframe names its image)';
 
@@ -145,8 +152,11 @@ final class CutsceneSchemas
     /**
      * Returns the summon category: one record per asset, its definition as
      * fields, its tracks and cues as command-style lists opened as frames.
+     * The graphical editor also authors what only the graphical presentation
+     * reads: each track's motion scope and the timeline's reduced-motion
+     * samples.
      */
-    public static function summons(): RecordSchema
+    public static function summons(bool $graphical = false): RecordSchema
     {
         $fields = [
             new RecordField('id', 'Id', isReadOnly: true),
@@ -220,18 +230,84 @@ final class CutsceneSchemas
                 self::CUES_KEY => [],
             ],
             commandLists: [
-                self::TRACKS_KEY => self::trackList(),
+                self::TRACKS_KEY => self::trackList($graphical),
                 self::CUES_KEY => self::cueList(),
                 self::STAGE_SUBJECTS_KEY => self::stageSubjectList(),
                 self::STAGE_CAMERA_KEY => self::stageCameraList(),
                 self::STAGE_COVERS_KEY => self::stageCoverList(),
+                ...($graphical ? [self::REDUCED_MOTION_SAMPLES_KEY => self::reducedMotionSampleList()] : []),
             ],
             // A sequence with a stage edits it as rows and lists of its own.
             fieldsFor: static fn(array $payload): array => is_array($payload['stage'] ?? null) ? [...$fields, ...self::stageFields()] : $fields,
-            commandListsFor: static fn(array $payload): array => is_array($payload['stage'] ?? null)
-                ? [self::TRACKS_KEY, self::CUES_KEY, self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY]
-                : [self::TRACKS_KEY, self::CUES_KEY],
+            commandListsFor: static fn(array $payload): array => [
+                self::TRACKS_KEY, self::CUES_KEY,
+                ...(is_array($payload['stage'] ?? null) ? [self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY] : []),
+                ...($graphical && self::offersReducedMotionSamples($payload) ? [self::REDUCED_MOTION_SAMPLES_KEY] : []),
+            ],
         );
+    }
+
+    /**
+     * Whether a timeline's reduced-motion samples are authored in the sequence being edited. The Engine
+     * selects held drawings for the graphical presentation alone, so of a timeline with separate terminal
+     * and graphical sequences the plan belongs in the graphical one; a terminal sequence that already holds
+     * one still lists it.
+     *
+     * @param array<string, mixed> $payload The record as it is edited.
+     */
+    private static function offersReducedMotionSamples(array $payload): bool
+    {
+        return ($payload[CutsceneAsset::SEQUENCE_KEY] ?? null) !== EffectPresentation::TERMINAL->value
+            || array_key_exists(self::REDUCED_MOTION_SAMPLES_KEY, $payload);
+    }
+
+    /**
+     * A fixed, once-playing timeline's reduced-motion samples, as the Engine's `EffectReducedMotionSamples`
+     * reads them: from frame zero to the timeline's last frame, one after another, each holding the drawing
+     * of an authored frame for its duration, or clearing the picture. The Engine judges their order and
+     * cover on save. A list emptied of its last sample goes from the file: the Engine reads none as the
+     * timeline's rest frame, and refuses an empty list.
+     *
+     * A sample that clears holds an explicit `null` source frame, never a missing key. The source frame's
+     * row reads {@see REDUCED_MOTION_CLEAR} for it; that label, or an empty value, written to the row keeps
+     * the key with `null`, and a number holds that frame, zero included.
+     */
+    public static function reducedMotionSampleList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: self::REDUCED_MOTION_SAMPLES_KEY,
+            prefix: 'reducedSample',
+            singular: 'reduced-motion sample',
+            fields: [
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('duration', 'Duration', InputControlType::INTEGER),
+                // Removed when cleared, as the row machinery clears any field, and put back as null below.
+                new RecordField('sourceFrame', 'Source Frame', InputControlType::INTEGER, removeWhenEmpty: true,
+                    displayDefault: self::REDUCED_MOTION_CLEAR),
+            ],
+            blank: ['frame' => 0, 'duration' => 1, 'sourceFrame' => 0],
+            heading: 'Reduced Motion Samples',
+            removeWhenEmpty: true,
+            prepareEdit: static function (array $entry, string $field): array {
+                if ($field === 'sourceFrame' && ! array_key_exists('sourceFrame', $entry)) {
+                    $entry['sourceFrame'] = null;
+                }
+
+                return $entry;
+            },
+        );
+    }
+
+    /**
+     * Which motion setting draws a track, as the Engine's `EffectMotionScope` names them: every one, or
+     * only normal or only reduced motion. A track that names none is drawn in every one, and stays
+     * without the key; the empty choice removes it. The Engine draws a motion-specific track in the
+     * graphical presentation alone and judges the rest on save.
+     */
+    private static function trackMotionField(): RecordField
+    {
+        return new RecordField('motion', 'Motion', options: ['', ...array_column(EffectMotionScope::cases(), 'value')],
+            removeWhenEmpty: true, displayDefault: EffectMotionScope::ALL->value);
     }
 
     /**
@@ -750,13 +826,17 @@ final class CutsceneSchemas
                         heading: 'Far Range Timing Keys',
                         removeWhenEmpty: true,
                     ),
+                    self::REDUCED_MOTION_SAMPLES_KEY => self::reducedMotionSampleList(),
                 ] : []),
             ],
             fieldsFor: static fn(array $payload): array => $graphical && is_array($payload['stage'] ?? null)
                 ? [...$fields, ...self::stageFields()] : $fields,
-            commandListsFor: static fn(array $payload): array => $graphical && is_array($payload['stage'] ?? null)
-                ? [self::TRACKS_KEY, self::CUES_KEY, self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY]
-                : [self::TRACKS_KEY, self::CUES_KEY, ...($graphical ? [self::RANGE_TIMING_KEYS] : [])],
+            commandListsFor: static fn(array $payload): array => [
+                self::TRACKS_KEY, self::CUES_KEY,
+                ...($graphical ? (is_array($payload['stage'] ?? null)
+                    ? [self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY] : [self::RANGE_TIMING_KEYS]) : []),
+                ...($graphical && self::offersReducedMotionSamples($payload) ? [self::REDUCED_MOTION_SAMPLES_KEY] : []),
+            ],
         );
     }
 
@@ -803,6 +883,7 @@ final class CutsceneSchemas
                 new RecordField('presentation', 'Presentation',
                     options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
                     removeWhenEmpty: true, displayDefault: 'all'),
+                ...($graphical ? [self::trackMotionField()] : []),
             ],
             blank: ['id' => 'track', 'type' => 'glyph', 'keyframes' => [['frame' => 0, 'duration' => 1, 'content' => '*', 'position' => ['x' => 0, 'y' => 0]]]],
             variants: [
@@ -1159,7 +1240,7 @@ final class CutsceneSchemas
      * anchor (the target, by default) with the effect schema's fields and
      * keyframes, so a summon's art is authored as any effect's is.
      */
-    public static function trackList(): RecordSubList
+    public static function trackList(bool $graphical = false): RecordSubList
     {
         return new RecordSubList(
             key: self::TRACKS_KEY,
@@ -1172,6 +1253,7 @@ final class CutsceneSchemas
                 new RecordField('presentation', 'Presentation',
                     options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
                     removeWhenEmpty: true, displayDefault: 'all'),
+                ...($graphical ? [self::trackMotionField()] : []),
             ],
             blank: ['type' => 'glyph', 'id' => 'track', 'keyframes' => []],
             // On a graphical stage, art is placed in stage units on a subject,

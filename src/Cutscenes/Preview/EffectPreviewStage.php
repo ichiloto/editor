@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 use Ichiloto\Editor\Cutscenes\CutsceneOutline;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectSegmentComposition;
 use Ichiloto\Engine\Battle\Presentation\BattleEffectDirection;
@@ -110,7 +111,9 @@ final readonly class EffectPreviewStage
      * The declared stage at one authored frame, as the Engine's shared stage
      * compositor draws it for its owning caller or for a battle cut-in: a
      * seekable projection with no scene, audio or gameplay state to retain.
-     * None for the terminal, or for a timeline that declares no stage.
+     * Only the tracks of the motion setting asked for are drawn, as the
+     * Engine's stage session selects them. None for the terminal, or for a
+     * timeline that declares no stage.
      */
     public function renderCanvas(CompiledEffectTimeline $timeline, string $assetRoot, int $frame,
         int $width, int $height, bool $reducedMotion = false): ?PresentationCanvas
@@ -124,7 +127,7 @@ final readonly class EffectPreviewStage
         $frame = max(0, min($frame, $length - 1));
 
         return CinematicStagePresentation::compose($stage->getFrame($frame, $reducedMotion),
-            $timeline->playbackSegments, $assetRoot, max(1, $width), max(1, $height));
+            EffectMotionScope::filterSegments($timeline->playbackSegments, $reducedMotion), $assetRoot, max(1, $width), max(1, $height));
     }
 
     /**

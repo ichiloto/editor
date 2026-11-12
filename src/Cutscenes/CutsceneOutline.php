@@ -8,6 +8,7 @@ use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\Database\StorybookPlaybackFields;
 use Ichiloto\Engine\Animations\Timelines\BattleMotionSpace;
+use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
 
 /**
  * The command tree of a cinematic, or the track and cue list of a summon,
@@ -19,6 +20,11 @@ use Ichiloto\Engine\Animations\Timelines\BattleMotionSpace;
  * lanes, branches, choices -- have children and may be folded shut. The
  * outline is a projection of the authoritative command tree, never a
  * second copy of it.
+ *
+ * A timeline's reduced-motion samples are listed after its cues, each with
+ * the frame it holds or that it clears the picture. They are graphical
+ * metadata: their rows open the record's own rows, and no tree operation
+ * moves, adds or removes one.
  *
  * @package Ichiloto\Editor\Cutscenes
  */
@@ -122,12 +128,42 @@ final class CutsceneOutline
             ];
         }
 
+        if (is_array($payload[CutsceneSchemas::REDUCED_MOTION_SAMPLES_KEY] ?? null)) {
+            $samples = array_values($payload[CutsceneSchemas::REDUCED_MOTION_SAMPLES_KEY]);
+            $key = CutsceneSchemas::REDUCED_MOTION_SAMPLES_KEY;
+            $outline->rows[] = ['depth' => 0, 'text' => sprintf('Reduced motion (%d sample%s)', count($samples), count($samples) === 1 ? '' : 's'),
+                'frame' => [], 'index' => null, 'key' => $key, 'kind' => 'list', 'foldable' => $samples !== [], 'children' => $samples !== []];
+
+            foreach ($samples as $index => $sample) {
+                $outline->rows[] = ['depth' => 1, 'text' => is_array($sample) ? self::describeReducedMotionSample($sample) : '(not a sample)',
+                    'frame' => [], 'index' => null, 'key' => $key . '.' . $index, 'kind' => 'reducedSample', 'foldable' => false, 'children' => false];
+            }
+        }
+
         return $outline;
     }
 
     /**
+     * Returns a reduced-motion sample as authored: where it starts, how long it lasts, and the authored
+     * frame whose drawing it holds or that it clears the picture (an explicit null source frame).
+     *
+     * @param array<string, mixed> $sample
+     */
+    public static function describeReducedMotionSample(array $sample): string
+    {
+        $read = static fn(string $key): string => is_int($sample[$key] ?? null) ? strval($sample[$key]) : '?';
+
+        return sprintf('f%s +%s  %s', $read('frame'), $read('duration'), match (true) {
+            ! array_key_exists('sourceFrame', $sample) => 'names no source frame',
+            $sample['sourceFrame'] === null => 'clears the picture',
+            default => 'holds frame ' . $read('sourceFrame'),
+        });
+    }
+
+    /**
      * Returns where a track plays and which way it is drawn, when authored:
-     * one presentation only, or a battle stroke's facing.
+     * one presentation only, one motion setting only, or a battle stroke's
+     * facing.
      *
      * @param array<string, mixed> $track
      */
@@ -137,6 +173,11 @@ final class CutsceneOutline
 
         if (is_string($track['presentation'] ?? null) && $track['presentation'] !== '') {
             $scope .= ' · ' . $track['presentation'] . ' only';
+        }
+
+        // A track drawn in every motion setting, named or not, has no motion scope to tell.
+        if (is_string($track['motion'] ?? null) && ! in_array($track['motion'], ['', EffectMotionScope::ALL->value], true)) {
+            $scope .= ' · ' . $track['motion'] . ' motion only';
         }
 
         if (is_string($track['facing'] ?? null) && $track['facing'] !== '') {

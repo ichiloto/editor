@@ -3798,6 +3798,31 @@ In either editor, a track whose type that editor does not offer keeps its
 type: choosing another is refused and nothing changes. Remove the track to
 replace it. The same holds for every list whose entries have a type or kind.
 
+An effect or a summon that plays once at a fixed rate may say what reduced
+motion shows in its place: `reducedMotionSamples`, a list that runs from frame
+zero to the last frame, each sample holding the drawing of one authored frame
+for its duration or clearing the picture. In the GUI the record's **Reduced
+Motion Samples** list has a **Frame**, a **Duration** and a **Source Frame**
+for each sample. A sample that clears reads `(clears the picture)` in its
+Source Frame row; empty the row, or enter that text, to make a sample clear,
+and enter a frame number, zero included, to make it hold that frame. Removing
+the last sample removes the list from the file, and reduced motion then holds
+the rest frame as before. A track's **Motion** row says which setting draws
+it: `all`, `normal` or `reduced`. A track that names none is drawn in every
+setting; the empty choice leaves the key out of the file. A track for one
+setting is drawn by the graphical presentation alone, so art can be drawn
+separately for reduced motion. On save the Engine refuses samples with a gap,
+an overlap or a frame outside the timeline, samples on a looping or
+battle-phase timeline, a motion-specific track given a presentation other than
+`graphical`, and a whole-field or battler motion drawn for reduced motion
+alone, and nothing is written. Where an effect or summon has separate
+sequences, the samples belong to the graphical one. The Terminal editor shows
+`· normal motion only` or `· reduced motion only` on such a track and lists
+the samples at the end of the Timeline pane as `holds frame n` or `clears the
+picture`; it has no rows for either and leaves them as written. The battle
+previews draw the held drawings when asked for reduced motion; every other
+preview plays with motion.
+
 A summon's **Effect Timing** offers the same `arena` mode, checked by the same
 validator against its graphical stage's restore frame.
 

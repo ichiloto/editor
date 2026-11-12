@@ -14,6 +14,15 @@
 
 ### Added
 
+- Reduced-motion samples and motion scopes (Engine e1438b34): the graphical editor's effect and summon rows author a
+  sequence's `reducedMotionSamples` (each sample's frame, duration and source frame) and each track's `motion` (`all`,
+  `normal` or `reduced`). A sample that clears the picture reads `(clears the picture)`; that text or an empty value
+  keeps its key with `null`, and a number holds that frame, zero included. A track that names no motion stays without
+  the key. `cutscenes.timeline` gives both with the row keys that edit them. Both are kept as written by every other
+  edit and save, and each save compiles through the Engine. The Terminal editor lists a track's motion scope and the
+  samples in the Timeline pane and has no rows for them. For an effect or summon with separate sequences the samples
+  are authored in the graphical one.
+
 - Group colour treatments (Engine fe238189): map stills, canvas stills and cinematic capture frames draw a canvas
   group's colour treatment. The group's flattened drawing, composites and nested groups included, has its colour
   turned through the treatment's matrix and offset once, before it is blended onto what is beneath it; coverage is
@@ -164,6 +173,10 @@
   or **Art only**.
 
 ### Changed
+
+- The timeline previews and the stage canvas of `cutscenes.preview` play with motion: a track whose `motion` is
+  `reduced` is no longer drawn, listed under **Drawn now** or described under **Not drawn here** there. The battle
+  previews draw it when asked for reduced motion.
 
 - The warning for tiles a piece draws whose glyph is no longer there now reports piece art that is not placed where
   it stands: tiles no glyph of the piece accounts for that are not a whole copy of its art over ground with its
