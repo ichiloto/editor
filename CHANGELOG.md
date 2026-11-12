@@ -4,10 +4,25 @@
 
 ### Fixed
 
+- A list entry whose type or kind the editor does not offer (a `field-motion`, `trail` or `tether` track in the
+  Terminal editor, a `tone` track in either editor, a world object cast member in the Terminal editor) can no longer
+  be given another type. Choosing one re-read the entry's keys as the new type's and saved them that way; it is now
+  refused with nothing changed. Remove the entry to replace it.
+
 - `map:apply --check` and `map:render --changes` run on a scratch copy of the project, so edits that write at once
   (imported assets, tileset cells, new maps) can never reach the project, even if the process dies part way.
 
 ### Added
+
+- Whole-field motion tracks (Engine 22954f40): the graphical editor's effect rows author a battle effect's
+  `field-motion` track: the track type, and each sample's frame, duration, field offset X and Y in logical pixels and
+  whether it is enabled. `cutscenes.timeline` lists the samples on the track's lane. The track is kept as written by
+  every other edit and save, fractional offsets and comments included, and each save compiles through the Engine. The
+  Terminal editor names the track and lists its samples in the Timeline pane as `field offset x, y`; its preview names
+  the offset under **Not drawn here**. `cutscenes.effectBattlePreview` takes an optional `canvasGroups` flag: when it
+  is `true` the frame is composed with `canvas_groups` negotiated, so a moving frame's canvas holds the battlefield in
+  one group at the sample's offset. Without it the battle preview draws the battlefield still on a moving frame and
+  carries the Engine's diagnostic.
 
 - Play statistic conditions (Engine 09b3b8f): the shared condition line, the condition grammar and both condition
   editors author `play_statistic:<counter>:<op>:<count>` (or `play_statistic:<counter>:<count>`, keeping an absent

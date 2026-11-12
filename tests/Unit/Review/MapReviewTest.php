@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\Preview\PreviewField;
+use Ichiloto\Editor\Review\FieldStill;
 use Ichiloto\Editor\Review\FieldStillRaster;
 use Ichiloto\Editor\Review\MapRenderSubject;
 use Ichiloto\Editor\Review\MapRenderView;
@@ -14,6 +15,14 @@ use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\IO\Console\TerminalText;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasGroup;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
+use Ichiloto\Engine\Rendering\Presentation\PresentationColor;
+use Ichiloto\Engine\Rendering\Presentation\PresentationSpritePivot;
+use Ichiloto\Engine\Rendering\Presentation\PresentationWorldCanvas;
 
 /**
  * A synthetic 12 x 5 layered map, its water blue, with an NPC, and a player
@@ -296,6 +305,30 @@ it('draws a bed\'s world canvas with its sleeper between base and cover, as the 
         ->and($cell(6, 2, 4, 4))->toBe([0, 200, 0])
         ->and($cell(6, 2, 24, 24))->toBe([230, 0, 0])
         ->and($cell(6, 2, 24, 42))->toBe([0, 0, 220])
+        ->and($raster->diagnostics)->toBe([]);
+});
+
+it('draws the groups of a world canvas inside that canvas, where each group places its drawing', function () {
+    $root = mapReviewBedProject();
+    $still = EditorSession::open($root)->renderMapReview(new MapRenderView('test-map'))->still;
+    $magenta = PresentationColor::rgb(250, 0, 250)->toArray();
+    $drawing = new PresentationCanvas(48, 24, composites: [new CanvasComposite('fill', 1, 1, new CanvasRectangle(0, 0, 48, 24),
+        [new CanvasCompositeOperation(['type' => 'fill', 'destination' => ['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1],
+            'brush' => ['type' => 'solid', 'color' => $magenta]])])]);
+    // A synthetic 48 x 48 canvas standing on cell (3, 2), whose group reaches past its top and right edges.
+    $canvas = new PresentationWorldCanvas('grouped', 3, 2, new PresentationSpritePivot(0.5, 1.0),
+        new PresentationCanvas(48, 48, groups: [new CanvasGroup('part', 24, -6, $drawing)]));
+    $raster = new FieldStillRaster($root . '/assets');
+    $field = new FieldStill($still->world, [], $still->region, worldCanvases: [$canvas]);
+    $image = $raster->rasterize($field);
+    $half = $raster->rasterize($field, 0.5);
+    $shown = static fn(GdImage $picture, int $x, int $y): bool => readReviewPixel($picture, $x, $y) === [250, 0, 250];
+
+    // The canvas takes x 144..192, y 96..144 of the still; the group shows in it at x 168..192, y 96..114.
+    expect([$shown($image, 168, 96), $shown($image, 191, 113)])->toBe([true, true])
+        ->and([$shown($image, 167, 100), $shown($image, 192, 100), $shown($image, 180, 95), $shown($image, 180, 114)])
+        ->toBe([false, false, false, false])
+        ->and([$shown($half, 90, 52), $shown($half, 80, 52), $shown($half, 98, 52)])->toBe([true, false, false])
         ->and($raster->diagnostics)->toBe([]);
 });
 

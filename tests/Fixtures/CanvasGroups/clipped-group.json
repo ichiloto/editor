@@ -1,0 +1,100 @@
+{
+  "width": 120,
+  "height": 80,
+  "groups": [
+    {
+      "id": "clipped",
+      "origin": {
+        "x": -10.5,
+        "y": 20.25
+      },
+      "layer": 7,
+      "canvas": {
+        "width": 80,
+        "height": 40,
+        "images": [],
+        "indicators": [],
+        "textLayers": [],
+        "composites": [
+          {
+            "id": "fill",
+            "width": 80,
+            "height": 40,
+            "destination": {
+              "x": 0,
+              "y": 0,
+              "width": 80,
+              "height": 40
+            },
+            "layer": 0,
+            "operations": [
+              {
+                "type": "fill",
+                "opacity": 1,
+                "blend": "source_over",
+                "masks": [],
+                "destination": {
+                  "x": 0,
+                  "y": 0,
+                  "width": 80,
+                  "height": 40
+                },
+                "brush": {
+                  "type": "solid",
+                  "color": {
+                    "kind": "ansi16",
+                    "index": 1
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "clipRect": {
+        "x": 10,
+        "y": 10,
+        "width": 50,
+        "height": 40
+      }
+    }
+  ],
+  "images": [],
+  "indicators": [],
+  "textLayers": [],
+  "composites": [
+    {
+      "id": "fill",
+      "width": 120,
+      "height": 80,
+      "destination": {
+        "x": 0,
+        "y": 0,
+        "width": 120,
+        "height": 80
+      },
+      "layer": 0,
+      "operations": [
+        {
+          "type": "fill",
+          "opacity": 1,
+          "blend": "source_over",
+          "masks": [],
+          "destination": {
+            "x": 0,
+            "y": 0,
+            "width": 120,
+            "height": 80
+          },
+          "brush": {
+            "type": "solid",
+            "color": {
+              "kind": "ansi16",
+              "index": 2
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
+use Ichiloto\Editor\Cutscenes\CutsceneOutline;
+use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectSegmentComposition;
@@ -25,8 +27,9 @@ use InvalidArgumentException;
  * it, so both directions can be checked by putting the caster on either
  * side. On the field an effect has one subject, its target.
  *
- * What a terminal cannot draw (images, flashes, shakes) is described, not
- * imitated: the graphical renderer owns those pictures.
+ * What a terminal cannot draw (images, flashes, shakes, a whole-field
+ * motion) is described, not imitated: the graphical renderer owns those
+ * pictures.
  */
 final readonly class EffectPreviewStage
 {
@@ -126,7 +129,8 @@ final readonly class EffectPreviewStage
 
     /**
      * Describes the active draws a terminal cannot show: images with their
-     * sheet frame and flips, flashes and shakes with their subject.
+     * sheet frame and flips, flashes and shakes with their subject, and a
+     * whole-field motion's offset.
      *
      * @param array<int, array<string, mixed>> $segments The playhead's active segments.
      * @return string[]
@@ -144,6 +148,13 @@ final readonly class EffectPreviewStage
             }
 
             foreach (array_filter((array) ($segment['drawCommands'] ?? []), is_array(...)) as $command) {
+                if ($layer === CutsceneSchemas::FIELD_MOTION_TRACK) {
+                    // The battle moves its whole field by the sample; it has no subject.
+                    $lines[] = CutsceneOutline::describeFieldMotionSample($command);
+
+                    continue;
+                }
+
                 $command = $this->orient($command);
                 $payload = is_array($command['payload'] ?? null) ? $command['payload'] : [];
                 $subject = strval($payload['anchor'] ?? 'target');

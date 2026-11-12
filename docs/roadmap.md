@@ -305,6 +305,34 @@ battle or the field places it, with the caster on either side. Remaining
 for the GUI editor: drawing image frames, sheet and cell picking by eye, and
 image timing; the TUI only names them.
 
+Whole-field motion (status, 12 November 2026, Engine `22954f40`): a battle
+effect's `field-motion` track is kept as written by every edit and save,
+fractional offsets, omitted durations and comments included. The graphical
+editor authors it through the shared record rows: the track type, and each
+sample's frame, duration, field offset X and Y in logical pixels and whether it
+is enabled; its timeline lane lists the samples. The TUI names the track, lists
+its samples in the Timeline pane and gains no sample form. In every record
+list, an entry of a type the editor does not offer (this track in the TUI,
+`tone` in both editors) keeps its type: changing it is refused before anything
+is written. Each save compiles through the Engine, which judges sample order,
+overlap, the `graphical` presentation and the fixed, once-playing battle
+timeline. Remaining for the GUI editor:
+- Visual controls for the samples, such as placing an offset on the battle
+  preview; today each value is typed in its row.
+- Seeing the motion in the editor window. The negotiation is in place:
+  `cutscenes.effectBattlePreview` takes an optional `canvasGroups` flag beside
+  its other drawing features, and composes that frame with `canvas_groups`
+  negotiated only when the flag is `true`. The frame's canvas then holds the
+  arena, battlers and effects in one group at the sample's offset and carries
+  no diagnostic; a sample of zero is a group at the origin, and a disabled
+  sample, a frame outside the samples, reduced motion and the terminal arena
+  leave the canvas ungrouped. Without the flag a moving frame draws the
+  battlefield still and carries the Engine's diagnostic, as before. The
+  graphical editor sends the flag where the canvas it paints with draws
+  groups. The painted result has not been checked in a window. A summon's
+  battle preview takes no such flag: the Engine refuses the track in a summon
+  timeline.
+
 Battle effect orientation and weapon roles (Engine contract in progress,
 2026-10): a battle track may declare `facing` (`east` or `west`), the
 direction its stroke is drawn in; playback mirrors it for an attack the other
@@ -364,7 +392,8 @@ and notices are paged for the graphical screen), and `composeFrame()` gives
 the Engine's `SceneFrameComposition` at the session's clock. `CinematicCapture`
 records it at a fixed rate, reading each waiting page for a reading time;
 `SceneFrameRaster` draws a frame (field still, screen text grid, screen canvas
-with its overlay, the stage plane and above-cover art included) and
+with its overlay, the stage plane, above-cover art and translated canvas
+groups included) and
 `CinematicCaptureWriter` writes numbered PNG frames and `capture.json`, served
 as `EditorSession::writeCinematicCapture()` / `cutscenes.cinematicCapture`.
 The preview game now delivers the Engine's notices to the preview's screen and
@@ -373,6 +402,15 @@ current scene, and the field installs the project's `WorldAbilityCatalog`.
 This closes the four preview findings of the Hybrid reveal review
 (10 November: no frame export, Terminal-compiled effects, no current scene,
 no world-ability catalog).
+
+The stills draw the Engine's translated canvas groups (`PresentationCanvas`
+`groups`, capability `canvas_groups`): `CanvasStillRaster` paints each group's
+canvas whole at the group's layer, after the other drawings of that layer and
+in listed order among groups, at the group's origin taken to the nearest whole
+pixel, inside the group's clip, its own canvas and every canvas and clip around
+it; an origin off the surface draws nothing. World canvases and groups share
+one painter (`paintLocalCanvas()`), so a world canvas draws its groups too, and
+a still reads the label rasters of every canvas a world canvas's groups draw.
 
 Done on Engine `156840cd` and `06ecb262` (12 November):
 - [x] Campaign restoration for previews. A preview or capture given a save

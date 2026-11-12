@@ -26,8 +26,8 @@ use RuntimeException;
  * filling its size and a whole image contained in it; each text cell its
  * background, the field's own when it names none, and glyph; each world
  * canvas's pivot on its cell's ground anchor, drawn by the shared canvas
- * raster ({@see CanvasStillRaster}) and clipped to the canvas. Glyphs are
- * drawn in a monospaced system font fitted to the cell.
+ * raster ({@see CanvasStillRaster}), its groups included, and clipped to the
+ * canvas. Glyphs are drawn in a monospaced system font fitted to the cell.
  *
  * It reads only the presentation the Engine composed, never a map's source,
  * so what it draws is what the game would send a graphical renderer. Motion,
@@ -42,6 +42,7 @@ final class FieldStillRaster
         RendererSessionConfig::SPRITE_LIFT, RendererSessionConfig::SPRITE_QUARTER_TURNS, RendererSessionConfig::TILE_COVERS,
         RendererSessionConfig::TILE_SHADOWS, RendererSessionConfig::WORLD_CANVAS, RendererSessionConfig::GRAPHICAL_CANVAS,
         RendererSessionConfig::CANVAS_CLIP_OPACITY, RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
+        RendererSessionConfig::CANVAS_GROUPS,
     ];
 
     /** The most pixels one native-size image holds; a larger view is drawn scaled down, a block of cells at a time. */
@@ -248,7 +249,7 @@ final class FieldStillRaster
         match (true) {
             $item instanceof PresentationTextLayer => $this->drawTextLayer($image, $item, $left, $top, $width, $height),
             $item instanceof PresentationSprite => $this->drawSprite($image, $item, $left, $top),
-            default => $this->drawWorldCanvas($image, $item, $left, $top, $width, $height),
+            default => $this->drawWorldCanvas($image, $item, $left, $top),
         };
     }
 
@@ -283,24 +284,21 @@ final class FieldStillRaster
 
     /**
      * Paints a world canvas with its pivot on its cell's ground anchor, its
-     * children drawn by the shared canvas raster ({@see CanvasStillRaster})
-     * in the renderer's paint order and clipped to the canvas. A label shows
-     * the raster the graphical renderer made of it ({@see FieldStill::$labelRasters}).
+     * children and groups drawn by the shared canvas raster
+     * ({@see CanvasStillRaster::paintLocalCanvas()}) in the renderer's paint
+     * order and clipped to the canvas. A label shows the raster the graphical
+     * renderer made of it ({@see FieldStill::$labelRasters}).
      */
-    private function drawWorldCanvas(GdImage $image, PresentationWorldCanvas $group, int $left, int $top, int $width, int $height): void
+    private function drawWorldCanvas(GdImage $image, PresentationWorldCanvas $group, int $left, int $top): void
     {
         $canvas = $group->canvas;
-        $canvasLeft = (int) round(($group->x + 0.5) * $this->cell - $group->pivot->x * $canvas->width) - $left;
-        $canvasTop = (int) round(($group->y + 1) * $this->cell - $group->pivot->y * $canvas->height) - $top;
-        if ($canvasLeft >= $width || $canvasTop >= $height || $canvasLeft + $canvas->width <= 0 || $canvasTop + $canvas->height <= 0) {
-            return;
-        }
-        $surface = self::createCanvas($canvas->width, $canvas->height, transparent: true);
-        $this->canvases->drawCanvas($surface, $canvas, 'world canvas ' . $group->id);
+        $this->canvases->paintLocalCanvas($image, $canvas,
+            (int) round(($group->x + 0.5) * $this->cell - $group->pivot->x * $canvas->width) - $left,
+            (int) round(($group->y + 1) * $this->cell - $group->pivot->y * $canvas->height) - $top,
+            null, 'world canvas ' . $group->id);
         foreach ($this->canvases->diagnostics as $message) {
             $this->diagnose($message);
         }
-        imagecopy($image, $surface, $canvasLeft, $canvasTop, 0, 0, $canvas->width, $canvas->height);
     }
 
     private function drawTileLayer(GdImage $image, string $layerId, int $tileFrame, int $left, int $top, int $width, int $height): void

@@ -3868,7 +3868,11 @@ final class EditorSession
      * The effects are compiled as they stand, unsaved edits included, and the
      * animations are read as they stand too. Every action that plays the
      * effect is listed, so another can be chosen; a frame of the effect's own
-     * timeline may be asked for instead of a command frame. Nothing is
+     * timeline may be asked for instead of a command frame. Each drawing
+     * feature (image rotation, coverage dabs, texture strips, the region
+     * budget, canvas groups) is composed only when the caller says its
+     * canvas draws it; canvas groups carry an authored whole-field motion,
+     * which is otherwise left still with the Engine's diagnostic. Nothing is
      * resolved, spent or played aloud, and nothing is written.
      *
      * @return array<string, mixed>
@@ -3877,7 +3881,7 @@ final class EditorSession
     public function readEffectBattlePreview(int $index, int $frame, bool $reducedMotion = false,
         EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null, int $binding = 0,
         bool $imageRotation = false, ?int $targetIndex = null, bool $coverageDabs = false, bool $textureStrip = false,
-        bool $regionBudget = false): array
+        bool $regionBudget = false, bool $canvasGroups = false): array
     {
         $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
         $effects = $this->workspace->cutscenes?->assets(CutsceneType::EFFECT) ?? [];
@@ -3900,7 +3904,8 @@ final class EditorSession
         try {
             $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame, $reducedMotion);
             $totalFrames = $preview->getTotalFrames($reducedMotion);
-            $read = $preview->readFrame(max(0, min($frame, $totalFrames - 1)), $reducedMotion, $imageRotation, $coverageDabs, $textureStrip, $regionBudget);
+            $read = $preview->readFrame(max(0, min($frame, $totalFrames - 1)), $reducedMotion, $imageRotation, $coverageDabs, $textureStrip, $regionBudget,
+                $canvasGroups);
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
         }
