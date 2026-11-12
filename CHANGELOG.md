@@ -14,6 +14,14 @@
 
 ### Added
 
+- Group colour treatments (Engine fe238189): map stills, canvas stills and cinematic capture frames draw a canvas
+  group's colour treatment. The group's flattened drawing, composites and nested groups included, has its colour
+  turned through the treatment's matrix and offset once, before it is blended onto what is beneath it; coverage is
+  unchanged, unpainted pixels stay unpainted, and a nested group is treated by its own treatment first and its
+  parent's after. A group with no treatment draws as before. `cutscenes.effectBattlePreview` takes an optional
+  `groupColor` flag: the frame is composed with `canvas_group_color` negotiated when it is `true`. No battle preview
+  frame carries a treatment yet.
+
 - Battler motion tracks (Engine 06ec2c47): the graphical editor's effect rows author a battle effect's
   `battler-motion` track: the track type, the moved battler (`caster` or `target`), the offset space (`canvas`, or
   `opponents`, where X runs from the moved battler toward the side it fights) and the samples a whole-field motion

@@ -2,13 +2,17 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Cutscenes\Preview\EffectBattlePreview;
 use Ichiloto\Editor\Session\EditorSession;
+use Ichiloto\Editor\Session\SessionHost;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Battle\Formation\BattleTargeting;
 use Ichiloto\Engine\Battle\Formation\BattleTargetShape;
 use Ichiloto\Engine\Entities\Enumerations\Occasion;
 use Ichiloto\Engine\Entities\Skills\BasicSkill;
+use Ichiloto\Engine\Rendering\Presentation\PresentationSession;
+use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 
 /** A battle effect previewed in an action the battle test party actually plays it in, by the Engine's own animation selection. Synthetic fixtures only. */
 
@@ -593,4 +597,59 @@ it('previews each distinct authored crisis technique through the battle test par
         ->and($terminal)->toMatchArray(['phase' => 'target', 'caster' => 'Kaelion', 'binding' => 1, 'diagnostics' => []])
         ->and($terminal['terminalLines'])->not->toBeEmpty()
         ->and(file_get_contents($actorPath))->toBe($before);
+});
+
+it('advertises group colour to the Engine only for a frame whose request asks for it', function () {
+    $every = ['imageRotation' => true, 'regionBudget' => true, 'canvasGroups' => true, 'clipOpacity' => true];
+
+    expect(EffectBattlePreview::listNegotiatedCapabilities())->toBe([])
+        ->and(EffectBattlePreview::listNegotiatedCapabilities(groupColor: true))->toBe([RendererSessionConfig::CANVAS_GROUP_COLOR])
+        ->and(EffectBattlePreview::listNegotiatedCapabilities(...$every))->not->toContain(RendererSessionConfig::CANVAS_GROUP_COLOR)
+        // Asked for beside the others, it joins them and removes none: the session has what it had, and group colour.
+        ->and(array_values(array_diff(EffectBattlePreview::listNegotiatedCapabilities(...$every, groupColor: true),
+            EffectBattlePreview::listNegotiatedCapabilities(...$every))))->toBe([RendererSessionConfig::CANVAS_GROUP_COLOR])
+        ->and(array_diff(EffectBattlePreview::listNegotiatedCapabilities(...$every), EffectBattlePreview::listNegotiatedCapabilities(...$every, groupColor: true)))
+        ->toBe([]);
+});
+
+it('composes a frame asked for with group colour in a session that has it, and every other frame as before', function () {
+    $session = EditorSession::open(effectBattlePreviewProject());
+    $index = findEffectIndex($session, 'dusk-slash');
+    $frame = $session->readEffectBattlePreview($index, 0, authoredFrame: 1)['frame'];
+    // The Engine's own command preview behind the session's, composed in a renderer session of exactly these capabilities.
+    $preview = new ReflectionProperty($session, 'effectBattlePreviews')->getValue($session)[EffectPresentation::GRAPHICAL->value]['preview'];
+    $command = new ReflectionProperty($preview, 'preview')->getValue($preview);
+    $compose = static fn(array $negotiated): array => $negotiated === [] ? $command->getFrameAtIndex($frame, false)->toArray()
+        : PresentationSession::runForSession(static fn(string $capability): bool => in_array($capability, $negotiated, true),
+            static fn(): array => $command->getFrameAtIndex($frame, false)->toArray());
+    $groups = [RendererSessionConfig::CANVAS_REGION_BUDGET, RendererSessionConfig::CANVAS_GROUPS];
+
+    $asked = $session->readEffectBattlePreview($index, $frame, regionBudget: true, canvasGroups: true, groupColor: true);
+    $alone = $session->readEffectBattlePreview($index, $frame, groupColor: true);
+    $without = $session->readEffectBattlePreview($index, $frame, regionBudget: true, canvasGroups: true);
+    $plain = $session->readEffectBattlePreview($index, $frame);
+
+    expect(array_intersect_key($asked, $compose($groups)))->toBe($compose([...$groups, RendererSessionConfig::CANVAS_GROUP_COLOR]))
+        ->and(array_intersect_key($alone, $compose([])))->toBe($compose([RendererSessionConfig::CANVAS_GROUP_COLOR]))
+        ->and(array_intersect_key($without, $compose($groups)))->toBe($compose($groups))
+        ->and(array_intersect_key($plain, $compose([])))->toBe($compose([]));
+});
+
+it('reads the group colour request from the host route beside the other drawing features', function () {
+    $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
+    $request = static fn(string $method, array $params = []): array => $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params]));
+    $request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => effectBattlePreviewProject()]);
+    $index = array_find_key($request('database.records', ['category' => 'cutscenes/effect'])['result']['records'],
+        static fn(mixed $label): bool => str_contains(strval($label), 'dusk-slash'));
+    $preview = static fn(array $features): array => $request('cutscenes.effectBattlePreview',
+        ['index' => $index, 'frame' => 0, 'authoredFrame' => 1, 'presentation' => 'graphical', ...$features]);
+    $plain = $preview([]);
+
+    // The flag is optional and a boolean: a frame comes back whether it is true, false, left out or anything else.
+    foreach ([['groupColor' => true, 'canvasGroups' => true, 'regionBudget' => true], ['groupColor' => true], ['groupColor' => false], ['groupColor' => 'yes']] as $features) {
+        $frame = $preview($features);
+        expect($frame)->not->toHaveKey('error')
+            ->and([$frame['result']['frame'], $frame['result']['lane'], $frame['result']['totalFrames']])
+            ->toBe([$plain['result']['frame'], $plain['result']['lane'], $plain['result']['totalFrames']]);
+    }
 });

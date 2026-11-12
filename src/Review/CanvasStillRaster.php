@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Review;
 
 use GdImage;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasColorTransform;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasGroup;
@@ -31,7 +32,8 @@ use RuntimeException;
  * cell's background and glyph, centred in the cell, in a monospaced system
  * font fitted to the layer's cell; labels show the graphical renderer's own
  * raster of them. A group paints its local canvas as one drawing at the
- * group's origin ({@see paintLocalCanvas()}), groups within it included.
+ * group's origin ({@see paintLocalCanvas()}), groups within it included, in
+ * the group's colour treatment when it has one.
  *
  * It reads only the canvas the Engine composed, so what it draws is what the
  * game would send a graphical renderer. It is a review picture, not the
@@ -49,6 +51,7 @@ final class CanvasStillRaster
         RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
         RendererSessionConfig::CANVAS_IMAGE_ROTATION, RendererSessionConfig::CANVAS_TEXTURE_STRIP,
         RendererSessionConfig::CANVAS_IMAGE_BOTTOM_FADE, RendererSessionConfig::CANVAS_GROUPS,
+        RendererSessionConfig::CANVAS_GROUP_COLOR,
     ];
 
     /** Fonts tried, in order, when none is given: the graphical renderer's own text font first. */
@@ -63,6 +66,9 @@ final class CanvasStillRaster
 
     /** The renderer's paint order for items of one layer. */
     private const array KIND_ORDER = ['image' => 0, 'composite' => 1, 'indicator' => 2, 'text' => 3, 'label' => 4, 'group' => 5];
+
+    /** The most colours a colour treatment remembers the result for at one time ({@see treatColors()}). */
+    private const int TREATED_COLOR_MEMORY = 4096;
 
     /** @var list<string> What the still could not draw, once each. */
     public private(set) array $diagnostics = [];
@@ -150,9 +156,13 @@ final class CanvasStillRaster
      * geometry and is masked by its own rectangle, by a clip of the canvas being drawn when one is given, and
      * by the surface, so the clips of every canvas it is nested in intersect. A corner off the surface stays
      * there: what does not show is not drawn, and only the part that shows takes memory.
+     *
+     * A colour treatment is applied once to that flattened part, after everything in the local canvas is drawn
+     * and before the part is blended onto the canvas being drawn ({@see treatColors()}). A group within the local
+     * canvas is treated the same way when it is flattened, so its own treatment comes first and this one follows.
      */
     public function paintLocalCanvas(GdImage $surface, PresentationCanvas $canvas, int $left, int $top, ?CanvasRectangle $clip,
-        string $context): void
+        string $context, ?CanvasColorTransform $colorTransform = null): void
     {
         $left += $this->originX;
         $top += $this->originY;
@@ -174,17 +184,53 @@ final class CanvasStillRaster
         } finally {
             [$this->originX, $this->originY] = [$originX, $originY];
         }
+        if ($colorTransform !== null) {
+            self::treatColors($part, $colorTransform);
+        }
         imagecopy($surface, $part, $visibleLeft, $visibleTop, 0, 0, $visibleRight - $visibleLeft, $visibleBottom - $visibleTop);
     }
 
     /**
-     * Paints a group's canvas at the group's origin, inside the group's clip. The origin is taken to the nearest
-     * whole pixel, a half upwards on either side of zero, so equal steps of an origin move the drawing equally.
+     * Paints a group's canvas at the group's origin, inside the group's clip and in the group's colour treatment.
+     * The origin is taken to the nearest whole pixel, a half upwards on either side of zero, so equal steps of an
+     * origin move the drawing equally.
      */
     private function paintGroup(GdImage $surface, CanvasGroup $group, string $context): void
     {
         $this->paintLocalCanvas($surface, $group->canvas, (int) floor($group->x + 0.5), (int) floor($group->y + 0.5),
-            $group->clipRect, sprintf('%s group %s', $context, $group->id));
+            $group->clipRect, sprintf('%s group %s', $context, $group->id), $group->colorTransform);
+    }
+
+    /**
+     * Gives a flattened drawing a group's colour treatment: every pixel's straight colour, each channel taken to
+     * 0..1, goes through the Engine's own calculation ({@see CanvasColorTransform::transformRgb()}) and back to
+     * the nearest of GD's 256 steps. Coverage is never changed, and a pixel nothing covers is left as it is, so
+     * no offset can give it a colour.
+     */
+    private static function treatColors(GdImage $image, CanvasColorTransform $transform): void
+    {
+        // Flat artwork repeats few colours; the memory of them is emptied before it can outgrow the drawing.
+        $treated = [];
+        imagealphablending($image, false);
+        for ($y = 0, $height = imagesy($image); $y < $height; $y++) {
+            for ($x = 0, $width = imagesx($image); $x < $width; $x++) {
+                $pixel = imagecolorat($image, $x, $y);
+                $transparency = $pixel & 0x7F000000;
+                if ($transparency === 0x7F000000) {
+                    continue;
+                }
+                $rgb = $pixel & 0xFFFFFF;
+                if (! isset($treated[$rgb])) {
+                    if (count($treated) >= self::TREATED_COLOR_MEMORY) {
+                        $treated = [];
+                    }
+                    [$red, $green, $blue] = $transform->transformRgb(($rgb >> 16) / 255, (($rgb >> 8) & 255) / 255, ($rgb & 255) / 255);
+                    $treated[$rgb] = ((int) round($red * 255) << 16) | ((int) round($green * 255) << 8) | (int) round($blue * 255);
+                }
+                imagesetpixel($image, $x, $y, $transparency | $treated[$rgb]);
+            }
+        }
+        imagealphablending($image, true);
     }
 
     private function drawComposite(GdImage $surface, CanvasComposite $composite, string $context): void

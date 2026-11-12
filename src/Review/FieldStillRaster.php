@@ -26,8 +26,8 @@ use RuntimeException;
  * filling its size and a whole image contained in it; each text cell its
  * background, the field's own when it names none, and glyph; each world
  * canvas's pivot on its cell's ground anchor, drawn by the shared canvas
- * raster ({@see CanvasStillRaster}), its groups included, and clipped to the
- * canvas. Glyphs are drawn in a monospaced system font fitted to the cell.
+ * raster ({@see CanvasStillRaster}), its groups and their colour treatments
+ * included, and clipped to the canvas. Glyphs are drawn in a monospaced system font fitted to the cell.
  *
  * It reads only the presentation the Engine composed, never a map's source,
  * so what it draws is what the game would send a graphical renderer. Motion,
@@ -42,7 +42,7 @@ final class FieldStillRaster
         RendererSessionConfig::SPRITE_LIFT, RendererSessionConfig::SPRITE_QUARTER_TURNS, RendererSessionConfig::TILE_COVERS,
         RendererSessionConfig::TILE_SHADOWS, RendererSessionConfig::WORLD_CANVAS, RendererSessionConfig::GRAPHICAL_CANVAS,
         RendererSessionConfig::CANVAS_CLIP_OPACITY, RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
-        RendererSessionConfig::CANVAS_GROUPS,
+        RendererSessionConfig::CANVAS_GROUPS, RendererSessionConfig::CANVAS_GROUP_COLOR,
     ];
 
     /** The most pixels one native-size image holds; a larger view is drawn scaled down, a block of cells at a time. */

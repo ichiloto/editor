@@ -15,6 +15,7 @@ use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\IO\Console\TerminalText;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasColorTransform;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasGroup;
@@ -329,6 +330,34 @@ it('draws the groups of a world canvas inside that canvas, where each group plac
         ->and([$shown($image, 167, 100), $shown($image, 192, 100), $shown($image, 180, 95), $shown($image, 180, 114)])
         ->toBe([false, false, false, false])
         ->and([$shown($half, 90, 52), $shown($half, 80, 52), $shown($half, 98, 52)])->toBe([true, false, false])
+        ->and($raster->diagnostics)->toBe([]);
+});
+
+it('draws a world canvas\'s group in the group\'s colour treatment, and the field around it as it was', function () {
+    $root = mapReviewBedProject();
+    $still = EditorSession::open($root)->renderMapReview(new MapRenderView('test-map'))->still;
+    $drawing = new PresentationCanvas(48, 24, composites: [new CanvasComposite('fill', 1, 1, new CanvasRectangle(0, 0, 48, 24),
+        [new CanvasCompositeOperation(['type' => 'fill', 'destination' => ['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1],
+            'brush' => ['type' => 'solid', 'color' => PresentationColor::rgb(250, 0, 250)->toArray()]])])]);
+    $field = static fn(?CanvasColorTransform $treatment): FieldStill => new FieldStill($still->world, [], $still->region,
+        worldCanvases: [new PresentationWorldCanvas('grouped', 3, 2, new PresentationSpritePivot(0.5, 1.0),
+            new PresentationCanvas(48, 48, groups: [new CanvasGroup('part', 24, -6, $drawing, colorTransform: $treatment)]))]);
+    $raster = new FieldStillRaster($root . '/assets');
+    $plain = $raster->rasterize($field(null));
+    $treated = $raster->rasterize($field(new CanvasColorTransform([[-1, 0, 0], [0, -1, 0], [0, 0, -1]], [1, 1, 1])));
+
+    // The group shows at x 168..192, y 96..114 of the still: magenta turned over there, every other pixel as it was.
+    $changed = 0;
+    for ($y = 0; $y < imagesy($plain); $y++) {
+        for ($x = 0; $x < imagesx($plain); $x++) {
+            $inside = $x >= 168 && $x < 192 && $y >= 96 && $y < 114;
+            $changed += (int) (! $inside && imagecolorat($plain, $x, $y) !== imagecolorat($treated, $x, $y));
+            if ($inside) {
+                expect([readReviewPixel($plain, $x, $y), readReviewPixel($treated, $x, $y)])->toBe([[250, 0, 250], [5, 255, 5]]);
+            }
+        }
+    }
+    expect($changed)->toBe(0)
         ->and($raster->diagnostics)->toBe([]);
 });
 

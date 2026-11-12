@@ -7,6 +7,7 @@ use Ichiloto\Editor\Review\FieldStillRaster;
 use Ichiloto\Editor\Review\SceneFrameRaster;
 use Ichiloto\Editor\Review\StillLabelPreparation;
 use Ichiloto\Editor\Review\TerminalPalette;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasColorTransform;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasGroup;
@@ -28,8 +29,9 @@ use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 
 /**
  * A canvas group paints its local canvas as one drawing at the group's
- * origin and layer, inside the group's clip and every clip around it.
- * Everything here is synthetic: solid fills, and one solid image.
+ * origin and layer, inside the group's clip and every clip around it, and
+ * in the group's colour treatment when it has one. Everything here is
+ * synthetic: solid fills, and one solid image.
  */
 const CANVAS_GROUP_RED = [230, 0, 0];
 const CANVAS_GROUP_GREEN = [0, 200, 0];
@@ -48,11 +50,11 @@ function canvasGroupAssets(): string
     return $root;
 }
 
-/** One solid colour over a rectangle of its canvas. */
-function canvasGroupFill(string $id, CanvasRectangle $area, array $rgb, int $layer = 0): CanvasComposite
+/** One solid colour over a rectangle of its canvas, covering it whole or by an opacity. */
+function canvasGroupFill(string $id, CanvasRectangle $area, array $rgb, int $layer = 0, float $opacity = 1): CanvasComposite
 {
     return new CanvasComposite($id, 1, 1, $area, [new CanvasCompositeOperation([
-        'type' => 'fill', 'destination' => ['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1],
+        'type' => 'fill', 'destination' => ['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1], 'opacity' => $opacity,
         'brush' => ['type' => 'solid', 'color' => PresentationColor::rgb(...$rgb)->toArray()],
     ])], $layer);
 }
@@ -130,18 +132,81 @@ function canvasGroupFromJson(array $data): PresentationCanvas
             $composite['layer'], $composite['opacity'] ?? 1, isset($composite['clipRect']) ? $rectangle($composite['clipRect']) : null),
             $data['composites'] ?? []),
         groups: array_map(static fn(array $group): CanvasGroup => new CanvasGroup($group['id'], $group['origin']['x'], $group['origin']['y'],
-            canvasGroupFromJson($group['canvas']), $group['layer'], isset($group['clipRect']) ? $rectangle($group['clipRect']) : null),
+            canvasGroupFromJson($group['canvas']), $group['layer'], isset($group['clipRect']) ? $rectangle($group['clipRect']) : null,
+            isset($group['colorTransform']) ? new CanvasColorTransform($group['colorTransform']['matrix'], $group['colorTransform']['offset']) : null),
             $data['groups'] ?? []));
+}
+
+/** One of the Engine's canvas group fixtures as its JSON holds it. */
+function readCanvasGroupFixtureData(string $name): array
+{
+    return json_decode((string) file_get_contents(dirname(__DIR__, 2) . '/Fixtures/CanvasGroups/' . $name), true, flags: JSON_THROW_ON_ERROR);
+}
+
+/** A canvas of the Engine's canvas group fixtures, read back into the Engine's model whole. */
+function createCanvasGroupFixtureCanvas(array $data): PresentationCanvas
+{
+    $canvas = canvasGroupFromJson($data);
+    expect($canvas->toArray())->toEqual($data);
+
+    return $canvas;
 }
 
 /** One of the Engine's full-frame canvas group fixtures, read back into the Engine's model whole. */
 function readCanvasGroupFixture(string $name): PresentationCanvas
 {
-    $data = json_decode((string) file_get_contents(dirname(__DIR__, 2) . '/Fixtures/CanvasGroups/' . $name), true, flags: JSON_THROW_ON_ERROR);
-    $canvas = canvasGroupFromJson($data);
-    expect($canvas->toArray())->toEqual($data);
+    return createCanvasGroupFixtureCanvas(readCanvasGroupFixtureData($name));
+}
 
-    return $canvas;
+/** A colour treatment that turns every channel over: black to white, red to cyan. */
+function canvasGroupInversion(): CanvasColorTransform
+{
+    return new CanvasColorTransform([[-1, 0, 0], [0, -1, 0], [0, 0, -1]], [1, 1, 1]);
+}
+
+/** A colour treatment that halves every channel. */
+function canvasGroupDimming(): CanvasColorTransform
+{
+    return new CanvasColorTransform([[0.5, 0, 0], [0, 0.5, 0], [0, 0, 0.5]], [0, 0, 0]);
+}
+
+/**
+ * A canvas drawn onto a surface nothing covers, with nothing left out, so each pixel keeps the colour and the
+ * coverage its drawings gave it: what a group's flattened drawing holds before it is blended onto anything.
+ */
+function canvasGroupSurface(PresentationCanvas $canvas): GdImage
+{
+    $surface = imagecreatetruecolor($canvas->width, $canvas->height);
+    imagealphablending($surface, false);
+    imagefilledrectangle($surface, 0, 0, $canvas->width - 1, $canvas->height - 1, imagecolorallocatealpha($surface, 0, 0, 0, 127));
+    imagealphablending($surface, true);
+    imagesavealpha($surface, true);
+    $raster = new CanvasStillRaster(sys_get_temp_dir());
+    $raster->drawCanvas($surface, $canvas, 'canvas');
+    expect($raster->diagnostics)->toBe([]);
+
+    return $surface;
+}
+
+/** A pixel's red, green and blue of 255, and its coverage of GD's 127 steps: 0 where nothing is painted. */
+function canvasGroupSample(GdImage $image, int $x, int $y): array
+{
+    $pixel = imagecolorat($image, $x, $y);
+
+    return [($pixel >> 16) & 255, ($pixel >> 8) & 255, $pixel & 255, 127 - ($pixel >> 24)];
+}
+
+/**
+ * How far a pixel is from a colour and a coverage given in 0..1, as the Engine's references give them: the
+ * largest difference of a channel, and the difference of the coverage.
+ *
+ * @return array{float, float}
+ */
+function measureCanvasGroupSample(GdImage $image, int $x, int $y, array $rgb, float $alpha): array
+{
+    [$red, $green, $blue, $coverage] = canvasGroupSample($image, $x, $y);
+
+    return [max(abs($red / 255 - $rgb[0]), abs($green / 255 - $rgb[1]), abs($blue / 255 - $rgb[2])), abs($coverage / 127 - $alpha)];
 }
 
 /** A fixture's ANSI colour as the rasters show it. */
@@ -374,4 +439,247 @@ it('draws the Engine\'s nested groups fixture: each child inside every clip arou
     expect(canvasGroupArea($image, $outer, $inner))->toBe(['x' => 20, 'y' => 0, 'width' => 60, 'height' => 45, 'filled' => true])
         ->and(canvasGroupArea($image, $inner))->toBe(['x' => 20, 'y' => 2, 'width' => 28, 'height' => 28, 'filled' => true])
         ->and(canvasGroupArea($image, $outer, $inner, $ground))->toBe(['x' => 0, 'y' => 0, 'width' => 120, 'height' => 80, 'filled' => true]);
+});
+
+/*
+ * Group colour treatment. A treatment turns the straight colour of the group's flattened drawing through a
+ * matrix and an offset, once, before the drawing is blended onto its parent; coverage is never changed.
+ *
+ * The stills hold 8 bits a channel and GD's 7 bits of coverage, and GD blends one drawing over another in whole
+ * numbers, rounding its weights down. Against values worked out exactly, a channel is therefore within two of its
+ * 255 steps and coverage within one of its 127; the hair added to each admits the arithmetic of the comparison.
+ */
+const CANVAS_GROUP_CHANNEL_TOLERANCE = 2 / 255 + 1.0e-9;
+const CANVAS_GROUP_COVERAGE_TOLERANCE = 1 / 127 + 1.0e-9;
+
+it('names group colour among the features every raster draws', function () {
+    expect(CanvasStillRaster::supports(RendererSessionConfig::CANVAS_GROUP_COLOR))->toBeTrue()
+        ->and(SceneFrameRaster::supports(RendererSessionConfig::CANVAS_GROUP_COLOR))->toBeTrue()
+        ->and(FieldStillRaster::supports(RendererSessionConfig::CANVAS_GROUP_COLOR))->toBeTrue();
+});
+
+it('turns every channel of an inverted group over, each kind of drawing in it alike', function () {
+    $assets = canvasGroupAssets();
+    $child = new PresentationCanvas(20, 16,
+        [new CanvasImage('art', 'Art/green.png', new CanvasRectangle(2, 2, 6, 6), 1)],
+        [new CanvasIndicator('focus', 'art', CanvasIndicatorKind::UNDERLINE, new CanvasRectangle(2, 10, 6, 4), 2,
+            PresentationColor::rgb(...CANVAS_GROUP_YELLOW), 2)],
+        [new CanvasTextLayer('backing', 1, 10, 0, new RendererGridConfig(2, 1, 5, 4),
+            [new PresentationTextRun(0, 0, '  ', background: PresentationColor::rgb(...CANVAS_GROUP_BLUE))])],
+        [canvasGroupFill('ground', new CanvasRectangle(0, 0, 20, 16), CANVAS_GROUP_RED)]);
+    $image = canvasGroupStill(new PresentationCanvas(60, 40, groups: [new CanvasGroup('placed', 12, 9, $child,
+        colorTransform: canvasGroupInversion())]), $assets);
+    [$red, $green, $yellow, $blue] = [[25, 255, 255], [255, 55, 255], [15, 15, 255], [255, 255, 35]];
+
+    expect(canvasGroupArea($image, $red, $green, $yellow, $blue))->toBe(['x' => 12, 'y' => 9, 'width' => 20, 'height' => 16, 'filled' => true])
+        ->and(canvasGroupArea($image, $green))->toBe(['x' => 14, 'y' => 11, 'width' => 6, 'height' => 6, 'filled' => true])
+        ->and(canvasGroupArea($image, $yellow))->toBe(['x' => 14, 'y' => 21, 'width' => 6, 'height' => 2, 'filled' => true])
+        ->and(canvasGroupArea($image, $blue))->toBe(['x' => 22, 'y' => 9, 'width' => 10, 'height' => 4, 'filled' => true])
+        // Nothing keeps the colour it was drawn in, and nothing outside the group takes one.
+        ->and(canvasGroupArea($image, CANVAS_GROUP_RED, CANVAS_GROUP_GREEN, CANVAS_GROUP_YELLOW, CANVAS_GROUP_BLUE))->toBeNull()
+        ->and([canvasGroupPixel($image, 11, 9), canvasGroupPixel($image, 32, 24)])->toBe([[0, 0, 0], [0, 0, 0]]);
+});
+
+it('weighs the three channels into one grey and tints it, each output channel from its own matrix row', function () {
+    // One weighting of red, green and blue (a quarter, a half, a quarter) at full, half and quarter strength.
+    $tint = new CanvasColorTransform([[0.25, 0.5, 0.25], [0.125, 0.25, 0.125], [0.0625, 0.125, 0.0625]], [0, 0, 0]);
+    $child = new PresentationCanvas(30, 10, composites: [
+        canvasGroupFill('warm', new CanvasRectangle(0, 0, 10, 10), [200, 100, 48]),
+        canvasGroupFill('green', new CanvasRectangle(10, 0, 10, 10), [0, 200, 0]),
+        canvasGroupFill('white', new CanvasRectangle(20, 0, 10, 10), [255, 255, 255]),
+    ]);
+    $image = canvasGroupStill(new PresentationCanvas(30, 10, groups: [new CanvasGroup('tinted', 0, 0, $child, colorTransform: $tint)]));
+
+    expect([canvasGroupPixel($image, 5, 5), canvasGroupPixel($image, 15, 5), canvasGroupPixel($image, 25, 5)])
+        ->toBe([[112, 56, 28], [100, 50, 25], [255, 128, 64]]);
+});
+
+it('adds a treatment\'s offset to every painted pixel', function () {
+    // Half of each channel, lifted by a quarter in red alone: black becomes a quarter red.
+    $lift = new CanvasColorTransform([[0.5, 0, 0], [0, 0.5, 0], [0, 0, 0.5]], [0.25, 0, 0]);
+    $child = new PresentationCanvas(20, 10, composites: [
+        canvasGroupFill('black', new CanvasRectangle(0, 0, 10, 10), [0, 0, 0]),
+        canvasGroupFill('grey', new CanvasRectangle(10, 0, 10, 10), [102, 204, 51]),
+    ]);
+    $image = canvasGroupStill(new PresentationCanvas(20, 10, groups: [new CanvasGroup('lifted', 0, 0, $child, colorTransform: $lift)]));
+
+    // A quarter of 255 is 63.75, the nearest step 64; 51 + 63.75 is 114.75, the nearest step 115.
+    expect([canvasGroupPixel($image, 5, 5), canvasGroupPixel($image, 15, 5)])->toBe([[64, 0, 0], [115, 102, 26]]);
+});
+
+it('treats a nested group by its own treatment first and by its parent\'s after', function () {
+    $nest = static fn(array $rgb, CanvasColorTransform $inner, CanvasColorTransform $outer): GdImage => canvasGroupStill(
+        new PresentationCanvas(30, 10, groups: [new CanvasGroup('parent', 0, 0, new PresentationCanvas(30, 10,
+            // Beside the child, a drawing of the parent's own, which only the parent's treatment reaches.
+            composites: [canvasGroupFill('own', new CanvasRectangle(20, 0, 10, 10), [200, 100, 50])],
+            groups: [new CanvasGroup('child', 5, 0, canvasGroupDrawing(10, 10, $rgb), colorTransform: $inner)]), colorTransform: $outer)]));
+    $invertedThenDimmed = $nest([1, 101, 255], canvasGroupInversion(), canvasGroupDimming());
+    $dimmedThenInverted = $nest([0, 100, 254], canvasGroupDimming(), canvasGroupInversion());
+
+    // Turned over then halved: (254, 154, 0) / 2. Halved then turned over: 255 - (0, 50, 127).
+    expect(canvasGroupArea($invertedThenDimmed, [127, 77, 0]))->toBe(['x' => 5, 'y' => 0, 'width' => 10, 'height' => 10, 'filled' => true])
+        ->and(canvasGroupPixel($invertedThenDimmed, 25, 5))->toBe([100, 50, 25])
+        ->and(canvasGroupArea($dimmedThenInverted, [255, 205, 128]))->toBe(['x' => 5, 'y' => 0, 'width' => 10, 'height' => 10, 'filled' => true])
+        ->and(canvasGroupPixel($dimmedThenInverted, 25, 5))->toBe([55, 155, 205])
+        // What the parent's canvas leaves unpainted stays unpainted under an inversion.
+        ->and(canvasGroupPixel($dimmedThenInverted, 2, 5))->toBe([0, 0, 0]);
+});
+
+it('treats drawings that overlap in part once, after they are blended, and keeps the coverage they had', function () {
+    // Half-covering red, half-covering blue over its right half; in one composite, half-covering green over half-covering yellow.
+    $child = new PresentationCanvas(40, 10, composites: [
+        canvasGroupFill('red', new CanvasRectangle(0, 0, 16, 10), [255, 0, 0], 0, 0.5),
+        canvasGroupFill('blue', new CanvasRectangle(8, 0, 16, 10), [0, 0, 255], 0, 0.5),
+        new CanvasComposite('pair', 10, 10, new CanvasRectangle(30, 0, 10, 10), array_map(
+            static fn(array $rgb, int $left): CanvasCompositeOperation => new CanvasCompositeOperation(['type' => 'fill', 'opacity' => 0.5,
+                'destination' => ['x' => $left, 'y' => 0, 'width' => 10 - $left, 'height' => 10],
+                'brush' => ['type' => 'solid', 'color' => PresentationColor::rgb(...$rgb)->toArray()]]),
+            [CANVAS_GROUP_YELLOW, CANVAS_GROUP_GREEN], [0, 5])),
+    ]);
+    $plain = canvasGroupSurface(new PresentationCanvas(40, 10, groups: [new CanvasGroup('plain', 0, 0, $child)]));
+    $treated = canvasGroupSurface(new PresentationCanvas(40, 10, groups: [new CanvasGroup('treated', 0, 0, $child,
+        colorTransform: canvasGroupInversion())]));
+
+    // Every pixel is the blended pixel turned over, with the blended pixel's coverage; an unpainted one is unpainted.
+    $coverages = [];
+    for ($x = 0; $x < 40; $x++) {
+        [$red, $green, $blue, $coverage] = canvasGroupSample($plain, $x, 5);
+        expect(canvasGroupSample($treated, $x, 5))->toBe($coverage === 0 ? [0, 0, 0, 0] : [255 - $red, 255 - $green, 255 - $blue, $coverage]);
+        $coverages[$coverage] = true;
+    }
+    // Red alone, blue over red, blue alone and nothing; then yellow alone and green over yellow.
+    expect(array_keys($coverages))->toHaveCount(3)
+        ->and(max(measureCanvasGroupSample($treated, 4, 5, [0, 1, 1], 0.5)))->toBeLessThanOrEqual(CANVAS_GROUP_COVERAGE_TOLERANCE)
+        ->and(measureCanvasGroupSample($treated, 12, 5, [2 / 3, 1, 1 / 3], 0.75)[0])->toBeLessThanOrEqual(CANVAS_GROUP_CHANNEL_TOLERANCE)
+        ->and(measureCanvasGroupSample($treated, 12, 5, [2 / 3, 1, 1 / 3], 0.75)[1])->toBeLessThanOrEqual(CANVAS_GROUP_COVERAGE_TOLERANCE)
+        ->and(canvasGroupSample($treated, 26, 5))->toBe([0, 0, 0, 0])
+        ->and(measureCanvasGroupSample($treated, 37, 5, [1 - 80 / 255, 1 - 640 / 765, 1], 0.75)[0])->toBeLessThanOrEqual(CANVAS_GROUP_CHANNEL_TOLERANCE);
+});
+
+it('leaves an untreated sibling, and everything outside a treated group, as it is drawn without the treatment', function () {
+    $scene = static fn(?CanvasColorTransform $treatment): GdImage => canvasGroupStill(new PresentationCanvas(40, 20,
+        composites: [canvasGroupFill('ground', new CanvasRectangle(0, 0, 40, 20), CANVAS_GROUP_GREEN)],
+        groups: [new CanvasGroup('treated', 4, 4, canvasGroupDrawing(10, 10, CANVAS_GROUP_RED), 1, colorTransform: $treatment),
+            // A sibling under the treated group in part, and one over it.
+            new CanvasGroup('under', 10, 2, canvasGroupDrawing(10, 6, CANVAS_GROUP_BLUE)),
+            new CanvasGroup('over', 12, 10, canvasGroupDrawing(12, 8, CANVAS_GROUP_YELLOW), 2)]));
+    $plain = $scene(null);
+    $treated = $scene(canvasGroupInversion());
+
+    $changed = [];
+    for ($y = 0; $y < 20; $y++) {
+        for ($x = 0; $x < 40; $x++) {
+            if (imagecolorat($plain, $x, $y) !== imagecolorat($treated, $x, $y)) {
+                $changed[] = [canvasGroupPixel($plain, $x, $y), canvasGroupPixel($treated, $x, $y)];
+            }
+        }
+    }
+    // Only where the treated group itself shows: its 10 x 10 less the 2 x 4 the sibling over it covers.
+    expect(array_values(array_unique($changed, SORT_REGULAR)))->toBe([[CANVAS_GROUP_RED, [25, 255, 255]]])
+        ->and($changed)->toHaveCount(92)
+        ->and(canvasGroupArea($treated, CANVAS_GROUP_BLUE))->toBe(canvasGroupArea($plain, CANVAS_GROUP_BLUE))
+        ->and(canvasGroupArea($treated, CANVAS_GROUP_YELLOW))->toBe(['x' => 12, 'y' => 10, 'width' => 12, 'height' => 8, 'filled' => true]);
+});
+
+it('treats a group where its origin and its clip leave it, on either side of the surface\'s edge', function () {
+    // Four blue columns, then six red, half off the surface's left edge and cut by a clip above and below.
+    $child = new PresentationCanvas(10, 8, composites: [
+        canvasGroupFill('left', new CanvasRectangle(0, 0, 4, 8), CANVAS_GROUP_BLUE),
+        canvasGroupFill('right', new CanvasRectangle(4, 0, 6, 8), CANVAS_GROUP_RED),
+    ]);
+    $ground = canvasGroupFill('ground', new CanvasRectangle(0, 0, 30, 20), CANVAS_GROUP_GREEN);
+    $image = canvasGroupStill(new PresentationCanvas(30, 20, composites: [$ground], groups: [new CanvasGroup('offset', -4.25, 3.5, $child, 1,
+        new CanvasRectangle(0, 6, 4, 3), canvasGroupInversion())]));
+
+    // The child's red columns reach x 0..6, y 4..12; the clip keeps x 0..4, y 6..9. Its blue is off the surface.
+    expect(canvasGroupArea($image, [25, 255, 255]))->toBe(['x' => 0, 'y' => 6, 'width' => 4, 'height' => 3, 'filled' => true])
+        ->and(canvasGroupArea($image, [255, 255, 35], CANVAS_GROUP_RED, CANVAS_GROUP_BLUE))->toBeNull()
+        ->and(canvasGroupArea($image, CANVAS_GROUP_GREEN, [25, 255, 255]))->toBe(['x' => 0, 'y' => 0, 'width' => 30, 'height' => 20, 'filled' => true]);
+});
+
+it('gives no colour to what a treated group leaves unpainted, whatever the treatment adds', function () {
+    // A group painted over its left half alone, under treatments that would turn clear black white or red.
+    $child = new PresentationCanvas(20, 10, composites: [canvasGroupFill('half', new CanvasRectangle(0, 0, 10, 10), CANVAS_GROUP_BLUE)]);
+    foreach ([canvasGroupInversion(), new CanvasColorTransform([[0, 0, 0], [0, 0, 0], [0, 0, 0]], [1, 0, 0])] as $treatment) {
+        $group = new CanvasGroup('half', 5, 5, $child, 1, colorTransform: $treatment);
+        $surface = canvasGroupSurface(new PresentationCanvas(30, 20, groups: [$group]));
+        $over = canvasGroupStill(new PresentationCanvas(30, 20, composites: [canvasGroupFill('ground', new CanvasRectangle(0, 0, 30, 20), CANVAS_GROUP_GREEN)],
+            groups: [$group]));
+
+        // On a clear surface the unpainted half is the pixel it was; over a ground the ground shows through it unchanged.
+        expect(canvasGroupSample($surface, 10, 10)[3])->toBe(127)
+            ->and(imagecolorat($surface, 20, 10))->toBe(imagecolorat($surface, 0, 0))
+            ->and(canvasGroupSample($surface, 20, 10))->toBe([0, 0, 0, 0])
+            ->and(canvasGroupArea($over, CANVAS_GROUP_GREEN))->toBe(['x' => 0, 'y' => 0, 'width' => 30, 'height' => 20, 'filled' => false])
+            ->and(canvasGroupPixel($over, 20, 10))->toBe(CANVAS_GROUP_GREEN)
+            ->and(canvasGroupPixel($over, 10, 10))->not->toBe(CANVAS_GROUP_GREEN);
+    }
+});
+
+it('draws a group with no treatment, and one whose treatment changes nothing, to the same bytes as the canvas on its own', function () {
+    $assets = canvasGroupAssets();
+    $plain = new PresentationCanvas(40, 30,
+        [new CanvasImage('art', 'Art/green.png', new CanvasRectangle(3, 4, 21, 13), 2, clipRect: new CanvasRectangle(5, 4, 30, 10))],
+        [new CanvasIndicator('focus', 'art', CanvasIndicatorKind::OUTLINE, new CanvasRectangle(2, 2, 30, 20), 2,
+            PresentationColor::rgb(...CANVAS_GROUP_YELLOW), 3)],
+        [new CanvasTextLayer('backing', 1, 20, 18, new RendererGridConfig(3, 2, 6, 5),
+            [new PresentationTextRun(1, 0, '   ', background: PresentationColor::rgb(...CANVAS_GROUP_BLUE))])],
+        [canvasGroupFill('ground', new CanvasRectangle(0, 0, 40, 30), CANVAS_GROUP_RED, -1),
+            canvasGroupFill('veil', new CanvasRectangle(10, 0, 20, 30), [10, 20, 30], 3, 0.4)]);
+    $raster = new CanvasStillRaster($assets);
+    $alone = canvasGroupPng($raster->rasterize($plain, 0x102030));
+    $untreated = canvasGroupPng($raster->rasterize(new PresentationCanvas(40, 30, groups: [new CanvasGroup('same', 0, 0, $plain)]), 0x102030));
+    $identity = canvasGroupPng($raster->rasterize(new PresentationCanvas(40, 30, groups: [new CanvasGroup('same', 0, 0, $plain,
+        colorTransform: new CanvasColorTransform([[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0]))]), 0x102030));
+    // A treated group drawn in between changes nothing drawn after it.
+    $raster->rasterize(new PresentationCanvas(40, 30, groups: [new CanvasGroup('turned', 0, 0, $plain, colorTransform: canvasGroupInversion())]));
+
+    expect($untreated)->toBe($alone)
+        ->and($identity)->toBe($alone)
+        ->and(canvasGroupPng($raster->rasterize($plain, 0x102030)))->toBe($alone)
+        ->and($raster->diagnostics)->toBe([]);
+});
+
+it('draws a frame\'s treated groups on the screen, from its canvas and its overlay, at the screen\'s scale', function () {
+    $canvas = new PresentationCanvas(40, 40, composites: [canvasGroupFill('ground', new CanvasRectangle(0, 0, 40, 40), CANVAS_GROUP_GREEN)],
+        groups: [new CanvasGroup('field', -5, 10, canvasGroupDrawing(20, 10, CANVAS_GROUP_RED), 1, new CanvasRectangle(0, 12, 40, 4),
+            canvasGroupInversion())]);
+    $overlay = new PresentationCanvas(40, 40, groups: [new CanvasGroup('battler', 30, 10, canvasGroupDrawing(6, 6, CANVAS_GROUP_BLUE),
+        colorTransform: canvasGroupDimming())]);
+    $raster = new SceneFrameRaster(sys_get_temp_dir());
+    $native = $raster->rasterize(new SceneFrameComposition(null, canvas: $canvas, screenOverlay: $overlay), new RendererGridConfig(4, 2, 10, 20));
+    $doubled = $raster->rasterize(new SceneFrameComposition(null, canvas: $canvas, screenOverlay: $overlay), new RendererGridConfig(8, 4, 10, 20));
+
+    expect(canvasGroupArea($native, [25, 255, 255]))->toBe(['x' => 0, 'y' => 12, 'width' => 15, 'height' => 4, 'filled' => true])
+        ->and(canvasGroupArea($native, [0, 0, 110]))->toBe(['x' => 30, 'y' => 10, 'width' => 6, 'height' => 6, 'filled' => true])
+        ->and(canvasGroupArea($native, CANVAS_GROUP_RED, CANVAS_GROUP_BLUE))->toBeNull()
+        ->and([canvasGroupPixel($doubled, 14, 27), canvasGroupPixel($doubled, 66, 26), canvasGroupPixel($doubled, 40, 40)])
+        ->toBe([[25, 255, 255], [0, 0, 110], CANVAS_GROUP_GREEN])
+        ->and($raster->diagnostics)->toBe([]);
+});
+
+it('draws the Engine\'s group colour fixture: its flattened drawing within the still\'s precision of the Engine\'s references', function () {
+    $fixture = readCanvasGroupFixtureData('group-colour.json');
+    $reference = $fixture['reference'];
+    $surface = canvasGroupSurface(createCanvasGroupFixtureCanvas($fixture['canvas']));
+    $measure = static fn(int $x, int $y, array $expected): array => measureCanvasGroupSample($surface, $x, $y, $expected['rgb'], $expected['alpha']);
+
+    // The dimmed parent stands at (-2, 1) inside its clip (0, 0, 28, 16). Its inverted child's half-covering red spans
+    // x -2..14 of the root and its half-covering blue x 6..22: red alone at x 0..6, blue over red at x 6..14.
+    foreach ([[0, 1], [3, 8], [5, 15]] as [$x, $y]) {
+        expect($measure($x, $y, $reference['childRedOnly'])[0])->toBeLessThanOrEqual(CANVAS_GROUP_CHANNEL_TOLERANCE)
+            ->and($measure($x, $y, $reference['childRedOnly'])[1])->toBeLessThanOrEqual(CANVAS_GROUP_COVERAGE_TOLERANCE);
+    }
+    foreach ([[6, 1], [10, 8], [13, 15]] as [$x, $y]) {
+        expect($measure($x, $y, $reference['childBlueOverRed'])[0])->toBeLessThanOrEqual(CANVAS_GROUP_CHANNEL_TOLERANCE)
+            ->and($measure($x, $y, $reference['childBlueOverRed'])[1])->toBeLessThanOrEqual(CANVAS_GROUP_COVERAGE_TOLERANCE);
+    }
+    // The untreated sibling is exact where the group paints nothing over it, inside the group's clip and past it.
+    foreach ([[23, 8], [27, 15], [28, 8], [31, 0], [16, 0]] as [$x, $y]) {
+        expect($measure($x, $y, $reference['untreatedSibling']))->toEqual([0, 0]);
+    }
+    // Above the group's translated top edge nothing is painted, and nothing takes the treatment's colour.
+    foreach ([[0, 0], [8, 0], [15, 0]] as [$x, $y]) {
+        expect(canvasGroupSample($surface, $x, $y))->toBe([0, 0, 0, (int) (127 * $reference['transparentUnpainted']['alpha'])]);
+    }
 });

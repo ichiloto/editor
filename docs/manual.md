@@ -867,8 +867,9 @@ capture and scene times, what waited on the player and what the frames could
 not draw. Each waiting dialogue page, choice and notice stays on screen for the
 reading time and is then acknowledged; while a notice is shown the scene holds,
 as the game's notice window holds it. A canvas group, a drawing the game
-places as one piece, is drawn where its origin puts it, inside its clip. A
-video encoder reads the frames in order,
+places as one piece, is drawn where its origin puts it, inside its clip, and
+in its colour treatment (an inversion or a tint of the whole group) when the
+game gives it one. A video encoder reads the frames in order,
 for example `ffmpeg -framerate 30 -i frame-%06d.png review.mp4`. The capture
 starts from the preview's own empty campaign unless it is given a save
 (`campaignSave`, an absolute path): the scene then plays in that save's

@@ -433,6 +433,26 @@ it; an origin off the surface draws nothing. World canvases and groups share
 one painter (`paintLocalCanvas()`), so a world canvas draws its groups too, and
 a still reads the label rasters of every canvas a world canvas's groups draw.
 
+The stills draw a group's colour treatment (`CanvasGroup` `colorTransform`,
+capability `canvas_group_color`, Engine `fe238189`). The painter flattens the
+visible part of a group's canvas, composites and nested groups included, then
+turns that part's straight colour through the treatment's matrix and offset
+once, with the Engine's `transformRgb()`, before it is blended onto the parent.
+Coverage is unchanged and an unpainted pixel stays unpainted. A nested group is
+treated by its own treatment when it is flattened and by its parent's after.
+A group with no treatment draws to the same bytes as before. A still holds 8
+bits a channel and 7 bits of coverage: against the Engine's analytic fixture
+(`tests/Fixtures/CanvasGroups/group-colour.json`) a channel is within 1 of 255
+steps and coverage within 1 of 127. All three rasters name
+`canvas_group_color`. The Engine pairs that capability with
+`canvas_region_budget`, which the rasters do not name; nothing composes a
+treatment for a still yet, so whether the rasters should name the region budget
+is open until a field colour timeline exists.
+`cutscenes.effectBattlePreview` takes an optional `groupColor` flag and
+advertises `canvas_group_color` to the Engine for that frame only when the flag
+is `true`. Remaining: the Engine binds no field colour timeline yet, so no
+battle preview frame carries a treatment, and there is nothing to author.
+
 Done on Engine `156840cd` and `06ecb262` (12 November):
 - [x] Campaign restoration for previews. A preview or capture given a save
   (`campaignSave`) plays in that save's campaign:
