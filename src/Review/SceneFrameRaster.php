@@ -25,7 +25,8 @@ use InvalidArgumentException;
  * frame's screen canvas with its overlay composed above it as
  * the Engine composes them ({@see PresentationCanvas::composeOverlay()}):
  * dialogue, notices, cinematic covers, stages and what is lifted above the
- * cover, drawn by the canvas raster ({@see CanvasStillRaster}).
+ * cover, drawn by the canvas raster ({@see CanvasStillRaster}), which paints
+ * a canvas's translated groups at their layers.
  *
  * It reads only what the Engine composed. What the two rasters leave out is
  * named in {@see $diagnostics}.

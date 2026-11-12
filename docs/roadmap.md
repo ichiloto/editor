@@ -364,7 +364,8 @@ and notices are paged for the graphical screen), and `composeFrame()` gives
 the Engine's `SceneFrameComposition` at the session's clock. `CinematicCapture`
 records it at a fixed rate, reading each waiting page for a reading time;
 `SceneFrameRaster` draws a frame (field still, screen text grid, screen canvas
-with its overlay, the stage plane and above-cover art included) and
+with its overlay, the stage plane, above-cover art and translated canvas
+groups included) and
 `CinematicCaptureWriter` writes numbered PNG frames and `capture.json`, served
 as `EditorSession::writeCinematicCapture()` / `cutscenes.cinematicCapture`.
 The preview game now delivers the Engine's notices to the preview's screen and
@@ -373,6 +374,15 @@ current scene, and the field installs the project's `WorldAbilityCatalog`.
 This closes the four preview findings of the Hybrid reveal review
 (10 November: no frame export, Terminal-compiled effects, no current scene,
 no world-ability catalog).
+
+The stills draw the Engine's translated canvas groups (`PresentationCanvas`
+`groups`, capability `canvas_groups`): `CanvasStillRaster` paints each group's
+canvas whole at the group's layer, after the other drawings of that layer and
+in listed order among groups, at the group's origin taken to the nearest whole
+pixel, inside the group's clip, its own canvas and every canvas and clip around
+it; an origin off the surface draws nothing. World canvases and groups share
+one painter (`paintLocalCanvas()`), so a world canvas draws its groups too, and
+a still reads the label rasters of every canvas a world canvas's groups draw.
 
 Done on Engine `156840cd` and `06ecb262` (12 November):
 - [x] Campaign restoration for previews. A preview or capture given a save

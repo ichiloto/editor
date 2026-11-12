@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Review;
 use GdImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasGroup;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageBottomFade;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImagePreflight;
@@ -23,13 +24,14 @@ use RuntimeException;
 /**
  * Draws a still of one graphical canvas, such as a menu, dialogue, storybook
  * or modal over a scene, as the graphical renderer paints it: every image,
- * indicator, text layer and label in one order by layer, and at a tie in the
- * renderer's own order (images, composites, indicators, text, labels), each
- * in the order the canvas lists it. Images are cropped, mirrored, rotated, brightened,
+ * indicator, text layer, label and group in one order by layer, and at a tie
+ * in the renderer's own order (images, composites, indicators, text, labels,
+ * groups), each in the order the canvas lists it. Images are cropped, mirrored, rotated, brightened,
  * faded, stretched to their destination and clipped. Text layers paint each
  * cell's background and glyph, centred in the cell, in a monospaced system
  * font fitted to the layer's cell; labels show the graphical renderer's own
- * raster of them.
+ * raster of them. A group paints its local canvas as one drawing at the
+ * group's origin ({@see paintLocalCanvas()}), groups within it included.
  *
  * It reads only the canvas the Engine composed, so what it draws is what the
  * game would send a graphical renderer. It is a review picture, not the
@@ -46,7 +48,7 @@ final class CanvasStillRaster
         RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::CANVAS_IMAGE_TONE, RendererSessionConfig::CANVAS_IMAGE_FLIP,
         RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
         RendererSessionConfig::CANVAS_IMAGE_ROTATION, RendererSessionConfig::CANVAS_TEXTURE_STRIP,
-        RendererSessionConfig::CANVAS_IMAGE_BOTTOM_FADE,
+        RendererSessionConfig::CANVAS_IMAGE_BOTTOM_FADE, RendererSessionConfig::CANVAS_GROUPS,
     ];
 
     /** Fonts tried, in order, when none is given: the graphical renderer's own text font first. */
@@ -60,7 +62,7 @@ final class CanvasStillRaster
     ];
 
     /** The renderer's paint order for items of one layer. */
-    private const array KIND_ORDER = ['image' => 0, 'composite' => 1, 'indicator' => 2, 'text' => 3, 'label' => 4];
+    private const array KIND_ORDER = ['image' => 0, 'composite' => 1, 'indicator' => 2, 'text' => 3, 'label' => 4, 'group' => 5];
 
     /** @var list<string> What the still could not draw, once each. */
     public private(set) array $diagnostics = [];
@@ -69,6 +71,13 @@ final class CanvasStillRaster
     private array $images = [];
     /** @var array<string, float> Font sizes fitted to each cell size. */
     private array $fontSizes = [];
+    /**
+     * Where the canvas being drawn has its top-left corner on the surface, in whole pixels: the surface's own
+     * corner for a canvas drawn at its size, and left of or above it for a local canvas of which the surface
+     * holds the part that shows ({@see paintLocalCanvas()}).
+     */
+    private int $originX = 0;
+    private int $originY = 0;
 
     /**
      * @param array<string, string> $labelRasters Each label's raster from the graphical renderer, by layout id.
@@ -117,7 +126,7 @@ final class CanvasStillRaster
         $items = [];
         foreach ([['image', $canvas->images], ['composite', $canvas->composites],
             ['indicator', $canvas->indicators], ['text', $canvas->textLayers],
-            ['label', $canvas->labels]] as [$kind, $children]) {
+            ['label', $canvas->labels], ['group', $canvas->groups]] as [$kind, $children]) {
             foreach ($children as $index => $child) {
                 $items[] = [$child->layer, self::KIND_ORDER[$kind], $index, $child];
             }
@@ -129,9 +138,53 @@ final class CanvasStillRaster
                 $item instanceof CanvasComposite => $this->drawComposite($surface, $item, $context),
                 $item instanceof CanvasIndicator => $this->drawIndicator($surface, $item),
                 $item instanceof CanvasTextLayer => $this->drawTextLayer($surface, $item, $context),
+                $item instanceof CanvasGroup => $this->paintGroup($surface, $item, $context),
                 default => $this->drawLabel($surface, $item, $context),
             };
         }
+    }
+
+    /**
+     * Paints a local canvas as one drawing with its top-left corner at a whole pixel of the canvas being drawn:
+     * a world canvas on its field, or a group's canvas on the group's parent. The local canvas keeps its own
+     * geometry and is masked by its own rectangle, by a clip of the canvas being drawn when one is given, and
+     * by the surface, so the clips of every canvas it is nested in intersect. A corner off the surface stays
+     * there: what does not show is not drawn, and only the part that shows takes memory.
+     */
+    public function paintLocalCanvas(GdImage $surface, PresentationCanvas $canvas, int $left, int $top, ?CanvasRectangle $clip,
+        string $context): void
+    {
+        $left += $this->originX;
+        $top += $this->originY;
+        $visible = [max(0, $left), max(0, $top), min(imagesx($surface), $left + $canvas->width), min(imagesy($surface), $top + $canvas->height)];
+        if ($clip !== null) {
+            $visible = [max($visible[0], $this->originX + (int) round($clip->x)), max($visible[1], $this->originY + (int) round($clip->y)),
+                min($visible[2], $this->originX + (int) round($clip->x + $clip->width)),
+                min($visible[3], $this->originY + (int) round($clip->y + $clip->height))];
+        }
+        [$visibleLeft, $visibleTop, $visibleRight, $visibleBottom] = $visible;
+        if ($visibleRight <= $visibleLeft || $visibleBottom <= $visibleTop) {
+            return;
+        }
+        $part = self::createCanvas($visibleRight - $visibleLeft, $visibleBottom - $visibleTop);
+        [$originX, $originY] = [$this->originX, $this->originY];
+        [$this->originX, $this->originY] = [$left - $visibleLeft, $top - $visibleTop];
+        try {
+            $this->drawCanvas($part, $canvas, $context);
+        } finally {
+            [$this->originX, $this->originY] = [$originX, $originY];
+        }
+        imagecopy($surface, $part, $visibleLeft, $visibleTop, 0, 0, $visibleRight - $visibleLeft, $visibleBottom - $visibleTop);
+    }
+
+    /**
+     * Paints a group's canvas at the group's origin, inside the group's clip. The origin is taken to the nearest
+     * whole pixel, a half upwards on either side of zero, so equal steps of an origin move the drawing equally.
+     */
+    private function paintGroup(GdImage $surface, CanvasGroup $group, string $context): void
+    {
+        $this->paintLocalCanvas($surface, $group->canvas, (int) floor($group->x + 0.5), (int) floor($group->y + 0.5),
+            $group->clipRect, sprintf('%s group %s', $context, $group->id));
     }
 
     private function drawComposite(GdImage $surface, CanvasComposite $composite, string $context): void
@@ -388,8 +441,8 @@ final class CanvasStillRaster
         };
         $color = self::allocate($surface, TerminalPalette::resolveRgb($indicator->color, TerminalPalette::DEFAULT_FOREGROUND));
         foreach ($edges as [$x, $y, $width, $height]) {
-            imagefilledrectangle($surface, (int) round($x), (int) round($y),
-                (int) round($x + $width) - 1, (int) round($y + $height) - 1, $color);
+            imagefilledrectangle($surface, $this->originX + (int) round($x), $this->originY + (int) round($y),
+                $this->originX + (int) round($x + $width) - 1, $this->originY + (int) round($y + $height) - 1, $color);
         }
     }
 
@@ -427,14 +480,7 @@ final class CanvasStillRaster
         if ($layer->opacity < 1) {
             self::adjustPixels($text, 1.0, $layer->opacity);
         }
-        $clip = $layer->clipRect;
-        $maskLeft = $clip === null ? $left : max($left, (int) round($clip->x));
-        $maskTop = $clip === null ? $top : max($top, (int) round($clip->y));
-        $maskRight = $clip === null ? $left + $width : min($left + $width, (int) round($clip->x + $clip->width));
-        $maskBottom = $clip === null ? $top + $height : min($top + $height, (int) round($clip->y + $clip->height));
-        if ($maskRight > $maskLeft && $maskBottom > $maskTop) {
-            imagecopy($surface, $text, $maskLeft, $maskTop, $maskLeft - $left, $maskTop - $top, $maskRight - $maskLeft, $maskBottom - $maskTop);
-        }
+        $this->copyClipped($surface, $text, $left, $top, $width, $height, $layer->clipRect);
     }
 
     private function drawGlyph(GdImage $image, string $glyph, int $rgb, int $cellLeft, int $cellTop, int $cellWidth, int $cellHeight): void
@@ -504,12 +550,23 @@ final class CanvasStillRaster
         if ($bottomFade !== null) {
             self::applyBottomFade($stretched, $bottomFade);
         }
-        $maskLeft = $clip === null ? $drawLeft : max($drawLeft, (int) round($clip->x));
-        $maskTop = $clip === null ? $drawTop : max($drawTop, (int) round($clip->y));
-        $maskRight = $clip === null ? $drawLeft + $drawWidth : min($drawLeft + $drawWidth, (int) round($clip->x + $clip->width));
-        $maskBottom = $clip === null ? $drawTop + $drawHeight : min($drawTop + $drawHeight, (int) round($clip->y + $clip->height));
+        $this->copyClipped($surface, $stretched, $drawLeft, $drawTop, $drawWidth, $drawHeight, $clip);
+    }
+
+    /**
+     * Copies what was drawn for a rectangle of the canvas onto the surface, where the canvas being drawn has it,
+     * masked by a clip of that canvas and by the surface.
+     */
+    private function copyClipped(GdImage $surface, GdImage $drawn, int $left, int $top, int $width, int $height, ?CanvasRectangle $clip): void
+    {
+        $maskLeft = max(-$this->originX, $clip === null ? $left : max($left, (int) round($clip->x)));
+        $maskTop = max(-$this->originY, $clip === null ? $top : max($top, (int) round($clip->y)));
+        $maskRight = min(imagesx($surface) - $this->originX,
+            $clip === null ? $left + $width : min($left + $width, (int) round($clip->x + $clip->width)));
+        $maskBottom = min(imagesy($surface) - $this->originY,
+            $clip === null ? $top + $height : min($top + $height, (int) round($clip->y + $clip->height)));
         if ($maskRight > $maskLeft && $maskBottom > $maskTop) {
-            imagecopy($surface, $stretched, $maskLeft, $maskTop, $maskLeft - $drawLeft, $maskTop - $drawTop,
+            imagecopy($surface, $drawn, $this->originX + $maskLeft, $this->originY + $maskTop, $maskLeft - $left, $maskTop - $top,
                 $maskRight - $maskLeft, $maskBottom - $maskTop);
         }
     }

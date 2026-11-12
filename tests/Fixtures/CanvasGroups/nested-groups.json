@@ -1,0 +1,158 @@
+{
+  "width": 120,
+  "height": 80,
+  "groups": [
+    {
+      "id": "outer",
+      "origin": {
+        "x": 20,
+        "y": -5
+      },
+      "layer": 7,
+      "canvas": {
+        "width": 70,
+        "height": 50,
+        "groups": [
+          {
+            "id": "inner",
+            "origin": {
+              "x": -12,
+              "y": 7
+            },
+            "layer": 3,
+            "canvas": {
+              "width": 40,
+              "height": 30,
+              "images": [],
+              "indicators": [],
+              "textLayers": [],
+              "composites": [
+                {
+                  "id": "fill",
+                  "width": 40,
+                  "height": 30,
+                  "destination": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 40,
+                    "height": 30
+                  },
+                  "layer": 0,
+                  "operations": [
+                    {
+                      "type": "fill",
+                      "opacity": 1,
+                      "blend": "source_over",
+                      "masks": [],
+                      "destination": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 40,
+                        "height": 30
+                      },
+                      "brush": {
+                        "type": "solid",
+                        "color": {
+                          "kind": "ansi16",
+                          "index": 1
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            "clipRect": {
+              "x": 0,
+              "y": 0,
+              "width": 30,
+              "height": 35
+            }
+          }
+        ],
+        "images": [],
+        "indicators": [],
+        "textLayers": [],
+        "composites": [
+          {
+            "id": "fill",
+            "width": 70,
+            "height": 50,
+            "destination": {
+              "x": 0,
+              "y": 0,
+              "width": 70,
+              "height": 50
+            },
+            "layer": 0,
+            "operations": [
+              {
+                "type": "fill",
+                "opacity": 1,
+                "blend": "source_over",
+                "masks": [],
+                "destination": {
+                  "x": 0,
+                  "y": 0,
+                  "width": 70,
+                  "height": 50
+                },
+                "brush": {
+                  "type": "solid",
+                  "color": {
+                    "kind": "ansi16",
+                    "index": 4
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "clipRect": {
+        "x": 10,
+        "y": 0,
+        "width": 70,
+        "height": 60
+      }
+    }
+  ],
+  "images": [],
+  "indicators": [],
+  "textLayers": [],
+  "composites": [
+    {
+      "id": "fill",
+      "width": 120,
+      "height": 80,
+      "destination": {
+        "x": 0,
+        "y": 0,
+        "width": 120,
+        "height": 80
+      },
+      "layer": 0,
+      "operations": [
+        {
+          "type": "fill",
+          "opacity": 1,
+          "blend": "source_over",
+          "masks": [],
+          "destination": {
+            "x": 0,
+            "y": 0,
+            "width": 120,
+            "height": 80
+          },
+          "brush": {
+            "type": "solid",
+            "color": {
+              "kind": "ansi16",
+              "index": 2
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
