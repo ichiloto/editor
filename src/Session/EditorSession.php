@@ -3501,11 +3501,18 @@ final class EditorSession
      * acknowledging it, a choice by its first option. The project's files
      * never change.
      *
+     * With a save, the capture plays in that save's campaign instead: its
+     * party, world state and quests, starting on its map where it left the
+     * player, as a game launched from it would
+     * ({@see CinematicPreviewSession::start()}). The save is only read.
+     *
+     * @param string|null $campaignSave An absolute path to a save file, or null to start where the preview starts.
+
      * @return array{frames: int, manifest: string, finished: bool, diagnostics: list<string>}
      * @throws SessionRefusal When the cinematic is unknown or does not compile, or the capture cannot be written.
      */
     public function writeCinematicCapture(int $index, string $directory, int $width, int $height, float $fps,
-        float $readingSeconds, float $maxSeconds): array
+        float $readingSeconds, float $maxSeconds, ?string $campaignSave = null): array
     {
         $type = CutsceneType::CINEMATIC;
         $id = $this->workspace->cutscenes?->ids($type)[$index] ?? null;
@@ -3521,6 +3528,7 @@ final class EditorSession
         try {
             $preview = CinematicPreviewSession::startCapture($this->workspace->projectRoot, $definition, SceneFrameRaster::supports(...), [
                 'mapId' => $origin['mapId'], 'x' => $origin['x'], 'y' => $origin['y'], 'width' => max(20, $width), 'height' => max(8, $height),
+                'campaignSave' => $campaignSave,
             ]);
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be captured: %s', $asset->id, $failure->getMessage()), previous: $failure);

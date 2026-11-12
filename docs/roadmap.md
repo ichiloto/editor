@@ -374,22 +374,29 @@ This closes the four preview findings of the Hybrid reveal review
 (10 November: no frame export, Terminal-compiled effects, no current scene,
 no world-ability catalog).
 
+Done on Engine `156840cd` (12 November):
+- [x] Campaign restoration for previews. A preview or capture given a save
+  (`campaignSave`) plays in that save's campaign:
+  `PreviewField::openSavedCampaign()` reads the save through the Engine's
+  `SaveManager` and restores it with the Engine's `CampaignSession`
+  (`PreviewCampaign`), the preview scene adopts it as the game's field does,
+  the player stands where the save left them and shows the party leader where
+  the project says so, and the campaign is released when the field is
+  disposed. Served through `EditorSession::writeCinematicCapture()` and
+  `cutscenes.cinematicCapture`.
+- [x] Per-game loading and notices. The preview binds its own `GameLoader`
+  and notice queue to its Game, and pages notices with the Engine's
+  `NoticePageModel`.
+
 Remaining, waiting on the Engine:
-- [ ] Campaign restoration for previews. `GameScene::configureCampaign()`
-  restores a `GameConfig` (project-state snapshot, world state, party and its
-  recruitment ownership, quests, achievements, income, knowledge, bestiary,
-  tutorials) together with the field, UI, player and interpreter it installs,
-  so a preview scene cannot restore a save or new game without copying that
-  order. Needed: an Engine-owned restoration of the campaign facts alone,
-  with its release, that `configureCampaign()` also uses. Until then a
-  preview runs on its own empty party and world state, so a scene that needs
-  the assembled party (a power showcase naming an actor) cannot be captured
-  from real campaign state, and a player who follows the party leader shows no
-  graphical art.
-- [ ] Per-game new-game loading. `GameLoader::getInstance()` keeps the first
-  Game and the actor and item stores it found, for the life of the process;
-  a host that opens several projects or previews needs a loader for its own
-  Game and the project's current stores.
+- [ ] Decoding a save without the project's classes. `SaveCompatibilityManifest`
+  resolves every project migration class when it is built, and the Editor
+  never loads a project's PHP classes, so a project whose manifest names
+  migration classes cannot have any save decoded here, even one already at
+  its current content version. Needed: an Engine-supported way to build the
+  save pipeline without those classes (for example resolving a migration
+  class when its step runs).
+- [ ] GUI: choosing the save a preview or capture starts from.
 - [ ] Notice pages. `PagedAlertModal` pages a notice inside its constructor
   and turns pages only from its blocking input loop. `PreviewNoticeOwner`
   mirrors its two paging rules through the Engine's public `MenuTextWrap` and

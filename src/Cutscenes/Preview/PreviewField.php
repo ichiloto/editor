@@ -13,6 +13,8 @@ use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\IO\Console\Console;
 use Ichiloto\Engine\Progression\WorldAbilityCatalog;
+use Ichiloto\Engine\Util\Stores\ActorStore;
+use Ichiloto\Engine\Util\Stores\ItemStore;
 use Ichiloto\Engine\Rendering\FieldViewport;
 use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposer;
 use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposition;
@@ -50,7 +52,9 @@ use Throwable;
  * The Engine configuration it installs is the project's, as the game
  * installs it before a campaign: the preview's play and project settings,
  * and the project's world abilities, which world conditions and power
- * showcases read.
+ * showcases read. A field opened on a save ({@see openSavedCampaign()}) also
+ * installs the project's actors and items and restores the save's campaign
+ * for its own Game, which it releases when it is disposed.
  */
 final class PreviewField
 {
@@ -77,6 +81,11 @@ final class PreviewField
     /** @var (Closure(string): bool)|null The capture's renderer capabilities. */
     private ?Closure $captureSupports = null;
     private bool $configured = false;
+    /** The saved campaign the field plays, when it was opened on one. */
+    private ?PreviewCampaign $campaign = null;
+    /** Every Engine configuration the field may install; each is given back as it was found. */
+    private const array INSTALLED_CONFIGURATION = [ProjectConfig::class, PlaySettings::class, WorldAbilityCatalog::class,
+        ActorStore::class, ItemStore::class];
     /** The field's screen in Terminal cells, which the graphical view's camera viewport never changes. */
     private int $screenWidth;
     private int $screenHeight;
@@ -123,6 +132,59 @@ final class PreviewField
         });
 
         return $field;
+    }
+
+    /**
+     * Opens the field on a save: its campaign restored for the field's own
+     * Game through the Engine's save pipeline ({@see PreviewCampaign}), on the
+     * save's map, with the player where the save left them, facing as they
+     * faced and shown as the game shows them, and the camera following. The
+     * save file is only read. A save that cannot be read or restored is
+     * refused with the Engine's reason, and nothing stays installed.
+     *
+     * @param Closure(): float $readTime The owner's clock, in seconds.
+     */
+    public static function openSavedCampaign(string $projectRoot, string $savePath, int $width, int $height, Closure $readTime): self
+    {
+        $field = new self($projectRoot, $width, $height, $readTime);
+        try {
+            $field->run(function () use ($field, $savePath): void {
+                ConfigStore::put(ActorStore::class, new ActorStore());
+                ConfigStore::put(ItemStore::class, new ItemStore());
+                $manager = new PreviewSceneManager();
+                $game = $manager->game instanceof PreviewGame ? $manager->game
+                    : throw new \LogicException('The preview scene manager lost its preview game.');
+                $field->campaign = PreviewCampaign::restoreFromSave($game, $field->projectRoot, $savePath);
+                $config = $field->campaign->config;
+                $field->scene = new PreviewGameScene($manager, $field->screenWidth, $field->screenHeight, $config->mapId,
+                    $field->campaign->session);
+                $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
+                $camera = $field->scene->previewCamera();
+                $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight, $field->projectRoot . '/assets');
+                $field->scene->getPreviewGame()->notices->presentOn($field->presentation);
+                $field->presentTerminal();
+                $player = new PreviewPlayer($field->scene, new Vector2($config->playerPosition->x, $config->playerPosition->y),
+                    $config->playerSprite, $config->playerHeading, party: $config->party);
+                $field->scene->installPlayer($player);
+                try {
+                    $field->scene->previewMap->loadForPreview($config->mapId);
+                } catch (Throwable) {
+                    // The map manager owns the undefined terrain and its diagnostic.
+                }
+                $camera->attach($player);
+            });
+        } catch (Throwable $failure) {
+            $field->dispose();
+            throw $failure;
+        }
+
+        return $field;
+    }
+
+    /** The map the field's saved campaign was saved on; null for a field opened without one. */
+    public function getCampaignMapId(): ?string
+    {
+        return $this->campaign?->config->mapId;
     }
 
     /**
@@ -492,11 +554,14 @@ final class PreviewField
     {
         $this->endCapture();
         $this->detachScene();
+        // The project state the campaign replaced goes back before the configuration it was restored under.
+        $this->campaign?->release();
+        $this->campaign = null;
         if (! $this->configured) {
             return;
         }
 
-        foreach ([ProjectConfig::class, PlaySettings::class, WorldAbilityCatalog::class] as $class) {
+        foreach (self::INSTALLED_CONFIGURATION as $class) {
             if (isset($this->previousConfigs[$class])) {
                 ConfigStore::put($class, $this->previousConfigs[$class]);
             } else {
@@ -544,7 +609,7 @@ final class PreviewField
             return;
         }
 
-        foreach ([ProjectConfig::class, PlaySettings::class, WorldAbilityCatalog::class] as $class) {
+        foreach (self::INSTALLED_CONFIGURATION as $class) {
             if (ConfigStore::has($class)) {
                 $this->previousConfigs[$class] = ConfigStore::get($class);
             }

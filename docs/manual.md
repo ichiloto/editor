@@ -868,9 +868,12 @@ not draw. Each waiting dialogue page, choice and notice stays on screen for the
 reading time and is then acknowledged; while a notice is shown the scene holds,
 as the game's notice window holds it. A video encoder reads the frames in order,
 for example `ffmpeg -framerate 30 -i frame-%06d.png review.mp4`. The capture
-starts from the preview's own empty campaign: a scene that needs a real party
-or saved progress cannot be captured from those until the Engine offers the
-campaign restoration it needs (see the roadmap).
+starts from the preview's own empty campaign unless it is given a save
+(`campaignSave`, an absolute path): the scene then plays in that save's
+campaign, with its party, world state and quests, on its map where it left the
+player, as a game launched from it would. The save is read through the
+Engine's save pipeline and is never written. A save the pipeline cannot decode
+is refused with the Engine's reason.
 
 **Pending, not implemented:** richer renderers will use a separate,
 RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.

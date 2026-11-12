@@ -74,7 +74,7 @@ final class CinematicPreviewSession
     private PreviewField $field;
 
     /**
-     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string} $options
+     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string, campaignSave?: string|null} $options
      */
     /**
      * @param array{supports: Closure(string): bool, textPreparation: TextPreparationProviderInterface|null}|null $capture
@@ -94,7 +94,13 @@ final class CinematicPreviewSession
      * entry the stage cannot place); that is reported through `status()`
      * and `failure()` rather than thrown, so the pane can show it.
      *
-     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string} $options
+     * With `campaignSave`, an absolute path to a save file, the scene plays
+     * in that save's campaign ({@see PreviewField::openSavedCampaign()}): its
+     * party, world state and quests, on its map, with the player where the
+     * save left them; `mapId`, `x` and `y` are then the save's. A save that
+     * cannot be restored is refused with the Engine's reason.
+     *
+     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string, campaignSave?: string|null} $options
      */
     public static function start(string $projectRoot, CinematicDefinition $definition, array $options = []): self
     {
@@ -114,7 +120,7 @@ final class CinematicPreviewSession
      * compositions as it chooses.
      *
      * @param Closure(string): bool $supports The capture renderer's capabilities.
-     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string} $options
+     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string, campaignSave?: string|null} $options
      * @param TextPreparationProviderInterface|null $textPreparation Where project labels are measured; without one
      *     the scene composes no labels.
      */
@@ -141,11 +147,20 @@ final class CinematicPreviewSession
 
     private function boot(): void
     {
-        $mapId = $this->options['mapId'] ?? $this->definition->startMap;
-        $mapId = is_string($mapId) && trim($mapId) !== '' ? trim($mapId) : '';
-        $this->field = PreviewField::open($this->projectRoot, $mapId,
-            new Vector2(intval($this->options['x'] ?? 0), intval($this->options['y'] ?? 0)),
-            intval($this->options['width'] ?? 60), intval($this->options['height'] ?? 18), fn(): float => $this->elapsed);
+        $save = $this->options['campaignSave'] ?? null;
+        if (is_string($save) && $save !== '') {
+            // The save decides where the scene begins, as a game launched from it does.
+            $this->field = PreviewField::openSavedCampaign($this->projectRoot, $save,
+                intval($this->options['width'] ?? 60), intval($this->options['height'] ?? 18), fn(): float => $this->elapsed);
+            $mapId = strval($this->field->getCampaignMapId());
+            $this->note('Campaign restored from the save.');
+        } else {
+            $mapId = $this->options['mapId'] ?? $this->definition->startMap;
+            $mapId = is_string($mapId) && trim($mapId) !== '' ? trim($mapId) : '';
+            $this->field = PreviewField::open($this->projectRoot, $mapId,
+                new Vector2(intval($this->options['x'] ?? 0), intval($this->options['y'] ?? 0)),
+                intval($this->options['width'] ?? 60), intval($this->options['height'] ?? 18), fn(): float => $this->elapsed);
+        }
         $this->scene = $this->field->scene;
         $this->presentation = $this->field->presentation;
         if ($this->capture !== null) {
