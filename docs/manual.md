@@ -866,7 +866,9 @@ frames at the frame rate asked for, with `capture.json` naming each frame's
 capture and scene times, what waited on the player and what the frames could
 not draw. Each waiting dialogue page, choice and notice stays on screen for the
 reading time and is then acknowledged; while a notice is shown the scene holds,
-as the game's notice window holds it. A video encoder reads the frames in order,
+as the game's notice window holds it. A canvas group, a drawing the game
+places as one piece, is drawn where its origin puts it, inside its clip. A
+video encoder reads the frames in order,
 for example `ffmpeg -framerate 30 -i frame-%06d.png review.mp4`. The capture
 starts from the preview's own empty campaign unless it is given a save
 (`campaignSave`, an absolute path): the scene then plays in that save's
@@ -3748,6 +3750,23 @@ battle's own route planning over each troop's projected bodies, and reports a
 flight that reaches a troop's targets only through its fallback as a warning
 and one that cannot reach them without a fallback as an error. A missing pose
 point or unreadable artwork is reported apart, with the Engine's reason.
+
+A battle effect may hold a `field-motion` track, which moves the whole
+battlefield in the graphical battle. In the GUI it is one of the track types.
+It has no anchor; each sample gives its **Frame**, **Duration** (one frame when
+left out), **Field Offset X** and **Field Offset Y** in logical pixels,
+fractions allowed, and **Enabled** (`false` keeps the sample and moves
+nothing). On save the Engine refuses samples out of order or overlapping, a
+presentation other than `graphical`, and a looping or battle-phase timeline,
+and nothing is written. The Terminal editor names the track, lists its samples
+in the Timeline pane as `field offset x, y`, and leaves them as written; its
+preview names the offset under **Not drawn here**. The GUI's battle preview
+draws the battlefield still on a moving frame, with the Engine's diagnostic
+that the motion is not applied.
+
+In either editor, a track whose type that editor does not offer keeps its
+type: choosing another is refused and nothing changes. Remove the track to
+replace it. The same holds for every list whose entries have a type or kind.
 
 A summon's **Effect Timing** offers the same `arena` mode, checked by the same
 validator against its graphical stage's restore frame.

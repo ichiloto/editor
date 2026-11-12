@@ -15,6 +15,7 @@ use Ichiloto\Engine\Field\PlayerPresentationConfig;
 use Ichiloto\Engine\IO\Console\NormalizedRow;
 use Ichiloto\Engine\Rendering\Launch\PackagedRendererExecutableResolver;
 use Ichiloto\Engine\Rendering\Launch\RendererExecutableResolverInterface;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasFrameBudget;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSprite;
 use Ichiloto\Engine\Rendering\Presentation\PresentationTextLayer;
 use Ichiloto\Engine\Rendering\Presentation\PresentationTextRun;
@@ -162,9 +163,12 @@ final class MapRenderer
         }
         $labelRasters = [];
         foreach ($canvases as $canvas) {
-            foreach ($canvas->canvas->labels as $label) {
-                $layoutId = $label->measurement->layoutId;
-                $labelRasters[$layoutId] ??= $labels?->readRaster($layoutId);
+            // A world canvas and every canvas its groups draw.
+            foreach (CanvasFrameBudget::getCanvases([$canvas->canvas]) as $drawn) {
+                foreach ($drawn->labels as $label) {
+                    $layoutId = $label->measurement->layoutId;
+                    $labelRasters[$layoutId] ??= $labels?->readRaster($layoutId);
+                }
             }
         }
         foreach ($signs as $spriteId => $sign) {

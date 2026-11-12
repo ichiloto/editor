@@ -5085,15 +5085,25 @@ final class ProjectRecordDatabase
      * glyph rows, a connected piece's glyph per shape) never mix. Unknown
      * keys -- neither variant's -- stay.
      *
+     * An entry of a variant the list does not edit ({@see RecordSubList::authorsVariant()})
+     * cannot change variant: nothing here knows which of its keys the old
+     * variant owned, so the new one would silently re-read them as its own.
+     *
      * @param array<string, mixed> $before The entry before the change.
      * @param array<string, mixed> $after The entry with the new variant.
      * @return array<string, mixed>
+     * @throws \InvalidArgumentException When the entry is of a variant the list does not edit; nothing is changed.
      */
     private static function withoutStaleVariantFields(RecordSubList $subList, array $before, array $after): array
     {
         if ($subList->getVariant($before) === $subList->getVariant($after)) {
             // The same variant picked again changes nothing.
             return $after;
+        }
+        if (! $subList->authorsVariant($before)) {
+            $name = str_replace('_', ' ', strval($subList->variantKey));
+            throw new \InvalidArgumentException(sprintf('A %s of %s "%s" is not edited here, so it keeps that %s. Nothing was changed.',
+                $subList->singular, $name, $subList->getVariant($before), $name));
         }
 
         $keys = static fn(array $fields): array => array_map(static fn(RecordField $field): string => $field->key, $fields);
