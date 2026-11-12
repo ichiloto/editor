@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage;
 use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\Session\EditorSession;
+use Ichiloto\Editor\Session\SessionHost;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 
@@ -361,6 +362,95 @@ it('previews the effect in battle: a static battlefield with the Engine saying t
         ->and($disabled['diagnostics'])->toBe([])
         ->and($terminal['diagnostics'])->toBe([])
         ->and($terminal['terminalLines'])->not->toBe([]);
+});
+
+it('moves the battlefield by the authored offset, with no diagnostic, for a preview whose canvas draws canvas groups', function () {
+    $root = fieldMotionProject();
+    [$session, $index] = openFieldMotionSession($root);
+    $samples = (require fieldMotionPath($root))['tracks'][1]['keyframes'];
+    $readOrigins = static fn(array $frame): array => array_column($frame['canvas']['groups'] ?? [], 'origin');
+    $read = static fn(int $authored, bool $canvasGroups): array => $session->readEffectBattlePreview($index, 0, authoredFrame: $authored, canvasGroups: $canvasGroups);
+
+    $still = $read($samples[0]['frame'], false);
+    $moving = $read($samples[0]['frame'], true);
+    $next = $read($samples[1]['frame'], true);
+
+    // Everything the still battlefield draws travels in the one group, as drawn; none of it stays behind on the canvas.
+    $field = array_column($still['canvas']['images'], 'id');
+    expect($readOrigins($moving))->toBe([$samples[0]['payload']])
+        ->and($readOrigins($next))->toBe([$samples[1]['payload']])
+        ->and($moving['diagnostics'])->toBe([])
+        ->and($field)->not->toBe([])
+        ->and(array_column($moving['canvas']['groups'][0]['canvas']['images'], 'id'))->toBe($field)
+        ->and(array_intersect(array_column($moving['canvas']['images'], 'id'), $field))->toBe([])
+        ->and([$moving['canvas']['width'], $moving['canvas']['height']])->toBe([$still['canvas']['width'], $still['canvas']['height']])
+        ->and($moving['frame'])->toBe($still['frame']);
+
+    // The same frame asked for without them is the still battlefield and the Engine's word that the motion is not applied,
+    // before and after a frame composed with them.
+    expect($still['canvas'])->not->toHaveKey('groups')
+        ->and($still['canvas']['images'])->not->toBe([])
+        ->and($still['diagnostics'])->toHaveCount(1)
+        ->and($read($samples[0]['frame'], false))->toBe($still);
+});
+
+it('holds the battlefield in place where no enabled sample moves it, and keeps a zero sample as a motion of nothing', function () {
+    $root = fieldMotionProject();
+    [$session, $index] = openFieldMotionSession($root);
+    $samples = (require fieldMotionPath($root))['tracks'][1]['keyframes'];
+    $read = static fn(int $authored, bool $canvasGroups = true, bool $reducedMotion = false): array => $session->readEffectBattlePreview(
+        $index, 0, $reducedMotion, authoredFrame: $authored, canvasGroups: $canvasGroups);
+    $disabled = array_find($samples, static fn(array $sample): bool => ($sample['visible'] ?? true) === false);
+    $zero = array_find($samples, static fn(array $sample): bool => $sample['payload'] == ['x' => 0, 'y' => 0]);
+
+    // A frame before the first sample and a disabled sample release the field: the canvas is the one composed without groups.
+    foreach ([$samples[0]['frame'] - 1, $disabled['frame']] as $frame) {
+        $released = $read($frame);
+        expect($released['canvas'])->not->toHaveKey('groups')
+            ->and($released['diagnostics'])->toBe([])
+            ->and($released)->toBe($read($frame, false));
+    }
+
+    // Zero is a sample of its own: the field is grouped at the origin, which a canvas without groups is told it cannot draw.
+    expect(array_column($read($zero['frame'])['canvas']['groups'], 'origin'))->toEqual([['x' => 0, 'y' => 0]])
+        ->and($read($zero['frame'])['diagnostics'])->toBe([])
+        ->and($read($zero['frame'], false)['diagnostics'])->toHaveCount(1);
+
+    // Reduced motion and the terminal arena never move the field, whatever the canvas draws.
+    $reduced = $read($samples[0]['frame'], reducedMotion: true);
+    $terminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL,
+        authoredFrame: $samples[0]['frame'], canvasGroups: true);
+    expect($reduced['canvas'])->not->toHaveKey('groups')
+        ->and($reduced['diagnostics'])->toBe([])
+        ->and($terminal['canvas'])->toBeNull()
+        ->and($terminal['diagnostics'])->toBe([]);
+});
+
+it('reads the canvas groups request from the host route, and composes them for that request alone', function () {
+    $root = fieldMotionProject();
+    $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
+    $request = static fn(string $method, array $params = []): array => $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params]));
+    $request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+    $index = array_find_key($request('database.records', ['category' => 'cutscenes/effect'])['result']['records'],
+        static fn(mixed $label): bool => str_contains(strval($label), 'quake-strike'));
+    $frame = (require fieldMotionPath($root))['tracks'][1]['keyframes'][0];
+    $preview = static fn(array $features): array => $request('cutscenes.effectBattlePreview',
+        ['index' => $index, 'frame' => 0, 'authoredFrame' => $frame['frame'], 'presentation' => 'graphical', ...$features])['result'];
+
+    expect(array_column($preview(['canvasGroups' => true])['canvas']['groups'], 'origin'))->toBe([$frame['payload']])
+        ->and($preview(['canvasGroups' => true])['diagnostics'])->toBe([]);
+
+    // Only a true flag asks for them: left out, false or another feature's flag leaves the field still.
+    foreach ([[], ['canvasGroups' => false], ['canvasGroups' => 'yes'], ['regionBudget' => true, 'imageRotation' => true]] as $features) {
+        $still = $preview($features);
+        expect($still['canvas'])->not->toHaveKey('groups')
+            ->and($still['diagnostics'])->toHaveCount(1);
+    }
+
+    // Another negotiated feature beside them keeps both.
+    $both = $preview(['canvasGroups' => true, 'regionBudget' => true]);
+    expect($both['canvas']['groups'])->toHaveCount(1)
+        ->and($both['diagnostics'])->toBe([]);
 });
 
 it('leaves a summon timeline holding the track as written while the Engine refuses it', function () {

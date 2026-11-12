@@ -3761,8 +3761,11 @@ presentation other than `graphical`, and a looping or battle-phase timeline,
 and nothing is written. The Terminal editor names the track, lists its samples
 in the Timeline pane as `field offset x, y`, and leaves them as written; its
 preview names the offset under **Not drawn here**. The GUI's battle preview
-draws the battlefield still on a moving frame, with the Engine's diagnostic
-that the motion is not applied.
+moves the battlefield by each enabled sample's offset where its canvas draws
+canvas groups. The editor session composes them only for a
+`cutscenes.effectBattlePreview` request whose `canvasGroups` is `true`; any
+other request draws the battlefield still on a moving frame, with the
+Engine's diagnostic that the motion is not applied.
 
 In either editor, a track whose type that editor does not offer keeps its
 type: choosing another is refused and nothing changes. Remove the track to

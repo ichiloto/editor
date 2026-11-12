@@ -241,19 +241,27 @@ final class EffectBattlePreview
     }
 
     /**
-     * One command frame as the battle draws it.
+     * One command frame as the battle draws it, composed with the drawing
+     * features asked for and no other. The Engine reads the region budget
+     * and canvas groups from the renderer session it composes for, so each
+     * is negotiated for this frame only when it is asked for: without
+     * canvas groups an authored whole-field motion leaves the battlefield
+     * still and the frame carries the Engine's diagnostic.
      *
      * @return array<string, mixed>
      * @throws InvalidArgumentException When the frame is outside the command.
      */
     public function readFrame(int $frame, bool $reducedMotion, bool $imageRotation = false, bool $coverageDabs = false,
-        bool $textureStrip = false, bool $regionBudget = false): array
+        bool $textureStrip = false, bool $regionBudget = false, bool $canvasGroups = false): array
     {
         $read = fn(): array => $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation, $coverageDabs, $textureStrip)->toArray();
+        $negotiated = array_keys(array_filter([
+            RendererSessionConfig::CANVAS_REGION_BUDGET => $regionBudget,
+            RendererSessionConfig::CANVAS_GROUPS => $canvasGroups,
+        ]));
 
-        return $regionBudget
-            ? PresentationSession::runForSession(static fn(string $capability): bool => $capability === RendererSessionConfig::CANVAS_REGION_BUDGET, $read)
-            : $read();
+        return $negotiated === [] ? $read()
+            : PresentationSession::runForSession(static fn(string $capability): bool => in_array($capability, $negotiated, true), $read);
     }
 
     public function getTotalFrames(bool $reducedMotion): int

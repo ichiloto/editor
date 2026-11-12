@@ -19,8 +19,10 @@
   whether it is enabled. `cutscenes.timeline` lists the samples on the track's lane. The track is kept as written by
   every other edit and save, fractional offsets and comments included, and each save compiles through the Engine. The
   Terminal editor names the track and lists its samples in the Timeline pane as `field offset x, y`; its preview names
-  the offset under **Not drawn here**. The battle preview draws the battlefield still on a moving frame and carries
-  the Engine's diagnostic.
+  the offset under **Not drawn here**. `cutscenes.effectBattlePreview` takes an optional `canvasGroups` flag: when it
+  is `true` the frame is composed with `canvas_groups` negotiated, so a moving frame's canvas holds the battlefield in
+  one group at the sample's offset. Without it the battle preview draws the battlefield still on a moving frame and
+  carries the Engine's diagnostic.
 
 - Play statistic conditions (Engine 09b3b8f): the shared condition line, the condition grammar and both condition
   editors author `play_statistic:<counter>:<op>:<count>` (or `play_statistic:<counter>:<count>`, keeping an absent

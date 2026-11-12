@@ -319,11 +319,19 @@ overlap, the `graphical` presentation and the fixed, once-playing battle
 timeline. Remaining for the GUI editor:
 - Visual controls for the samples, such as placing an offset on the battle
   preview; today each value is typed in its row.
-- Showing the motion. The battle preview does not ask the Engine for
-  `canvas_groups`, so a moving frame draws the battlefield still and carries
-  the Engine's diagnostic. Painting canvas groups in the editor window and
-  negotiating them for the preview belong together; the still rasters already
-  draw groups.
+- Seeing the motion in the editor window. The negotiation is in place:
+  `cutscenes.effectBattlePreview` takes an optional `canvasGroups` flag beside
+  its other drawing features, and composes that frame with `canvas_groups`
+  negotiated only when the flag is `true`. The frame's canvas then holds the
+  arena, battlers and effects in one group at the sample's offset and carries
+  no diagnostic; a sample of zero is a group at the origin, and a disabled
+  sample, a frame outside the samples, reduced motion and the terminal arena
+  leave the canvas ungrouped. Without the flag a moving frame draws the
+  battlefield still and carries the Engine's diagnostic, as before. The
+  graphical editor sends the flag where the canvas it paints with draws
+  groups. The painted result has not been checked in a window. A summon's
+  battle preview takes no such flag: the Engine refuses the track in a summon
+  timeline.
 
 Battle effect orientation and weapon roles (Engine contract in progress,
 2026-10): a battle track may declare `facing` (`east` or `west`), the

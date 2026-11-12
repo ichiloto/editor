@@ -685,7 +685,8 @@ final class SessionHost
                 isset($params['targetIndex']) ? self::requireInt($params, 'targetIndex') : null,
                 ($params['coverageDabs'] ?? false) === true,
                 ($params['textureStrip'] ?? false) === true,
-                ($params['regionBudget'] ?? false) === true),
+                ($params['regionBudget'] ?? false) === true,
+                ($params['canvasGroups'] ?? false) === true),
             'cutscenes.battlePreview' => $session->readSummonBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
                 ($params['reducedMotion'] ?? false) === true,
                 EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
