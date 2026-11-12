@@ -6,19 +6,26 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Engine\Animations\ActionAnimationResolver;
 use Ichiloto\Engine\Animations\AnimationLibrary;
+use Ichiloto\Engine\Animations\SourceEffectAnchor;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Battle\Actions\CrisisSkillBattleAction;
 use Ichiloto\Engine\Battle\BattleCommandCatalog;
 use Ichiloto\Engine\Battle\BattleCommandType;
 use Ichiloto\Engine\Battle\BattlePacing;
 use Ichiloto\Engine\Battle\BattleTargetPolicy;
+use Ichiloto\Engine\Battle\Presentation\BattleCommandPlayback;
 use Ichiloto\Engine\Battle\Presentation\BattleCommandPreview;
 use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
 use Ichiloto\Engine\Battle\Presentation\BattlePoseRole;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\GraphicalBattlePresentation;
 use Ichiloto\Engine\Core\GameState;
 use Ichiloto\Engine\Entities\Character;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Rendering\Presentation\PresentationSession;
+use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 use Ichiloto\Engine\Scenes\Battle\BattleConfig;
 use InvalidArgumentException;
 
@@ -26,7 +33,7 @@ use InvalidArgumentException;
  * A battle effect as a battle plays it, frame by frame, for its editors, in
  * one presentation: in an action that actually plays it, found by the
  * Engine's own animation selection among what the battle test party can do
- * (its attacks, skills, magic and items; a summon is previewed as a summon),
+ * (its attacks, skills, magic, items and authored Super Move techniques; a summon is previewed as a summon),
  * with the animation's other effect beside it, the action's pose and the
  * project's battle pacing. Nothing is invented: an effect no such action
  * plays has no battle preview. Each frame comes from the production
@@ -42,7 +49,11 @@ final class EffectBattlePreview
      * @param list<array{caster: string, action: string, lane: string}> $contexts Every action of the party that plays it.
      * @param int $binding Which of them is shown.
      * @param list<string> $targets
+     * @param list<array{name: string, side: string, position: array{row: string, lane: int}|null}> $targetOptions
      * @param array<string, array{start: int, length: int}> $phases
+     * @param int $laneFrames How many frames the effect itself has, in the lane it plays in.
+     * @param GraphicalBattlePresentation|null $graphical The graphical battle the command plays in; null in the Terminal.
+     * @param list<\Ichiloto\Engine\Entities\Interfaces\CharacterInterface> $targetBattlers The selected targets.
      */
     private function __construct(
         private readonly BattleCommandPreview $preview,
@@ -52,7 +63,15 @@ final class EffectBattlePreview
         public readonly int $binding,
         public readonly string $caster,
         public readonly array $targets,
+        public readonly array $targetOptions,
+        public readonly ?int $targetIndex,
         public readonly array $phases,
+        public readonly SourceEffectAnchor $sourceEffectAnchor,
+        private readonly int $laneFrames,
+        private readonly ?GraphicalBattlePresentation $graphical,
+        private readonly Character $casterBattler,
+        private readonly array $targetBattlers,
+        private readonly BattlePoseRole $role,
     ) {
     }
 
@@ -73,6 +92,8 @@ final class EffectBattlePreview
         EffectPresentation $presentation,
         callable $compile,
         int $binding = 0,
+        bool $reducedMotion = false,
+        ?int $targetIndex = null,
     ): self {
         $state = new GameState();
         $found = [];
@@ -84,9 +105,16 @@ final class EffectBattlePreview
             foreach ([BattleCommandType::ATTACK, BattleCommandType::SKILL, BattleCommandType::MAGIC, BattleCommandType::ITEM] as $type) {
                 foreach (BattleCommandCatalog::buildOptions($caster, $battle->party, $type->label(), [], $state) as $option) {
                     // A summon's choreography is previewed as the summon, not through an animation.
-                    if (! $skills->isSummonAction($option->action->name)) {
+                    if (! $option->action instanceof CrisisSkillBattleAction && ! $skills->isSummonAction($option->action->name)) {
                         $candidates[] = $option->action;
                     }
+                }
+            }
+            // Preview the actor's authored forms without changing their health, states or world flags.
+            $superMove = $caster->crisisAbility;
+            if ($superMove !== null && $caster->battleCommandLoadout?->allowsCommand(BattleCommandType::ATTACK) !== false) {
+                foreach ($superMove->getVariantSkills($skills) as $skill) {
+                    $candidates[] = new CrisisSkillBattleAction($skill, $superMove, $caster->actorId);
                 }
             }
             foreach (ActionAnimationResolver::findEffectBindings($effectId, $animations, $caster, $candidates) as $match) {
@@ -105,25 +133,111 @@ final class EffectBattlePreview
         $target = $animation->targetEffect === null ? null : $compile($animation->targetEffect, $presentation);
         $terminalTarget = $presentation === EffectPresentation::GRAPHICAL && $target !== null && ! $target->hasTerminalContent
             ? $compile($animation->targetEffect, EffectPresentation::TERMINAL) : null;
-        // The action's own binding sizes the target effect, so each grade previews at its authored scale.
-        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
-            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action));
-        $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $battle->partyRoster->battlers, $battle->troop->members->toArray());
+        // The action's own binding sizes the target effect, so each grade previews at its authored scale. A graphical
+        // battle starts the caster effect where the animation anchors it, as the battle does; the terminal keeps its
+        // own source phase. The command's own target boundary then drives the pose's impact entry too.
+        $anchor = $presentation === EffectPresentation::GRAPHICAL ? $animation->sourceEffectAnchor : SourceEffectAnchor::SOURCE;
+        $role = BattlePoseRole::getForAction($action);
+        // The same stable actor binding used by production supplies the complete post-impact recovery.
+        $poses = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null && $catalog->getArenaFor($battle) !== null
+            ? ($catalog->actorPoses[$caster->actorId] ?? null) : null;
+        $pose = $poses?->getPose($role);
+        $allies = $battle->partyRoster->battlers;
+        $opponents = $battle->troop->members->toArray();
+        $selectable = $action->targetScope->number === ItemScopeNumber::ONE
+            ? BattleTargetPolicy::getEligibleTargets($action->targetScope, $caster, $allies, $opponents, $battle->formation, $action->targeting)
+            : [];
+        if ($targetIndex !== null && !isset($selectable[$targetIndex])) {
+            throw new InvalidArgumentException('Choose a target from the current action and formation.');
+        }
+        $targetIndex ??= $selectable === [] ? null : 0;
+        $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $allies, $opponents,
+            $targetIndex === null ? [] : [$selectable[$targetIndex]], formation: $battle->formation, targeting: $action->targeting);
         if ($targets === []) {
             throw new InvalidArgumentException(sprintf('%s has no one to act on in the battle test.', $action->name));
         }
 
+        $graphical = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null
+            ? GraphicalBattlePresentation::prepare($battle, $catalog, $assetRoot) : null;
+        $travel = !$reducedMotion && $animation->movement->usesTargetRoute()
+            ? $graphical?->planActionTravel($caster, $targets, $action, animationId: $animation->id, movement: $animation->movement) : null;
+        $actionPoseOverride = $poses?->getAnimationPose($animation->id);
+        $flashStep = $travel?->isPossible ? $animation->flashStep : null;
+        if ($flashStep !== null && !$flashStep->supportsPose($actionPoseOverride)) {
+            throw new InvalidArgumentException('Flash step requires action transit cells and a planted first frame.');
+        }
+        $movementPoses = !$reducedMotion && $flashStep === null;
+        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
+            targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor, actionPose: $pose,
+            movementPoses: $movementPoses && ($poses?->getPose(BattlePoseRole::MOVE) !== null
+                || $poses?->getPose(BattlePoseRole::RETURNING) !== null), travel: $travel,
+            movePose: $movementPoses ? $poses?->getPose(BattlePoseRole::MOVE) : null,
+            returnPose: $movementPoses ? $poses?->getPose(BattlePoseRole::RETURNING) : null,
+            projectedRange: isset($target->defaults['rangeTiming']) ? $graphical?->measureActionRange($caster, $targets) : null,
+            actionPoseOverride: $actionPoseOverride, flashStep: $flashStep, targetCount: count($targets));
+
         return new self(
-            new BattleCommandPreview($battle, $plan, $caster, $targets, BattlePoseRole::getForAction($action),
-                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation),
+            new BattleCommandPreview($battle, $plan, $caster, $targets, $role,
+                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation, $graphical),
             $plan,
             $lane,
             array_map(static fn(array $context): array => ['caster' => $context['caster']->name, 'action' => $context['action']->name, 'lane' => $context['lane']], $found),
             $binding,
             $caster->name,
             array_map(static fn($target): string => $target->name, $targets),
+            array_map(static fn($target): array => [
+                'name' => $target->name,
+                'side' => in_array($target, $allies, true) ? 'ally' : 'enemy',
+                'position' => $battle->formation->getPosition($target)?->toArray(),
+            ], $selectable),
+            $targetIndex,
             $plan->phases,
+            $anchor,
+            intval(($lane === 'source' ? $source : $target)?->defaults['lengthFrames'] ?? 0),
+            $graphical,
+            $caster,
+            $targets,
+            $role,
         );
+    }
+
+    /**
+     * The route each straight caster flight of the command takes at release,
+     * as the graphical battle captures it: the caster's pose point at its
+     * detach frame, the selected targets' projected bodies and the Engine's
+     * {@see \Ichiloto\Engine\Battle\Presentation\BattleStraightShot::planRoute()}. Nothing is drawn.
+     *
+     * @return list<array{track: string, fallback: ?string, failure: ?string}> Per track of this effect, by its
+     *   authored id: the fallback policy the route used (null for direct contact), or why the battle could not plan it.
+     */
+    public function findStraightFlightRoutes(): array
+    {
+        if ($this->graphical === null) {
+            return [];
+        }
+        $routes = [];
+        foreach ($this->plan->timeline->cueSchedule as $cue) {
+            $payload = $cue['payload'] ?? [];
+            // The command names each lane's tracks by lane; only this effect's own lane is reported.
+            $prefix = $this->lane . '-';
+            if ($cue['type'] !== 'commandCapturePosePoint' || ($payload['anchor'] ?? null) !== 'caster'
+                || ($payload['route'] ?? null) !== \Ichiloto\Engine\Animations\Timelines\EffectFlightRoute::STRAIGHT->value
+                || ! str_starts_with(strval($payload['trackId'] ?? ''), $prefix)) {
+                continue;
+            }
+            // The production playback captures the route when it crosses the cue, exactly as the battle does.
+            $playback = new BattleCommandPlayback($this->plan, $this->casterBattler, $this->targetBattlers, $this->role,
+                static function (): void {}, static function (): void {});
+            $this->graphical->bindCommandPosePoints($playback, false, 0);
+            $playback->begin();
+            $playback->update(($cue['frame'] + 1) / BattleCommandTimeline::FPS);
+            $point = $playback->getDetachedPosePoint($payload['trackId'], $this->casterBattler);
+            $routes[] = ['track' => substr($payload['trackId'], strlen($prefix)), 'fallback' => isset($point['path']) ? ($point['fallback'] ?? null)?->value : null,
+                'failure' => isset($point['path']) ? null
+                    : ($playback->presentationFailure?->getMessage() ?? 'The battle did not capture the flight.')];
+        }
+
+        return $routes;
     }
 
     /**
@@ -132,20 +246,40 @@ final class EffectBattlePreview
      * @return array<string, mixed>
      * @throws InvalidArgumentException When the frame is outside the command.
      */
-    public function readFrame(int $frame, bool $reducedMotion): array
+    public function readFrame(int $frame, bool $reducedMotion, bool $imageRotation = false, bool $coverageDabs = false,
+        bool $textureStrip = false, bool $regionBudget = false): array
     {
-        return $this->preview->getFrameAtIndex($frame, $reducedMotion)->toArray();
+        $read = fn(): array => $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation, $coverageDabs, $textureStrip)->toArray();
+
+        return $regionBudget
+            ? PresentationSession::runForSession(static fn(string $capability): bool => $capability === RendererSessionConfig::CANVAS_REGION_BUDGET, $read)
+            : $read();
+    }
+
+    public function getTotalFrames(bool $reducedMotion): int
+    {
+        return $this->preview->getTotalFrames($reducedMotion);
+    }
+
+    public function getPlaybackPhases(bool $reducedMotion): array
+    {
+        return $this->preview->getPlaybackPhases($reducedMotion);
     }
 
     /**
-     * The command frame that draws one of the effect's own frames, in the lane it plays in; a frame
-     * before it maps to its first, one after it to its last.
+     * The command frame that draws one of the effect's own frames, in the lane it plays in, wherever the
+     * command anchors that lane; a frame before it maps to its first, one after it to its last.
      */
-    public function findCommandFrame(int $authoredFrame): int
+    public function findCommandFrame(int $authoredFrame, bool $reducedMotion = false): int
     {
-        $phase = $this->phases[$this->lane];
-        $frame = $this->plan->getCommandFrameForAuthoredFrame($this->lane, max(0, $authoredFrame));
+        // A frame the battle's pacing leaves no time for is drawn where the nearest earlier one is.
+        for ($frame = max(0, min($authoredFrame, $this->laneFrames - 1)); $frame >= 0; $frame--) {
+            $command = $this->plan->getCommandFrameForAuthoredFrame($this->lane, $frame);
+            if ($command !== null) {
+                return $this->preview->getPlaybackFrame($command, $reducedMotion);
+            }
+        }
 
-        return $frame ?? ($authoredFrame <= 0 ? $phase['start'] : $phase['start'] + $phase['length'] - 1);
+        throw new InvalidArgumentException(sprintf('The %s effect draws no frame in this command.', $this->lane));
     }
 }

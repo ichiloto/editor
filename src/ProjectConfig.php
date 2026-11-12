@@ -6,6 +6,8 @@ namespace Ichiloto\Editor;
 
 use Ichiloto\Engine\Localization\Vocabulary;
 
+use Ichiloto\Editor\Database\BattleConditionEffectFields;
+use Ichiloto\Editor\Database\BattleConditionGroup;
 use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Engine\Audio\AudioManager;
 use Ichiloto\Engine\Audio\Enumerations\AudioBus;
@@ -15,6 +17,7 @@ use Ichiloto\Engine\Battle\Enumerations\BattleActionCategory;
 use Ichiloto\Engine\Battle\Enumerations\BattlePace;
 use Ichiloto\Engine\Localization\EngineMessageTerms;
 use Ichiloto\Engine\Field\PlayerDash;
+use Ichiloto\Engine\Progression\TutorialDirector;
 use Ichiloto\Engine\Rendering\FieldViewport;
 
 /** One source owner for config.php, shared by Terms and Configuration. */
@@ -25,15 +28,20 @@ final class ProjectConfig extends ProjectSettingsFile
     public const string INN_PRESENTATION = 'graphics.inn.presentation';
     /** The event script a save point runs, else the Engine's save point notice (SaveFeatures). */
     public const string SAVE_POINT_SCRIPT = 'save.point_script';
+    /** The most save points one map holds, 0 for no limit; validation reports a map with more (SavePointLimitCheck). */
+    public const string SAVE_POINTS_PER_MAP = 'save.points_per_map';
+    public const int DEFAULT_SAVE_POINTS_PER_MAP = 1;
     /** Always Dash's first value; the player changes it in Options and Config (PlayerDash). */
     public const string ALWAYS_DASH = PlayerDash::CONFIG_ALWAYS_DASH;
+    /** Whether tutorials start on their own when their trigger first holds; the player changes it in Config (TutorialDirector). */
+    public const string TUTORIAL_PROMPTS = TutorialDirector::CONFIG_AUTOMATIC_PROMPTS;
 
     /**
      * Settings the engine reads with a default when the file leaves them
      * out, by path, with that default.
      */
     private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM, self::INN_PRESENTATION => null,
-        self::SAVE_POINT_SCRIPT => null, self::ALWAYS_DASH => false];
+        self::SAVE_POINT_SCRIPT => null, self::ALWAYS_DASH => false, self::TUTORIAL_PROMPTS => true];
 
     /**
      * Settings that name another resource, by path, with the reference kind
@@ -85,6 +93,13 @@ final class ProjectConfig extends ProjectSettingsFile
     protected function listEngineSettings(): array
     {
         $settings = array_map(static fn(mixed $default): array => ['default' => $default], self::ENGINE_DEFAULTS);
+        // An authoring rule rather than a runtime one: the Engine plays any number, and validation holds the project to it.
+        $settings[self::SAVE_POINTS_PER_MAP] = ['default' => self::DEFAULT_SAVE_POINTS_PER_MAP,
+            'description' => 'The most save points one map holds; validation reports a map with more. 0 allows any number.'];
+        // The effects battle conditions play are offered as groups even where the project binds none.
+        foreach (BattleConditionGroup::cases() as $group) {
+            $settings[$group->getConfigPath()] = ['default' => null];
+        }
         // The volumes the game starts at: the master volume, and beneath it each bus's (Music, Sound Effects, Voice).
         // The player changes them in Options and Config; their choices stay in player settings.
         $settings[AudioManager::CONFIG_MASTER_VOLUME] = ['default' => AudioManager::DEFAULT_MASTER_VOLUME];
@@ -132,8 +147,9 @@ final class ProjectConfig extends ProjectSettingsFile
      * Refuses a value the engine would not accept at a path, before anything
      * changes: a field zoom outside its range, a master, bus or system sound
      * volume outside its range, an inn presentation that is not a timeline
-     * identity, an Always Dash that is not true or false, or a battle
-     * announcement reading time outside its range.
+     * identity, an Always Dash that is not true or false, a battle
+     * announcement reading time outside its range, or battle condition
+     * effects the Engine's binding boundary refuses.
      *
      * @throws \InvalidArgumentException
      */
@@ -150,8 +166,14 @@ final class ProjectConfig extends ProjectSettingsFile
         if ($path === self::INN_PRESENTATION && $value !== null) {
             InnPresentationFields::assertValid($value, complete: $complete);
         }
+        if (($group = BattleConditionGroup::findByConfigPath($path)) !== null) {
+            BattleConditionEffectFields::assertShape($group, $value, rtrim($this->projectRoot, '/') . '/assets', $complete);
+        }
         if ($path === self::ALWAYS_DASH && ! is_bool($value)) {
             throw new \InvalidArgumentException('Always Dash must be true or false.');
+        }
+        if ($path === self::TUTORIAL_PROMPTS && ! is_bool($value)) {
+            throw new \InvalidArgumentException('Tutorial prompts must be true or false.');
         }
         if (self::isAnnouncementSeconds($path) && (! is_int($value) && ! is_float($value) || ! is_finite((float) $value)
             || $value < BattlePacing::MIN_ANNOUNCEMENT_SECONDS || $value > BattlePacing::MAX_ANNOUNCEMENT_SECONDS)) {
@@ -175,25 +197,47 @@ final class ProjectConfig extends ProjectSettingsFile
             || array_any(SystemSound::cases(), static fn(SystemSound $sound): bool => $path === $sound->getVolumeConfigPath());
     }
 
-    /** The inn's rest presentation is one setting, a whole timeline binding. */
+    /** The inn's rest presentation and each group of battle condition effects are one setting, a whole binding. */
     protected function isWholeValue(string $path): bool
     {
-        return $path === self::INN_PRESENTATION;
+        return $path === self::INN_PRESENTATION || BattleConditionGroup::findByConfigPath($path) !== null;
+    }
+
+    /** Removing a group's last battle condition effect removes the group, as a project without any leaves it out. */
+    protected function isRemovedWhenEmpty(string $path): bool
+    {
+        return BattleConditionGroup::findByConfigPath($path) !== null;
     }
 
     /** One picker key replacement keeps the binding's authored comments and value span. */
     protected function listKeyRenames(string $path, mixed $old, mixed $new): array
     {
-        if (! is_array($old) || ! is_array($new) || ($old['treatment'] ?? null) !== 'leader' || ($new['treatment'] ?? null) !== 'leader'
-            || ! is_array($old['leaders'] ?? null) || ! is_array($new['leaders'] ?? null)) { return []; }
-        $before = array_keys($old['leaders']);
-        $after = array_keys($new['leaders']);
+        if (BattleConditionGroup::findByConfigPath($path) !== null) {
+            return self::listMapKeyRenames(explode('.', $path), $old, $new);
+        }
+        if (! is_array($old) || ! is_array($new) || ($old['treatment'] ?? null) !== 'leader' || ($new['treatment'] ?? null) !== 'leader') { return []; }
+
+        return self::listMapKeyRenames(['graphics', 'inn', 'presentation', 'leaders'], $old['leaders'] ?? null, $new['leaders'] ?? null);
+    }
+
+    /**
+     * The keys of a map a whole-value edit renames in place: entries whose key alone changed, position by
+     * position, to a key the map did not hold. Any other change is a rewrite.
+     *
+     * @param list<string> $at Where the map is in the file.
+     * @return list<array{path: list<string>, key: string}>
+     */
+    private static function listMapKeyRenames(array $at, mixed $old, mixed $new): array
+    {
+        if (! is_array($old) || ! is_array($new)) { return []; }
+        $before = array_keys($old);
+        $after = array_keys($new);
         if (count($before) !== count($after)) { return []; }
         $renames = [];
         foreach ($before as $index => $key) {
             if ($key === $after[$index]) { continue; }
-            if (array_key_exists($key, $new['leaders']) || array_key_exists($after[$index], $old['leaders'])) { return []; }
-            $renames[] = ['path' => ['graphics', 'inn', 'presentation', 'leaders', $key], 'key' => $after[$index]];
+            if (array_key_exists($key, $new) || array_key_exists($after[$index], $old)) { return []; }
+            $renames[] = ['path' => [...$at, $key], 'key' => $after[$index]];
         }
         return $renames;
     }

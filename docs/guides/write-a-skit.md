@@ -30,6 +30,8 @@ A new file appears with one placeholder beat.
 | `Where (map id)` | Restricts the skit to one map; empty means anywhere |
 | `Conditions` | A condition line gating availability |
 | `Speed (chars/sec)` | Typing speed; leave empty for the project default |
+| `Trigger` | `prompt` for a skit the field prompt offers (the default), `script` for one only a story script plays |
+| `Open Sound`, `Close Sound` | Optional sound effects played as the skit opens and closes, picked from the project's SFX |
 
 `Where` takes a map id like `happyville/town-center` — the slash-separated id,
 not a filename — and is matched case-insensitively.
@@ -61,6 +63,15 @@ Each beat is one dialogue box: the speaker becomes its title, the text its body.
 Current limit: beats support `speaker` and `text` only. The compact skit overlay
 and per-beat emotes described in the engine roadmap are not implemented, so
 beats render through the standard dialogue box.
+
+## Play It From A Story Script
+
+A story conversation, such as a call that rings as a scene begins, sets
+`Trigger` to `script` so the field prompt never offers it. An event script or
+cinematic plays it with a `play_skit` command: set a command's `Type` to
+`play_skit` and pick the skit in its `Skit` row. The script waits until the
+conversation ends. The skit's `Where` and `Conditions` still apply, and a skit
+already seen completes at once, so a retried script does not replay it.
 
 ## Save
 

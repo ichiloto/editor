@@ -58,6 +58,26 @@ function applyResourceRow(EditorSession $session, int $index, string $field, str
     return $session->applyDatabaseRecord(FieldResourceFields::CATEGORY, $index, $row['key'], $value);
 }
 
+it('authors an explicit ground or overhead appearance with source-preserving save and exact undo', function () {
+    [$root, $path, $session] = createFieldResourceProject();
+    $before = file_get_contents($path);
+    expect(findResourceRow($session, 0, 'appearance')['options'])->toBe(['', 'ground', 'water', 'barrier', 'overhead']);
+    applyResourceRow($session, 0, 'appearance', 'ground');
+    $session->saveDatabase(FieldResourceFields::CATEGORY);
+    expect(FieldPresentationCatalog::load($root . '/assets')->getResource('oak')->appearance?->value)->toBe('ground')
+        ->and(file_get_contents($path))->toContain('// Authored cue bindings stay as written.');
+    $session->undo();
+    $session->saveDatabase(FieldResourceFields::CATEGORY);
+    expect(file_get_contents($path))->toBe($before);
+    $session->redo();
+    applyResourceRow($session, 0, 'appearance', 'overhead');
+    $session->saveDatabase(FieldResourceFields::CATEGORY);
+    expect(FieldPresentationCatalog::load($root . '/assets')->getResource('oak')->appearance?->value)->toBe('overhead');
+    applyResourceRow($session, 0, 'appearance', '');
+    $session->saveDatabase(FieldResourceFields::CATEGORY);
+    expect((require $path)['resources']['oak'])->not->toHaveKey('appearance');
+});
+
 it('offers field resources only to the graphical editor', function () {
     [, , $session] = createFieldResourceProject();
 

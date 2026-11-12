@@ -25,6 +25,8 @@ use Ichiloto\Engine\Entities\Skills\SkillDraft;
 use Ichiloto\Engine\Field\MapCategoryCatalog;
 use Ichiloto\Engine\Field\PlayerPresentationConfig;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePresentationCatalog;
+use Ichiloto\Engine\Messaging\Storybook\StorybookDefinition;
+use Ichiloto\Engine\Messaging\Storybook\StorybookLibrary;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeCatalog;
 use Ichiloto\Engine\Rendering\Presentation\Text\ProjectTextCatalog;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
@@ -480,6 +482,46 @@ final readonly class ProjectCatalogs
 
             return $library->compile($id, $current['payload'], $forBattle, $presentation, $forStage);
         });
+    }
+
+    /**
+     * An effect timeline as a battle condition plays it: compiled for battle as the Cutscenes workspace holds it,
+     * unsaved edits included, then checked by the Engine's rule for the group ({@see BattleConditionGroup}).
+     *
+     * @throws InvalidArgumentException With the Engine's reason when it is missing or refused.
+     */
+    public function loadConditionTimeline(string $id, EffectPresentation $presentation, BattleConditionGroup $group): CompiledEffectTimeline
+    {
+        $timeline = $this->loadEffectTimeline($id, true, $presentation);
+        $group->validateTimeline($timeline);
+
+        return $timeline;
+    }
+
+    /**
+     * The id of every storybook a `play_storybook` command may select, as the
+     * Engine's library discovers them under `assets/Data/Storybooks`, in id
+     * order. Discovery evaluates no source; {@see loadStorybook()} does.
+     *
+     * @return list<string>
+     */
+    public function listStorybookIds(): array
+    {
+        return new StorybookLibrary($this->getAssetRoot())->findStorybookIds();
+    }
+
+    /**
+     * A storybook as the Engine plays it, read from its current source.
+     *
+     * @throws \RuntimeException With the Engine's reason when it is missing or refused.
+     * @throws InvalidArgumentException When the id is not a stable storybook id.
+     */
+    public function loadStorybook(string $id): StorybookDefinition
+    {
+        $library = new StorybookLibrary($this->getAssetRoot());
+
+        return ProjectDirectoryContext::run($this->workspace->projectRoot,
+            static fn(): StorybookDefinition => $library->load($id));
     }
 
     /**

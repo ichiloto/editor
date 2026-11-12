@@ -30,6 +30,24 @@ function npcPageProject(array $event = ['class' => 'Ichiloto\\Engine\\Events\\Tr
     return $root;
 }
 
+it('retains a zero-distance NPC cue through save and clears range back to its unlimited default', function () {
+    $root = npcPageProject();
+    $session = EditorSession::open($root);
+    $apply = static function (string $field, mixed $value) use ($session): void {
+        $view = $session->readNpc('test-map', 0);
+        $session->applyNpc('test-map', $session->readMap('test-map')['revision'], 0, npcSessionRow($view, $field)['key'], $value);
+    };
+    $apply('variant0Cuesymbol', '!');
+    $apply('variant0CuemaxDistance', '0');
+    $session->saveMap('test-map');
+    $entry = (require $root . '/assets/Maps/test-map/test-map.data.php')['npcs'][0];
+    expect(NpcPages::fromEntry($entry)->pages[0]->cue?->maxDistance)->toBe(0);
+    $apply('variant0CuemaxDistance', '');
+    $session->saveMap('test-map');
+    $entry = (require $root . '/assets/Maps/test-map/test-map.data.php')['npcs'][0];
+    expect(NpcPages::fromEntry($entry)->pages[0]->cue?->maxDistance)->toBeNull();
+});
+
 it('authors a story page that runs an event script once with its own cue, and the Engine reads it back as authored', function () {
     $root = npcPageProject();
     $session = EditorSession::open($root);

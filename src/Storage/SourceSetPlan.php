@@ -21,16 +21,20 @@ use Throwable;
 final class SourceSetPlan
 {
     private bool $applied = false;
+    /** @var list<string> Directories this installation created, parents first. */
+    private array $createdFolders = [];
 
     /**
      * @param string $root The project root.
      * @param array<string, string> $watched Every source the plan read, by path.
      * @param array<string, string|null> $originals The bytes of each changed file, null for a
      * file the plan creates: it must not exist until applied, and reverting removes it again.
-     * @param array<string, string> $proposals The planned bytes of each changed file.
+     * @param array<string, string|null> $proposals The planned bytes of each changed file, null for a file the
+     * plan removes: it must exist until applied, and reverting writes it back.
      * @param array<string, mixed> $beforeValues What each changed file reads back as now.
-     * @param array<string, mixed> $afterValues What each changed file must read back as once written.
-     * @param Closure(): list<string> $findWatchedPaths The paths of the file family the plan read, as they are on disk now.
+     * @param array<string, mixed> $afterValues What each changed file must read back as once written (null when removed).
+     * @param Closure(): list<string> $findWatchedPaths The paths of the file family the plan read, as they are on disk now
+     * (a file the plan removes belongs to it only while it exists).
      * @param Closure(string, string): mixed $readBack Reads a staged file (destination path, staged path) as a comparable value.
      * @param string $subject What the plan does, for refusals (an actor migration).
      * @param string $family The files it reads, for refusals (Project actor/reference files).
@@ -99,7 +103,7 @@ final class SourceSetPlan
     /** @return array<string, string|null> Null for a file the plan creates. */
     public function getOriginalSources(): array { return $this->originals; }
 
-    /** @return array<string, string> */
+    /** @return array<string, string|null> Null for a file the plan removes. */
     public function getProposedSources(): array { return $this->proposals; }
 
     /**
@@ -116,7 +120,7 @@ final class SourceSetPlan
     public function apply(): array
     {
         if (! $this->applied) {
-            $this->installSources($this->proposals, $this->afterValues);
+            $this->createdFolders = $this->installSources($this->proposals, $this->afterValues);
             $this->applied = true;
         }
         return $this->getChangedPaths();
@@ -136,9 +140,13 @@ final class SourceSetPlan
         }
         $this->assertSourcesUnchanged();
 
+        // Nothing is created until the set's transaction has staged these writes.
+        $findCreated = static fn(): array => [];
+
         return new PreparedSave(
             $label,
-            function (FileSetTransaction $transaction): void {
+            function (FileSetTransaction $transaction) use (&$findCreated): void {
+                $findCreated = $transaction->getCreatedFolders(...);
                 foreach ($this->watched as $path => $source) {
                     $transaction->expectSource($path, $source);
                 }
@@ -147,18 +155,27 @@ final class SourceSetPlan
                         // A file the plan creates must not exist until it does.
                         $transaction->expectSource($path, null);
                     }
-                    $transaction->write($path, $source);
+                    if ($source === null) {
+                        $transaction->remove($path);
+                    } else {
+                        $transaction->write($path, $source);
+                    }
                 }
             },
             function (array $staged): void {
                 foreach ($this->proposals as $path => $source) {
+                    if ($source === null) {
+                        continue;
+                    }
                     $value = ($this->readBack)($path, $staged[$path]);
                     if (serialize($value) !== serialize($this->afterValues[$path])) {
                         throw new RuntimeException("{$path} would not read back as the planned {$this->subject}; nothing was written.");
                     }
                 }
             },
-            function (): void {
+            function () use (&$findCreated): void {
+                $this->createdFolders = array_values(array_filter($findCreated(),
+                    fn(string $folder): bool => array_any(array_keys($this->proposals), static fn(string $path): bool => str_starts_with($path, $folder . '/'))));
                 $this->applied = true;
             },
         );
@@ -169,21 +186,23 @@ final class SourceSetPlan
         if ($this->applied) {
             $this->installSources($this->originals, $this->beforeValues);
             $this->applied = false;
-            // A folder only the plan's created file lived in goes with it.
-            foreach (array_keys(array_filter($this->originals, static fn(?string $source): bool => $source === null)) as $path) {
-                $folder = dirname($path);
-                if (is_dir($folder) && (scandir($folder) ?: []) === ['.', '..']) {
+            foreach (array_reverse($this->createdFolders) as $folder) {
+                if (!is_link($folder) && is_dir($folder) && (scandir($folder) ?: []) === ['.', '..']) {
                     rmdir($folder);
                 }
             }
+            $this->createdFolders = [];
         }
     }
 
-    /** @param array<string, string|null> $sources Null removes a file. */
-    private function installSources(array $sources, array $expectedValues): void
+    /**
+     * @param array<string, string|null> $sources Null removes a file.
+     * @return list<string> Directories created by the transaction, parents first.
+     */
+    private function installSources(array $sources, array $expectedValues): array
     {
         $this->assertSourcesUnchanged();
-        if ($sources === []) { return; }
+        if ($sources === []) { return []; }
         $transaction = new FileSetTransaction($this->root . '/assets');
         foreach ($sources as $path => $source) {
             if ($source === null) {
@@ -202,6 +221,8 @@ final class SourceSetPlan
                 }
             }
             $transaction->commit();
+
+            return $transaction->getCreatedFolders();
         } catch (Throwable $failure) {
             $transaction->rollBack();
             throw $failure;
@@ -219,13 +240,22 @@ final class SourceSetPlan
             }
         }
         foreach ($this->watched as $path => $source) {
-            $expected = $this->applied ? ($this->proposals[$path] ?? $source) : $source;
+            $expected = $this->applied && array_key_exists($path, $this->proposals) ? $this->proposals[$path] : $source;
+            if ($expected === null) {
+                // A file the applied plan removed must stay removed.
+                if (file_exists($path)) {
+                    throw new RuntimeException("{$path} appeared outside the {$this->subject}; reload and plan again.");
+                }
+                continue;
+            }
             if (! is_file($path) || file_get_contents($path) !== $expected) {
                 throw new RuntimeException("{$path} changed outside the {$this->subject}; reload and plan again.");
             }
         }
         $current = ($this->findWatchedPaths)();
-        $expected = array_keys($this->watched);
+        // A file of the family the applied plan removed is no longer one of it.
+        $expected = array_keys(array_filter($this->watched, fn(string $path): bool => ! $this->applied
+            || ! array_key_exists($path, $this->proposals) || $this->proposals[$path] !== null, ARRAY_FILTER_USE_KEY));
         sort($current, SORT_STRING);
         sort($expected, SORT_STRING);
         if ($current !== $expected) {

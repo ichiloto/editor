@@ -82,8 +82,17 @@ it('leaves collision alone for objects without a footprint and maps that resolve
     'an undeclared map' => [false, 'oak'],
 ]);
 
-it('writes the moved footprint to the map file when saved', function () {
+it('writes the moved footprint to the map file when saved', function (bool $packed) {
     $root = createTreeBrushProject();
+    if ($packed) {
+        $file = $root . '/assets/Maps/test-map/test-map.data.php';
+        $fixture = require $file;
+        $fixture['occupancy'] = ['packedRows' => array_map(
+            static fn(array $row): string => implode('', array_column($row, 'value')),
+            $fixture['occupancy'],
+        )];
+        file_put_contents($file, '<?php return ' . var_export($fixture, true) . ';');
+    }
     $session = EditorSession::open($root);
     createFootprintObject($session, 'oak-1', 3, 4, 'oak');
     $session->moveWorldObject('test-map', $session->readMap('test-map')['revision'], 'oak-1', 0, 1);
@@ -91,5 +100,6 @@ it('writes the moved footprint to the map file when saved', function () {
 
     $reopened = EditorSession::open($root);
     expect(readFootprintCell($reopened, 3, 4))->toBe(CollisionType::NONE->value)
-        ->and(readFootprintCell($reopened, 3, 5))->toBe(CollisionType::SOLID->value);
-});
+        ->and(readFootprintCell($reopened, 3, 5))->toBe(CollisionType::SOLID->value)
+        ->and(getPhysicalOccupancyMap($reopened)->hasMapDataField(['occupancy', 'packedRows']))->toBe($packed);
+})->with([false, true]);

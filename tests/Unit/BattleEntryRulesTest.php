@@ -919,3 +919,36 @@ it('encodes and decodes predicates through colons in identities', function (): v
         ->and(BattleEntryPredicateCodec::decodeAll('nonsense'))->toBe([])
         ->and(BattleEntryPredicateCodec::decodeAll('ghost:benched'))->toBe([]);
 });
+
+it('saves grouped battle entry conditions and reports invalid nested leaves', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        $database = loadRecordDatabase($root, 'battle_entry_rules');
+        $index = $database->addRecord();
+        $database->setField($index, 'id', 'grouped-entry');
+        $database->setField($index, 'actors', 'Kaelion:active');
+        $database->setField($index, 'effect0Actor', 'Kaelion');
+        $conditionLine = 'any(event:first_path; !any(switch:second_path; event:third_path)); event:ready';
+        $database->setField($index, 'conditions', $conditionLine);
+        $database->save();
+
+        $rules = require battleEntryRulesPath($root);
+        $reloaded = loadRecordDatabase($root, 'battle_entry_rules');
+        $fields = array_column($reloaded->getSettingsFields(0), 'value', 'field');
+
+        expect(BattleEntryRuleContract::problems($rules, 'the file'))->toBe([])
+            ->and($fields['conditions'])->toBe($conditionLine)
+            ->and(battleEntryIssues($root))->toBe([]);
+
+        $rules['rules'][0]['conditions'][0]['conditions'][1]['conditions'][0]['value'] = 'yes';
+        $rules['rules'][0]['conditions'][1]['name'] = '';
+        $problems = BattleEntryRuleContract::problems($rules, 'the file');
+
+        expect($problems)->toHaveCount(2)
+            ->and($problems[0])->toContain('[0].conditions[1].conditions[0] switch field "value"')
+            ->and($problems[1])->toContain('field "conditions"[1] field "name"');
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});

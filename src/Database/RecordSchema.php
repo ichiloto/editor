@@ -91,13 +91,32 @@ final readonly class RecordSchema
         public ?Closure $saveCheck = null,
         public bool $identityGiven = false,
         public ?Closure $commandListsFor = null,
-        /** @var Closure(array<string, mixed>): list<string>|null Selects the inline lists offered by this record's shape. */
+        /**
+         * @var Closure(array<string, mixed>): list<string>|null Selects the inline lists offered by this record's shape, by
+         *   prefix: lists offered by different shapes may hold the same payload key (each configuration binding's `value`).
+         */
         public ?Closure $subListsFor = null,
         /** Exclusive source owners refuse external edits rather than merging a stale snapshot. */
         public bool $requireUnchangedSource = false,
-        /** Normalize dependent fields on an edited record before accepting the draft. */
+        /**
+         * Normalize dependent fields on an edited record before accepting the draft: given the edited record, the
+         * field edited and the record before the edit.
+         *
+         * @var (Closure(array<string, mixed>, string, array<string, mixed>): array<string, mixed>)|null
+         */
         public ?Closure $prepareEdit = null,
+        /**
+         * An earlier project-relative file the category's records were kept in before the Engine moved them to
+         * `relativePath`. A project holding only that file is read from it, read-only, until it migrates; a
+         * project holding both is ambiguous to the Engine, so the category is read-only there too.
+         */
+        public ?string $legacyRelativePath = null,
+        /** Why a project still on `legacyRelativePath` cannot edit the category here, naming what moves it (no final full stop). */
+        public ?string $legacyReadOnlyReason = null,
     ) {
+        if (($legacyRelativePath === null) !== ($legacyReadOnlyReason === null)) {
+            throw new LogicException(sprintf('The %s category declares a legacy file only together with why it is read-only there.', $key));
+        }
         if ($projection instanceof WholeFileProjection) {
             // A field outside the keys the category owns would read blank and
             // its edits would never reach the file.
@@ -122,7 +141,7 @@ final readonly class RecordSchema
         $lists = $this->subList === null ? $this->subLists : [$this->subList, ...$this->subLists];
         if ($payload === null || $this->subListsFor === null) { return $lists; }
         $keys = ($this->subListsFor)((array) $payload);
-        return array_values(array_filter($lists, static fn(RecordSubList $list): bool => in_array($list->key, $keys, true)));
+        return array_values(array_filter($lists, static fn(RecordSubList $list): bool => in_array($list->prefix, $keys, true)));
     }
 
     /** The inline list held under a payload key; the record's own when the key is null. */
@@ -173,15 +192,47 @@ final readonly class RecordSchema
     }
 
     /**
-     * Returns the absolute path this category reads from.
+     * Returns the absolute path this category reads from: its current file,
+     * or its legacy file when the project holds only that one.
      *
      * @param string $projectRoot The project root.
      * @return string
      */
     public function resolvePath(string $projectRoot): string
     {
-        return rtrim($projectRoot, DIRECTORY_SEPARATOR)
-            . DIRECTORY_SEPARATOR
-            . str_replace('/', DIRECTORY_SEPARATOR, $this->relativePath);
+        return self::joinPath($projectRoot, $this->resolveRelativePath($projectRoot));
+    }
+
+    /** The project-relative file this category reads in a project, as {@see resolvePath()} chooses it. */
+    public function resolveRelativePath(string $projectRoot): string
+    {
+        $current = self::joinPath($projectRoot, $this->relativePath);
+
+        return $this->legacyRelativePath !== null && ! file_exists($current)
+            && is_file(self::joinPath($projectRoot, $this->legacyRelativePath))
+            ? $this->legacyRelativePath : $this->relativePath;
+    }
+
+    /**
+     * Why a project cannot write this category through its current file, or
+     * null when it can: it still keeps the records in the legacy file, or it
+     * holds both files, which the Engine refuses as ambiguous.
+     */
+    public function findLocationReadOnlyReason(string $projectRoot): ?string
+    {
+        if ($this->legacyRelativePath === null || ! is_file(self::joinPath($projectRoot, $this->legacyRelativePath))) {
+            return null;
+        }
+        if (! file_exists(self::joinPath($projectRoot, $this->relativePath))) {
+            return $this->legacyReadOnlyReason;
+        }
+
+        return sprintf('the project holds both %s and %s, and the game reads only one of them',
+            $this->relativePath, $this->legacyRelativePath);
+    }
+
+    private static function joinPath(string $projectRoot, string $relativePath): string
+    {
+        return rtrim($projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
     }
 }

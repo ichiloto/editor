@@ -39,6 +39,7 @@ use Ichiloto\Editor\Animations\AnimationConversionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ConditionEditor;
+use Ichiloto\Editor\Database\ConditionTypedPart;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
@@ -72,6 +73,8 @@ use Ichiloto\Editor\History\CommandHistory;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\PaintStrokeCommand;
 use Ichiloto\Editor\History\SourceSetCommand;
+use Ichiloto\Editor\History\SourceSetRequired;
+use Ichiloto\Editor\Database\SuperMoveMigration;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InspectorListEdit;
 use Ichiloto\Editor\Inspector\InspectorRefusal;
@@ -122,6 +125,7 @@ use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Entities\Skills\SkillRecord;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\LootType;
+use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
@@ -574,7 +578,8 @@ final class Editor
      * one; the only time an id is ever written after creation.
      */
     private const string NPC_ASSIGN_ID_FIELD = NpcInspector::ASSIGN_ID_FIELD;
-    private bool $isConditionNaming = false;
+    /** The condition part being typed, or null while the condition editor's keys move and choose. */
+    private ?ConditionTypedPart $conditionTypedPart = null;
     private string $conditionNameBuffer = '';
     /**
      * Legacy views over the inspector field editor; the hooks keep the many
@@ -1689,7 +1694,8 @@ final class Editor
             return;
         }
 
-        if (preg_match('/^\X$/u', $input) !== 1) {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes === false || count($graphemes) !== 1) {
             return;
         }
 
@@ -1837,11 +1843,16 @@ final class Editor
      */
     private function handleNormalModeTypedInput(string $input): void
     {
-        if (str_contains($input, "\033") || preg_match('/^\X/u', $input, $matches) !== 1) {
+        if (str_contains($input, "\033")) {
             return;
         }
 
-        $symbol = $matches[0];
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes === false || $graphemes === []) {
+            return;
+        }
+
+        $symbol = $graphemes[0];
 
         if ($symbol === "\n" || $symbol === "\r" || $symbol === "\t") {
             return;
@@ -3863,11 +3874,12 @@ final class Editor
             return;
         }
 
-        if (preg_match('/^\X/u', $input, $matches) !== 1) {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes === false || $graphemes === []) {
             return;
         }
 
-        $symbol = $matches[0];
+        $symbol = $graphemes[0];
 
         if ($symbol === "\n" || $symbol === "\r" || $symbol === "\t") {
             return;
@@ -5581,7 +5593,8 @@ final class Editor
             return;
         }
 
-        if (preg_match('/^\X$/u', $input) === 1 && $input !== "\n" && $input !== "\r") {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes !== false && count($graphemes) === 1 && $input !== "\n" && $input !== "\r") {
             $this->commandPalette->type($input);
             $this->renderOverlays();
         }
@@ -5609,6 +5622,7 @@ final class Editor
             new PaletteItem('Playtest Selected Map', 'Ctrl+T', fn() => $this->startPlaytest()),
             new PaletteItem('Reload Workspace', 'Ctrl+R', fn() => $this->requestReload()),
             new PaletteItem('Repair Actor Identities and References', '', fn() => $this->openActorReferenceMigration()),
+            new PaletteItem(SuperMoveMigration::LABEL, '', fn() => $this->openSuperMoveMigration()),
             new PaletteItem('Tool: Map Mode', 'm', function (): void {
                 $this->closeDatabaseIfOpen();
                 $this->setEditingMode(self::MODE_MAP);
@@ -5947,7 +5961,8 @@ final class Editor
             return;
         }
 
-        if (preg_match('/^\X$/u', $input) !== 1) {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes === false || count($graphemes) !== 1) {
             return;
         }
 
@@ -6789,7 +6804,7 @@ final class Editor
             return;
         }
 
-        $issues = MapValidator::validate($selectedMap, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
+        $issues = MapValidator::validate($selectedMap, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace), $this->workspace->config);
         $errors = MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::ERROR));
         $warnings = MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING));
         $step = null;
@@ -7082,7 +7097,8 @@ final class Editor
                 return true;
             }
 
-            if (preg_match('/^\X$/u', $input) === 1) {
+            $graphemes = TerminalText::splitGraphemes($input);
+            if ($graphemes !== false && count($graphemes) === 1) {
                 $this->dialogFilter->type($input);
                 $this->syncDialogSelectionToFilter();
                 $this->renderOverlays();
@@ -7540,6 +7556,12 @@ final class Editor
             if (($field['actorReferenceMigration'] ?? null) instanceof ActorIdentityMigrationPlan) {
                 if ($selectedEntry['value'] === 'preview') { return; }
                 $this->confirmActorReferenceMigration($field['actorReferenceMigration'], $selectedEntry['value'] === 'migrate');
+                return;
+            }
+
+            if (($field['superMoveMigration'] ?? null) instanceof SourceSetRequired) {
+                if ($selectedEntry['value'] === 'preview') { return; }
+                $this->confirmSuperMoveMigration($field['superMoveMigration'], $selectedEntry['value'] === 'migrate');
                 return;
             }
 
@@ -9080,7 +9102,7 @@ final class Editor
         // end of the record's own list.
         $fieldId = $this->getSelectedDatabaseFieldId();
         $item = $database->locateItem($recordIndex, [], $fieldId);
-        $subList = $database->schema->findInlineSubList($item?->listKey) ?? $subList;
+        $subList = $database->schema->findInlineSubList($item?->listKey, $database->getRecordByIndex($recordIndex)?->toArray()) ?? $subList;
         $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $item === null
             ? $authoring->addEntry($database, $recordIndex, [])
             : $authoring->addItem($database, $recordIndex, [], $fieldId));
@@ -9229,7 +9251,7 @@ final class Editor
         // last entry of the record's own list.
         $item = $database->locateItem($recordIndex, [], $this->getSelectedDatabaseFieldId());
         $listKey = $item?->kind === RecordItem::ENTRY ? $item->listKey : null;
-        $subList = $database->schema->findInlineSubList($listKey) ?? $subList;
+        $subList = $database->schema->findInlineSubList($listKey, $database->getRecordByIndex($recordIndex)?->toArray()) ?? $subList;
         $entryIndex = $item?->kind === RecordItem::ENTRY ? $item->entryIndex : $database->countSubItems($recordIndex) - 1;
 
         if ($entryIndex < 0) {
@@ -9609,6 +9631,13 @@ final class Editor
             return;
         }
 
+        // So is one chosen among what its own entry offers (a tutorial step's targets), filtered as typed.
+        if (($field['entryChoices'] ?? false) === true) {
+            $this->openEntryChoicePicker($field);
+
+            return;
+        }
+
         if (($field['conditions'] ?? false) === true) {
             $this->openConditionEditor($field);
 
@@ -9766,6 +9795,68 @@ final class Editor
         } catch (Throwable $failure) {
             $this->closeEventOptionDialog('');
             $this->setErrorStatus($failure, 'Actor reference migration');
+        }
+    }
+
+    /**
+     * Asks before moving the project to the current Super Move shape: the
+     * catalogue file and every actor's key together, written at once and
+     * undone as one step.
+     */
+    private function openSuperMoveMigration(): void
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) { return; }
+        if ($this->workspace->hasUnsavedChanges()) {
+            $this->setStatus('Save or undo pending edits before migrating to Super Moves. No files were changed.', StatusLevel::WARN);
+            return;
+        }
+        try {
+            $required = SuperMoveMigration::describe($this->projectRoot);
+            if ($required === null) {
+                $this->setStatus('This project already uses Super Moves; nothing needs moving.');
+                return;
+            }
+            $this->optionDialogField = ['superMoveMigration' => $required];
+            $this->eventOptionDialogMarker = null;
+            $this->eventOptionDialogPath = null;
+            $this->eventOptionDialogTitle = SuperMoveMigration::LABEL;
+            $this->eventOptionDialogEntries = [
+                ['label' => 'Cancel', 'value' => 'cancel', 'description' => 'Leave all files unchanged.'],
+                ['label' => sprintf('Write %d files now', count($required->paths)), 'value' => 'migrate',
+                    'description' => 'Writes now, not on Save. Ctrl+Z restores files.'],
+                ...array_map(static fn(string $path): array => [
+                    'label' => $path, 'value' => 'preview',
+                    'description' => 'Migration preview only. Select Write to apply all files.',
+                ], $required->paths),
+            ];
+            $this->selectedEventOptionIndex = 0;
+            $this->dialogFilter->clear();
+            $this->isEventOptionDialogOpen = true;
+            $this->statusMessage = $required->question;
+            $this->renderSelectionDependentArea();
+        } catch (Throwable $failure) {
+            $this->setErrorStatus($failure, 'Super Move migration');
+        }
+    }
+
+    private function confirmSuperMoveMigration(SourceSetRequired $required, bool $confirmed): void
+    {
+        if (! $confirmed || ! $this->workspace instanceof ProjectWorkspace) {
+            $this->closeEventOptionDialog('Super Move migration cancelled. No files were changed.');
+            return;
+        }
+        try {
+            $command = new SourceSetCommand($required->label, $required->subject, $required->plan, $this->workspace,
+                fn(): ?ProjectWorkspace => $this->workspace,
+                function (ProjectWorkspace $workspace): void { $this->workspace = $workspace; },
+            );
+            $command->execute();
+            $this->recordCommand($command);
+            $this->closeEventOptionDialog('Migrated to Super Moves. Ctrl+Z restores the original files.');
+            $this->requestFullRender();
+        } catch (Throwable $failure) {
+            $this->closeEventOptionDialog('');
+            $this->setErrorStatus($failure, 'Super Move migration');
         }
     }
 
@@ -10562,7 +10653,7 @@ final class Editor
      */
     private function handleConditionEditorInput(string $input): void
     {
-        if ($this->isConditionNaming) {
+        if ($this->conditionTypedPart !== null) {
             $this->handleConditionNameInput($input);
 
             return;
@@ -10594,6 +10685,7 @@ final class Editor
             $input === '!' => $this->conditionEditor->toggleNegate(),
             $input === 'n' => $this->beginConditionName(),
             $input === 'e' => $this->beginConditionMarker(),
+            $input === 'v' => $this->beginConditionValue(),
             default => null,
         };
 
@@ -10654,7 +10746,7 @@ final class Editor
         }
 
         if (! is_string($reference['category'])) {
-            $this->isConditionNaming = true;
+            $this->conditionTypedPart = ConditionTypedPart::NAME;
             $this->conditionNameBuffer = strval($condition['name'] ?? '');
             $this->statusMessage = sprintf('Naming the %s.', mb_strtolower($reference['label']));
 
@@ -10680,7 +10772,29 @@ final class Editor
     }
 
     /**
-     * Handles input while a condition's name is being typed.
+     * Starts typing the value the selected condition compares with: a
+     * variable's value or a play statistic's count.
+     *
+     * @return void
+     */
+    private function beginConditionValue(): void
+    {
+        $label = $this->conditionEditor->getValueLabel();
+        $condition = $this->conditionEditor->selected();
+
+        if ($label === null || $condition === null) {
+            $this->setStatus('This condition compares with no value; x steps what it carries.', StatusLevel::WARN);
+
+            return;
+        }
+
+        $this->conditionTypedPart = ConditionTypedPart::VALUE;
+        $this->conditionNameBuffer = is_scalar($condition['value'] ?? null) ? strval($condition['value']) : '';
+        $this->statusMessage = sprintf('Setting the %s.', mb_strtolower($label));
+    }
+
+    /**
+     * Handles input while a condition's name or value is being typed.
      *
      * @param string $input The raw input.
      * @return void
@@ -10688,17 +10802,29 @@ final class Editor
     private function handleConditionNameInput(string $input): void
     {
         if ($input === "\033" || $input === "\x1b") {
-            $this->isConditionNaming = false;
+            $this->statusMessage = $this->conditionTypedPart === ConditionTypedPart::VALUE ? 'Value unchanged.' : 'Name unchanged.';
+            $this->conditionTypedPart = null;
             $this->conditionNameBuffer = '';
-            $this->statusMessage = 'Name unchanged.';
             $this->renderDatabasePanes(['settings']);
 
             return;
         }
 
         if ($input === "\n" || $input === "\r") {
-            $this->conditionEditor->setName(trim($this->conditionNameBuffer));
-            $this->isConditionNaming = false;
+            if ($this->conditionTypedPart === ConditionTypedPart::VALUE) {
+                try {
+                    $this->conditionEditor->setValue($this->conditionNameBuffer);
+                } catch (InvalidArgumentException $refusal) {
+                    // The typed value stays in front of the author to correct.
+                    $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+                    $this->renderDatabasePanes(['settings']);
+
+                    return;
+                }
+            } else {
+                $this->conditionEditor->setName(trim($this->conditionNameBuffer));
+            }
+            $this->conditionTypedPart = null;
             $this->conditionNameBuffer = '';
             $this->statusMessage = 'Building conditions.';
             $this->renderDatabasePanes(['settings']);
@@ -10786,11 +10912,12 @@ final class Editor
     {
         $rows = $this->conditionEditor->rows();
 
-        if ($this->isConditionNaming) {
-            $reference = $this->conditionEditor->nameReference();
+        if ($this->conditionTypedPart !== null) {
+            $label = $this->conditionTypedPart === ConditionTypedPart::VALUE
+                ? $this->conditionEditor->getValueLabel() : $this->conditionEditor->nameReference()['label'] ?? null;
 
             return [
-                sprintf('%s: %s', $reference['label'] ?? 'Name', $this->conditionNameBuffer),
+                sprintf('%s: %s', $label ?? 'Name', $this->conditionNameBuffer),
                 '',
                 '  Enter to accept, Esc to leave it alone.',
             ];
@@ -10841,6 +10968,39 @@ final class Editor
         }
 
         return new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+    }
+
+    /**
+     * Opens the picker on a field chosen among what its own entry offers. Where the field may be left empty,
+     * its none row clears it.
+     *
+     * @param array<string, mixed> $field
+     */
+    private function openEntryChoicePicker(array $field): void
+    {
+        $label = (string) ($field['label'] ?? 'Choice');
+        $values = [];
+        $labels = [];
+        foreach (is_array($field['choices'] ?? null) ? $field['choices'] : [] as $choice) {
+            $value = is_array($choice) ? (string) ($choice['value'] ?? '') : '';
+            $values[] = $value === '' ? self::getEntryChoiceNoneLabel($field) : $value;
+            $labels[$value] = is_array($choice) ? (string) ($choice['label'] ?? $value) : $value;
+        }
+
+        if (! $this->referencePicker->open((string) ($field['field'] ?? ''), $label, $label, $values, (string) ($field['value'] ?? ''), $labels)) {
+            $this->setStatus(sprintf('%s offers nothing to choose here yet.', $label), StatusLevel::WARN);
+        } else {
+            $this->statusMessage = sprintf('Choose %s.', lcfirst($label));
+        }
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /** @param array<string, mixed> $field */
+    private static function getEntryChoiceNoneLabel(array $field): string
+    {
+        $none = array_find(is_array($field['choices'] ?? null) ? $field['choices'] : [], static fn(mixed $choice): bool => is_array($choice) && ($choice['value'] ?? null) === '');
+
+        return is_array($none) ? (string) ($none['label'] ?? '(None)') : '(None)';
     }
 
     private function openReferencePicker(array $field): bool
@@ -11094,10 +11254,11 @@ final class Editor
                 return;
             }
 
-            // The record layer reads the none row as clearing the reference.
-            $this->applyDatabaseFieldValueRecorded($field, $selected);
+            // The record layer reads the none row as clearing the reference; an entry choice's none row is its empty value.
+            $clears = ($field['entryChoices'] ?? false) === true && $selected === self::getEntryChoiceNoneLabel($field);
+            $this->applyDatabaseFieldValueRecorded($field, $clears ? '' : $selected);
             $this->setStatus(
-                $selected === (string) ($field['noneLabel'] ?? '(None)')
+                $clears || $selected === (string) ($field['noneLabel'] ?? '(None)')
                     ? sprintf('%s cleared.', $label)
                     : sprintf('%s set to %s.', $label, $selected),
                 StatusLevel::INFO,
@@ -13530,10 +13691,10 @@ final class Editor
                 ),
                 $this->conditionEditor->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
-                    'a:Add  d:Del  t:Type  n:Name  e:Event  x:Value  !:Not  Enter:Done  Esc:Cancel',
-                    'a:Add  d:Del  t:Type  n:Name  e:Event  x:Value  !:Not  Enter:Done',
-                    'a/d:Add/Del  t:Type  n:Name  e:Event  x:Value  !:Not',
-                    'a/d:Add/Del  t/n/x:Edit  ?:Help',
+                    'a:Add  d:Del  t:Type  n:Name  e:Event  x:Step  v:Value  !:Not  Enter:Done  Esc:Cancel',
+                    'a:Add  d:Del  t:Type  n:Name  e:Event  x:Step  v:Value  !:Not  Enter:Done',
+                    'a/d:Add/Del  t:Type  n:Name  e:Event  x:Step  v:Value  !:Not',
+                    'a/d:Add/Del  t/n/x/v:Edit  ?:Help',
                     '?:Help',
                 ),
                 $this->isDatabaseEditing => 'Enter:Apply  Esc:Cancel',

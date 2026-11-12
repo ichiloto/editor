@@ -37,7 +37,12 @@ final class PreviewSceneHost
     private readonly RendererClient $client;
     private readonly RendererPresentation $presentation;
     private readonly SceneFrameComposer $composer;
+    private readonly PreviewPresentationCapabilities $capabilities;
     private bool $ready = false;
+    /** The presentation this view attached to the scene, while attached. */
+    private ?ScenePresentationContext $context = null;
+    /** The presentation the scene had before this view attached its own. */
+    private ?ScenePresentationContext $replaced = null;
 
     /**
      * @param Closure(): void $renderTerminal Draws the scene's Terminal picture, as the preview's Terminal view draws it.
@@ -54,6 +59,7 @@ final class PreviewSceneHost
     ) {
         $this->relay = new PreviewRendererRelay();
         $this->client = new RendererClient($this->relay);
+        $this->capabilities = new PreviewPresentationCapabilities($this->client->supports(...));
         $this->client->start(new RendererSessionConfig('Cinematic preview', $assetRoot, $grid, RendererProtocolVersion::V2));
         $this->presentation = new RendererPresentation($this->client, $grid);
         $this->composer = new SceneFrameComposer($assetRoot);
@@ -94,7 +100,7 @@ final class PreviewSceneHost
         }
         if ($this->ready) {
             $this->attachContext();
-            $composition = $this->composer->composeFrame($this->scene, $this->grid, $this->client->supports(...),
+            $composition = $this->composer->composeFrame($this->scene, $this->grid, $this->capabilities->supportsFeature(...),
                 fn(array $excluded, array $worldLayers) => Console::capturePresentation($this->grid->columns, $this->grid->rows,
                     $this->renderTerminal, $excluded, $worldLayers,
                     $this->scene instanceof RetainedWorldProviderInterface && $this->scene->getPresentationWorld() !== null));
@@ -104,26 +110,35 @@ final class PreviewSceneHost
         return $this->relay->collect();
     }
 
-    /** Detaches the scene's presentation context and the dialogue's graphical paging, and closes the relay. */
+    /**
+     * Gives the scene back the presentation this view replaced, while its own
+     * is still the scene's, ends the dialogue's graphical paging, and closes
+     * the relay.
+     */
     public function dispose(): void
     {
-        if ($this->scene->getPresentationContext() !== null) {
-            $this->scene->setPresentationContext(null);
+        if ($this->context !== null && $this->scene->getPresentationContext() === $this->context) {
             if ($this->scene instanceof PreviewGameScene) {
-                $this->scene->installFieldEffects(EffectPresentation::TERMINAL);
+                $this->scene->restorePresentation($this->replaced);
+            } else {
+                $this->scene->setPresentationContext($this->replaced);
             }
         }
+        $this->context = null;
+        $this->replaced = null;
         $this->dialogue->pageLayout = null;
+        $this->dialogue->graphicalGrid = null;
         $this->client->shutdown();
     }
 
     /** Selects the graphical field for the composer, with the window's capabilities and the preview's playhead. */
     private function attachContext(): void
     {
-        if ($this->scene->getPresentationContext() !== null) {
+        if ($this->context !== null && $this->scene->getPresentationContext() === $this->context) {
             return;
         }
-        $this->scene->setPresentationContext(new ScenePresentationContext($this->grid, $this->client->supports(...),
+        $this->replaced = $this->scene->getPresentationContext();
+        $this->scene->setPresentationContext($this->context = new ScenePresentationContext($this->grid, $this->capabilities->supportsFeature(...),
             collectPresentations: fn(): array => $this->dialogue->getActivePresentations(), readTime: $this->readTime,
             assetRoot: $this->assetRoot,
             // Text such as a sign's label is laid out by this window, through this preview's own client: never the game's.
@@ -134,5 +149,6 @@ final class PreviewSceneHost
         }
         $width = $this->grid->columns * $this->grid->cellWidth;
         $this->dialogue->pageLayout = fn(string $speaker, $context, string $help) => $this->composer->getDialoguePageLayout($speaker, $context, $help, $width);
+        $this->dialogue->graphicalGrid = $this->grid;
     }
 }

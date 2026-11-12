@@ -6,20 +6,28 @@ namespace Ichiloto\Editor\Review;
 
 use GdImage;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSprite;
+use Ichiloto\Engine\Rendering\Presentation\PresentationSubjectOrder;
+use Ichiloto\Engine\Rendering\Presentation\PresentationTextLayer;
+use Ichiloto\Engine\Rendering\Presentation\PresentationWorldCanvas;
 use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 use InvalidArgumentException;
 use RuntimeException;
 
 /**
  * Draws a still of the graphical field into an image, as a renderer of the
- * Engine's retained world draws it: the world's layers and the sprites in one
- * paint order by layer, a world layer before a sprite of the same layer; each
+ * Engine's retained world draws it: the world's layers, the field's text
+ * layers, the sprites and the world canvases in one paint order by layer, a
+ * world layer first, then text, then sprites and canvases in their shared
+ * subject order ({@see PresentationSubjectOrder}); each
  * tile one field cell tall at its own width and offset, composed from its
  * sheet pieces; each glyph cell its background and glyph unless a tile that
  * covers its layer stands on it; each sprite's image pivot on its cell's
  * ground anchor, raised by its lift and turned by its quarter turns, a crop
- * filling its size and a whole image contained in it. Glyphs are drawn in a
- * monospaced system font fitted to the cell.
+ * filling its size and a whole image contained in it; each text cell its
+ * background, the field's own when it names none, and glyph; each world
+ * canvas's pivot on its cell's ground anchor, drawn by the shared canvas
+ * raster ({@see CanvasStillRaster}) and clipped to the canvas. Glyphs are
+ * drawn in a monospaced system font fitted to the cell.
  *
  * It reads only the presentation the Engine composed, never a map's source,
  * so what it draws is what the game would send a graphical renderer. Motion,
@@ -32,7 +40,8 @@ final class FieldStillRaster
     public const array CAPABILITIES = [
         RendererSessionConfig::FRAME_VIEWPORT, RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::SPRITE_PIVOT,
         RendererSessionConfig::SPRITE_LIFT, RendererSessionConfig::SPRITE_QUARTER_TURNS, RendererSessionConfig::TILE_COVERS,
-        RendererSessionConfig::TILE_SHADOWS,
+        RendererSessionConfig::TILE_SHADOWS, RendererSessionConfig::WORLD_CANVAS, RendererSessionConfig::GRAPHICAL_CANVAS,
+        RendererSessionConfig::CANVAS_CLIP_OPACITY, RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
     ];
 
     /** The most pixels one native-size image holds; a larger view is drawn scaled down, a block of cells at a time. */
@@ -72,12 +81,15 @@ final class FieldStillRaster
     /** @var array<string, GdImage|null> */
     private array $images = [];
     private ?float $fontSize = null;
+    /** Draws the world canvases, with the label rasters of the still being drawn. */
+    private readonly CanvasStillRaster $canvases;
 
     public function __construct(private readonly string $assetRoot, private readonly ?string $fontPath = null)
     {
         if (! extension_loaded('gd')) {
             throw new RuntimeException('Drawing a graphical still needs the PHP gd extension.');
         }
+        $this->canvases = new CanvasStillRaster($assetRoot, $fontPath);
     }
 
     /** Whether the raster draws a renderer feature. */
@@ -146,6 +158,7 @@ final class FieldStillRaster
         $this->cell = (int) $definition['cellWidth'];
         $this->tileset = $definition['tileset'] ?? null;
         $this->layers = $this->cells = $this->tiles = $this->covered = $this->sheets = $this->composed = [];
+        $this->canvases->setLabelRasters($still->labelRasters);
         foreach ($definition['layers'] as $index => $layer) {
             $this->layers[] = ['id' => $layer['id'], 'layer' => (int) $layer['layer'], 'kind' => $layer['kind'],
                 'covers' => $layer['coversLayerId'] ?? null, 'index' => $index];
@@ -189,12 +202,12 @@ final class FieldStillRaster
      */
     private function drawInto(GdImage $image, FieldStill $still, int $left, int $top, int $width, int $height): void
     {
-        $sprites = $still->sprites;
+        $plan = self::orderPlan($still);
         $next = 0;
         foreach ($this->layers as $layer) {
-            // A world layer paints before a sprite of the same layer.
-            for (; $next < count($sprites) && $sprites[$next]->layer < $layer['layer']; $next++) {
-                $this->drawSprite($image, $sprites[$next], $left, $top);
+            // A world layer paints before any field item of the same layer.
+            for (; $next < count($plan) && $plan[$next]->layer < $layer['layer']; $next++) {
+                $this->drawPlanItem($image, $plan[$next], $left, $top, $width, $height);
             }
             if ($layer['kind'] === 'tiles' || $layer['kind'] === 'shadows') {
                 $this->drawTileLayer($image, $layer['id'], $still->tileFrame, $left, $top, $width, $height);
@@ -202,9 +215,92 @@ final class FieldStillRaster
                 $this->drawGlyphLayer($image, $layer['id'], $left, $top, $width, $height);
             }
         }
-        for (; $next < count($sprites); $next++) {
-            $this->drawSprite($image, $sprites[$next], $left, $top);
+        for (; $next < count($plan); $next++) {
+            $this->drawPlanItem($image, $plan[$next], $left, $top, $width, $height);
         }
+    }
+
+    /**
+     * The field's items in paint order, as a graphical renderer plans its
+     * frame: by layer, a text layer before a sprite or canvas of the same
+     * layer, text in the frame's order and sprites and canvases in their
+     * shared subject order.
+     *
+     * @return list<PresentationTextLayer|PresentationSprite|PresentationWorldCanvas>
+     */
+    private static function orderPlan(FieldStill $still): array
+    {
+        $items = [];
+        foreach ($still->textLayers as $index => $layer) {
+            $items[] = [$layer->layer, 0, $index, $layer];
+        }
+        foreach (PresentationSubjectOrder::getOrderedSubjects($still->sprites, $still->worldCanvases) as $index => $subject) {
+            $items[] = [$subject->layer, 1, $index, $subject];
+        }
+        usort($items, static fn(array $a, array $b): int => array_slice($a, 0, 3) <=> array_slice($b, 0, 3));
+
+        return array_column($items, 3);
+    }
+
+    private function drawPlanItem(GdImage $image, PresentationTextLayer|PresentationSprite|PresentationWorldCanvas $item,
+        int $left, int $top, int $width, int $height): void
+    {
+        match (true) {
+            $item instanceof PresentationTextLayer => $this->drawTextLayer($image, $item, $left, $top, $width, $height),
+            $item instanceof PresentationSprite => $this->drawSprite($image, $item, $left, $top),
+            default => $this->drawWorldCanvas($image, $item, $left, $top, $width, $height),
+        };
+    }
+
+    /**
+     * Paints a field text layer one cell per character, as a graphical
+     * renderer paints one: every cell its background, the field's own when
+     * the run names none, and every glyph but a space.
+     */
+    private function drawTextLayer(GdImage $image, PresentationTextLayer $layer, int $left, int $top, int $width, int $height): void
+    {
+        [$firstColumn, $lastColumn, $firstRow, $lastRow] = $this->findCellRange($left, $top, $width, $height, 0);
+        foreach ($layer->runs as $run) {
+            if ($run->row < $firstRow || $run->row > $lastRow) {
+                continue;
+            }
+            foreach (mb_str_split($run->text, 1, 'UTF-8') as $offset => $glyph) {
+                $column = $run->column + $offset;
+                if ($column < $firstColumn || $column > $lastColumn) {
+                    continue;
+                }
+                $cellLeft = $column * $this->cell - $left;
+                $cellTop = $run->row * $this->cell - $top;
+                imagefilledrectangle($image, $cellLeft, $cellTop, $cellLeft + $this->cell - 1, $cellTop + $this->cell - 1,
+                    self::allocate($image, TerminalPalette::resolveRgb($run->background, TerminalPalette::DEFAULT_BACKGROUND)));
+                if ($glyph !== ' ') {
+                    $this->drawGlyph($image, $glyph, TerminalPalette::resolveRgb($run->foreground, TerminalPalette::DEFAULT_FOREGROUND),
+                        $cellLeft, $cellTop);
+                }
+            }
+        }
+    }
+
+    /**
+     * Paints a world canvas with its pivot on its cell's ground anchor, its
+     * children drawn by the shared canvas raster ({@see CanvasStillRaster})
+     * in the renderer's paint order and clipped to the canvas. A label shows
+     * the raster the graphical renderer made of it ({@see FieldStill::$labelRasters}).
+     */
+    private function drawWorldCanvas(GdImage $image, PresentationWorldCanvas $group, int $left, int $top, int $width, int $height): void
+    {
+        $canvas = $group->canvas;
+        $canvasLeft = (int) round(($group->x + 0.5) * $this->cell - $group->pivot->x * $canvas->width) - $left;
+        $canvasTop = (int) round(($group->y + 1) * $this->cell - $group->pivot->y * $canvas->height) - $top;
+        if ($canvasLeft >= $width || $canvasTop >= $height || $canvasLeft + $canvas->width <= 0 || $canvasTop + $canvas->height <= 0) {
+            return;
+        }
+        $surface = self::createCanvas($canvas->width, $canvas->height, transparent: true);
+        $this->canvases->drawCanvas($surface, $canvas, 'world canvas ' . $group->id);
+        foreach ($this->canvases->diagnostics as $message) {
+            $this->diagnose($message);
+        }
+        imagecopy($image, $surface, $canvasLeft, $canvasTop, 0, 0, $canvas->width, $canvas->height);
     }
 
     private function drawTileLayer(GdImage $image, string $layerId, int $tileFrame, int $left, int $top, int $width, int $height): void

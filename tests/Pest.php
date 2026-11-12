@@ -16,17 +16,26 @@ function gameSourceRoot(): ?string
         : null;
 }
 
+require_once __DIR__ . '/Support/TemporaryFixtures.php';
+
+// The Engine's and the Editor's diagnostics from this process go with its
+// fixtures, never into a log another run or the author keeps.
+Ichiloto\Engine\Util\Debug::configure(['log_directory' => TemporaryFixtures::getDiagnosticsDirectory()]);
+Ichiloto\Editor\Debug\Debug::setLogDirectory(TemporaryFixtures::getDiagnosticsDirectory());
+
 /**
- * Removes every throwaway project a test made, whether it passed or not.
+ * Removes every throwaway fixture a test made, whether it passed or not.
  *
  * A test that builds a project and then fails would otherwise leave it in
  * the temporary directory for good; over a full run those add up to
  * hundreds of copies. Cleaning here, after every test, is what keeps the
  * suite's footprint the size of one fixture rather than the size of the run.
+ * A fixture that cannot be removed fails the test that made it.
  */
 if (new ReflectionProperty(Pest\TestSuite::class, 'instance')->getValue() instanceof Pest\TestSuite) {
     // Only under the Pest runner. A script that loads this file for its
-    // autoloader alone -- a reproduction, a probe -- has no suite to hook.
+    // helpers -- a reproduction, a probe -- has its fixtures removed when it
+    // ends, by the registry that made them.
     uses()->afterEach(function (): void {
         cleanUpTemporaryProjects();
     })->in(__DIR__ . '/Unit');
@@ -113,41 +122,74 @@ function fixturePath(string $relativePath = ''): string
  */
 function makeTemporaryProject(string $prefix = 'ichiloto-editor-'): string
 {
-    $root = sys_get_temp_dir() . '/' . uniqid($prefix, true);
-    mkdir($root, 0777, true);
+    $root = TemporaryFixtures::createDirectory($prefix);
     copyDirectoryRecursively(fixturePath('sample-project'), $root);
-    rememberTemporaryProject($root);
 
     return $root;
 }
 
 /**
- * Registers a throwaway directory for removal when the running test ends.
+ * Makes an empty, owned throwaway directory for a test to lay out itself.
  *
- * Every project `makeTemporaryProject()` builds is registered; a test that
- * lays out its own directory registers it the same way, so its cleanup does
- * not depend on the test reaching its last line.
+ * @param string $prefix The start of the directory's name.
+ * @return string The directory, removed when the running test ends.
+ */
+function makeTemporaryDirectory(string $prefix): string
+{
+    return TemporaryFixtures::createDirectory($prefix);
+}
+
+/**
+ * Makes an empty, owned throwaway file, such as a PHP source to require.
  *
- * @param string $root The directory to remove after the test.
- * @return string The same directory, for chaining.
+ * @param string $prefix The start of the file's name.
+ * @param string $suffix The end of the file's name, such as `.php`.
+ * @return string The file, removed when the running test ends.
+ */
+function makeTemporaryFile(string $prefix, string $suffix = ''): string
+{
+    return TemporaryFixtures::createFile($prefix, $suffix);
+}
+
+/**
+ * Reserves an owned throwaway path that does not exist yet, for the code
+ * under test to create itself.
+ *
+ * @param string $prefix The start of the path's name.
+ * @param string $suffix The end of the path's name, such as `.php`.
+ * @return string The path, removed when the running test ends.
+ */
+function reserveTemporaryPath(string $prefix, string $suffix = ''): string
+{
+    return TemporaryFixtures::reservePath($prefix, $suffix);
+}
+
+/**
+ * Registers a throwaway path for removal when the running test ends.
+ *
+ * Every fixture the helpers above make is registered; a test that names
+ * its own path under the temporary directory registers it the same way, so
+ * its cleanup does not depend on the test reaching its last line.
+ *
+ * @param string $root The file or directory to remove after the test.
+ * @return string The same path, for chaining.
  */
 function rememberTemporaryProject(string $root): string
 {
-    $GLOBALS['ichilotoTemporaryProjects'][$root] = $root;
-
-    return $root;
+    return TemporaryFixtures::register($root);
 }
 
 /**
- * Removes every registered throwaway directory.
+ * Removes every registered throwaway fixture, failing loudly when the
+ * filesystem refuses one.
  */
 function cleanUpTemporaryProjects(): void
 {
-    foreach ($GLOBALS['ichilotoTemporaryProjects'] ?? [] as $root) {
-        removeDirectoryRecursively($root);
-    }
+    $problems = TemporaryFixtures::removeAll();
 
-    $GLOBALS['ichilotoTemporaryProjects'] = [];
+    if ($problems !== []) {
+        throw new RuntimeException("Temporary fixtures could not be removed:\n  " . implode("\n  ", $problems));
+    }
 }
 
 /**
@@ -174,7 +216,8 @@ function copyDirectoryRecursively(string $source, string $destination): void
 }
 
 /**
- * Recursively removes a directory tree created by makeTemporaryProject().
+ * Removes a throwaway directory tree now, failing loudly when the
+ * filesystem refuses part of it.
  */
 function removeDirectoryRecursively(string $directory): void
 {
@@ -182,34 +225,11 @@ function removeDirectoryRecursively(string $directory): void
         return;
     }
 
-    // Only ever a directory made under the temporary directory: a path
-    // outside it is a mistake, not a fixture, whatever asked.
-    $temporary = realpath(sys_get_temp_dir()) ?: sys_get_temp_dir();
-    $resolved = realpath($directory) ?: $directory;
+    $problems = TemporaryFixtures::removePath($directory);
 
-    if (! str_starts_with($resolved, rtrim($temporary, '/') . '/')) {
-        throw new RuntimeException(sprintf('Refusing to remove %s: it is not a temporary fixture.', $directory));
+    if ($problems !== []) {
+        throw new RuntimeException("Temporary fixture could not be removed:\n  " . implode("\n  ", $problems));
     }
-
-    foreach (scandir($directory) ?: [] as $entry) {
-        if ($entry === '.' || $entry === '..') {
-            continue;
-        }
-
-        $path = $directory . '/' . $entry;
-
-        if (is_link($path) || ! is_dir($path)) {
-            // A link is removed as a link: what it points at -- a shared
-            // vendor tree, an engine -- is not the fixture's to remove.
-            @unlink($path);
-
-            continue;
-        }
-
-        removeDirectoryRecursively($path);
-    }
-
-    @rmdir($directory);
 }
 
 /**
@@ -475,15 +495,10 @@ function writeItemRecords(string $root, \Ichiloto\Engine\Entities\Inventory\Inve
  */
 function itemsFromSource(string $source): array
 {
-    $path = (string) tempnam(sys_get_temp_dir(), 'ichiloto-items-');
+    $path = makeTemporaryFile('ichiloto-items-', '.php');
+    file_put_contents($path, $source);
 
-    try {
-        file_put_contents($path, $source);
-
-        return array_values((static fn(): mixed => require $path)());
-    } finally {
-        unlink($path);
-    }
+    return array_values((static fn(): mixed => require $path)());
 }
 
 /**

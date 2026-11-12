@@ -79,14 +79,16 @@ final class SummonBattlePreview
             ?? throw new InvalidArgumentException(sprintf('%s calls the action %s, which no skill defines.', $definition->name, $definition->linkedActionId));
         $action = new SkillBattleAction($skill);
         $opponents = $battle->troop->members->toArray();
-        $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $battlers, $opponents);
+        $targets = BattleTargetPolicy::resolveTargets($action->targetScope, $caster, $battlers, $opponents,
+            formation: $battle->formation, targeting: $action->targeting);
         if ($targets === []) {
             throw new InvalidArgumentException(sprintf('%s has no one to target in the battle test.', $definition->name));
         }
         $timings = $pacing->getTurnTimings($action);
         $plan = $presentation === EffectPresentation::TERMINAL
-            ? new BattleCommandTimeline($timings, target: $terminal)
-            : new BattleCommandTimeline($timings, target: $graphical ?? throw new InvalidArgumentException('A graphical preview plays the graphical compile.'), terminalTarget: $terminal);
+            ? new BattleCommandTimeline($timings, target: $terminal, targetCount: count($targets))
+            : new BattleCommandTimeline($timings, target: $graphical ?? throw new InvalidArgumentException('A graphical preview plays the graphical compile.'),
+                terminalTarget: $terminal, targetCount: count($targets));
 
         return new self(
             new BattleCommandPreview($battle, $plan, $caster, $targets, BattlePoseRole::SUMMON,

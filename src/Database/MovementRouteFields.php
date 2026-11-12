@@ -44,6 +44,7 @@ final class MovementRouteFields
     public static function getChildCommandLists(array $command): array
     {
         return match ($command['type'] ?? '') {
+            StorybookPlaybackFields::getCommandType() => [StorybookPlaybackFields::getFinishCommands($command) ?? []],
             'sequence' => [(array) ($command['commands'] ?? [])],
             'branch' => [(array) ($command['then'] ?? []), (array) ($command['else'] ?? [])],
             'choice' => [...array_map(static fn(array $option): array => (array) ($option['then'] ?? []),

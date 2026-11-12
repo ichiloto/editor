@@ -30,6 +30,8 @@ use Throwable;
 final class MasteryFields
 {
     public const string REGIONS = 'mastery_regions';
+    /** The {@see ReferenceCatalog::listEntryChoices()} source of what a branch may grow within. */
+    public const string WITHIN_CHOICES = 'mastery_within_branches';
     public const string BRANCHES = 'mastery_branches';
     public const string MAPS = 'mastery_maps';
     /** The reference source listing every tree node, by id. */
@@ -84,7 +86,8 @@ final class MasteryFields
                 new RecordField('id', 'Stable Id', isReadOnly: true),
                 RecordField::reference('region', 'Region', self::REGIONS),
                 // The branch of the same region it grows within, as a sub-family of that branch's family; none grows from the region.
-                new RecordField('within', 'Within Branch', reference: self::BRANCHES, removeWhenEmpty: true, allowsNone: true, displayDefault: '(the region)'),
+                // Every other branch is offered, so a move can name its new branch before its region; never the branch itself.
+                RecordField::entryChoice('within', 'Within Branch', self::WITHIN_CHOICES, '(the region)'),
                 new RecordField('name', 'Name'),
                 new RecordField('kind', 'Kind', options: array_column(MasteryBranchKind::cases(), 'value')),
                 // An element branch practises one of the project's elements.

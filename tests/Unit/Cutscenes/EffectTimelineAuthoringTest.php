@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewContext;
 use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage;
 use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\UI\CutscenesScreen;
@@ -150,16 +151,19 @@ it("sets and removes a battle image's attachment and pivot as whole fields, and 
     pressKeys($editor, "\n");
     $find = static fn(string $suffix): string => array_values(array_filter(cutsceneFieldIds($editor),
         static fn(string $id): bool => str_ends_with(strtolower($id), $suffix)))[0];
-    [$attachment, $pivot] = [$find('attachment'), $find('pivot')];
+    [$attachment, $pivot, $depth] = [$find('attachment'), $find('pivot'), $find('depth')];
 
     expect(cutsceneField($editor, $attachment)['options'])
-        ->toBe(['', ...array_map(static fn(EffectImageAttachment $case): string => $case->value, EffectImageAttachment::cases())]);
+        ->toBe(['', ...array_map(static fn(EffectImageAttachment $case): string => $case->value, EffectImageAttachment::cases())])
+        ->and(cutsceneField($editor, $depth)['options'])->toBe(['front', 'behind', 'subject-front']);
 
     // The ring at the cell's foot sits on the ground beneath the battler.
     setCutsceneField($editor, $attachment, 'ground');
     setCutsceneField($editor, $pivot, '0.5, 0.92');
+    setCutsceneField($editor, $depth, 'subject-front');
     expect($track()['attachment'])->toBe('ground')
         ->and($track()['pivot'])->toBe(['x' => 0.5, 'y' => 0.92])
+        ->and($track()['depth'])->toBe('subject-front')
         ->and(cutsceneField($editor, $pivot)['value'])->toBe('0.5, 0.92')
         ->and($asset->compiledEffect(EffectPresentation::GRAPHICAL, true))->not->toBeNull();
 
@@ -171,7 +175,8 @@ it("sets and removes a battle image's attachment and pivot as whole fields, and 
 
     setCutsceneField($editor, $pivot, '');
     setCutsceneField($editor, $attachment, '');
-    expect($track())->not->toHaveKey('pivot')->not->toHaveKey('attachment')
+    setCutsceneField($editor, $depth, '');
+    expect($track())->not->toHaveKey('pivot')->not->toHaveKey('attachment')->not->toHaveKey('depth')
         ->and($asset->isDirty())->toBeFalse();
 });
 
@@ -236,7 +241,7 @@ it('previews an effect through the Engine playhead, anchored to caster and targe
 
     expect($preview)->not->toBeNull()
         ->and($preview->totalFrames())->toBe(4)
-        ->and(callEditorMethod($editor, 'isEffectPreviewInBattle', $asset))->toBeTrue();
+        ->and(callEditorMethod($editor, 'getEffectPreviewContext', $asset))->toBe(EffectPreviewContext::BATTLE);
 
     // The west-facing stroke is turned toward a target on the right, as the battle turns it.
     $stage = callEditorMethod($editor, 'createEffectPreviewStage', $asset);
@@ -250,7 +255,7 @@ it('previews an effect through the Engine playhead, anchored to caster and targe
     // On the field the effect has one subject; B switches and recompiles.
     pressKeys($editor, 'b');
     // Its facing is battle-only, so the field refuses it, and says why.
-    expect(callEditorMethod($editor, 'isEffectPreviewInBattle', $asset))->toBeFalse()
+    expect(callEditorMethod($editor, 'getEffectPreviewContext', $asset))->toBe(EffectPreviewContext::FIELD)
         ->and(getEditorProperty($editor, 'timelinePreview'))->toBeNull()
         ->and(getEditorProperty($editor, 'statusMessage'))->toContain('facing');
 

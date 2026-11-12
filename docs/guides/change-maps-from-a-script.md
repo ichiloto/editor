@@ -122,10 +122,11 @@ map's role is not one its own map's role leads to (`map.role-destination`;
 see Map Roles in the manual), or a map naming a role the project does not have
 (`map.role`).
 
-Warnings never refuse a change: tiles a piece draws whose glyph is gone, the
-missing-art placeholder, see-through ground, a map nothing reaches yet, an
-entrance whose icon is not its destination's place type's (`place.icon`) or a
-place icon over a way into a map naming no place type (`place.untyped`). A map
+Warnings never refuse a change: tiles a piece draws whose glyph is gone, wall
+tiles under furniture (`graphics.wall-under-furniture`), the missing-art
+placeholder, see-through ground, a map nothing reaches yet, an entrance
+whose icon is not its destination's place type's (`place.icon`) or a place
+icon over a way into a map naming no place type (`place.untyped`). A map
 naming a place type the project does not have is an error (`map.place-type`).
 
 A change to a map that already has an error is refused until that error is
@@ -156,12 +157,23 @@ for you:
   refused with their role keys. Answer as the editors do, in the change's
   params: `"choices": {"x": "crate:0:0"}`, or `null` for no tiles.
 
+For records identified by filename, such as tilesets and event scripts,
+`database.create` and `database.duplicate` accept an explicit `identity` in
+lowercase hyphenated form. It becomes the stable filename, independently of
+the display name. An unsafe or occupied identity refuses the change; omitting
+it generates a unique identity, including against unsaved records.
+
 Edits are made in order and held in memory, and every later change reads
 them: a field resource, tileset piece, place category, skill, effect timeline,
 database record or world object made earlier in the batch is usable by the
-changes after it, before anything is written. Painting, piece lists, pickers,
+changes after it, before anything is written. Reachability and safe-save
+relocation planning also read the current tileset catalogue for every map; a
+new tileset and its map can be checked and saved in one transaction. An invalid
+current dependency still refuses the transaction. Painting, piece lists, pickers,
 the map world the GUI draws and the validation `changes.commit` runs all read
-these current records. Battle previews and the cinematic preview field still
+these current records. Map reviews also resolve world-object resources from
+the current catalogue, including resources created earlier in an unsaved batch.
+Battle previews and the cinematic preview field still
 read the saved items, enemies, summons and maps until the Engine can take them
 from the Editor; commit or save first when one of those must show an edit.
 Inserting or removing rows, and creating or duplicating a map, write their
@@ -199,7 +211,7 @@ or with the GUI editor open, these reads give every id a change needs:
 | `maps.list` | Map ids and revisions. |
 | `map.read {map}` | Layers (`id`, `name`), `baseLayer`, events, NPCs and world objects, unsaved changes included. |
 | `inspector.read {map, event?}` | The map's rows, and an event's rows when `event` names its marker. Each row's `key` goes back unchanged to `inspector.apply`, `inspector.add` or `inspector.remove`. |
-| `worldObjects.read {map, id}` | A world object's rows, for `worldObjects.apply`. |
+| `worldObjects.read {map, id}` | A world object's rows, for `worldObjects.apply`, and the tiles it presents (`tiles2d`) as declared. |
 | `npc.read {map, index, frame?}` | An NPC's rows, for `npc.apply`. |
 | `pieces.list {map}` | The pieces the map's tileset can stamp. |
 | `kinds.list {map}` | The terrain kinds of the map's tileset, and whether the map is painted in them (`painted`, with an `issue` saying how to convert it when not). |
@@ -354,7 +366,9 @@ retirement written in its batch again: each landing, moved by the steps
 written after it (rows inserted in the same batch move it), must still be a
 cell a save can stand on in the maps the batch leaves, or the batch is
 refused. Relocations `changes.commit` writes for the batch's maps go in a
-later step, so they move landed saves as they move any other save.
+later step, so they move landed saves as they move any other save. A map the
+batch retires, into itself or onto another map, gets no relocations of its
+own: its retirement already moves every save made on it.
 
 The Engine reads a step as a migration class or as declared position edits,
 never both. So a batch that registers a class and also changes a map in a
@@ -369,11 +383,11 @@ batches.
 | Paint glyphs | `map.paint {map, layer, cells, symbol, color?}`; a whole block of rows at once with `map.paintRegion {map, layer, x, y, rows}` |
 | Draw the tiles a layer's glyphs need | `layer.drawTiles {map, layer}` |
 | Paint or stamp tiles | `tiles.paint`, `tiles.stamp` |
-| Stamp a tileset piece | `pieces.place {map, piece, from, to, color?}`; `{map, piece, origins}` stamps one copy at each listed top-left `[x, y]` in one undo step, such as the peaks of a range |
+| Stamp a tileset piece | `pieces.place {map, piece, from, to, color?, footprint?, ownership?}`; `{map, piece, origins, color?, footprint?, ownership?}` stamps one copy at each listed top-left `[x, y]` in one undo step. With `footprint: true`, every copy also applies its authored physical recipe to a map with its own collision. Omitted or false leaves collision unchanged. `ownership: "graphical"` lays the piece's art alone over the footprint the map already has: its tiles change, while every glyph, its colour and collision stay byte for byte, so new art can replace old over glyphs the author chose (`ownership: "gameplay"`, the default, places the whole piece). It is refused, changing nothing, when a ground cell's collision is not the one the piece gives, when its art would rise over walkable floor, with `footprint: true`, or for a connected piece |
 | Paint a terrain kind | `kinds.paint {map, kind, from, to}` on a map painted in kinds; its glyph, its tiles and, under declared occupancy, its collision. `{map, kind, cells}` paints listed `[x, y]` cells instead, for terrain no rectangle fits |
 | Convert a map to terrain kinds | `kinds.convert {map, mapping}`, such as `{";": "grassland", "~": "water"}`; or `ichiloto map:convert-kinds` |
 | Layers | `layer.create`, `layer.rename`, `layer.remove`, `layer.reorder`, `layer.decoration`; tile layers `tileLayer.*` |
-| Collision | `map.paintOccupancy`, `occupancy.stampPiece` |
+| Collision | `map.paintOccupancy`, `occupancy.stampPiece`, `map.packOccupancy {map, revision, answer?, confirm?}` |
 | Resize | `map.insertLines`, `map.removeLines` (with an `answer`), or the map's size rows |
 | Events | `event.create {map, cells, type, marker?}`, `event.move {map, marker, dx, dy}`, `event.bounds`, `event.destination`, `event.delete`; fields with `inspector.apply` |
 | Name who speaks an event | `inspector.add {map, key: {target: event-speakers, marker}}` names the nearest NPC not yet listed; `inspector.apply` with `{target: event-speakers, marker, field: speaker, index}` and an NPC id chooses another; `inspector.remove` with that key removes it |
@@ -389,10 +403,13 @@ batches.
 | Which way a waypoint or staged actor faces once there | the same entry's Facing row (north, east, south, west), or its Face Toward row (the same subject kinds) and then its Face Toward id row; choosing one clears the other |
 | A map's region-map cell | `inspector.apply` with `{target: map-station, field: station}`, value `x, y`, empty removes it |
 | World objects | `worldObjects.create`, `worldObjects.move {map, id, dx, dy}`, `worldObjects.place`, `worldObjects.apply`, `worldObjects.add`, `worldObjects.remove`, `worldObjects.delete` |
+| Tiles a world object presents while shown (a concealed wall drawn as the wall beside it) | `worldObjects.setTiles {map, id, layer, cells}`, each cell `[x, y, tile]` on a cell the object owns, `0` showing no tile; `worldObjects.unsetTiles {map, id, layer, cells}`, each cell `[x, y]`, gives the layer's own tile back |
 | NPCs | `npc.create`, `npc.move`, `npc.apply`, `npc.add`, `npc.reorder`, `npc.remove`, `npc.duplicate`, `npc.delete` |
 | Move a character's own skills onto their Mastery Map | `mastery.adopt {actor}` (asks; answer `write` with its `confirm`): each skill the actor file says they know gets terms known from the start (cost 0, level 1), each learnable terms costing its EXP requirement, for the tree node that teaches it (a skill the tree does not place yet joins the first region's trunk), skills their role teaches stay with the role, and the actor's learned lists and learnables are emptied; then edit the terms in the Mastery Maps category |
 | Place or link Mastery Map nodes | `mastery.page {index}` reads the regions and each node the map gives terms for, with the tree's `name`, `skill`, `region`, `branch` and `kind` and its place (`x`, `y` as fractions of the map; `placed` false where the Engine places it in its region); `mastery.placeNode {index, node, x, y}` places a node; `mastery.toggleRequirement {index, node, requires}` makes `node` build on `requires`, or stops it, refusing a loop. Each is one undo step |
 | Retire a skill | `skills.retire {index, replacement?}` (asks; answer `write` with its `confirm`): every class grant, actor learned skill and learnable, attack and counter skill, enemy action and skill or state counter that names it moves onto the replacement (a list already holding the replacement drops the old entry) and saves read the old skill as the replacement; without a replacement each is removed and saves drop the skill. A replacement must be a spell for a spell and an ability for an ability, and a summon's action follows its summon. Then `database.delete` the skill, which is refused while anything still names it |
+| Move a project to Super Moves | `superMoves.migrate` (asks; answer `write` with its `confirm`): `assets/Data/crisis-abilities.php` moves to `assets/Data/super-moves.php` byte for byte and every actor's `crisisAbility` key becomes `superMove` where it stands, in one transaction and one undo step; it writes nothing when the project holds both catalogues, when the game cannot read the catalogue or an actor's reference, or when an actor's data is built in code. `changed` is false when nothing needs moving |
+| Check an effect's straight flights | `effects.flightRoutes {index}`: for every troop, every action of the battle test party that plays the effect and every target it can choose, the graphical battle captures each straight caster flight's route with the Engine's own planning over the troop's projected bodies. `issues` lists a route that reaches the targets only through its Straight Flight Fallback as a warning (`effect.flight.fallback_used`), one that cannot reach them without a fallback as an error (`effect.flight.unreachable`), and a flight the battle cannot plan for another reason, such as a missing pose point, as an error with the Engine's reason (`effect.flight.unplanned`). Nothing is drawn or written |
 | Retire a map onto the map that took its places | `saveCompatibility.retireMap {map, into, to, landings?}`, then `map.delete {map}` outside the batch; see Save Migrations |
 | Let saves read a moved identity as its new one | `saveCompatibility.alias {category, from, to}`, such as a one-shot event `old-map:Q` to `new-map:Q` |
 | Move a story event onto the NPC who delivers it | `npc.adoptEvent {map, marker, npc?}`: the event becomes the NPC's first page (its conditions, writes, cue, action and run-once), its cells are cleared, a run-once event's saved completion is aliased to the page, and the result lists what was dropped and the quest waymarks to repoint at the NPC (`database.apply` on the waymark's NPC row) |
@@ -403,6 +420,13 @@ batches.
 | Copy or move a map | `map.duplicate {map, to?}`; `map.move {map, to}` asks first, then `{map, to, destination, confirm: true}` |
 | Landmark id | `inspector.apply` with `{target: map-landmarks, index, field: id}`; other maps' atlas parents follow the rename |
 | NPC id | `npc.create {..., id?}`, `npc.assignId {..., id?}`, or the NPC's Id row with `npc.apply` |
+
+`map.packOccupancy` reviews a representation-only change for a map that
+already has declared enum rows. Confirm with the returned fingerprint to
+write the map data file. The Editor checks every physical cell and compares
+the staged file's full evaluated data before writing. Undo restores the exact
+previous source. A computed declaration or comments inside its rows require
+an author to prepare the source first.
 
 Two NPCs may anchor on one tile only as phases the game never shows
 together: one has a visibility condition (its Visible When row) that the

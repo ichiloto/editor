@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor;
 
 use Ichiloto\Engine\Entities\Actors\ActorDefinition;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Util\Stores\ActorStore;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\PreparedSave;
@@ -76,11 +77,11 @@ final class ProjectActorDatabase
         return array_values($this->actors);
     }
 
-    /** Builds the runtime registry from the same current records used by pickers. */
-    public function createActorStore(): ActorStore
+    /** Builds the runtime registry from current actor records and, when supplied, their current skill catalogue. */
+    public function createActorStore(?SkillCatalog $skills = null): ActorStore
     {
         return new ActorStore(definitions: array_map(
-            static fn(ProjectActor $actor): ActorDefinition => ActorDefinition::fromArray($actor->getData(), $actor->path),
+            static fn(ProjectActor $actor): ActorDefinition => ActorDefinition::fromArray($actor->getData(), $actor->path, $skills),
             $this->getActors(),
         ));
     }

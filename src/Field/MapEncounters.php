@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Field;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\EncounterArenaRule;
 use Ichiloto\Engine\Field\EncounterEntry;
+use Ichiloto\Engine\Field\EncounterPool;
 use InvalidArgumentException;
 
 /**
@@ -91,7 +92,9 @@ final class MapEncounters
     public const string ARENA_RULES_KEY = EncounterArenaRule::KEY;
 
     /** The keys this model owns; everything else in the block is the author's. */
-    private const array OWNED_KEYS = ['troops', 'rate', 'tiles', self::ARENA_KEY, self::ARENA_RULES_KEY];
+    public const string POOLS_KEY = EncounterPool::KEY;
+
+    private const array OWNED_KEYS = ['troops', 'rate', 'tiles', self::ARENA_KEY, self::ARENA_RULES_KEY, self::POOLS_KEY];
 
     /**
      * @param array<string, mixed>|null $block The authored block, or null when the map declares none.
@@ -182,6 +185,12 @@ final class MapEncounters
                 'entry' => $structured ? $entry : null];
         }
 
+        $pools = array_key_exists(self::POOLS_KEY, $block) ? $block[self::POOLS_KEY] : [];
+        if (! is_array($pools) || ! array_is_list($pools)
+            || array_any($pools, static fn(mixed $pool): bool => !is_array($pool))) {
+            return new self($block, [], 'encounter pools must be an ordered list of records');
+        }
+
         $rules = self::readArenaRules($block[self::ARENA_RULES_KEY] ?? null);
 
         return is_string($rules) ? new self($block, [], $rules) : new self($block, $rows, null, $rules);
@@ -265,6 +274,32 @@ final class MapEncounters
     public function arenaRules(): array
     {
         return $this->rules;
+    }
+
+    /**
+     * The scoped encounter pools, in priority order: the first whose scope
+     * holds the step supplies the roster. Empty when the block is unsupported.
+     *
+     * @var list<array<string, mixed>>
+     */
+    public array $pools {
+        get => $this->isSupported() ? ($this->block[self::POOLS_KEY] ?? []) : [];
+    }
+
+    /** @param list<array<string, mixed>> $pools */
+    public function withPools(array $pools): ?array
+    {
+        return $this->rebuilt($this->rows, [self::POOLS_KEY => $pools === [] ? null : $pools]);
+    }
+
+    /**
+     * The positions of the pools scoped to an area.
+     *
+     * @return list<int>
+     */
+    public function findPoolsInArea(string $areaId): array
+    {
+        return array_keys(array_filter($this->pools, static fn(array $pool): bool => ($pool['area'] ?? null) === $areaId));
     }
 
     /**
@@ -423,14 +458,15 @@ final class MapEncounters
             return 'unsupported shape';
         }
 
-        if (! $this->isDeclared() || $this->rows === []) {
+        if (! $this->isDeclared() || ($this->rows === [] && $this->pools === [])) {
             return 'off';
         }
 
         return sprintf(
-            '%d troop%s, every ~%d step%s, %s',
+            '%d troop%s%s, every ~%d step%s, %s',
             count($this->rows),
             count($this->rows) === 1 ? '' : 's',
+            $this->pools === [] ? '' : sprintf(' and %d scoped pool%s', count($this->pools), count($this->pools) === 1 ? '' : 's'),
             $this->rate(),
             $this->rate() === 1 ? '' : 's',
             $this->tiles() === 'any' ? 'any tile' : 'danger tiles',
@@ -585,7 +621,16 @@ final class MapEncounters
         }, $this->rows);
         $rules = array_map(static fn(array $rule): array => $rule['area'] === $from ? ['area' => $to] + $rule : $rule, $this->rules);
 
-        return $this->rebuilt($rows, $rules === $this->rules ? [] : [self::ARENA_RULES_KEY => self::writeArenaRules($rules)]);
+        $pools = $this->pools;
+        foreach ($this->findPoolsInArea($from) as $index) {
+            $pools[$index]['area'] = $to;
+        }
+        $changes = $rules === $this->rules ? [] : [self::ARENA_RULES_KEY => self::writeArenaRules($rules)];
+        if ($pools !== $this->pools) {
+            $changes[self::POOLS_KEY] = $pools;
+        }
+
+        return $this->rebuilt($rows, $changes);
     }
 
     /**
@@ -655,7 +700,8 @@ final class MapEncounters
     {
         $block = $this->block ?? [];
 
-        if ($rows === []) {
+        $pools = array_key_exists(self::POOLS_KEY, $changes) ? $changes[self::POOLS_KEY] : $this->pools;
+        if ($rows === [] && ($pools === null || $pools === [])) {
             // No troop can be picked, so the block asks for encounters the
             // engine cannot give. Everything this model owns goes with it;
             // a field it does not own keeps the block alive.
@@ -670,7 +716,11 @@ final class MapEncounters
             $troops[$row['name']] = self::entryFor($row);
         }
 
-        $block['troops'] = $troops;
+        if ($troops === []) {
+            unset($block['troops']);
+        } else {
+            $block['troops'] = $troops;
+        }
 
         foreach ($changes as $key => $value) {
             if ($value === null) {

@@ -173,3 +173,93 @@ it('names the entry each list row belongs to and its name within it, so one sele
         // The record's own rows belong to no entry.
         ->and(stageRows($session)['Name'])->not->toHaveKey('entry');
 });
+
+/** Gives a staged summon's art a subject to stand on, so the stage has an image at its rest frame. */
+function placeStagedSummonArt(EditorSession $session): void
+{
+    $apply = static fn(array $row, string $value) => $session->applyDatabaseRecord('cutscenes/summon', 0, $row['key'], $value);
+    $session->addDatabaseItem('cutscenes/summon', 0, ['frame' => ['stage.subjects']]);
+    $apply(stageRows($session, ['stage.subjects'])['Subject 1 Id'], 'visitor');
+    $apply(stageRows($session, ['stage.subjects'])['Subject 1 Position'], '640, 600');
+    $apply(stageRows($session, ['stage.subjects'])['Subject 1 Size'], '300, 500');
+    $apply(stageRows($session, ['tracks'])['Track 1 Anchor'], 'stage');
+    $apply(stageRows($session, ['tracks'])['Track 1 Subject'], 'visitor');
+}
+
+it('authors a stage rest frame apart from the sequence rest frame, and keeps it absent when inherited', function () {
+    $root = stagedSummonProject();
+    $path = $root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php';
+    $session = EditorSession::open($root);
+    $session->setCutsceneStage('cutscenes/summon', 0, true);
+    $session->selectCutscenePresentation('cutscenes/summon', 0, 'graphical');
+    placeStagedSummonArt($session);
+    $apply = static fn(string $value) => $session->applyDatabaseRecord('cutscenes/summon', 0, stageRows($session)['Stage Rest Frame']['key'], $value);
+    $apply(''); // Inherited is the absence of the field, even after an edit that names nothing.
+    $apply('5');
+    $session->applyDatabaseRecord('cutscenes/summon', 0, stageRows($session)['Rest Frame']['key'], '20');
+
+    expect($session->saveAll()['failures'])->toBe([]);
+    $graphical = (require $path)['presentations']['graphical'];
+    expect($graphical['stage']['restFrame'])->toBe(5)
+        ->and($graphical['restFrame'])->toBe(20);
+    $compiled = CutsceneLibrary::fromProject($root)->find(CutsceneType::SUMMON, 'lantern-wisp')->compiledSummon(EffectPresentation::GRAPHICAL);
+    expect($compiled->defaults['stage']['restFrame'])->toBe(5);
+
+    $reopened = EditorSession::open($root);
+    $reopened->selectCutscenePresentation('cutscenes/summon', 0, 'graphical');
+    expect(stageRows($reopened)['Stage Rest Frame']['value'])->toBe('5');
+    $reopened->applyDatabaseRecord('cutscenes/summon', 0, stageRows($reopened)['Stage Rest Frame']['key'], '');
+    $reopened->applyDatabaseRecord('cutscenes/summon', 0, stageRows($reopened)['Rest Frame']['key'], '4');
+    expect($reopened->saveAll()['failures'])->toBe([])
+        ->and((require $path)['presentations']['graphical']['stage'])->not->toHaveKey('restFrame');
+});
+
+it('refuses a stage rest frame outside the active stage on the source-saving path', function () {
+    $root = stagedSummonProject();
+    $path = $root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php';
+    $session = EditorSession::open($root);
+    $session->setCutsceneStage('cutscenes/summon', 0, true);
+    $session->selectCutscenePresentation('cutscenes/summon', 0, 'graphical');
+    placeStagedSummonArt($session);
+    expect($session->saveAll()['failures'])->toBe([]);
+    $before = file_get_contents($path);
+    $restore = (int) stageRows($session)['Stage Restore Frame']['value'];
+    try {
+        $session->applyDatabaseRecord('cutscenes/summon', 0, stageRows($session)['Stage Rest Frame']['key'], (string) $restore);
+        $refusal = implode(' ', array_map('json_encode', $session->saveAll()['failures']));
+    } catch (SessionRefusal $failure) {
+        $refusal = $failure->getMessage();
+    }
+
+    expect($refusal)->toContain('stage.restFrame')
+        ->and(file_get_contents($path))->toBe($before);
+});
+
+it('authors arena effect timing on a staged summon through the same validator, refused before its restore frame', function () {
+    $root = stagedSummonProject();
+    $data = $root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.data.php';
+    $session = EditorSession::open($root);
+    $session->setCutsceneStage('cutscenes/summon', 0, true);
+    $session->selectCutscenePresentation('cutscenes/summon', 0, 'graphical');
+    placeStagedSummonArt($session);
+    expect($session->saveAll()['failures'])->toBe([]);
+    $restore = (int) stageRows($session)['Stage Restore Frame']['value'];
+    $before = file_get_contents($data);
+    $apply = static fn(string $label, string $value) => $session->applyDatabaseRecord('cutscenes/summon', 0, stageRows($session)[$label]['key'], $value);
+
+    $apply('Effect Timing', 'arena');
+    // Arena impact names a frame, so the cue the summon resolved on before is cleared.
+    $apply('Effect Cue', '');
+    try {
+        $apply('Effect Frame', (string) ($restore - 1));
+        $refusal = implode(' ', array_map('json_encode', $session->saveAll()['failures']));
+    } catch (SessionRefusal $failure) {
+        $refusal = $failure->getMessage();
+    }
+    expect($refusal)->toContain('arena impact requires')
+        ->and(file_get_contents($data))->toBe($before);
+
+    $apply('Effect Frame', (string) $restore);
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and((require $data)['effectTiming'])->toMatchArray(['mode' => 'arena', 'frame' => $restore]);
+});

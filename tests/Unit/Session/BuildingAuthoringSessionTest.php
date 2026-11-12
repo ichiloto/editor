@@ -71,7 +71,7 @@ it('brings building art in through the asset picker, keeping its bytes, refusing
     $target = $root . '/assets/Graphics/Incoming/Hut.png';
 
     $imported = expectAnswer($request('assets.import', ['source' => $incoming, 'destination' => 'Graphics/Incoming/Hut.png']));
-    expect($imported)->toMatchArray(['path' => 'Graphics/Incoming/Hut.png', 'width' => 6, 'height' => 4, 'changed' => true])
+    expect($imported)->toBe(['kind' => 'image', 'path' => 'Graphics/Incoming/Hut.png', 'width' => 6, 'height' => 4, 'changed' => true])
         ->and(file_get_contents($target))->toBe(file_get_contents($incoming))
         ->and(ReferenceCatalog::getPngAssets($root))->toContain('Graphics/Incoming/Hut.png');
     // The same image again changes nothing; another one asks first.
@@ -98,7 +98,9 @@ it('brings building art in through the asset picker, keeping its bytes, refusing
         ->and(expectRefusal($request('assets.import', ['source' => $incoming, 'destination' => dirname($root) . '/Hut.png'])))
         ->toBe("Images are brought into the project's assets folder. Choose a place inside it.")
         ->and(expectRefusal($request('assets.import', ['source' => $incoming, 'destination' => 'Graphics/Hut.jpg'])))
-        ->toContain('is not a PNG\'s name');
+        ->toBe('Graphics/Hut.jpg is not the name of a file the game uses. Name an image with .png at the end, or a sound with .mp3, .wav or .ogg.')
+        ->and(expectRefusal($request('assets.import', ['source' => $incoming, 'destination' => 'Graphics/.png'])))
+        ->toBe("Graphics/.png is not a PNG's name. Name the image with .png at the end.");
 });
 
 it('copies an image\'s cells into free cells of a sheet pixel for pixel, never over art, with undo and redo', function () {
@@ -203,6 +205,53 @@ it('defines a building piece over its cells: tiles, a glyph per cell, footprint,
     expect(array_column(expectAnswer($request('tilesets.preview', ['index' => 0]))['authoring'], 'id'))->toBe(['hut']);
 });
 
+it('sets a piece cell to a literal delimiter or backslash in its colour, saved, reloaded and undone through its Glyph Rows', function (string $glyph) {
+    $root = createBuildingProject();
+    $request = createBuildingRpc($root);
+    $path = $root . '/assets/Data/Tilesets/town.php';
+    defineHutPiece($root, $request);
+    $authored = (string) file_get_contents($path);
+    $glyphs = Tileset::load($root . '/assets', 'town')->pieces['hut']->glyphs;
+
+    // The coloured cell is set beside the piece's own coloured door glyph, and a plain one beside the roof's backslash.
+    expectAnswer($request('tilesets.setPieceGlyph', ['index' => 0, 'tileset' => 'town', 'piece' => 'hut', 'x' => 0, 'y' => 1,
+        'glyph' => $glyph, 'color' => 'red']));
+    expectAnswer($request('tilesets.setPieceGlyph', ['index' => 0, 'tileset' => 'town', 'piece' => 'hut', 'x' => 1, 'y' => 0,
+        'glyph' => $glyph, 'color' => '']));
+    $authoring = static fn(): array => array_find(expectAnswer($request('tilesets.preview', ['index' => 0]))['authoring'],
+        static fn(array $entry): bool => $entry['id'] === 'hut')['cells'];
+    expect($authoring()[1][0])->toBe(['symbol' => $glyph, 'color' => 'red'])
+        ->and($authoring()[1][1])->toBe(['symbol' => '⊓', 'color' => '#ffd75f'])
+        ->and($authoring()[0][1]['symbol'])->toBe($glyph);
+    expectAnswer($request('database.save', ['category' => 'tilesets']));
+
+    $expected = $glyphs;
+    $expected[1][0] = $glyph;
+    $expected[0][1] = $glyph;
+    expect(Tileset::load($root . '/assets', 'town')->pieces['hut']->glyphs)->toBe($expected)
+        ->and(file_get_contents($path))->toContain('<fg=#ffd75f>⊓</>');
+    // A fresh session reads the saved cells as the author set them.
+    $fresh = createBuildingRpc($root);
+    $cells = array_find(expectAnswer($fresh('tilesets.preview', ['index' => 0]))['authoring'],
+        static fn(array $entry): bool => $entry['id'] === 'hut')['cells'];
+    expect($cells[1][0])->toBe(['symbol' => $glyph, 'color' => 'red'])
+        ->and(array_column($cells[0], 'symbol'))->toBe($expected[0]);
+
+    expectAnswer($request('history.undo'));
+    expectAnswer($request('history.undo'));
+    expectAnswer($request('database.save', ['category' => 'tilesets']));
+    expect(file_get_contents($path))->toBe($authored)
+        ->and(Tileset::load($root . '/assets', 'town')->pieces['hut']->glyphs)->toBe($glyphs);
+})->with(['less-than' => '<', 'greater-than' => '>', 'backslash' => '\\']);
+
+it('still refuses formatter markup or several characters offered as one piece glyph', function (string $glyph) {
+    $root = createBuildingProject();
+    $request = createBuildingRpc($root);
+    defineHutPiece($root, $request);
+    expect(expectRefusal($request('tilesets.setPieceGlyph', ['index' => 0, 'tileset' => 'town', 'piece' => 'hut', 'x' => 0, 'y' => 0,
+        'glyph' => $glyph])))->toBe('A cell holds one character that fills one terminal cell.');
+})->with(['markup' => '<fg=red>x</>', 'escaped tag' => '\\<', 'two characters' => '<>']);
+
 it('marks a dragged rectangle of tiles above characters, or takes the mark away, as one undo step', function () {
     $root = createBuildingProject();
     $request = createBuildingRpc($root);
@@ -300,6 +349,46 @@ it('places the building with its footprint, gives its painted door an entrance, 
     expect(expectAnswer($reopened('pieces.findPlaced', ['map' => 'town', 'x' => 6, 'y' => 3]))['pieces'][0])->toMatchArray(['x' => 4, 'y' => 2]);
 });
 
+it('places scattered copies with their requested physical footprints in one undo step', function () {
+    $root = createBuildingProject();
+    $request = createBuildingRpc($root);
+    defineHutPiece($root, $request);
+    $before = readTown($request);
+
+    $placed = expectAnswer($request('pieces.place', ['map' => 'town', 'revision' => $before['revision'], 'piece' => 'hut',
+        'origins' => [[0, 0], [4, 2]], 'footprint' => true]));
+    $after = readTown($request);
+    expect($after['occupancy'][1][0])->toBe(CollisionType::SOLID->value);
+    expect($placed)->toMatchArray(['changed' => true, 'copies' => 2, 'footprint' => 6]);
+    expect($after['occupancy'][0])->toBe(array_fill(0, 8, 0))
+        ->and($after['occupancy'][1])->toBe([1, 1, 1, 0, 0, 0, 0, 0])
+        ->and($after['occupancy'][2])->toBe(array_fill(0, 8, 0))
+        ->and($after['occupancy'][3])->toBe([0, 0, 0, 0, 1, 1, 1, 0]);
+    expectAnswer($request('history.undo'));
+    $undone = readTown($request);
+    expect($undone['occupancy'])->toBe($before['occupancy'])->and($undone['glyphs'])->toBe($before['glyphs']);
+    expectAnswer($request('history.redo'));
+    expect(readTown($request)['occupancy'])->toBe($after['occupancy'])->and(readTown($request)['glyphs'])->toBe($after['glyphs']);
+
+    $revision = readTown($request)['revision'];
+    expect(expectRefusal($request('pieces.place', ['map' => 'town', 'revision' => $revision, 'piece' => 'hut',
+        'origins' => [[1, 3], [7, 0]], 'footprint' => true])))->toContain('does not fit');
+    expect(readTown($request)['occupancy'])->toBe($after['occupancy'])->and(readTown($request)['glyphs'])->toBe($after['glyphs']);
+    expectAnswer($request('map.save', ['map' => 'town']));
+    expect(readTown(createBuildingRpc($root))['occupancy'])->toBe($after['occupancy']);
+});
+
+it('leaves scattered-copy collision unchanged unless physical stamping is requested', function (?bool $footprint) {
+    $root = createBuildingProject();
+    $request = createBuildingRpc($root);
+    defineHutPiece($root, $request);
+    $before = readTown($request);
+    $params = ['map' => 'town', 'revision' => $before['revision'], 'piece' => 'hut', 'origins' => [[0, 0], [4, 2]]];
+    if ($footprint !== null) { $params['footprint'] = $footprint; }
+    expect(expectAnswer($request('pieces.place', $params)))->toMatchArray(['changed' => true, 'copies' => 2, 'footprint' => 0]);
+    expect(readTown($request)['occupancy'])->toBe($before['occupancy'])->and(readTown($request)['glyphs'])->not->toBe($before['glyphs']);
+})->with([null, false]);
+
 it('refuses moves that cannot be whole and placement without a footprint leaves collision alone', function () {
     $root = createBuildingProject();
     $request = createBuildingRpc($root);
@@ -319,7 +408,7 @@ it('writes a review page of a map as the game draws it, unsaved edits included, 
     defineHutPiece($root, $request);
     expectAnswer($request('pieces.place', ['map' => 'town', 'revision' => readTown($request)['revision'], 'piece' => 'hut',
         'from' => [2, 1], 'to' => [2, 1], 'footprint' => true]));
-    $out = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('editor-building-review-', true));
+    $out = reserveTemporaryPath('editor-building-review-');
     $before = sourceHashTree($root . '/assets');
 
     $review = expectAnswer($request('map.review', ['map' => 'town', 'directory' => $out, 'region' => [1, 0, 5, 4], 'player' => [3, 3]]));

@@ -17,19 +17,26 @@ use Ichiloto\Editor\Database\KnowledgeCommandShape;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\SkitPlaybackFields;
+use Ichiloto\Editor\Database\StorybookPlaybackFields;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Maps\MapDoors;
+use Ichiloto\Engine\Field\MapDoorReference;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
-use Ichiloto\Engine\Core\WorldConditionExclusion;
+use Ichiloto\Editor\Database\SuperMoveFields;
 use Ichiloto\Editor\Events\CommandMapContext;
-use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Editor\Events\ScriptReferenceScope;
+use Ichiloto\Editor\Events\ScriptReferenceSource;
 use Ichiloto\Editor\Field\MapAreaAuthoring;
 use Ichiloto\Editor\Field\MapAreaRefusal;
 use Ichiloto\Editor\Field\MapEncounters;
+use Ichiloto\Editor\Field\NpcPlacementLifecycle;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
 use Ichiloto\Editor\PermanentGrowthCatalog;
+use Ichiloto\Editor\Progression\ProjectWorldAbilities;
 use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
@@ -41,17 +48,22 @@ use Ichiloto\Engine\Field\EncounterEntry;
 use Ichiloto\Engine\Field\EncounterTable;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
+use Ichiloto\Engine\Field\DashSettings;
+use Ichiloto\Engine\Field\NpcPlacementSet;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicStageManager;
 use Ichiloto\Engine\Field\SkitSpeaker;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
 use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
+use Ichiloto\Engine\Events\Triggers\EventCue;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeRecordType;
 use InvalidArgumentException;
@@ -74,6 +86,15 @@ class ProjectValidator
 {
   use CutsceneValidation;
 
+  /** @return Issue[] */
+  private function checkPartySize(ProjectWorkspace $workspace): array
+  {
+    $size = $workspace->getSystemField('battle.partySize');
+    if ($size === null) { return []; }
+    return is_int($size) && $size >= 1 && $size <= \Ichiloto\Engine\Entities\Party::MAX_BATTLE_SIZE
+      ? [] : [Issue::error('assets/Data/system.php', 'Battle party size must be an integer between 1 and 8.', 'Choose a supported battle party size.')];
+  }
+
   /**
    * The trigger classes whose data this knows how to check.
    */
@@ -83,6 +104,9 @@ class ProjectValidator
    */
   protected ?InventoryCatalog $inventoryCatalog = null;
 
+  /** @var MapDoors|null The doors scripts leave through, read from this run's maps. */
+  protected ?MapDoors $doors = null;
+
   /**
    * @var array<string, mixed>|null The project's knowledge catalogue, read
    * once per validation run so every command check shares one reading.
@@ -91,6 +115,9 @@ class ProjectValidator
 
   /** @var array<string, array<int, mixed>> Common Event payloads for this validation run. */
   protected array $commonEventScripts = [];
+
+  /** Where each NPC can stand at rest, read once per validation run from every authored run. */
+  protected ?NpcPlacementLifecycle $placementLifecycle = null;
 
   /** @var array<string, true> Common Events reached from a first-class cinematic. */
   protected array $cinematicCommonEventIds = [];
@@ -134,8 +161,18 @@ class ProjectValidator
    */
   protected array $troopHabitats = [];
 
+  /** @var array<string, string> The map each Skit that names one plays on, by Skit id, read once per validation. */
+  protected array $skitMaps = [];
+
+  /** The project's storybooks as the Engine reads them, read once per validation. */
+  protected StorybookValidator $storybooks;
+
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
   protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
+  /** A project holding both the current and the earlier Super Move catalogue. */
+  public const string SUPER_MOVE_CATALOGUES_AMBIGUOUS = 'super_move.catalogues.ambiguous';
+  /** An actor whose current and earlier Super Move keys name different Super Moves. */
+  public const string ACTOR_SUPER_MOVE_KEYS_DISAGREE = 'actor.super_move.keys_disagree';
 
   /**
    * Checks a whole project.
@@ -150,8 +187,13 @@ class ProjectValidator
     $this->troopHabitats = $this->readTroopHabitats($workspace);
     $this->knowledgeCatalogData = null;
     $this->commonEventScripts = $this->eventScriptsById($workspace);
+    $this->placementLifecycle = null;
+    $this->skitMaps = $this->readSkitMaps($workspace);
+    $this->storybooks = new StorybookValidator($workspace);
     $this->cinematicCommonEventIds = [];
     $this->legacyCommonEventIds = [];
+
+    $this->doors = new MapDoors($workspace);
 
     try {
       $this->inventoryCatalog = InventoryCatalog::fromWorkspace($workspace);
@@ -165,19 +207,25 @@ class ProjectValidator
 
     $issues = [
       ...$this->checkScriptCommandDeclarations($workspace),
+      ...$this->checkWorldAbilitySource($workspace),
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
       ...$this->checkTroops($workspace),
       ...$this->checkBattleEntryRules($workspace),
       ...$this->checkSkillCatalog($workspace),
+      ...$this->checkSuperMoves($workspace),
+      ...$this->checkTutorialFollowOns($workspace),
       ...$this->checkItemCatalog($workspace),
       ...$this->checkSummons($workspace),
       ...$this->checkCutscenes($workspace),
       ...$this->checkReferences($workspace),
       ...new AnimationReferenceValidator()->validate($workspace),
       ...new CounterAttackValidator()->validate($workspace),
+      ...new ResponseWindowValidator()->validate($workspace),
+      ...new InitialEquipmentValidator()->validate($workspace),
       ...new TroopFormationValidator()->validate($workspace),
       ...new BattleTestValidator()->validate($workspace),
+      ...$this->checkPartySize($workspace),
       ...new ProgressionValidator()->validate($workspace),
       ...new DashValidator()->validate($workspace),
       ...new MasteryValidator()->validate($workspace),
@@ -188,6 +236,7 @@ class ProjectValidator
       ...new ActorReferenceValidator()->validate($workspace),
       ...new DialoguePresentationValidator()->validate($workspace),
       ...new SkitBackdropValidator()->validate($workspace),
+      ...$this->storybooks->validate(),
       ...new RecordReferenceValidator()->validate($workspace),
       ...$this->checkKnowledgeCatalog($workspace),
       ...$this->checkSpecialProperties($workspace),
@@ -198,6 +247,7 @@ class ProjectValidator
       ...new SaveCompatibilityValidator()->validate($workspace),
       ...new ScreenTransitionValidator()->validate($workspace),
       ...new ReachabilityValidator()->validate($workspace),
+      ...new EdgeTransferAgreementCheck()->validate($workspace),
       ...new StoryGuidanceValidator()->validate($workspace),
       ...new EffectValidator()->validate($workspace),
     ];
@@ -292,6 +342,7 @@ class ProjectValidator
 
     // What an actor's Attack command may use, by the rule its picker offers.
     $attackSkills = new ReferenceCatalog($workspace)->valuesFor('attack_skills');
+    $superMoves = new ReferenceCatalog($workspace)->valuesFor(SuperMoveFields::CATEGORY);
 
     foreach ($workspace->actorDatabase->getActors() as $actor) {
       $where = sprintf('actor %s', $actor->getName());
@@ -330,6 +381,7 @@ class ProjectValidator
       }
 
       $variants = $actor->getNaturalVariants();
+      $issues = [...$issues, ...$this->checkActorSuperMove($actor, $where, $superMoves)];
       $default = $actor->getDefaultNaturalVariantId();
 
       if ($variants !== [] && ($default === null || ! isset($variants[$default]))) {
@@ -1443,6 +1495,117 @@ class ProjectValidator
   }
 
   /**
+   * One concept per tutorial, started when it comes into play: a tutorial's follow-on cinematic carries the story
+   * on, so one that starts another tutorial chains lessons back to back and is warned of.
+   *
+   * @return Issue[]
+   */
+  protected function checkTutorialFollowOns(ProjectWorkspace $workspace): array
+  {
+    $followOns = [];
+    foreach ($workspace->getRecordDatabase(\Ichiloto\Editor\Progression\TutorialFields::CATEGORY)?->getRecords() ?? [] as $record) {
+      $cinematic = $record->get('onFinish');
+      if (is_string($cinematic) && $cinematic !== '') {
+        $followOns['cinematic ' . $cinematic][] = [strval($record->get('id')), $cinematic];
+      }
+    }
+    if ($followOns === []) {
+      return [];
+    }
+
+    $issues = [];
+    \Ichiloto\Editor\Events\ScriptCommandUses::visitCommands($workspace, $workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [],
+      'start_tutorial', static function (array $command, string $where) use ($followOns, &$issues): void {
+        foreach ($followOns[$where] ?? [] as [$tutorial, $cinematic]) {
+          $issues[] = Issue::warning('assets/' . \Ichiloto\Engine\Progression\TutorialCatalog::FILE,
+            sprintf('Tutorial %s follows on with cinematic %s, which starts tutorial %s straight after it.', $tutorial, $cinematic,
+              is_string($command['tutorial'] ?? null) ? $command['tutorial'] : '(unnamed)'),
+            'Teach one concept at a time: give that tutorial its own trigger for when its concept comes into play.');
+        }
+      });
+
+    return $issues;
+  }
+
+  /**
+   * Validates the project's Super Moves against the same skill and state identities the runtime consumes, and
+   * reports a project that holds both the current and the earlier catalogue, which the Engine refuses.
+   *
+   * @return Issue[]
+   */
+  private function checkSuperMoves(ProjectWorkspace $workspace): array
+  {
+    $issues = [];
+    if (is_file($workspace->projectRoot . '/' . SuperMoveFields::CATALOGUE)
+      && is_file($workspace->projectRoot . '/' . SuperMoveFields::LEGACY_CATALOGUE)) {
+      $issues[] = Issue::error(SuperMoveFields::CATALOGUE,
+        sprintf('Both %s and %s declare Super Moves. The game refuses a project with both.',
+          SuperMoveFields::CATALOGUE, SuperMoveFields::LEGACY_CATALOGUE),
+        sprintf('Keep one of them. %s is the file the Editor writes.', SuperMoveFields::CATALOGUE),
+        self::SUPER_MOVE_CATALOGUES_AMBIGUOUS);
+    }
+    $database = $workspace->getRecordDatabase(SuperMoveFields::CATEGORY);
+    try {
+      $entries = array_map(static fn($record): array => (array) $record->toArray(), $database?->getRecords() ?? []);
+      $catalog = new \Ichiloto\Engine\Battle\CrisisAbilityCatalog($entries);
+      $catalog->validateVariantConditions();
+      $states = new ReferenceCatalog($workspace)->valuesFor('states');
+      foreach ($catalog->getAbilities() as $id => $ability) {
+        $ability->validateSkills($workspace->loadSkillCatalog());
+        foreach ($ability->states as $state) {
+          if (!in_array($state, $states, true)) {
+            throw new InvalidArgumentException(sprintf('Super Move "%s" references unknown activation state "%s".', $id, $state));
+          }
+        }
+      }
+    } catch (InvalidArgumentException $error) {
+      $issues[] = Issue::error($database?->schema->resolveRelativePath($workspace->projectRoot) ?? SuperMoveFields::CATALOGUE,
+        $error->getMessage(), 'Correct the activation, variant conditions or resource references in Super Moves.');
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Reports an actor's Super Move reference as the Engine reads it: one that is not an id, one the project does not
+   * declare, or the current and earlier actor keys naming different Super Moves.
+   *
+   * @param list<string> $superMoves The project's Super Move ids.
+   * @return Issue[]
+   */
+  private function checkActorSuperMove(ProjectActor $actor, string $where, array $superMoves): array
+  {
+    try {
+      $superMove = $actor->getSuperMove();
+    } catch (InvalidArgumentException) {
+      $data = $actor->getData();
+      $named = array_map(static function (string $key) use ($data): ?string {
+        try {
+          return \Ichiloto\Engine\Battle\CrisisAbilityCatalog::requireReference($data[$key] ?? null, $key);
+        } catch (InvalidArgumentException) {
+          return null;
+        }
+      }, [SuperMoveFields::ACTOR_KEY, SuperMoveFields::LEGACY_ACTOR_KEY]);
+      $disagree = array_key_exists(SuperMoveFields::ACTOR_KEY, $data) && array_key_exists(SuperMoveFields::LEGACY_ACTOR_KEY, $data)
+        && ($named[0] !== null || $data[SuperMoveFields::ACTOR_KEY] === null)
+        && ($named[1] !== null || $data[SuperMoveFields::LEGACY_ACTOR_KEY] === null);
+
+      return [$disagree
+        ? Issue::error($where, sprintf('Its %s and %s keys name different Super Moves (%s and %s).',
+            SuperMoveFields::ACTOR_KEY, SuperMoveFields::LEGACY_ACTOR_KEY, $named[0] ?? 'none', $named[1] ?? 'none'),
+            'Choose its Super Move on the actor page, which keeps only the superMove key.', self::ACTOR_SUPER_MOVE_KEYS_DISAGREE)
+        : Issue::error($where, 'Its Super Move reference is not a Super Move id.',
+            'Choose a current Super Move on the actor page.')];
+    }
+    if ($superMove !== null && !in_array($superMove, $superMoves, true)) {
+      return [Issue::error($where, sprintf('Its Super Move "%s" is not one the project declares.', $superMove),
+        'Choose a current Super Move on the actor page.')];
+    }
+
+    return [];
+  }
+
+  /**
    * Reports the inventory records the Engine's item catalogue cannot read.
    *
    * The engine's own constructors enforce a definition's bounds (a sell rate
@@ -1733,6 +1896,9 @@ class ProjectValidator
           ...$this->checkLayers($map),
           ...MapGraphicsValidator::validate($map),
           ...MapGraphicsValidator::validateCoverage($map),
+          ...BrokenPieceCheck::validate($map),
+          ...SavePointAgreementCheck::validate($map),
+          ...SavePointLimitCheck::validate($map, $workspace->config),
           ...PassageAgreementCheck::validate($map),
           ...$this->checkRetiredMapData($map),
           ...MapCompletenessCheck::validate($map, $this->inventoryCatalog),
@@ -1901,7 +2067,7 @@ class ProjectValidator
 
     $rows = $encounters->rows();
 
-    if ($rows === []) {
+    if ($rows === [] && $encounters->pools === []) {
       return [Issue::error(
         $map->mapId,
         'The map declares encounters but names no troops the engine can read.',
@@ -1950,6 +2116,26 @@ class ProjectValidator
       $issues = [...$issues, ...$this->checkEncounterHabitats($map, $row['name'], $row['arena'] ?? $encounters->mapArena())];
     }
 
+    foreach ($encounters->pools as $index => $pool) {
+      $entries = $pool['troops'] ?? null;
+      if (! is_array($entries)) {
+        continue; // The shared table reports the invalid pool below.
+      }
+      foreach ($entries as $name => $entry) {
+        if (! is_string($name)) {
+          continue;
+        }
+        $context = sprintf('Encounter pool %d troop "%s"', $index + 1, $name);
+        if ($troops !== [] && ! in_array($name, $troops, true)) {
+          $issues[] = Issue::error($map->mapId, "{$context} is not a project troop.", 'Check assets/Data/troops.php.');
+        }
+        $arena = is_array($entry) ? ($entry[MapEncounters::ARENA_KEY] ?? null) : null;
+        if (is_string($arena)) {
+          $issues = [...$issues, ...$this->checkBattleArena($arena, $map->mapId, $context)];
+        }
+      }
+    }
+
     $issues = [...$issues, ...$this->checkEncounterArenaCoverage($map, $encounters)];
 
     return [...$issues, ...$this->checkEncounterRate($map, $encounters), ...$this->checkEncounterTiles($map, $encounters), ...$this->checkEncounterTroopDuplicates($map)];
@@ -1983,10 +2169,20 @@ class ProjectValidator
     }
 
     foreach ($table->ignored as $ignored) {
+      if (str_starts_with($ignored, 'Encounter pool')) {
+        $issues[] = Issue::error($map->mapId, $ignored,
+          'Use a declared area, an encounter terrain, or both and a weighted troop roster.');
+      }
       if (str_starts_with($ignored, 'Battle arena rule') || str_contains($ignored, MapEncounters::ARENA_RULES_KEY)) {
         $issues[] = Issue::error($map->mapId, $ignored,
           'A rule names one of the map\'s areas, an encounter terrain its kinds meet, or both, and the arena it picks.');
       }
+    }
+
+    foreach ($table->findUnusedPoolNumbers($collisions) as $number) {
+      $issues[] = Issue::warning($map->mapId,
+        sprintf('Encounter pool %d supplies no encounter-eligible cell.', $number),
+        'Check the area, terrain, encounter tiles and priority of earlier pools.');
     }
 
     if ($this->arenaCatalog === null) {
@@ -2427,7 +2623,7 @@ class ProjectValidator
    * @param string $where Where it lives.
    * @param int $width The map width.
    * @param int $height The map height.
-   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>}> $anchors Anchors seen so far, appended to.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>, entry: array<string, mixed>}> $anchors Anchors seen so far, appended to.
    * @param string $name The NPC's name.
    * @param int|string $index The entry index.
    * @return Issue[] The issues found.
@@ -2473,6 +2669,7 @@ class ProjectValidator
       'wanders' => strval($entry['movement'] ?? 'fixed') === 'wander',
       'width' => ProjectNpc::glyphWidth($sprite),
       'conditions' => is_array($entry['conditions'] ?? null) ? $entry['conditions'] : [],
+      'entry' => $entry,
     ];
 
     if ($x < 0 || $y < 0 || $x >= $width || $y >= $height) {
@@ -2893,14 +3090,21 @@ class ProjectValidator
    * tile of an event's area is fine while the area has another tile to step
    * onto (a shopkeeper behind the counter of a shop area, a guest inside a
    * celebration area). Only when fixed NPCs cover every tile of the area can
-   * the event never fire; a wanderer only blocks it while there. Two NPCs on
-   * one tile: `npcAt` finds the first, so the second can never be spoken to
-   * while both stand still, unless their visibility conditions exclude each
-   * other, as phases of one presence do.
+   * the event never fire; a wanderer, or an NPC its scenes move between
+   * placements, only blocks it while there. Two NPCs on one tile: `npcAt`
+   * finds the first, so the second can never be spoken to while both stand
+   * still, unless they are never there together.
+   *
+   * Each NPC is judged on every placement its scenes can leave it on, with
+   * what is true whenever it stands there ({@see NpcPlacementLifecycle}):
+   * its default while no scene has moved it, each committed placement after.
+   * Two placements share a tile only when their conditions together can
+   * hold, as phases of one presence exclude each other, and as an arrival
+   * whose scene walks it to another placement never rests on its default.
    *
    * @param ProjectMap $map The map.
    * @param ProjectWorkspace $workspace The project.
-   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>}> $anchors The NPC anchors.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>, entry: array<string, mixed>}> $anchors The NPC anchors.
    * @return Issue[] The issues found.
    */
   protected function checkNpcCollisions(ProjectMap $map, ProjectWorkspace $workspace, array $anchors): array
@@ -2908,83 +3112,119 @@ class ProjectValidator
     $issues = [];
     $definitions = (array) ($map->getEditableData()['events'] ?? []);
     $spawns = $this->spawnTilesOn($map, $workspace);
+    // Exclusion follows the project's current world abilities, never a catalogue installed for another project.
+    $worldAbilities = $workspace->getWorldAbilities();
+    $this->placementLifecycle ??= NpcPlacementLifecycle::read($workspace);
+    $stances = [];
+
+    foreach ($anchors as $index => $anchor) {
+      $stances[$index] = $this->placementLifecycle->listVisibleStances($map->mapId, $anchor['entry'], $anchor, $worldAbilities->proveExclusive(...));
+    }
+
     $occupiedBy = ['fixed' => [], 'any' => []];
 
-    foreach ($anchors as $anchor) {
-      $cell = $anchor['x'] . ',' . $anchor['y'];
-      $occupiedBy['any'][$cell] = true;
+    foreach ($stances as $index => $own) {
+      foreach ($own as $stance) {
+        $cell = $stance['x'] . ',' . $stance['y'];
+        $occupiedBy['any'][$cell] = true;
 
-      if (! $anchor['wanders']) {
-        $occupiedBy['fixed'][$cell] = true;
+        // An NPC its scenes move between placements blocks a tile only while there, as a wanderer does.
+        if (! $anchors[$index]['wanders'] && count(array_unique(array_column($own, 'placement'))) === 1) {
+          $occupiedBy['fixed'][$cell] = true;
+        }
       }
     }
 
     $areaCells = $this->eventAreaCells($map);
+    // One placement stood on in several stories is reported once.
+    $report = static function (Issue $issue) use (&$issues): void {
+      $issues[$issue->where . "\0" . $issue->message] = $issue;
+    };
+    $describe = static fn(array $stance, string $subject): string => $stance['placement'] === NpcPlacementSet::DEFAULT
+      ? $subject : sprintf('%s at its %s placement', $subject, $stance['placement']);
 
     foreach ($anchors as $index => $anchor) {
       foreach ($anchors as $otherIndex => $other) {
-        // Phases whose visibility conditions exclude each other are never
-        // on the field together, so they may share or overlap a tile.
-        if ($otherIndex <= $index || WorldConditionExclusion::proveExclusive($anchor['conditions'], $other['conditions'])) {
+        if ($otherIndex <= $index) {
           continue;
         }
 
-        if ($anchor['x'] === $other['x'] && $anchor['y'] === $other['y']) {
-          $issues[] = $anchor['wanders'] || $other['wanders']
+        foreach ($stances[$index] ?? [] as $stance) {
+          foreach ($stances[$otherIndex] ?? [] as $otherStance) {
+            // Stances whose conditions exclude each other are never on the
+            // field together, so they may share or overlap a tile.
+            if ($worldAbilities->proveExclusive($stance['conditions'], $otherStance['conditions'])) {
+              continue;
+            }
+
+            $it = $stance['placement'] === NpcPlacementSet::DEFAULT ? 'It' : sprintf('At its %s placement it', $stance['placement']);
+            $neighbour = $describe($otherStance, 'NPC ' . $other['name']);
+
+            if ($stance['x'] === $otherStance['x'] && $stance['y'] === $otherStance['y']) {
+              $report($anchor['wanders'] || $other['wanders']
+                ? Issue::warning(
+                  $anchor['where'],
+                  sprintf('%s starts on the same tile (%d, %d) as %s.', $it, $stance['x'], $stance['y'], $neighbour),
+                  'Only one can be spoken to until the wanderer moves off.'
+                )
+                : Issue::error(
+                  $anchor['where'],
+                  sprintf('%s shares tile (%d, %d) with %s.', $it, $stance['x'], $stance['y'], $neighbour),
+                  'The game finds the first NPC on a tile; the other can never be spoken to. Move one.'
+                ));
+            } elseif (
+              $anchor['width'] > 1
+              && $stance['y'] === $otherStance['y']
+              && $otherStance['x'] > $stance['x']
+              && $otherStance['x'] < $stance['x'] + $anchor['width']
+            ) {
+              $report(Issue::warning(
+                $anchor['where'],
+                sprintf('%s %d-column sprite covers the tile of %s at (%d, %d).',
+                  $stance['placement'] === NpcPlacementSet::DEFAULT ? 'Its' : sprintf('At its %s placement its', $stance['placement']),
+                  $anchor['width'], $neighbour, $otherStance['x'], $otherStance['y']),
+                'The wide glyph is drawn over the neighbour. Leave a column between them.'
+              ));
+            }
+          }
+        }
+      }
+
+      foreach ($stances[$index] ?? [] as $stance) {
+        $it = $stance['placement'] === NpcPlacementSet::DEFAULT ? 'It' : sprintf('At its %s placement it', $stance['placement']);
+        $marker = $map->getEventSymbol($stance['x'], $stance['y']);
+
+        $isAreaCovered = static fn(array $occupied): bool => array_diff_key($areaCells[$marker] ?? [], $occupied) === [];
+
+        if (trim($marker) !== '' && isset($definitions[$marker]) && $isAreaCovered($occupiedBy['any'])) {
+          $class = is_array($definitions[$marker]) ? strval($definitions[$marker]['class'] ?? '') : '';
+          $classLabel = $class !== '' ? sprintf(' (%s)', basename(str_replace('\\', '/', $class))) : '';
+          $report(! $isAreaCovered($occupiedBy['fixed'])
             ? Issue::warning(
               $anchor['where'],
-              sprintf('It starts on the same tile (%d, %d) as NPC %s.', $anchor['x'], $anchor['y'], $other['name']),
-              'Only one can be spoken to until the wanderer moves off.'
+              sprintf('%s starts on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $it, $marker, $classLabel, $stance['x'], $stance['y']),
+              'The player cannot step onto the event while they stand there, so it cannot fire until a wanderer moves off.'
             )
             : Issue::error(
               $anchor['where'],
-              sprintf('It shares tile (%d, %d) with NPC %s.', $anchor['x'], $anchor['y'], $other['name']),
-              'The game finds the first NPC on a tile; the other can never be spoken to. Move one.'
-            );
-        } elseif (
-          $anchor['width'] > 1
-          && $anchor['y'] === $other['y']
-          && $other['x'] > $anchor['x']
-          && $other['x'] < $anchor['x'] + $anchor['width']
-        ) {
-          $issues[] = Issue::warning(
-            $anchor['where'],
-            sprintf('Its %d-column sprite covers the tile of NPC %s at (%d, %d).', $anchor['width'], $other['name'], $other['x'], $other['y']),
-            'The wide glyph is drawn over the neighbour. Leave a column between them.'
-          );
+              sprintf('%s stands on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $it, $marker, $classLabel, $stance['x'], $stance['y']),
+              'The player can never step onto the event, so it never fires. Move the NPC, or give the event a free tile.'
+            ));
         }
-      }
 
-      $marker = $map->getEventSymbol($anchor['x'], $anchor['y']);
-
-      $isAreaCovered = static fn(array $occupied): bool => array_diff_key($areaCells[$marker] ?? [], $occupied) === [];
-
-      if (trim($marker) !== '' && isset($definitions[$marker]) && $isAreaCovered($occupiedBy['any'])) {
-        $class = is_array($definitions[$marker]) ? strval($definitions[$marker]['class'] ?? '') : '';
-        $classLabel = $class !== '' ? sprintf(' (%s)', basename(str_replace('\\', '/', $class))) : '';
-        $issues[] = ! $isAreaCovered($occupiedBy['fixed'])
-          ? Issue::warning(
-            $anchor['where'],
-            sprintf('It starts on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $marker, $classLabel, $anchor['x'], $anchor['y']),
-            'The player cannot step onto the event while they stand there, so it cannot fire until a wanderer moves off.'
-          )
-          : Issue::error(
-            $anchor['where'],
-            sprintf('It stands on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $marker, $classLabel, $anchor['x'], $anchor['y']),
-            'The player can never step onto the event, so it never fires. Move the NPC, or give the event a free tile.'
-          );
-      }
-
-      foreach ($spawns as $spawn) {
-        if ($spawn['x'] === $anchor['x'] && $spawn['y'] === $anchor['y']) {
-          $issues[] = Issue::warning(
-            $anchor['where'],
-            sprintf('It stands on %s at (%d, %d).', $spawn['label'], $anchor['x'], $anchor['y']),
-            'The player arrives on top of it and cannot speak to it until stepping off. Move one of them.'
-          );
+        foreach ($spawns as $spawn) {
+          if ($spawn['x'] === $stance['x'] && $spawn['y'] === $stance['y']) {
+            $report(Issue::warning(
+              $anchor['where'],
+              sprintf('%s stands on %s at (%d, %d).', $it, $spawn['label'], $stance['x'], $stance['y']),
+              'The player arrives on top of it and cannot speak to it until stepping off. Move one of them.'
+            ));
+          }
         }
       }
     }
+
+    $issues = array_values($issues);
 
     // An NPC on a solid tile is not reported: the game refuses the tile
     // because the NPC stands there, and the player speaks to it from a
@@ -3541,6 +3781,49 @@ class ProjectValidator
   }
 
   /**
+   * The reference categories the validator's own checks name directly.
+   * Registered script commands add theirs through
+   * {@see collectKnownReferences()}, so a new command reference kind never
+   * needs listing here.
+   */
+  protected const array DIRECT_REFERENCE_CATEGORIES = [
+    'quests', 'maps', 'troops', 'inventory', 'bgm', 'sfx', 'common_events', 'cinematics', 'summons',
+    'animations', 'effects', 'actors', 'income_schedules', SkitPlaybackFields::REFERENCE_CATEGORY,
+    ReferenceCatalog::WORLD_ABILITIES,
+  ];
+
+  /**
+   * What the project defines, for every category a reference check may
+   * consult: the validator's direct categories and every category a
+   * registered command's reference resolves to. Every reference check reads
+   * this one map, so no check knows fewer kinds than the commands it walks.
+   *
+   * @return array<string, string[]> The values, by ReferenceCatalog category.
+   */
+  protected function collectKnownReferences(ProjectWorkspace $workspace): array
+  {
+    $categories = self::DIRECT_REFERENCE_CATEGORIES;
+
+    foreach (ScriptCommandReference::cases() as $reference) {
+      // Map-local and cinematic-local kinds are checked where the script runs, never against the whole project.
+      $source = ScriptReferenceSource::forReference($reference);
+
+      if ($source->scope === ScriptReferenceScope::PROJECT && $source->category !== null) {
+        $categories[] = $source->category;
+      }
+    }
+
+    $catalog = new ReferenceCatalog($workspace);
+    $known = [];
+
+    foreach (array_unique($categories) as $category) {
+      $known[$category] = $catalog->valuesFor($category);
+    }
+
+    return $known;
+  }
+
+  /**
    * Checks everything that names another resource.
    *
    * The editor's pickers keep new references honest, but a project also
@@ -3554,30 +3837,54 @@ class ProjectValidator
    */
   protected function checkReferences(ProjectWorkspace $workspace): array
   {
-    $catalog = new ReferenceCatalog($workspace);
-    $known = [
-      'quests' => $catalog->valuesFor('quests'),
-      'maps' => $catalog->valuesFor('maps'),
-      'troops' => $catalog->valuesFor('troops'),
-      'inventory' => $catalog->valuesFor('inventory'),
-      'bgm' => $catalog->valuesFor('bgm'),
-      'sfx' => $catalog->valuesFor('sfx'),
-      'common_events' => $catalog->valuesFor('common_events'),
-      'cinematics' => $catalog->valuesFor('cinematics'),
-      'animations' => $catalog->valuesFor('animations'),
-      'effects' => $catalog->valuesFor('effects'),
-      'actors' => $catalog->valuesFor('actors'),
-      'income_schedules' => $catalog->valuesFor('income_schedules'),
-    ];
+    $known = $this->collectKnownReferences($workspace);
 
     return [
       ...$this->checkConfigReferences($workspace, $known),
+      ...$this->checkDashConditionReferences($workspace, $known),
+      ...$this->checkWorldAbilityConditionReferences($workspace, $known),
       ...$this->checkSkitReferences($workspace, $known),
       ...$this->checkMapReferences($workspace, $known),
       ...$this->checkScriptReferences($workspace, $known),
       ...$this->checkTroopEventReferences($workspace, $known),
       ...$this->checkAchievementReferences($workspace, $known),
     ];
+  }
+
+  /**
+   * Checks what the dash's unlock conditions name: the quests, items and
+   * world powers it waits on. Their shape is the DashValidator's.
+   *
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkDashConditionReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $dash = $workspace->getSystemField(DashSettings::KEY);
+    $conditions = is_array($dash) ? ($dash[DashSettings::CONDITIONS] ?? null) : null;
+
+    return is_array($conditions) && array_is_list($conditions)
+      ? $this->checkConditions($conditions, 'assets/Data/system.php: dash conditions', $known)
+      : [];
+  }
+
+  /**
+   * Checks what each world power's unlock conditions name: the quests and
+   * items it waits on. The powers it depends on are the Engine catalogue's
+   * own to check, with its dependency cycles.
+   *
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkWorldAbilityConditionReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $issues = [];
+    foreach ($workspace->getWorldAbilities()->catalog?->getAbilities() ?? [] as $ability) {
+      $issues = [...$issues, ...$this->checkConditions($ability->conditions,
+        sprintf('%s: world power %s conditions', ProjectWorldAbilities::RELATIVE_PATH, $ability->id), $known)];
+    }
+
+    return $issues;
   }
 
   /**
@@ -3600,10 +3907,9 @@ class ProjectValidator
   }
 
   /**
-   * Checks manually authored achievement condition records.
-   *
-   * Achievements are not an editor Database category, but their conditions
-   * use the same runtime evaluator and must receive the same validation.
+   * Checks what achievement conditions name, as every other condition list
+   * is checked. Database > Achievements authors them; a hand-written file
+   * is checked the same way.
    *
    * @param ProjectWorkspace $workspace The project.
    * @param array<string, string[]> $known What the project defines.
@@ -3611,7 +3917,7 @@ class ProjectValidator
    */
   protected function checkAchievementReferences(ProjectWorkspace $workspace, array $known): array
   {
-    $path = $workspace->projectRoot . '/assets/Data/achievements.php';
+    $path = $workspace->projectRoot . '/' . \Ichiloto\Editor\Progression\AchievementFields::RELATIVE_PATH;
     $file = ProjectDirectoryContext::run(
       $workspace->projectRoot,
       static fn(): PhpDataFile => PhpDataFile::load($path),
@@ -3636,6 +3942,55 @@ class ProjectValidator
     }
 
     return $issues;
+  }
+
+  /**
+   * Checks a command that plays a selected Skit: it must name a current
+   * Skit, and one gated to a map must be played on that map, as the runtime
+   * fails a Skit its map gate refuses. Story conditions are runtime state,
+   * so they are not judged here.
+   *
+   * @param array<string, mixed> $command
+   * @param array<string, string[]> $known
+   * @return Issue[]
+   */
+  protected function checkSkitPlayback(array $command, string $where, array $known, ScriptMapState $map): array
+  {
+    $skit = trim(strval($command[SkitPlaybackFields::getReferenceField()] ?? ''));
+    if ($skit === '') {
+      return [Issue::error($where, 'It plays no skit.', 'Choose a skit from the picker.')];
+    }
+    $issues = $this->checkReference($skit, SkitPlaybackFields::REFERENCE_CATEGORY, 'skit', $where, $known);
+    $gate = $this->skitMaps[$skit] ?? null;
+    if ($issues === [] && $gate !== null && $map->mapIds !== null && ! in_array($gate, $map->mapIds, true)) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('It plays the skit "%s", which plays only on the map "%s", from %s.', $skit, $gate, $map->description),
+        'The runtime fails this command. Play the skit on its map, or change the skit\'s Where.'
+      );
+    }
+
+    return $issues;
+  }
+
+  /**
+   * The map each Skit that names one plays on, by Skit id.
+   *
+   * @return array<string, string>
+   */
+  protected function readSkitMaps(ProjectWorkspace $workspace): array
+  {
+    $maps = [];
+    foreach ($workspace->getRecordDatabase(SkitPlaybackFields::REFERENCE_CATEGORY)?->getRecords() ?? [] as $record) {
+      $skit = (array) $record->toArray();
+      $id = trim(strval($skit['id'] ?? ''));
+      $map = trim(strval($skit['where'] ?? ''));
+      if ($id !== '' && $map !== '') {
+        $maps[$id] = $map;
+      }
+    }
+
+    return $maps;
   }
 
   /**
@@ -3675,6 +4030,13 @@ class ProjectValidator
       }
 
       $issues = [...$issues, ...$this->checkConditions((array) ($skit['conditions'] ?? []), $where, $known)];
+      try {
+        foreach (SkitPlaybackFields::readSkitPlayback($skit, ucfirst($where))['sounds'] as $cue => $sound) {
+          $issues = [...$issues, ...$this->checkReference($sound, 'sfx', sprintf('%s sound', $cue), $where, $known)];
+        }
+      } catch (InvalidArgumentException $exception) {
+        $issues[] = Issue::error($where, $exception->getMessage(), 'The runtime skips this skit. Choose its trigger and sounds from their pickers.');
+      }
       foreach ($skit['beats'] ?? [] as $index => $beat) {
         if (! is_array($beat)) {
           $issues[] = Issue::error($where, 'Each skit beat must be a data record.');
@@ -3824,7 +4186,8 @@ class ProjectValidator
       $registered = ScriptCommandRegistry::getCatalog()->findDefinition($type);
 
       if ($registered !== null) {
-        $issues = [...$issues, ...$this->checkRegisteredCommand($registered, $command, $where, $known)];
+        // Outside a cinematic there is no conversation to select a group of.
+        $issues = [...$issues, ...$this->checkRegisteredCommand($registered, $command, $where, $known, $context['map'], null)];
       } elseif (! in_array($type, EventInterpreter::COMMAND_TYPES, true)) {
         $issues[] = Issue::error(
           $where,
@@ -3840,10 +4203,12 @@ class ProjectValidator
         'play_music' => ['bgm', 'music', 'track'],
         'play_sound' => ['sfx', 'sound', 'sound'],
         'accept_quest' => ['quests', 'id', 'quest'],
-        'transfer' => ['maps', 'map', 'map'],
+        'transfer', 'transfer_through_door' => ['maps', 'map', 'map'],
         'start_battle' => ['troops', 'troop', 'troop'],
         default => null,
       };
+
+      $issues = [...$issues, ...$this->checkDoorTransfer($command, $where, $known)];
 
       if (is_array($named)) {
         [$category, $key, $noun] = $named;
@@ -3851,6 +4216,22 @@ class ProjectValidator
           ...$issues,
           ...$this->checkReference(strval($command[$key] ?? ''), $category, $noun, $where, $known),
         ];
+      }
+
+      if ($type === SkitPlaybackFields::getCommandType()) {
+        $issues = [...$issues, ...$this->checkSkitPlayback($command, $where, $known, $context['map'])];
+      }
+
+      if ($type === StorybookPlaybackFields::getCommandType()) {
+        $issues = [...$issues, ...$this->storybooks->checkPlayback($command, $where)];
+        $finish = StorybookPlaybackFields::getFinishField();
+        if ($finish !== null && array_key_exists($finish, $command)) {
+          try {
+            CinematicScriptValidator::validateStorybookPlayback($command, $where, 'command');
+          } catch (InvalidArgumentException $error) {
+            $issues[] = Issue::error($where, $error->getMessage(), 'Correct the After Reading command list.');
+          }
+        }
       }
 
       if ($type === 'field_animation') {
@@ -3948,8 +4329,9 @@ class ProjectValidator
         $context['map'] = ScriptMapState::mergeStates(array_column($branchContexts, 'map'));
       }
 
-      if ($type === 'transfer') {
-        $context['map'] = $context['map']->transferTo(trim(strval($command['map'] ?? '')), $context['npcIdsByMap']);
+      $destination = CommandMapContext::findDestinationMap($command, $this->doors?->createDestinationResolver());
+      if ($destination !== null) {
+        $context['map'] = $context['map']->transferTo($destination, $context['npcIdsByMap']);
       }
     }
 
@@ -3957,12 +4339,8 @@ class ProjectValidator
   }
 
   /**
-   * Walks a parallel command's lanes as the Engine runs them: together, on
-   * the one current map, which a transfer in any lane changes for every lane.
-   * Each lane starts on the incoming map or any map a sibling lane transfers
-   * to, and its own transfers can be overtaken by a sibling's. The block ends
-   * where its transferring lanes can finish, or where it started when no
-   * lane transfers.
+   * Walks a parallel command's lanes as the Engine runs them
+   * ({@see ScriptMapState::walkParallelLanes()}), gathering each lane's issues.
    *
    * @param array<string, mixed> $command The parallel command.
    * @param array<string, string[]> $npcIdsByMap Each known map's NPCs.
@@ -3978,30 +4356,22 @@ class ProjectValidator
     callable $walkLane,
   ): array
   {
-    $lanes = CommandMapContext::getLanes($command);
-    $findCommonEvent = fn(string $id): ?array => $this->commonEventScripts[$id] ?? null;
-    $destinations = array_map(
-      static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, array_values($commonEventStack)),
-      $lanes,
-    );
     $issues = [];
-    $ends = [];
+    $end = $start->walkParallelLanes(
+      $command,
+      $npcIdsByMap,
+      fn(string $id): ?array => $this->commonEventScripts[$id] ?? null,
+      array_values($commonEventStack),
+      static function (array $lane, ScriptMapState $laneStart) use ($walkLane, &$issues): ScriptMapState {
+        [$laneIssues, $laneEnd] = $walkLane($lane['commands'], $laneStart);
+        $issues = [...$issues, ...$laneIssues];
 
-    foreach ($lanes as $index => $lane) {
-      $siblings = array_values(array_unique(array_merge([], ...array_values(array_diff_key($destinations, [$index => true])))));
-      $laneStart = ScriptMapState::mergeStates([
-        $start,
-        ...array_map(static fn(string $map): ScriptMapState => $start->arriveOn($map, $npcIdsByMap), $siblings),
-      ])->setConcurrentMaps([...$start->concurrentMaps, ...$siblings]);
-      [$laneIssues, $end] = $walkLane($lane['commands'], $laneStart);
-      $issues = [...$issues, ...$laneIssues];
+        return $laneEnd;
+      },
+      $this->doors?->createDestinationResolver(),
+    );
 
-      if ($destinations[$index] !== []) {
-        $ends[] = $end;
-      }
-    }
-
-    return [$issues, $ends !== [] ? ScriptMapState::mergeStates($ends)->setConcurrentMaps($start->concurrentMaps) : $start];
+    return [$issues, $end];
   }
 
   /**
@@ -4016,8 +4386,30 @@ class ProjectValidator
       'knowledge' => $this->checkKnowledgeCommand($command, $where),
       'start_battle' => $this->checkBattleContinuation($command, $where),
       'move_route' => $this->checkMovementRoute($command, $where, $npcIds, $mapId, $cinematic),
+      'stage_actor' => $this->checkStagedActorBinding($command, $where),
       default => [],
     };
+  }
+
+  /**
+   * Reports what the Engine's stage manager would refuse about one staged
+   * actor, at the script that owns the command. The Engine owns the staging
+   * contract; the entry is selected as the interpreter selects it, so the
+   * flat and the wrapped `actor` form are judged alike and the source is
+   * left as authored.
+   *
+   * @param array<string, mixed> $command The stage_actor command.
+   * @return Issue[] The issue found, if any.
+   */
+  protected function checkStagedActorBinding(array $command, string $where): array
+  {
+    try {
+      CinematicStageManager::validateBinding(is_array($command['actor'] ?? null) ? $command['actor'] : $command);
+    } catch (Throwable $throwable) {
+      return [Issue::error($where, $throwable->getMessage(), 'Correct the staged actor as the Engine\'s cinematic stage requires.')];
+    }
+
+    return [];
   }
 
   /**
@@ -4307,7 +4699,7 @@ class ProjectValidator
         $issues = [...$issues, ...$this->checkCinematicTrigger($definition, $where, $known)];
       }
 
-      if (str_contains($class, self::SCRIPT_TRIGGER)) {
+      if (is_a($class, ScriptEventTrigger::class, true)) {
         $issues = [
           ...$issues,
           ...$this->checkScriptTrigger(
@@ -4526,7 +4918,8 @@ class ProjectValidator
     $scriptId = trim(strval($data['scriptId'] ?? ''));
     $inlineScript = $data['script'] ?? [];
 
-    if ($scriptId === '' && (! is_array($inlineScript) || $inlineScript === [])) {
+    if ($scriptId === '' && (! is_array($inlineScript) || $inlineScript === [])
+      && !is_a($definition['class'] ?? '', \Ichiloto\Engine\Events\Triggers\PassageEventTrigger::class, true)) {
       $issues[] = Issue::error(
         $where,
         'ScriptEventTrigger names no scriptId and has no inline script.',
@@ -4598,8 +4991,11 @@ class ProjectValidator
     }
 
     $issues = [];
-    foreach (array_diff(array_keys($cue), ['symbol', 'color', 'conditions', 'kind']) as $field) {
-      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol, color, conditions, or kind.');
+    foreach (array_diff(array_keys($cue), ['symbol', 'color', 'conditions', 'kind', 'maxDistance']) as $field) {
+      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol, color, conditions, kind or maxDistance.');
+    }
+    if (array_key_exists('maxDistance', $cue) && (!is_int($cue['maxDistance']) || $cue['maxDistance'] < 0 || $cue['maxDistance'] > EventCue::MAX_DISTANCE)) {
+      $issues[] = Issue::error($where, 'Its cue maxDistance must be an integer from 0 to 64 steps.', 'Choose a range or clear it for unlimited range.');
     }
 
     // Kind is a contract even for a cue whose blank symbol disables display.
@@ -4840,6 +5236,20 @@ class ProjectValidator
         continue;
       }
 
+      // An any-of group holds conditions rather than naming one: the Engine judges its shape,
+      // and each member is checked here as any condition in this list would be.
+      if ($type === WorldConditionType::ANY->value) {
+        try {
+          \Ichiloto\Engine\Core\WorldConditionEvaluator::validateAll([$condition], 'condition');
+        } catch (\InvalidArgumentException $refusal) {
+          $issues[] = Issue::error($where, sprintf('It has a malformed any-of condition group: %s', $refusal->getMessage()),
+            'Write the group as any(condition; condition) with one to the Engine\'s limit of members.');
+          continue;
+        }
+        array_push($issues, ...$this->checkConditions((array) $condition['conditions'], $where, $known, $questPrerequisites));
+        continue;
+      }
+
       $nameValue = $condition['name'] ?? null;
 
       if (! is_string($nameValue)) {
@@ -4870,6 +5280,7 @@ class ProjectValidator
       $issues = [...$issues, ...match ($type) {
         'quest' => $this->checkReference($name, 'quests', 'quest', $where, $known),
         'item', 'key_item' => $this->checkReference($name, 'inventory', 'item', $where, $known),
+        'world_ability' => $this->checkReference($name, ReferenceCatalog::WORLD_ABILITIES, 'world power', $where, $known),
         default => [],
       }];
     }
@@ -4912,6 +5323,36 @@ class ProjectValidator
   }
 
   /**
+   * Reports a world-abilities source the Engine refuses, as the game's boot
+   * would refuse it.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkWorldAbilitySource(ProjectWorkspace $workspace): array
+  {
+    $abilities = $workspace->getWorldAbilities();
+    $problem = $abilities->loadProblem;
+    if ($problem !== null) {
+      return [Issue::error(
+        ProjectWorldAbilities::RELATIVE_PATH,
+        sprintf('The project\'s world abilities could not be read: %s', $problem),
+        'The game will not start until it is fixed. Until then every world power reference is reported as undeclared and reachability is not checked.'
+      )];
+    }
+    $issues = [];
+    // A first-use effect plays once in a finite field effect session, as a field_animation's does.
+    foreach ($abilities->catalog?->getAbilities() ?? [] as $ability) {
+      if ($ability->firstUse?->effect !== null) {
+        $issues = [...$issues, ...EffectValidator::checkOneShotFieldEffect($workspace->catalogs, $ability->firstUse->effect,
+          sprintf('%s: world power %s first-use effect', ProjectWorldAbilities::RELATIVE_PATH, $ability->id))];
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
    * Reports a project's command declarations the game would refuse to start
    * with.
    *
@@ -4937,7 +5378,14 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issues found.
    */
-  protected function checkRegisteredCommand(ScriptCommandDefinition $definition, array $command, string $where, array $known): array
+  protected function checkRegisteredCommand(
+    ScriptCommandDefinition $definition,
+    array $command,
+    string $where,
+    array $known,
+    ?ScriptMapState $map = null,
+    ?array $conversationGroups = null,
+  ): array
   {
     $issues = array_map(
       static fn(string $problem): Issue => Issue::error(
@@ -4948,26 +5396,67 @@ class ProjectValidator
       $definition->findProblems($command),
     );
 
-    return [...$issues, ...$this->checkRegisteredReferences($definition, $command, $where, $known)];
+    return [...$issues, ...$this->checkRegisteredReferences($definition, $command, $where, $known, $map, $conversationGroups)];
   }
 
   /**
    * Checks every resource a registered command names, in its list entries
-   * too.
+   * too, where the command runs: a project resource against the project, an
+   * NPC against the map the script is on at that point, a conversation group
+   * against the cinematic running it. A reference kind this Editor does not
+   * know is reported on each command that declares one, never thrown.
    *
    * @param array<string, mixed> $command The authored command.
    * @param array<string, string[]> $known What the project defines.
+   * @param ScriptMapState|null $map Where the script is, when known.
+   * @param list<string>|null $conversationGroups The running cinematic's conversation groups; null outside a cinematic.
    * @return Issue[] The issues found.
    */
-  protected function checkRegisteredReferences(ScriptCommandDefinition $definition, array $command, string $where, array $known): array
+  protected function checkRegisteredReferences(
+    ScriptCommandDefinition $definition,
+    array $command,
+    string $where,
+    array $known,
+    ?ScriptMapState $map = null,
+    ?array $conversationGroups = null,
+  ): array
   {
-    $check = function (ScriptCommandField $field, array $data) use (&$check, $where, $known): array {
+    $check = function (ScriptCommandField $field, array $data, array $siblings) use (&$check, $definition, $where, $known, $map, $conversationGroups): array {
       $value = ScriptCommandField::readPath($data, $field->key);
 
-      $category = $field->reference === null ? null : ProjectScriptCommands::getReferenceCategory($field->reference);
+      if ($field->kind === ScriptCommandFieldKind::REFERENCE && $field->reference !== null) {
+        $source = ScriptReferenceSource::forReference($field->reference);
+        $text = is_string($value) ? trim($value) : '';
 
-      if ($field->kind === ScriptCommandFieldKind::REFERENCE && $category !== null && is_string($value)) {
-        return $this->checkReference($value, $category, strtolower($field->label), $where, $known);
+        return match ($source->scope) {
+          ScriptReferenceScope::PROJECT => $text === '' ? [] : $this->checkReference($text, $source->category ?? '', strtolower($field->label), $where, $known),
+          // The Engine's troop page validation checks a member against its troop.
+          ScriptReferenceScope::OWNING_TROOP => [],
+          ScriptReferenceScope::CURRENT_MAP => $text === '' || $map?->npcIds === null || in_array($text, $map->npcIds, true) ? [] : [Issue::error(
+            $where,
+            sprintf('Its %s command names NPC "%s", which is not on %s.', $definition->type, $text, $map->description ?? '(unknown map)'),
+            'The runtime stops the script at this command. Choose an NPC on the map the script is on at that point.'
+          )],
+          ScriptReferenceScope::CURRENT_CINEMATIC => match (true) {
+            $conversationGroups === null => [Issue::error(
+              $where,
+              sprintf('Its %s command selects conversation group "%s" outside a cinematic.', $definition->type, $text),
+              'The runtime stops the script at this command. Only a cinematic declares conversation groups; run it from one.'
+            )],
+            $text === '' || in_array($text, $conversationGroups, true) => [],
+            default => [Issue::error(
+              $where,
+              sprintf('Its %s command selects conversation group "%s", which this cinematic does not declare.', $definition->type, $text),
+              'The runtime stops the cinematic at this command. Choose a group its conversation declares, or declare it.'
+            )],
+          },
+          ScriptReferenceScope::SELECTED_NPC => $this->checkNpcPlacementReference($definition, $field, $siblings, $data, $text, $where, $map),
+          ScriptReferenceScope::UNSUPPORTED => [Issue::error(
+            $where,
+            sprintf('Its %s command\'s %s is an Engine "%s" reference this Editor does not know.', $definition->type, strtolower($field->label), $source->reference->value),
+            $source->describeUnsupported()
+          )],
+        };
       }
 
       if ($field->kind !== ScriptCommandFieldKind::LIST || ! is_array($value)) {
@@ -4978,7 +5467,7 @@ class ProjectValidator
 
       foreach (array_filter($value, is_array(...)) as $entry) {
         foreach ($field->fields as $entryField) {
-          $issues = [...$issues, ...$check($entryField, $entry)];
+          $issues = [...$issues, ...$check($entryField, $entry, $field->fields)];
         }
       }
 
@@ -4987,10 +5476,91 @@ class ProjectValidator
     $issues = [];
 
     foreach ($definition->fields as $field) {
-      $issues = [...$issues, ...$check($field, $command)];
+      $issues = [...$issues, ...$check($field, $command, $definition->fields)];
     }
 
     return $issues;
+  }
+
+  /**
+   * Checks a named NPC placement against the NPC its command's NPC field
+   * selects, on every map the script can be on at that point: that NPC must
+   * declare named placements through the Engine's reader, and this one among
+   * them or `default`. A declaration naming no single NPC beside the field
+   * is reported, as its value cannot be chosen. Unknown maps, and NPCs the
+   * NPC check already reports missing, are not judged here; a map whose
+   * placements the Engine refuses is reported by the map's own preflight.
+   *
+   * @param list<ScriptCommandField> $siblings The fields declared beside it.
+   * @param array<string, mixed> $data The object the fields live in.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcPlacementReference(ScriptCommandDefinition $definition, ScriptCommandField $field, array $siblings,
+    array $data, string $placement, string $where, ?ScriptMapState $map): array
+  {
+    $npcField = ScriptReferenceSource::findSelectingNpcField($field, $siblings);
+    if ($npcField === null) {
+      return [Issue::error($where, sprintf('Its %s command\'s %s cannot be chosen.', $definition->type, strtolower($field->label)),
+        ScriptReferenceSource::describeUnselectedNpc($field))];
+    }
+    $npcValue = ScriptCommandField::readPath($data, $npcField->key);
+    $npcId = is_string($npcValue) ? trim($npcValue) : '';
+    if ($placement === '' || $npcId === '' || $map?->mapIds === null || $this->validatedWorkspace === null) {
+      return [];
+    }
+    $issues = [];
+    foreach ($this->validatedWorkspace->maps as $candidate) {
+      if (! in_array($candidate->mapId, $map->mapIds, true)) {
+        continue;
+      }
+      foreach ($candidate->getNpcs()->all() as $npc) {
+        $entry = $npc->toArray();
+        if ($npc->getId() !== $npcId) {
+          continue;
+        }
+        if (! array_key_exists('placements', $entry)) {
+          $issues[] = Issue::error($where,
+            sprintf('Its %s command commits NPC "%s" to placement "%s", but that NPC declares no placements on %s.', $definition->type, $npcId, $placement, $candidate->mapId),
+            'The runtime stops the script at this command. Give the NPC named placements on its Placement rows, or remove the command.');
+          continue;
+        }
+        try {
+          $declared = array_map(strval(...), array_keys(NpcPlacementSet::fromEntry($entry)->placements));
+        } catch (\InvalidArgumentException) {
+          continue;
+        }
+        if (! in_array($placement, $declared, true)) {
+          $issues[] = Issue::error($where,
+            sprintf('Its %s command commits NPC "%s" to placement "%s", which that NPC does not declare on %s.', $definition->type, $npcId, $placement, $candidate->mapId),
+            sprintf('The runtime stops the script at this command. Choose one of: %s.', implode(', ', $declared)));
+        }
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * A `transfer_through_door` leaves through a door the Engine's resolver can
+   * read on the maps as they stand: the door owns where it leads, so a
+   * marker that is no door, or a malformed command, leads nowhere. A map the
+   * project lacks is reported as a missing map instead.
+   *
+   * @param array<string, mixed> $command
+   * @param array<string, string[]> $known
+   * @return Issue[]
+   */
+  protected function checkDoorTransfer(array $command, string $where, array $known): array
+  {
+    $map = trim(strval($command['map'] ?? ''));
+    if (($command['type'] ?? null) !== MapDoorReference::COMMAND || $this->doors === null
+      || ($map !== '' && ! in_array($map, $known['maps'] ?? [], true))) {
+      return [];
+    }
+    $door = $this->doors->resolve($command);
+
+    return is_string($door) ? [Issue::error($where, sprintf('It leaves through a door the game cannot use: %s', $door),
+      'Choose the door from the picker, which lists the doors on the named map.')] : [];
   }
 
   protected function checkReference(string $value, string $category, string $noun, string $where, array $known): array
@@ -5026,6 +5596,14 @@ class ProjectValidator
 
     if (in_array($value, $known[$category] ?? [], true)) {
       return [];
+    }
+
+    if ($category === ReferenceCatalog::WORLD_ABILITIES) {
+      return [Issue::error(
+        $where,
+        sprintf('It names the %s "%s", which %s does not declare.', $noun, $value, ProjectWorldAbilities::RELATIVE_PATH),
+        'The game raises an error when it evaluates it. Choose the power from the picker, or declare it.'
+      )];
     }
 
     if (in_array($category, ['bgm', 'sfx'], true)) {

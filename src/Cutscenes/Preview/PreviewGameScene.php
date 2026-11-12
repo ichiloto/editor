@@ -10,6 +10,7 @@ use Ichiloto\Engine\Animations\Field\FieldEffectAnchor;
 use Ichiloto\Engine\Animations\Field\FieldEffectSession;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Core\Campaign\CampaignSession;
 use Ichiloto\Engine\Core\GameState;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicController;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicPresentationManager;
@@ -23,14 +24,16 @@ use Ichiloto\Engine\Field\NpcManager;
 use Ichiloto\Engine\Progress\Bestiary;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeCatalog;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeProgressService;
+use Ichiloto\Engine\Rendering\Presentation\ScenePresentationContext;
 use Ichiloto\Engine\Scenes\Game\GameScene;
 
 /**
  * The isolated game scene a cinematic preview plays inside.
  *
- * The scene owns a fresh `GameState`, an empty party, the Engine's own
- * cinematic stage, presentation and controller, and an interpreter whose
- * dialogue goes to the preview pane. The author's play settings, save slots
+ * The scene owns a fresh `GameState` and an empty party, or the facts of a
+ * campaign restored from a save ({@see PreviewCampaign}) as the game's field
+ * adopts them, with the Engine's own cinematic stage, presentation and
+ * controller, and an interpreter whose dialogue goes to the preview pane. The author's play settings, save slots
  * and project files are never written; transfers load the destination map's
  * tiles and NPCs from disk and carry the session across exactly as the
  * Engine does.
@@ -56,15 +59,25 @@ final class PreviewGameScene extends GameScene
         int $screenWidth,
         int $screenHeight,
         string $initialMapId,
+        ?CampaignSession $campaign = null,
     ) {
         $this->sceneManager = $previewSceneManager;
-        $this->gameState = new GameState();
+        // The preview's scene manager owns this one scene, so it is the current, running scene that stage
+        // presentations and other scene-owned work require, as the game's field is in its scene manager.
+        $previewSceneManager->currentScene = $this;
         $this->hasDeferredAutoSave = false;
         $this->currentMapId = $initialMapId;
+        if ($campaign !== null) {
+            // Before anything of the scene's reads them, as the game's field adopts a restored campaign.
+            $this->adoptCampaign($campaign);
+            $campaign->setCurrentMapId($initialMapId);
+        } else {
+            $this->gameState = new GameState();
+            $this->party = new Party();
+            $this->knowledge = new KnowledgeProgressService(KnowledgeCatalog::fromProject());
+            $this->bestiary = new Bestiary($this->knowledge);
+        }
         $this->camera = new PreviewCamera($this, $screenWidth, $screenHeight);
-        $this->party = new Party();
-        $this->knowledge = new KnowledgeProgressService(KnowledgeCatalog::fromProject());
-        $this->bestiary = new Bestiary($this->knowledge);
         $this->npcManager = new NpcManager($this);
         $this->previewMap = new PreviewMapManager($previewSceneManager->game, $this);
         $this->mapManager = $this->previewMap;
@@ -93,6 +106,17 @@ final class PreviewGameScene extends GameScene
     }
 
     /**
+     * Gives the scene back a presentation a graphical one replaced, with the
+     * field effects that presentation draws: sprites for a graphical view,
+     * glyphs for the Terminal screen.
+     */
+    public function restorePresentation(?ScenePresentationContext $context): void
+    {
+        $this->setPresentationContext($context);
+        $this->installFieldEffects($context?->graphical === true ? EffectPresentation::GRAPHICAL : EffectPresentation::TERMINAL);
+    }
+
+    /**
      * Shows an effect on the field at one of its frames, at the player the
      * camera follows, as a cinematic's field animation presents one: an
      * effect session this scene owns, compiled for the field's presentation
@@ -113,6 +137,14 @@ final class PreviewGameScene extends GameScene
         $session->playback->seek($frame);
         $session->playback->pause();
         $presentation->presentEffect($session);
+    }
+
+    /** The preview game this scene belongs to, with its silent audio and its notice queue. */
+    public function getPreviewGame(): PreviewGame
+    {
+        $game = $this->previewSceneManager->game;
+
+        return $game instanceof PreviewGame ? $game : throw new \LogicException('The preview scene lost its preview game.');
     }
 
     public function installPlayer(PreviewPlayer $player): void
@@ -156,6 +188,7 @@ final class PreviewGameScene extends GameScene
         }
 
         $this->currentMapId = $location->mapFilename;
+        $this->campaign?->setCurrentMapId($this->currentMapId);
 
         $loaded = false;
         try {

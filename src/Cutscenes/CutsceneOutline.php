@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes;
 
 use Ichiloto\Editor\Database\CutsceneSchemas;
+use Ichiloto\Editor\Database\SkitPlaybackFields;
+use Ichiloto\Editor\Database\StorybookPlaybackFields;
 
 /**
  * The command tree of a cinematic, or the track and cue list of a summon,
@@ -270,6 +272,12 @@ final class CutsceneOutline
             }
         }
 
+        $finish = StorybookPlaybackFields::getFinishField();
+        $commands = StorybookPlaybackFields::getFinishCommands($command);
+        if ($finish !== null && $commands !== null) {
+            $children[] = ['path' => [$finish], 'commands' => self::listOf($commands), 'label' => 'after reading', 'key' => $finish];
+        }
+
         return $children;
     }
 
@@ -407,6 +415,11 @@ final class CutsceneOutline
     {
         $type = strval($command['type'] ?? '');
 
+        $finish = StorybookPlaybackFields::getFinishField();
+        if ($type === StorybookPlaybackFields::getCommandType() && $finish !== null) {
+            return [...$commandPath, $finish];
+        }
+
         switch ($type) {
             case 'sequence':
                 return [...$commandPath, 'commands'];
@@ -459,6 +472,8 @@ final class CutsceneOutline
             'narration', 'title_card' => self::quote(strval($command['title'] ?? $command['text'] ?? ''), '') . self::seconds($command, 'seconds'),
             'choice' => self::quote(strval($command['prompt'] ?? $command['title'] ?? ''), '') . sprintf(' · %d options', count(self::listOf($command['options'] ?? null))),
             'wait' => self::seconds($command, 'seconds'),
+            'play_stage' => strval($command['stage'] ?? '') . self::seconds($command, 'seconds'),
+            'cinematic_sound' => strval($command['sound'] ?? '') . self::seconds($command, 'seconds'),
             'set_switch' => strval($command['name'] ?? '') . ' = ' . (($command['value'] ?? true) ? 'on' : 'off'),
             'set_variable' => strval($command['name'] ?? '') . ' ' . (strval($command['op'] ?? 'set') === 'add' ? '+=' : '=') . ' ' . strval(is_scalar($command['value'] ?? null) ? $command['value'] : ''),
             'record_event' => strval($command['name'] ?? ''),
@@ -466,11 +481,14 @@ final class CutsceneOutline
             'give_gold' => strval($command['amount'] ?? '0') . ' gold',
             'play_sound' => strval($command['sound'] ?? ''),
             'play_music' => strval($command['music'] ?? ''),
+            SkitPlaybackFields::getCommandType() => strval($command[SkitPlaybackFields::getReferenceField()] ?? ''),
+            StorybookPlaybackFields::getCommandType() => strval($command[StorybookPlaybackFields::getReferenceField()] ?? ''),
             'accept_quest', 'common_event' => strval($command['id'] ?? ''),
             'knowledge' => strval($command['operation'] ?? '') . ' ' . strval($command['subject'] ?? ''),
             'move_player' => sprintf('→ %s, %s', strval($command['x'] ?? '?'), strval($command['y'] ?? '?')),
             'move_route' => self::routeSummary($command),
             'transfer' => sprintf('→ %s (%s, %s)', strval($command['map'] ?? '?'), strval($command['x'] ?? '?'), strval($command['y'] ?? '?')),
+            \Ichiloto\Engine\Field\MapDoorReference::COMMAND => sprintf('→ through door %s on %s', strval($command['event'] ?? '?'), strval($command['map'] ?? '?')),
             'start_battle' => strval($command['troop'] ?? ''),
             'branch' => 'if ' . self::conditionSummary($command),
             'sequence' => sprintf('%d commands', count(self::listOf($command['commands'] ?? null))),

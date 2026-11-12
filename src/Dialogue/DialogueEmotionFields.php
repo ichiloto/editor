@@ -10,8 +10,9 @@ use Throwable;
 
 /**
  * A dialogue line's emotion row as an author sees it: chosen among the emotions its speaker's catalogue identity
- * names, and, when it holds an emotion that identity lacks, followed by a row saying so. The value is kept as it is,
- * since art for it may be on its way; the Engine shows the identity's Neutral artwork until it exists.
+ * names, and followed by a row saying so when it holds an emotion that identity lacks, or holds none while that
+ * identity has more than Neutral to show. The value is kept as it is, since art for it may be on its way; the Engine
+ * shows the identity's Neutral artwork until it exists, and for every line that names no emotion.
  */
 final class DialogueEmotionFields
 {
@@ -76,13 +77,18 @@ final class DialogueEmotionFields
     }
 
     /**
-     * Why a line's emotion is not one its speaker's identity offers, or null when it is.
+     * Why a line's emotion is not one its speaker's identity offers, or why a line with none should name one: its
+     * speaker's identity has emotions beyond Neutral, yet the line always shows Neutral. Null when neither holds.
      *
+     * @param mixed $current The line's emotion as authored, null when it has none.
      * @param array{speaker: string, identity: ?string, emotions: list<string>, issue: ?string} $emotions
      */
     public static function describeWarning(mixed $current, array $emotions): ?string
     {
-        if ($current === null || $current === '' || $current === DialogueContext::DEFAULT_EMOTION || in_array($current, $emotions['emotions'], true)) {
+        if ($current === null || $current === '') {
+            return self::describeMissing($emotions);
+        }
+        if ($current === DialogueContext::DEFAULT_EMOTION || in_array($current, $emotions['emotions'], true)) {
             return null;
         }
         $emotion = is_scalar($current) ? (string) $current : get_debug_type($current);
@@ -97,5 +103,21 @@ final class DialogueEmotionFields
 
         return sprintf('%s has no "%s" emotion; the game shows its Neutral artwork until one is added under Dialogue Portraits.',
             $emotions['identity'], $emotion);
+    }
+
+    /**
+     * Why a line naming no emotion should name one: its speaker's identity has more than one emotion to show, and
+     * the Engine shows Neutral for every line without one. Null when the speaker has no identity or only Neutral.
+     *
+     * @param array{speaker: string, identity: ?string, emotions: list<string>, issue: ?string} $emotions
+     */
+    private static function describeMissing(array $emotions): ?string
+    {
+        if ($emotions['issue'] !== null || $emotions['identity'] === null || count($emotions['emotions']) < 2) {
+            return null;
+        }
+
+        return sprintf('The line names no emotion, so %s always shows Neutral. Choose one of: %s.',
+            $emotions['identity'], implode(', ', $emotions['emotions']));
     }
 }

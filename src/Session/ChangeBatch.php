@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Session;
 
 use Closure;
+use Ichiloto\Editor\Assets\AssetImport;
+use InvalidArgumentException;
 use JsonException;
 
 /**
@@ -30,7 +32,7 @@ final class ChangeBatch
     /** Requests the batch itself makes, never one of its changes. */
     private const array RESERVED = ['hello', 'project.create', 'changes.begin', 'changes.commit', 'changes.cancel'];
 
-    private function __construct(private readonly SessionHost $host)
+    private function __construct(private readonly SessionHost $host, private readonly ?string $originalProjectRoot)
     {
     }
 
@@ -64,20 +66,25 @@ final class ChangeBatch
      *
      * @param list<mixed> $changes The session requests, in order.
      * @param bool $relocateSaves Whether saves standing where a changed map is now solid may move to open floor.
-     * @param bool $checkOnly Whether to only report what committing would find, writing nothing.
+     * @param bool $checkOnly Whether to only report what committing would find. A check runs on a scratch copy of
+     *     the project ({@see ProjectScratchCopy}), so the project is untouched even if the process dies part way.
      * @return array<string, mixed> The commit's outcome ({@see EditorSession::commitChanges()}), or
      *     `{status: 'failed', step, method, message}` when a change was refused and nothing was written.
      */
     public static function apply(string $projectRoot, array $changes, bool $relocateSaves = false, bool $checkOnly = false): array
     {
-        return self::run($projectRoot, $changes,
-            static fn(self $batch): array => $batch->request('changes.commit', ['relocateSaves' => $relocateSaves, 'check' => $checkOnly]));
+        $commit = static fn(string $root): array => self::run($root, $changes,
+            static fn(self $batch): array => $batch->request('changes.commit', ['relocateSaves' => $relocateSaves, 'check' => $checkOnly]),
+            $checkOnly ? $projectRoot : null);
+
+        return $checkOnly ? ProjectScratchCopy::run($projectRoot, $commit) : $commit($projectRoot);
     }
 
     /**
      * Applies changes to a project as {@see apply()} does, shows the session
-     * they leave, unsaved, to `$inspect`, and then undoes them: nothing is
-     * written. A script sees what a batch would make before it applies it.
+     * they leave, unsaved, to `$inspect`, on a scratch copy of the project
+     * ({@see ProjectScratchCopy}): nothing is written to the project. A script
+     * sees what a batch would make before it applies it.
      *
      * @param list<mixed> $changes The session requests, in order.
      * @param Closure(EditorSession): mixed $inspect
@@ -86,14 +93,14 @@ final class ChangeBatch
      */
     public static function preview(string $projectRoot, array $changes, Closure $inspect): array
     {
-        return self::run($projectRoot, $changes, static function (self $batch) use ($inspect): array {
+        return ProjectScratchCopy::run($projectRoot, static fn(string $root): array => self::run($root, $changes, static function (self $batch) use ($inspect): array {
             try {
                 return ['status' => 'previewed', 'result' => $inspect($batch->host->session
                     ?? throw new SessionRefusal('The batch has no session open.'))];
             } finally {
                 $batch->request('changes.cancel');
             }
-        });
+        }, $projectRoot));
     }
 
     /**
@@ -104,10 +111,10 @@ final class ChangeBatch
      * @param Closure(self): array<string, mixed> $finish
      * @return array<string, mixed>
      */
-    private static function run(string $projectRoot, array $changes, Closure $finish): array
+    private static function run(string $projectRoot, array $changes, Closure $finish, ?string $originalProjectRoot): array
     {
         $memory = fopen('php://memory', 'r+');
-        $batch = new self(new SessionHost($memory, $memory, STDERR));
+        $batch = new self(new SessionHost($memory, $memory, STDERR), $originalProjectRoot);
 
         try {
             $batch->request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $projectRoot]);
@@ -148,6 +155,15 @@ final class ChangeBatch
             $map = array_find($this->request('maps.list'), static fn(array $map): bool => $map['id'] === $params['map']);
             if ($map !== null) {
                 $params['revision'] = $map['revision'];
+            }
+        }
+
+        if ($method === 'assets.import' && $this->originalProjectRoot !== null && is_string($params['destination'] ?? null)) {
+            // The batch runs on a copy, where a destination naming the project itself is outside the project.
+            try {
+                $params['destination'] = AssetImport::resolveProjectDestination($this->originalProjectRoot, $params['destination']);
+            } catch (InvalidArgumentException $refusal) {
+                return ['method' => $method, 'message' => $refusal->getMessage()];
             }
         }
 

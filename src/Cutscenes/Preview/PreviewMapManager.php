@@ -89,7 +89,7 @@ final class PreviewMapManager extends MapManager
                 $projectMap->getLayerSet(), $projectMap->getEventLayerCells());
             $map = $this->installMapSource($projectMap->mapId, $source, $projectMap->loadTerrainKinds(), $projectMap->loadGraphics(...),
                 static fn(): array => MapGraphics::readLayersFromSources($projectMap->getTileLayerSources(), $projectMap->mapId,
-                    $source['layers']));
+                    $source['layers']), $projectMap->getFieldCatalog(...));
 
             return [$map, $projectMap->getResolvedCollisionMap()];
         });

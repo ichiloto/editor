@@ -132,7 +132,7 @@ function backdateTriplet(ProjectMap $map): void
  */
 function scratchMapCopy(): array
 {
-    $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-editor-test-' . bin2hex(random_bytes(4)));
+    $root = reserveTemporaryPath('ichiloto-editor-test-');
     $mapsRoot = $root . '/assets/Maps';
     $directory = $mapsRoot . '/test-map';
     mkdir($directory, 0777, true);

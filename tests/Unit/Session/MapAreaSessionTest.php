@@ -237,3 +237,82 @@ it('refuses an areas block written as null or as something other than a list, le
         ->and($session->hasUnsavedChanges())->toBeFalse()
         ->and((string) file_get_contents($file))->toBe($source);
 })->with(['null' => ['null'], 'a string' => ["'yard'"], 'a keyed array' => ["['yard' => ['id' => 'yard']]"]]);
+
+it('moves compact row-run areas with inserted and removed lines exactly as their cells would move', function () {
+    [$root, $file, $session] = createLandmarkProject();
+    $revision = static fn(): int => $session->readMap('test-map')['revision'];
+    $session->createArea('test-map', $revision(), 'yard', ['runs' => [[1, 0, 2]]]);
+    $session->createArea('test-map', $revision(), 'porch', ['runs' => [[0, 2, 1], [1, 1, 1]]]);
+    $session->saveMap('test-map');
+
+    $question = $session->insertMapLines('test-map', $revision(), 'y', 1, 2);
+    expect($question['handEdits'])->toBe([]);
+    $session->insertMapLines('test-map', $question['revision'], 'y', 1, 2, 'write', $question['confirm']);
+    expect(readSavedAreas($file))->toBe([
+        ['id' => 'yard', 'area' => ['runs' => [[3, 0, 2]]]],
+        ['id' => 'porch', 'area' => ['runs' => [[0, 2, 1], [3, 1, 1]]]],
+    ]);
+
+    // Column 2 holds only porch's first run.
+    expect(fn() => $session->removeMapLines('test-map', $session->readMap('test-map')['revision'], 'x', 2, 1))
+        ->toThrow(SessionRefusal::class, 'areas.1.area.runs.0 (area porch has a cell on a removed line)');
+
+    $question = $session->removeMapLines('test-map', $session->readMap('test-map')['revision'], 'y', 1, 2);
+    $session->removeMapLines('test-map', $question['revision'], 'y', 1, 2, null, 'write', $question['confirm']);
+    expect(readSavedAreas($file))->toBe([
+        ['id' => 'yard', 'area' => ['runs' => [[1, 0, 2]]]],
+        ['id' => 'porch', 'area' => ['runs' => [[0, 2, 1], [1, 1, 1]]]],
+    ]);
+});
+
+it('parts a compact run across inserted columns, leaving the same gap exact cells leave and asking for a reshape', function () {
+    [$root, $file, $session] = createLandmarkProject();
+    $revision = static fn(): int => $session->readMap('test-map')['revision'];
+    // span's run covers row 1 on both sides of column 1; porch meets column 1 only on another row.
+    $session->createArea('test-map', $revision(), 'span', ['runs' => [[1, 0, 2]]]);
+    $session->createArea('test-map', $revision(), 'porch', ['runs' => [[0, 0, 1], [1, 2, 1]]]);
+    $session->saveMap('test-map');
+
+    $question = $session->insertMapLines('test-map', $revision(), 'x', 1, 2);
+    $reasons = array_column($question['handEdits'], 'reason', 'where');
+    expect($reasons)->toBe(['areas.0.area.runs' => 'area span has cells on both sides of the inserted lines, which leave a gap in it; reshape it over them']);
+
+    $session->insertMapLines('test-map', $question['revision'], 'x', 1, 2, 'write', $question['confirm']);
+    expect(readSavedAreas($file))->toBe([
+        ['id' => 'span', 'area' => ['runs' => [[1, 0, 1], [1, 3, 1]]]],
+        ['id' => 'porch', 'area' => ['runs' => [[0, 0, 1], [1, 4, 1]]]],
+    ]);
+});
+
+it('writes a selection that is no rectangle in the Engine\'s compact encoding', function () {
+    $cells = [[0, 0], [1, 0], [2, 0], [3, 0], [0, 1], [1, 1], [2, 1]];
+
+    expect(MapAreaAuthoring::createShapeFor($cells))->toBe(['runs' => [[0, 0, 4], [1, 0, 3]]])
+        ->and(MapAreaAuthoring::createShapeFor([[2, 0], [3, 1]]))->toBe(['cells' => [[2, 0], [3, 1]]])
+        ->and(MapAreaAuthoring::createShapeFor([[0, 1], [1, 1]]))->toBe(['x' => 0, 'y' => 1, 'width' => 2, 'height' => 1]);
+});
+
+
+it('refuses a line edit that would leave computed compact area runs behind', function (string $axis) {
+    [, $file, $session] = createLandmarkProject(
+        "'areas' => [['id' => 'yard', 'area' => ['runs' => array_merge([[0, 0, 3]], [[1, 2, 2]])]]],",
+    );
+    $source = file_get_contents($file);
+    $revision = $session->readMap('test-map')['revision'];
+
+    expect(fn() => $session->insertMapLines('test-map', $revision, $axis, 1, 2))
+        ->toThrow(SessionRefusal::class, 'compact area runs could not be moved')
+        ->and(file_get_contents($file))->toBe($source);
+})->with(['x', 'y']);
+
+it('validates compact run bounds before expanding them for a line edit', function () {
+    [, $file, $session] = createLandmarkProject(
+        "'areas' => [['id' => 'yard', 'area' => ['runs' => [[0, 0, PHP_INT_MAX]]]]],",
+    );
+    $source = file_get_contents($file);
+    $revision = $session->readMap('test-map')['revision'];
+
+    expect(fn() => $session->insertMapLines('test-map', $revision, 'x', 1, 2))
+        ->toThrow(SessionRefusal::class, 'row run extends outside the physical map')
+        ->and(file_get_contents($file))->toBe($source);
+});

@@ -95,11 +95,11 @@ function mountedWindowMap(): array
     return [$root, $map, $layerId];
 }
 
-/** @return list<string> Validation's warnings about piece tiles whose glyph has gone, for the map as it stands in memory. */
+/** @return list<string> Validation's warnings about piece art that is not placed where it stands, for the map as it stands in memory. */
 function readStaleUnderlayIssues(ProjectMap $map): array
 {
     return array_values(array_map(static fn($issue): string => $issue->message, array_filter(MapGraphicsValidator::validateCoverage($map),
-        static fn($issue): bool => str_contains($issue->message, 'no longer there'))));
+        static fn($issue): bool => str_contains($issue->message, 'is not placed there'))));
 }
 
 /** @return array{string, string, string} The buildings glyph at (1,0) and the decor and walls tiles there. */

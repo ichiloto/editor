@@ -131,6 +131,24 @@ it('reports what committing would find without writing anything when only checki
         ->and($session->listUnsavedChanges())->toBe([]);
 });
 
+it('restores NPC declaration presence after check-only rollback so another change set can begin', function (bool $declared) {
+    $root = changeSetProject();
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    $data = require $path;
+    unset($data['npcs']);
+    if ($declared) { $data['npcs'] = []; }
+    file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
+    $before = sourceHashTree($root . '/assets');
+    $session = EditorSession::open($root);
+    $session->beginChanges();
+    $session->createNpc('test-map', $session->readMap('test-map')['revision'], 0, 1, 'Visitor', 'visitor');
+    $outcome = $session->commitChanges(checkOnly: true);
+    expect($outcome['saved'])->toBe([])->and(sourceHashTree($root . '/assets'))->toBe($before)
+        ->and($session->listUnsavedChanges())->toBe([]);
+    expect($session->beginChanges()['status'])->toBe('open');
+    $session->cancelChanges();
+})->with(['absent collection' => false, 'authored empty collection' => true]);
+
 it('holds a change set to itself: no saves inside it, no undo past its start, and edits pending before it refuse it', function () {
     $session = EditorSession::open(changeSetProject());
     changeSetPaint($session, 'buildings', 1, 0, ' ');
@@ -162,6 +180,47 @@ it('undoes what a refused change set wrote at once, such as inserted rows', func
         ->and(changeSetMessages($outcome))->toContain("Gameplay glyph 'x' on buildings has no graphical presentation. At (3, 1).")
         ->and(sourceHashTree($root . '/assets'))->toBe($before);
 });
+
+/** A batch that inserts a row, duplicates the map, then edits the copy: it writes files at once twice before its last step. */
+function changeSetInsertThenDuplicate(string $buildings, array $last): array
+{
+    return [
+        ['method' => 'map.insertLines', 'params' => ['map' => 'test-map', 'axis' => 'y', 'at' => 2, 'count' => 1], 'answer' => 'write'],
+        ['method' => 'map.duplicate', 'params' => ['map' => 'test-map', 'to' => 'test-map-copy']],
+        ['method' => 'map.paint', 'params' => ['map' => 'test-map-copy', 'layer' => $buildings, 'cells' => [[1, 0]], 'symbol' => ' ']],
+        $last,
+    ];
+}
+
+it('writes nothing when only checking a batch that inserted rows, then made a map', function () {
+    $root = changeSetProject();
+    $before = sourceHashTree($root . '/assets');
+    $buildings = changeSetLayer(EditorSession::open($root), 'buildings');
+
+    $outcome = ChangeBatch::apply($root, changeSetInsertThenDuplicate($buildings,
+        ['method' => 'map.paint', 'params' => ['map' => 'test-map', 'layer' => $buildings, 'cells' => [[2, 1]], 'symbol' => ' ']]), checkOnly: true);
+
+    expect($outcome['status'])->toBe('checked')
+        ->and($outcome)->not->toHaveKey('unrestored')
+        ->and(sourceHashTree($root . '/assets'))->toBe($before);
+});
+
+it('undoes a refused or failed batch that inserted rows, then made a map, and writes nothing of it', function (bool $fails) {
+    $root = changeSetProject();
+    $before = sourceHashTree($root . '/assets');
+    $buildings = changeSetLayer(EditorSession::open($root), 'buildings');
+
+    $outcome = ChangeBatch::apply($root, changeSetInsertThenDuplicate($buildings, $fails
+        ? ['method' => 'map.paint', 'params' => ['map' => 'test-map', 'layer' => 'no-layer', 'cells' => [[0, 0]], 'symbol' => '#']]
+        : ['method' => 'map.paint', 'params' => ['map' => 'test-map', 'layer' => $buildings, 'cells' => [[3, 1]], 'symbol' => 'x']]));
+
+    expect($outcome['status'])->toBe($fails ? 'failed' : 'refused')
+        ->and($outcome)->not->toHaveKey('unrestored')
+        ->and(sourceHashTree($root . '/assets'))->toBe($before);
+    // Nothing is left half undone: the next change set begins on the project as it was.
+    expect(ChangeBatch::apply($root, [['method' => 'map.paint',
+        'params' => ['map' => 'test-map', 'layer' => $buildings, 'cells' => [[1, 0]], 'symbol' => ' ']]])['status'])->toBe('saved');
+})->with(['a later request fails' => true, 'the project it leaves is refused' => false]);
 
 it('applies a batch of session requests as one change set, filling each map\'s revision as it stands', function () {
     $root = changeSetProject();
@@ -199,7 +258,7 @@ it('names the step a batch was refused at, and writes nothing of it', function (
 });
 
 it('reads a batch file as a list of changes or as {"changes": [...]}', function () {
-    $directory = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-batch-' . bin2hex(random_bytes(4)));
+    $directory = reserveTemporaryPath('ichiloto-batch-');
     mkdir($directory);
     file_put_contents($directory . '/list.json', '[{"method": "maps.list", "params": {}}]');
     file_put_contents($directory . '/object.json', '{"changes": [{"method": "maps.list", "params": {}}]}');

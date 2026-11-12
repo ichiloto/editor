@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Audio;
 
+use Ichiloto\Editor\Assets\AudioRole;
 use Ichiloto\Engine\Audio\AudioManager;
 use Ichiloto\Engine\Audio\AudioPlayback;
 use Ichiloto\Engine\Audio\Interfaces\AudioBackendInterface;
@@ -18,9 +19,6 @@ use Ichiloto\Engine\Core\Game;
  */
 final class AudioAudition extends AudioManager
 {
-    /** The conventional folder under assets/Audio each kind's files are found in, as the game looks for them. */
-    private const array FOLDERS = ['bgm' => 'BGM', 'sfx' => 'SFX'];
-
     private ?AudioPlayback $playback = null;
 
     /** What is playing, as kind and name, while it plays. */
@@ -50,7 +48,7 @@ final class AudioAudition extends AudioManager
     public function play(string $kind, string $name): ?string
     {
         $this->stop();
-        $folder = self::FOLDERS[$kind] ?? null;
+        $folder = AudioRole::tryFrom($kind)?->getFolder();
         if ($folder === null) {
             return sprintf('%s is not music or a sound effect.', $kind);
         }

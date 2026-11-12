@@ -22,7 +22,8 @@ use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
  * script: pages carry their own);
  * `conditions` (visibility); `sets` (world writes after each conversation);
  * `id` (stable map-local identity, targeted by `move_route`); `sprites`
- * (directional glyphs, either case of key accepted on load).
+ * (directional glyphs, either case of key accepted on load); `bed` (the bed
+ * it rests in, its x/y then the standing exit: {@see NpcBedFields}).
  *
  * The payload is kept verbatim: a key this class does not know survives
  * load, edit, save, and reload untouched. A field edit never changes the id:
@@ -39,7 +40,7 @@ final class ProjectNpc
      */
     public const array KNOWN_FIELDS = [
         'id', 'name', 'sprite', 'x', 'y', 'movement', 'facing', 'directionFix', 'wanderArea', 'sprites',
-        'conditions', 'dialogue', 'script', 'sets', 'sprites2d', 'cue',
+        'conditions', 'dialogue', 'script', 'sets', 'sprites2d', 'cue', NpcBedFields::BED, NpcPlacementFields::PLACEMENTS,
     ];
 
     public const array MOVEMENTS = ['fixed', 'wander'];

@@ -5,37 +5,12 @@ declare(strict_types=1);
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Battle\Formation\BattleTargeting;
+use Ichiloto\Engine\Battle\Formation\BattleTargetShape;
+use Ichiloto\Engine\Entities\Enumerations\Occasion;
+use Ichiloto\Engine\Entities\Skills\BasicSkill;
 
 /** A battle effect previewed in an action the battle test party actually plays it in, by the Engine's own animation selection. Synthetic fixtures only. */
-
-/** The summon battle preview project with two effects, one of them played by an unarmed attack. */
-function effectBattlePreviewProject(): string
-{
-    $root = summonBattlePreviewProject();
-    foreach (['ember-spark' => emberSparkTimeline(), 'dusk-slash' => duskSlashTimeline()] as $id => $source) {
-        @mkdir($root . '/assets/Animations/' . $id, 0o777, true);
-        file_put_contents($root . '/assets/Animations/' . $id . '/' . $id . '.timeline.php', $source);
-    }
-    @mkdir($root . '/assets/Graphics/Effects', 0o777, true);
-    writeTilesetTestPng($root . '/assets/Graphics/Effects/dusk-slash.png', 32, 16);
-    // Dusk Slash is what an unarmed attack plays on its target; Ember Spark nothing plays.
-    file_put_contents($root . '/assets/Data/animations.php', "<?php\n\nreturn " . var_export([
-        ['id' => 1, 'name' => 'Dusk Slash', 'roles' => ['attack', 'attack-unarmed'], 'targetEffect' => 'dusk-slash'],
-    ], true) . ";\n");
-
-    return $root;
-}
-
-/** @return int The effect's place among the effect records. */
-function findEffectIndex(EditorSession $session, string $id): int
-{
-    foreach ($session->listDatabaseRecords('cutscenes/effect')['records'] as $index => $label) {
-        if (str_contains(strval($label), $id)) {
-            return $index;
-        }
-    }
-    throw new RuntimeException("No effect {$id}.");
-}
 
 it('previews an effect in the action that plays it, as the battle draws it, for both presentations', function () {
     $session = EditorSession::open(effectBattlePreviewProject());
@@ -53,9 +28,569 @@ it('previews an effect in the action that plays it, as the battle draws it, for 
         ->and($terminal['terminalLines'])->not->toBe([]);
 });
 
+it('refreshes both battle previews after an unsaved actor edit and history changes', function () {
+    $session = EditorSession::open(effectBattlePreviewProject());
+    $index = findEffectIndex($session, 'dusk-slash');
+    $casters = static function () use ($session, $index): array {
+        $casters = [];
+        foreach (EffectPresentation::cases() as $presentation) {
+            $casters[] = $session->readEffectBattlePreview($index, 0, presentation: $presentation)['caster'];
+            $casters[] = $session->readSummonBattlePreview(0, 0, presentation: $presentation)['caster'];
+        }
+
+        return $casters;
+    };
+
+    $before = $casters();
+    expect($before)->toBe(array_fill(0, 4, 'Kaelion'));
+    $row = array_find($session->readDatabaseRecord('actors', 0)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'name');
+    expect($session->applyDatabaseRecord('actors', 0, $row['key'], 'Travelling Actor')['changed'])->toBeTrue();
+    $edited = array_fill(0, 4, 'Travelling Actor');
+    expect($casters())->toBe($edited);
+    $session->undo();
+    expect($casters())->toBe($before);
+    $session->redo();
+    expect($casters())->toBe($edited);
+});
+
+it('round-trips graphical flight authoring through the shared rows and previews the negotiated heading', function (bool $curved, bool $timed) {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $initial = require $path;
+    $category = 'cutscenes/effect';
+    $bindingPath = $root . '/assets/Data/Presentation/battlers.php';
+    writeTilesetTestPng($root . '/assets/Graphics/FixturePose.png', 8, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/FixtureEnemy.png', 8, 8);
+    file_put_contents($bindingPath, '<?php return ' . var_export(['actors' => ['Kaelion' => [
+        'artwork' => ['image' => 'Graphics/FixturePose.png'],
+        'poses' => ['attack' => ['image' => 'Graphics/FixturePose.png',
+            'attachmentPoints' => [['cell' => 0, 'name' => '0', 'point' => ['x' => .5, 'y' => .4]]]]],
+    ]], 'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/FixtureEnemy.png']]]], true) . ';');
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $session->selectCutscenePresentation($category, $index, 'graphical');
+
+    $choices = $session->listReferences(null, 'battle_pose_points', ['category' => $category, 'index' => $index]);
+    expect($choices)->toBe([['value' => '0', 'label' => '0 (Kaelion attack)']]);
+    $trackFrame = $session->describeCutsceneTimeline($category, $index)['tracks'][0]['art']['pivotKey']['frame'];
+    $row = static fn(string $field, array $frame): array =>
+        array_find($session->readDatabaseRecord($category, $index, $frame)['rows'],
+            static fn(array $entry): bool => ($entry['key']['field'] ?? null) === $field);
+    $change = static function (string $field, string $value, ?array $frame = null) use ($session, $category, $index, $row, $trackFrame): void {
+        expect($session->applyDatabaseRecord($category, $index, $row($field, $frame ?? $trackFrame)['key'], $value)['changed'])->toBeTrue();
+    };
+    $change('poseSyncFrame', '0', []);
+    $change('track0Anchor', 'caster');
+    $change('track0AttachmentPoint', '0');
+    $change('track0DetachFrame', '0');
+    $change('track0FlightarrivalFrame', '1');
+    $route = $curved ? 'cubic' : 'straight';
+    $curve = ['launchProgress' => .28, 'launchOffsetY' => -.15, 'arrivalProgress' => .71, 'arrivalOffsetY' => -.075];
+    $change('track0Flightroute', $route);
+    $values = $curved ? array_combine(array_map(static fn(string $key): string => 'track0Flightcurve' . $key, array_keys($curve)), $curve)
+        : ['track0FlighttipX' => .25];
+    foreach ($values as $field => $value) {
+        $change($field, (string) $value);
+    }
+    $authoredImpact = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
+    if ($timed) {
+        expect($session->listReferences(null, 'effect_flight_tracks', ['category' => $category, 'index' => $index]))
+            ->toBe([['value' => 'stroke-art', 'label' => 'stroke-art']]);
+        $change('effectTiming.mode', 'frame', []);
+        $change('effectTiming.frame', '1', []);
+        $change('flightTiming.track', 'stroke-art', []);
+        $change('flightTiming.speed', '.5', []);
+    }
+    $session->undo();
+    expect($timed ? $row('flightTiming.speed', [])['value'] : $row(array_key_last($values), $trackFrame)['value'])->toBe('');
+    $session->redo();
+    expect($session->saveAll()['failures'])->toBe([]);
+
+    $saved = require $path;
+    $track = $saved['presentations']['graphical']['tracks'][0];
+    expect($saved['presentations']['terminal'])->toBe($initial['presentations']['terminal'])
+        ->and($saved['presentations']['graphical']['poseSyncFrame'])->toBe(0)
+        ->and($track)->toMatchArray(['attachmentPoint' => '0', 'detachFrame' => 0,
+            'flight' => ['arrivalFrame' => 1, 'route' => $route, ...($curved ? ['curve' => $curve] : ['tipX' => .25])]]);
+
+    if ($timed) {
+        expect($saved['presentations']['graphical']['flightTiming'])->toBe(['track' => 'stroke-art', 'speed' => .5]);
+    }
+    $ordinary = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
+    $rotating = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, imageRotation: true);
+    $image = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Effects/dusk-slash.png');
+    expect($image($ordinary))->not->toBeNull()->not->toHaveKey('rotation')
+        ->and($image($rotating))->toHaveKeys(['rotation', 'pivot'])
+        ->and($rotating['diagnostics'])->toBe([]);
+    if ($timed) {
+        expect($rotating['frame'])->toBeGreaterThan($authoredImpact['frame'])
+            ->and($rotating['totalFrames'])->toBeGreaterThan($authoredImpact['totalFrames'])
+            ->and($rotating['authoredFrames']['target'])->toBe(1)
+            ->and(array_find($rotating['crossedCues'], static fn(array $cue): bool => $cue['type'] === 'commandResolved')['frame'])
+            ->toBe($rotating['frame']);
+        $reduced = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, reducedMotion: true);
+        expect($reduced['diagnostics'])->toBe([])
+            ->and(array_find($reduced['crossedCues'], static fn(array $cue): bool => $cue['type'] === 'commandResolved')['frame'])
+            ->toBe($reduced['frame']);
+    }
+})->with([[false, false], [true, false], [false, true]]);
+
+it('round-trips range timing keys and uses projected distance in the graphical battle preview', function () {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $source = require $path;
+    $source['presentations']['graphical']['lengthFrames'] = 4;
+    $source['presentations']['graphical']['restFrame'] = 2;
+    $source['presentations']['graphical']['tracks'][0]['keyframes'][1] = ['frame' => 2, 'duration' => 2, 'sourceFrame' => 1];
+    file_put_contents($path, '<?php return ' . var_export($source, true) . ';');
+    $session = EditorSession::open($root);
+    $category = 'cutscenes/effect';
+    $index = findEffectIndex($session, 'dusk-slash');
+    $session->selectCutscenePresentation($category, $index, 'graphical');
+    $field = static fn(array $frame, string $label): array =>
+        array_find($session->readDatabaseRecord($category, $index, $frame)['rows'],
+            static fn(array $entry): bool => trim($entry['label']) === $label)['key'];
+    $apply = static fn(array $frame, string $label, string $value): array =>
+        $session->applyDatabaseRecord($category, $index, $field($frame, $label), $value);
+    $normal = $session->readEffectBattlePreview($index, 0, authoredFrame: 2);
+    expect($apply([], 'Far Range Threshold', '.001')['changed'])->toBeTrue();
+    $keys = ['rangeTiming.keys'];
+    expect($session->addDatabaseItem($category, $index, ['frame' => $keys])['changed'])->toBeTrue()
+        ->and($apply($keys, 'Range timing key 1 Authored Frame', '2')['changed'])->toBeTrue();
+    $session->undo();
+    $session->redo();
+    expect($session->saveAll()['failures'])->toBe([]);
+    $saved = require $path;
+    expect($saved['presentations']['terminal'])->toBe($source['presentations']['terminal'])
+        ->and($saved['presentations']['graphical']['rangeTiming'])->toBe(['minDistance' => .001, 'keys' => [['frame' => 2, 'at' => 1]]]);
+    $far = $session->readEffectBattlePreview($index, 0, authoredFrame: 2);
+    expect($far['frame'])->toBe($normal['frame'] - 10)
+        ->and($far['authoredFrames']['target'])->toBe(2)
+        ->and($far['diagnostics'])->toBe([]);
+});
+
+it('edits a graphical trail and previews its coverage without rewriting Terminal data', function () {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $source = require $path;
+    writeTilesetTestPng($root . '/assets/Graphics/FixturePose.png', 8, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/FixtureEnemy.png', 8, 8);
+    $bindings = ['actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/FixturePose.png'],
+        'poses' => ['attack' => ['image' => 'Graphics/FixturePose.png',
+            'attachmentPoints' => [['cell' => 0, 'name' => 'launch', 'point' => ['x' => .5, 'y' => .4]]]]]]],
+        'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/FixtureEnemy.png']]]];
+    file_put_contents($root . '/assets/Data/Presentation/battlers.php', '<?php return ' . var_export($bindings, true) . ';');
+    $source['presentations']['graphical']['lengthFrames'] = 5;
+    $source['presentations']['graphical']['restFrame'] = 1;
+    $source['presentations']['graphical']['tracks'] = [[
+        'id' => 'trail', 'type' => 'trail', 'attachmentPoint' => 'launch', 'detachFrame' => 0, 'fadeEndFrame' => 5,
+        'flight' => ['arrivalFrame' => 1, 'route' => 'cubic', 'bystanderClearance' => 1,
+            'curve' => ['launchProgress' => .3, 'launchOffsetY' => -.1, 'arrivalProgress' => .7, 'arrivalOffsetY' => -.1]],
+        'profile' => ['length' => 40, 'spacing' => 2, 'startRadius' => 1, 'endRadius' => 5, 'radiusPower' => 1,
+            'startOpacity' => .1, 'endOpacity' => .8, 'opacityPower' => 1, 'fadeLengthRatio' => .5,
+            'brush' => ['falloff' => 1, 'alphaSteps' => 100, 'minimumAlpha' => 1,
+                'bands' => [['until' => 1, 'color' => ['kind' => 'rgb', 'r' => 4, 'g' => 5, 'b' => 6]]]]],
+    ]];
+    file_put_contents($path, '<?php return ' . var_export($source, true) . ';');
+    $session = EditorSession::open($root);
+    $category = 'cutscenes/effect';
+    $index = findEffectIndex($session, 'dusk-slash');
+    $session->selectCutscenePresentation($category, $index, 'graphical');
+    $row = static fn(string $field): array => array_find($session->readDatabaseRecord($category, $index, ['tracks'])['rows'],
+        static fn(array $entry): bool => ($entry['key']['field'] ?? null) === $field);
+    $change = static fn(string $field, string $value): array => $session->applyDatabaseRecord($category, $index, $row($field)['key'], $value);
+    expect($session->listReferences(null, 'battle_pose_points', ['category' => $category, 'index' => $index]))
+        ->toBe([['value' => 'launch', 'label' => 'launch (Kaelion attack)']])
+        ->and($change('track0ProfileendRadius', '6')['changed'])->toBeTrue()
+        ->and($change('track0FlightbystanderClearance', '2')['changed'])->toBeTrue()
+        ->and($change('track0Band0Colorr', '99')['changed'])->toBeTrue();
+    $session->undo();
+    expect($row('track0Band0Colorr')['value'])->toBe('4');
+    $session->redo();
+    expect($session->saveAll()['failures'])->toBe([]);
+    $saved = require $path;
+    expect($saved['presentations']['terminal'])->toBe($source['presentations']['terminal'])
+        ->and($saved['presentations']['graphical']['tracks'][0]['flight']['bystanderClearance'])->toBe(2.0)
+        ->and($saved['presentations']['graphical']['tracks'][0]['profile']['brush']['bands'][0]['color']['r'])->toBe(99);
+    $ordinary = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
+    $enabled = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, coverageDabs: true);
+    $trail = static fn(array $frame): ?array => array_find($frame['canvas']['composites'] ?? [],
+        static fn(array $part): bool => str_contains($part['id'], 'target-trail'));
+    expect($trail($ordinary))->toBeNull()
+        ->and($trail($enabled)['operations'][0]['bands'][0]['color']['r'])->toBe(99)
+        ->and($enabled['diagnostics'])->toBe([]);
+});
+
 it('says so when no action of the battle test party plays an effect, inventing none', function () {
     $session = EditorSession::open(effectBattlePreviewProject());
 
     expect(fn() => $session->readEffectBattlePreview(findEffectIndex($session, 'ember-spark'), 0))
         ->toThrow(SessionRefusal::class, 'No action of the battle test party plays ember-spark in battle');
+});
+
+it('previews the selected combat line from the troop formation in both presentations', function () {
+    $root = effectBattlePreviewProject();
+    writeSkillRecords($root, new BasicSkill('Piercing shot', '', '', 0, 0,
+        occasion: Occasion::BATTLE_SCREEN, animationId: 1,
+        battleTargeting: new BattleTargeting(BattleTargetShape::LINE, ignoreCover: true)));
+    $actorPath = $root . '/assets/Data/Actors/Kaelion.php';
+    $actor = require $actorPath;
+    $actor['data']['attackSkill'] = 'Piercing shot';
+    file_put_contents($actorPath, '<?php return ' . var_export($actor, true) . ';');
+    $troopPath = $root . '/assets/Data/troops.php';
+    $troops = require $troopPath;
+    $troops[0]['enemies'][0]['battlePosition'] = ['row' => 'front', 'lane' => 0];
+    $troops[0]['enemies'][1]['battlePosition'] = ['row' => 'back', 'lane' => 0];
+    $troops[0]['enemies'][] = [
+        'enemy' => 'Regular Bat', 'position' => [20, 10], 'battlePosition' => ['row' => 'front', 'lane' => 1],
+    ];
+    file_put_contents($troopPath, '<?php return ' . var_export($troops, true) . ';');
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $graphical = $session->readEffectBattlePreview($index, 0, authoredFrame: 1);
+    $terminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL, authoredFrame: 1);
+    $otherLane = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, targetIndex: 2);
+    $otherLaneTerminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL, authoredFrame: 1, targetIndex: 2);
+    $images = array_filter($graphical['canvas']['images'],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Effects/dusk-slash.png');
+    expect($graphical['targets'])->toBe(['Regular Bat', 'Regular Bat'])
+        ->and($terminal['targets'])->toBe($graphical['targets'])
+        ->and($graphical['targetIndex'])->toBe(0)
+        ->and($graphical['targetOptions'][2])->toBe(['name' => 'Regular Bat', 'side' => 'enemy', 'position' => ['row' => 'front', 'lane' => 1]])
+        ->and($otherLane['targetIndex'])->toBe(2)
+        ->and($otherLane['targets'])->toBe(['Regular Bat'])
+        ->and($otherLaneTerminal['targets'])->toBe($otherLane['targets'])
+        ->and(fn() => $session->readEffectBattlePreview($index, 0, targetIndex: 3))->toThrow(SessionRefusal::class, 'Choose a target')
+        ->and($images)->toHaveCount(2)
+        ->and($session->listUnsavedChanges())->toBe([]);
+
+    $shape = array_find($session->readDatabaseRecord('skills', 0)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'battleTargeting.shape');
+    foreach (EffectPresentation::cases() as $presentation) {
+        $session->readEffectBattlePreview($index, 0, presentation: $presentation, authoredFrame: 1);
+    }
+    expect($session->applyDatabaseRecord('skills', 0, $shape['key'], BattleTargetShape::BACK_ROW->value)['changed'])->toBeTrue();
+    foreach (EffectPresentation::cases() as $presentation) {
+        expect($session->readEffectBattlePreview($index, 0, presentation: $presentation, authoredFrame: 1)['targets'])
+            ->toBe(['Regular Bat']);
+    }
+    $session->undo();
+    foreach (EffectPresentation::cases() as $presentation) {
+        expect($session->readEffectBattlePreview($index, 0, presentation: $presentation, authoredFrame: 1)['targets'])
+            ->toBe(['Regular Bat', 'Regular Bat']);
+    }
+});
+
+
+it('finishes impact-anchored recovery in the current graphical arena preview without changing terminal clocks or source', function (bool $hasArena) {
+    $root = effectBattlePreviewProject();
+    file_put_contents($root . '/config.php', "<?php return ['ui' => ['battle' => ['animation_pace' => 'fast']]];");
+    $actorPath = $root . '/assets/Data/Actors/Kaelion.php';
+    $actor = require $actorPath;
+    $actor['data']['name'] = 'Travelling Actor'; // The stable actor id still selects its art after a display-name change.
+    file_put_contents($actorPath, '<?php return ' . var_export($actor, true) . ';');
+    writeTilesetTestPng($root . '/assets/Graphics/FixtureBase.png', 8, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/FixtureAttack.png', 16, 8);
+    $bindingPath = $root . '/assets/Data/Presentation/battlers.php';
+    file_put_contents($bindingPath, '<?php return ' . var_export(['actors' => ['Kaelion' => [
+        'artwork' => ['image' => 'Graphics/FixtureBase.png'],
+        'poses' => ['attack' => ['image' => 'Graphics/FixtureAttack.png', 'columns' => 2,
+            'frames' => [0,0,0,...array_fill(0, 17, 0),1], 'fps' => 20, 'loop' => false,
+            'impactFrame' => 3, 'restFrame' => 0]],
+    ]]], true) . ';');
+    $catalogPath = $root . '/assets/Data/Presentation/battle.php';
+    if (!$hasArena) {
+        $catalog = file_get_contents($catalogPath);
+        $catalog = str_replace("arenas: ['arena.road' => \$arena('Road', 'Road.png'), 'arena.cave' => \$arena('Cave', 'Cave.png')],", 'arenas: [],', $catalog);
+        $catalog = str_replace("defaultArena: 'arena.cave'", 'defaultArena: null', $catalog);
+        file_put_contents($catalogPath, $catalog);
+    }
+    $sources = [$actorPath, $bindingPath, $catalogPath, $root . '/config.php'];
+    $before = array_map(file_get_contents(...), $sources);
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $graphical = $session->readEffectBattlePreview($index, 0);
+    $terminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL);
+    expect($graphical['caster'])->toBe('Travelling Actor');
+    foreach (['advance','announce','source','target','reaction','return'] as $phase) {
+        expect($graphical['phases'][$phase])->toBe($terminal['phases'][$phase]);
+    }
+    if ($hasArena) {
+        $recoveryEnd = $graphical['phases']['target']['start'] + 108; // Eighteen authored entries at 20 fps on the 120 fps command clock.
+        expect($graphical['totalFrames'])->toBe($recoveryEnd)
+            ->and($terminal['totalFrames'])->toBeLessThan($recoveryEnd);
+        $last = $session->readEffectBattlePreview($index, $recoveryEnd - 1);
+        $rest = $session->readEffectBattlePreview($index, $recoveryEnd - 1, reducedMotion: true);
+        $image = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
+            static fn(array $image): bool => $image['asset'] === 'Graphics/FixtureAttack.png');
+        expect($last['phase'])->toBe('finish')
+            ->and($image($last)['sourceRect']['x'] ?? null)->toBe(8)
+            ->and($image($rest)['sourceRect']['x'] ?? null)->toBe(0);
+        $hits = array_values(array_filter($last['crossedCues'], static fn(array $cue): bool => $cue['type'] === 'commandResolved'));
+        expect($hits)->toHaveCount(1)
+            ->and($hits[0]['frame'])->toBe($graphical['phases']['target']['start'] + $graphical['phases']['target']['length']);
+    } else {
+        expect($graphical['canvas'])->toBeNull()->and($graphical['totalFrames'])->toBe($terminal['totalFrames']);
+    }
+    expect(array_map(file_get_contents(...), $sources))->toBe($before)
+        ->and($session->listUnsavedChanges())->toBe([]);
+})->with([true, false]);
+
+
+it('previews movement and full recovery through production phase clocks while isolating reduced-motion caching', function () {
+    $root = effectBattlePreviewProject();
+    file_put_contents($root . '/config.php', "<?php return ['ui' => ['battle' => ['animation_pace' => 'fast']]];");
+    writeTilesetTestPng($root . '/assets/Graphics/Move.png', 16, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/Attack.png', 16, 8);
+    $binding = $root . '/assets/Data/Presentation/battlers.php';
+    file_put_contents($binding, '<?php return ' . var_export(['actors' => ['Kaelion' => [
+        'poses' => [
+            'attack' => ['image' => 'Graphics/Attack.png', 'columns' => 2, 'frames' => [0, ...array_fill(0, 18, 1)],
+                'fps' => 20, 'loop' => false, 'impactFrame' => 1],
+            'move' => ['image' => 'Graphics/Move.png', 'columns' => 2, 'frames' => [0,1], 'fps' => 20],
+            'return' => ['image' => 'Graphics/Move.png', 'columns' => 2, 'frames' => [1,0], 'fps' => 20, 'loop' => false],
+        ],
+    ]]], true) . ';');
+    $before = file_get_contents($binding);
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $normal = $session->readEffectBattlePreview($index, 0);
+    $image = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Move.png');
+    expect($image($normal)['sourceRect']['x'] ?? null)->toBe(0)
+        ->and($image($session->readEffectBattlePreview($index, 6))['sourceRect']['x'] ?? null)->toBe(8);
+    $home = $normal['phases']['return']['start'];
+    expect($normal['phases']['recovery']['length'])->toBeGreaterThan(0)
+        ->and($home)->toBe($normal['phases']['target']['start'] + 108);
+    $returned = $session->readEffectBattlePreview($index, $home);
+    expect($returned['phase'])->toBe('return')->and($image($returned)['sourceRect']['x'] ?? null)->toBe(8)
+        ->and($image($session->readEffectBattlePreview($index, $home + (int)ceil($normal['phases']['return']['length'] / 2)))['sourceRect']['x'] ?? null)->toBe(0);
+    $reduced = $session->readEffectBattlePreview($index, 0, reducedMotion: true);
+    expect($reduced['phases'])->not->toHaveKey('recovery')
+        ->and($reduced['phases']['return']['start'])->toBeLessThan($home)->and($image($reduced))->toBeNull();
+    $terminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL);
+    expect($terminal['phases'])->not->toHaveKey('recovery')->and($terminal['canvas'])->toBeNull()
+        ->and($session->readEffectBattlePreview($index, 0)['phases'])->toBe($normal['phases'])
+        ->and(file_get_contents($binding))->toBe($before)->and($session->listUnsavedChanges())->toBe([]);
+});
+
+it('previews the shared run-to-target plan while keeping Terminal and reduced motion at rest', function () {
+    $root = effectBattlePreviewProject();
+    writeTilesetTestPng($root . '/assets/Graphics/Contact.png', 32, 64);
+    writeTilesetTestPng($root . '/assets/Graphics/ContactEnemy.png', 32, 64);
+    writeTilesetTestPng($root . '/assets/Graphics/Lifecycle.png', 128, 64);
+    $binding = $root . '/assets/Data/Presentation/battlers.php';
+    file_put_contents($binding, '<?php return ' . var_export([
+        'actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/Contact.png'], 'poses' => [
+            'attack' => ['image' => 'Graphics/Contact.png'],
+            'move' => ['image' => 'Graphics/Lifecycle.png', 'columns' => 4, 'frames' => [1,2], 'entryFrames' => [0], 'exitFrames' => [3]],
+            'return' => ['image' => 'Graphics/Lifecycle.png', 'columns' => 4, 'frames' => [2,1], 'loop' => false, 'entryFrames' => [3], 'exitFrames' => [0]],
+        ]]],
+        'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/ContactEnemy.png']]],
+    ], true) . ';');
+    $path = $root . '/assets/Data/animations.php'; $data = require $path;
+    $data[0]['movement'] = 'run-to-target';
+    file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
+    $sources = array_map(file_get_contents(...), [$path, $binding]);
+    $session = EditorSession::open($root); $effect = findEffectIndex($session, 'dusk-slash');
+    $home = $session->readEffectBattlePreview($effect, 0);
+    $strike = $session->readEffectBattlePreview($effect, $home['phases']['target']['start']);
+    $image = static fn(array $frame): array => array_find($frame['canvas']['images'],
+        static fn(array $image): bool => in_array($image['asset'], ['Graphics/Contact.png', 'Graphics/Lifecycle.png'], true));
+    expect($home['phase'])->toBe('enter-advance')->and($image($home)['sourceRect']['x'])->toBe(0)
+        ->and($home['phases'])->toHaveKeys(['enter-advance','exit-advance','enter-return','exit-return'])
+        ->and($home['phases'])->toHaveKey('recovery')
+        ->and($strike['diagnostics'])->toBe([])
+        ->and($image($strike)['destination'])->not->toBe($image($home)['destination']);
+    $loop = $session->readEffectBattlePreview($effect, $home['phases']['advance']['start']);
+    $land = $session->readEffectBattlePreview($effect, $home['phases']['exit-return']['start']);
+    expect($loop['phase'])->toBe('advance')->and($image($loop)['sourceRect']['x'])->toBe(32)
+        ->and($land['phase'])->toBe('exit-return')->and($image($land)['sourceRect']['x'])->toBe(0)
+        ->and($image($land)['destination'])->toBe($image($home)['destination']);
+    $rest = $session->readEffectBattlePreview($effect, 0, reducedMotion: true);
+    $terminal = $session->readEffectBattlePreview($effect, 0, presentation: EffectPresentation::TERMINAL);
+    expect($rest['phases'])->not->toHaveKey('recovery')->and($terminal['phases'])->not->toHaveKey('recovery')
+        ->and($terminal['canvas'])->toBeNull()->and($session->listUnsavedChanges())->toBe([])
+        ->and(array_map(file_get_contents(...), [$path, $binding]))->toBe($sources);
+});
+
+it('previews the saved flash step and its action cells through the shared session in both modes', function () {
+    $root = effectBattlePreviewProject();
+    writeTilesetTestPng($root . '/assets/Graphics/Contact.png', 32, 64);
+    writeTilesetTestPng($root . '/assets/Graphics/ContactEnemy.png', 32, 64);
+    writeTilesetTestPng($root . '/assets/Graphics/Flash.png', 128, 64);
+    $binding = $root . '/assets/Data/Presentation/battlers.php';
+    $pose = ['image' => 'Graphics/Flash.png', 'columns' => 4, 'frames' => [2], 'fps' => 24,
+        'loop' => false, 'restFrame' => 2, 'impactFrame' => 0, 'entryFrames' => [0, 1], 'exitFrames' => [3]];
+    file_put_contents($binding, '<?php return ' . var_export([
+        'actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/Contact.png'], 'actionPoses' => [1 => $pose],
+            'poses' => ['move' => ['image' => 'Graphics/UnusedRun.png']]]],
+        'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/ContactEnemy.png']]],
+    ], true) . ';');
+    $path = $root . '/assets/Data/animations.php';
+    $animations = require $path;
+    $animations[0]['movement'] = 'flash-step';
+    $animations[0]['flashStep'] = ['fps' => 24, 'guardFrames' => 20, 'advanceFrames' => 3, 'holdFrames' => 10,
+        'returnFrames' => 3, 'settleFrames' => 7, 'echoes' => 2];
+    file_put_contents($path, '<?php return ' . var_export($animations, true) . ';');
+    $session = EditorSession::open($root);
+    $effect = findEffectIndex($session, 'dusk-slash');
+    $advance = $session->readEffectBattlePreview($effect, 110);
+    $strike = $session->readEffectBattlePreview($effect, 0, authoredFrame: 0);
+    $echoes = static fn(array $frame): array => array_values(array_filter($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => str_starts_with($image['id'], 'command-echo-')));
+    $body = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Flash.png' && str_starts_with($image['id'], 'combatant-'));
+    expect($advance['phases']['advance'])->toBe(['start' => 100, 'length' => 15])
+        ->and($advance['diagnostics'])->toBe([])
+        ->and($echoes($advance))->toHaveCount(2)
+        ->and($body($advance)['sourceRect']['x'])->toBe(32)
+        ->and($strike['frame'])->toBe(115)
+        ->and($body($strike)['sourceRect']['x'])->toBe(64)
+        ->and($echoes($strike))->toBe([]);
+    $rest = $session->readEffectBattlePreview($effect, 0, reducedMotion: true);
+    $terminal = $session->readEffectBattlePreview($effect, 0, presentation: EffectPresentation::TERMINAL);
+    expect($rest['phases'])->not->toHaveKey('guard')
+        ->and($terminal['phases'])->not->toHaveKey('guard')
+        ->and($terminal['canvas'])->toBeNull()
+        ->and($session->listUnsavedChanges())->toBe([]);
+});
+
+it('saves a captured target-group contact rail and previews it only with strip support', function () {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $source = require $path;
+    $rail = ['left' => .2, 'right' => .8, 'ridgeY' => .45, 'referenceHeight' => .5];
+    // The page exceeds the legacy frame budget once the arena is included.
+    // The 64px crop itself is small enough for a region-capable preview.
+    writeTilesetTestPng($root . '/assets/Graphics/Effects/LargeGroup.png', 4096, 4096);
+    $source['presentations']['graphical']['tracks'][0] = array_replace($source['presentations']['graphical']['tracks'][0], [
+        'anchor' => 'target-group', 'attachment' => 'ground', 'anchorLifetime' => 'effect-start', 'contactRail' => $rail,
+        'asset' => 'Graphics/Effects/LargeGroup.png', 'sheet' => ['columns' => 64, 'rows' => 64],
+    ]);
+    file_put_contents($path, '<?php return ' . var_export($source, true) . ';');
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $category = 'cutscenes/effect';
+    $session->selectCutscenePresentation($category, $index, 'graphical');
+    $trackFrame = $session->describeCutsceneTimeline($category, $index)['tracks'][0]['art']['pivotKey']['frame'];
+    $row = array_find($session->readDatabaseRecord($category, $index, $trackFrame)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'track0ContactRailridgeY');
+    expect($row)->not->toBeNull()
+        ->and($session->applyDatabaseRecord($category, $index, $row['key'], '.4')['changed'])->toBeTrue();
+    $session->undo();
+    $session->redo();
+    expect($session->saveAll()['failures'])->toBe([]);
+    $saved = require $path;
+    expect($saved['presentations']['graphical']['tracks'][0]['contactRail'])->toBe([...$rail, 'ridgeY' => .4])
+        ->and($saved['presentations']['terminal'])->toBe($source['presentations']['terminal']);
+    $legacy = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, textureStrip: true);
+    $enabled = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, textureStrip: true, regionBudget: true);
+    $legacyAgain = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, textureStrip: true);
+    $usesStrip = static fn(array $canvas): bool => array_any($canvas['composites'] ?? [],
+        static fn(array $composite): bool => ($composite['operations'][0]['type'] ?? null) === 'texture_strip');
+    expect($usesStrip($legacy['canvas']))->toBeFalse()
+        ->and($legacy['diagnostics'])->not->toBeEmpty()
+        ->and($usesStrip($enabled['canvas']))->toBeTrue()
+        ->and($enabled['diagnostics'])->toBe([])
+        ->and($usesStrip($legacyAgain['canvas']))->toBeFalse();
+});
+
+it('authors a graphical tether with the shared asset and pose pickers and reopens it in the battle preview', function () {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $initial = require $path;
+    $category = 'cutscenes/effect';
+    $head = 'Graphics/FixturePose.png';
+    $links = 'Graphics/Effects/dusk-slash.png';
+    writeTilesetTestPng($root . '/assets/' . $head, 8, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/FixtureEnemy.png', 8, 8);
+    $binding = ['actors' => ['Kaelion' => [
+        'artwork' => ['image' => $head],
+        'poses' => ['attack' => ['image' => $head,
+            'attachmentPoints' => [['cell' => 0, 'name' => 'grip', 'point' => ['x' => .5, 'y' => .4]]]]],
+    ]], 'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/FixtureEnemy.png']]]];
+    file_put_contents($root . '/assets/Data/Presentation/battlers.php', '<?php return ' . var_export($binding, true) . ';');
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $session->selectCutscenePresentation($category, $index, 'graphical');
+    $clock = array_find($session->readDatabaseRecord($category, $index)['rows'],
+        static fn(array $entry): bool => ($entry['key']['field'] ?? null) === 'poseClock');
+    expect($clock)->not->toBeNull()
+        ->and($session->applyDatabaseRecord($category, $index, $clock['key'], 'target')['changed'])->toBeTrue();
+    $track = $session->describeCutsceneTimeline($category, $index)['tracks'][0]['art']['pivotKey']['frame'];
+    $apply = static function (string $field, string $value) use ($session, $category, $index, $track): void {
+        $row = array_find($session->readDatabaseRecord($category, $index, $track)['rows'],
+            static fn(array $entry): bool => ($entry['key']['field'] ?? null) === 'track0' . $field);
+        expect($row)->not->toBeNull();
+        expect($session->applyDatabaseRecord($category, $index, $row['key'], $value)['changed'])->toBeTrue();
+    };
+    $apply('Type', 'tether');
+    $apply('Grip', 'grip');
+    $apply('Head', $head);
+    $apply('HeadPivot', '0.5, 0.5');
+    $apply('Links', $links);
+    $apply('HeadHeight', '12');
+    $apply('LinkHeight', '8');
+    $apply('LinkSpacing', '8');
+    $apply('GuideGripOffset', '10');
+    $apply('GuideHandOffset', '7');
+    $apply('CurveFirstProgress', '0.29');
+    $apply('CurveSecondProgress', '0.70');
+    $apply('LinkDepth', 'behind');
+    $type = array_find($session->readDatabaseRecord($category, $index, $track)['rows'],
+        static fn(array $entry): bool => ($entry['key']['field'] ?? null) === 'track0Type');
+    expect($session->addDatabaseItem($category, $index, $type['key'], child: true)['changed'])->toBeTrue();
+    $sampleDuration = array_find($session->readDatabaseRecord($category, $index, $track)['rows'],
+        static fn(array $entry): bool => str_ends_with($entry['key']['field'] ?? '', 'Duration'));
+    expect($sampleDuration)->not->toBeNull()
+        ->and($session->applyDatabaseRecord($category, $index, $sampleDuration['key'], '2')['changed'])->toBeTrue();
+    $session->undo();
+    $session->redo();
+    expect($session->saveAll()['failures'])->toBe([]);
+    $saved = require $path;
+    expect($saved['presentations']['terminal'])->toBe($initial['presentations']['terminal'])
+        ->and($saved['presentations']['graphical']['poseClock'])->toBe('target')
+        ->and($saved['presentations']['graphical']['tracks'][0])
+        ->toMatchArray(['type' => 'tether', 'head' => $head, 'links' => $links, 'grip' => 'grip', 'linkSpacing' => 8.0,
+            'guideGripOffset' => 10.0, 'guideHandOffset' => 7.0, 'curveFirstProgress' => .29,
+            'curveSecondProgress' => .7, 'linkDepth' => 'behind']);
+    $reopened = EditorSession::open($root);
+    $preview = $reopened->readEffectBattlePreview(findEffectIndex($reopened, 'dusk-slash'), 0, imageRotation: true, authoredFrame: 0);
+    expect($preview['diagnostics'])->toBe([])
+        ->and(array_any($preview['canvas']['images'], static fn(array $image): bool => str_contains($image['id'], '-link-0')))->toBeTrue();
+});
+
+it('previews each distinct authored crisis technique through the battle test party without activating it', function () {
+    $root = effectBattlePreviewProject();
+    $actorPath = $root . '/assets/Data/Actors/Kaelion.php';
+    $actor = require $actorPath;
+    $actor['data']['crisisAbility'] = 'surge';
+    file_put_contents($actorPath, '<?php return ' . var_export($actor, true) . ';');
+    $abilities = $root . '/assets/Data/crisis-abilities.php';
+    $variants = [];
+    foreach (['first' => 'First strike', 'changed' => 'Second strike', 'later' => 'Second strike'] as $form => $skill) {
+        $variants[] = ['skill' => $skill, 'conditions' => [['type' => 'variable', 'name' => 'form', 'value' => $form]]];
+    }
+    file_put_contents($abilities, '<?php return ' . var_export([[
+        'id' => 'surge', 'name' => 'Surge', 'hpBelowPercent' => 10, 'variants' => $variants,
+    ]], true) . ';');
+    writeSkillRecords($root,
+        new \Ichiloto\Engine\Entities\Skills\SpecialSkill('First strike', '', '', 0, 0, animationId: 1),
+        new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Second strike', '', '', 0, 0, animationId: 1));
+    $before = file_get_contents($actorPath);
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    $graphical = $session->readEffectBattlePreview($index, 0, authoredFrame: 1, binding: 2);
+    $terminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL,
+        authoredFrame: 1, binding: 1);
+
+    expect(array_column($graphical['contexts'], 'action'))->toBe(['Attack', 'First strike', 'Second strike'])
+        ->and($graphical)->toMatchArray(['phase' => 'target', 'caster' => 'Kaelion', 'binding' => 2, 'diagnostics' => []])
+        ->and($graphical['canvas']['images'])->not->toBeEmpty()
+        ->and($terminal)->toMatchArray(['phase' => 'target', 'caster' => 'Kaelion', 'binding' => 1, 'diagnostics' => []])
+        ->and($terminal['terminalLines'])->not->toBeEmpty()
+        ->and(file_get_contents($actorPath))->toBe($before);
 });

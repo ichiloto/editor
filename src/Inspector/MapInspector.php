@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Inspector;
 
+use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Dialogue\DialogueEmotionFields;
 use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
@@ -41,6 +42,8 @@ use Ichiloto\Engine\Events\Enumerations\EventEngagement;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
+use Ichiloto\Engine\Events\Triggers\EventCue;
+use Ichiloto\Engine\Events\Triggers\PassageEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
 use Ichiloto\Engine\Field\DashSettings;
@@ -83,6 +86,8 @@ use Throwable;
  */
 final readonly class MapInspector
 {
+    /** A transfer's Spawn Facing when it names none: the player keeps the heading they walked in with. */
+    public const string KEEP_HEADING = 'Keep walking heading';
     public const string MAP_BGM_NONE = '(None)';
     public const string MAP_KIND_NONE = 'Not set';
     /** What a map without a role shows on its Role row. */
@@ -183,6 +188,7 @@ final readonly class MapInspector
                 'field' => 'region',
             ],
             $this->buildMapRoleField($map),
+            MapSavePolicyField::describeField($map),
             $this->buildPlaceTypeField($map),
             $this->buildSkitBackdropField($map),
             $this->buildMapKindField($map),
@@ -373,6 +379,9 @@ final readonly class MapInspector
                 ? null
                 : $this->writeMapData($map, $path, $value === '' ? null : $value, (string) ($field['label'] ?? 'Field')),
             'map-encounters' => $this->applyMapEncounterValue($map, $field, $value),
+            MapEncounterPoolFields::TARGET => MapEncounterPoolFields::apply($this, $map, $this->requireEditableEncounters($map),
+                $field, $rawValue, $this->readMapAreaIds($map), $this->readEncounterTerrains($map) ?? [],
+                $this->references->valuesFor('troops')),
             'map-bgm-variants' => $this->applyMapBgmVariantValue($map, $field, $value),
             'map-size' => $this->applyMapSize($map, (string) ($field['field'] ?? ''), (int) $value),
             'event' => $this->applyEventField($map, $field, $value),
@@ -593,7 +602,8 @@ final readonly class MapInspector
                 $x, $y, $destination->mapId, $destination->getWidth(), $destination->getHeight()));
         }
 
-        $facing = $heading === null ? null : (self::findSpawnHeading($heading)
+        // No heading leaves the event's facing as it is; an empty one clears it, so the player keeps their heading.
+        $facing = $heading === null || $heading === '' ? null : (self::findSpawnHeading($heading)
             ?? throw new InspectorRefusal(sprintf('%s is not a spawn facing; choose %s.', $heading, implode(', ', self::listSpawnHeadingNames()))));
 
         $next = $current;
@@ -601,6 +611,9 @@ final readonly class MapInspector
         $next['data']['spawnPoint'] = [...(is_array($current['data']['spawnPoint'] ?? null) ? $current['data']['spawnPoint'] : []), 'x' => $x, 'y' => $y];
         if ($facing !== null) {
             $next['data']['spawnSprite'] = [$facing->value];
+        }
+        if ($heading === '') {
+            unset($next['data']['spawnSprite']);
         }
 
         if ($next === $current) {
@@ -627,6 +640,7 @@ final readonly class MapInspector
     public function addListEntry(ProjectMap $map, array $field): ?InspectorListEdit
     {
         if (isset($field['innPresentationList'])) { return $this->editInnPresentationList($map, $field, false); }
+        if (($field['target'] ?? null) === MapEncounterPoolFields::TARGET) { return $this->editEncounterPoolList($map, $field, false); }
         if (($field['target'] ?? null) === 'map-encounters' && is_array($field[self::ARENA_RULE_LIST] ?? null)) {
             return $this->addArenaRule($map, (int) $field[self::ARENA_RULE_LIST]['index']);
         }
@@ -687,6 +701,12 @@ final readonly class MapInspector
             sprintf('Added %s %d.', self::describeListPath($list['path']), $position + 1));
     }
 
+    private function editEncounterPoolList(ProjectMap $map, array $field, bool $remove): InspectorListEdit
+    {
+        return MapEncounterPoolFields::editList($this, $map, $this->requireEditableEncounters($map), $field,
+            $this->readMapAreaIds($map), $this->readEncounterTerrains($map) ?? [], $this->references->valuesFor('troops'), $remove);
+    }
+
     /**
      * Adds an arena rule after another: for the first of the map's encounter
      * terrains no rule names yet, else its first area, on the map's arena
@@ -698,7 +718,7 @@ final readonly class MapInspector
     {
         $encounters = $this->requireEditableEncounters($map);
 
-        if ($encounters->rows() === []) {
+        if ($encounters->rows() === [] && $encounters->pools === []) {
             throw new InspectorRefusal('Add an encounter troop first; arena rules choose where its battles are drawn.');
         }
 
@@ -727,6 +747,7 @@ final readonly class MapInspector
     public function removeListEntry(ProjectMap $map, array $field): ?InspectorListEdit
     {
         if (isset($field['innPresentationList'])) { return $this->editInnPresentationList($map, $field, true); }
+        if (($field['target'] ?? null) === MapEncounterPoolFields::TARGET) { return $this->editEncounterPoolList($map, $field, true); }
         if (($field['target'] ?? null) === 'map-encounters' && is_array($field[self::ARENA_RULE_LIST] ?? null)) {
             $encounters = $this->requireEditableEncounters($map);
             $index = (int) $field[self::ARENA_RULE_LIST]['index'];
@@ -1312,6 +1333,13 @@ final readonly class MapInspector
         if ($path === ['engagement']) {
             return $this->applyEventEngagement($map, $marker, $value);
         }
+        if ($path === ['cue', 'maxDistance']) {
+            $text = trim(strval($value));
+            if ($text === '') { $value = null; }
+            elseif (!ctype_digit($text) || (int) $text > EventCue::MAX_DISTANCE) {
+                throw new InspectorRefusal('Cue range must be 0..64 steps, or blank for unlimited range.');
+            } else { $value = (int) $text; }
+        }
         if (is_string($field['facingHeading'] ?? null)) {
             return $this->applyEventFacing($map, $marker, $field['facingHeading'], $value === true);
         }
@@ -1345,6 +1373,10 @@ final readonly class MapInspector
         $engagement = is_string($value) ? EventEngagement::tryFrom($value) : null;
         if ($engagement === null) {
             throw new InspectorRefusal('Choose to stand on the event or to face it from next to it.');
+        }
+        if (is_a($map->getEventDefinition($marker)['class'] ?? '', PassageEventTrigger::class, true)
+            && $engagement !== EventEngagement::FACING) {
+            throw new InspectorRefusal('An opening passage is operated from the adjacent facing cell.');
         }
         $held = $map->hasEventField($marker, ['engagement']);
         $old = $map->getEventField($marker, ['engagement']);
@@ -1394,17 +1426,26 @@ final readonly class MapInspector
      */
     private function applySpawnHeading(ProjectMap $map, string $marker, mixed $value): ?Command
     {
+        $path = ['data', 'spawnSprite'];
+        $held = $map->hasEventField($marker, $path);
+        $old = $map->getEventField($marker, $path);
+        if ($value === self::KEEP_HEADING) {
+            if (! $held) {
+                return null;
+            }
+            $clear = static fn() => $map->removeEventField($marker, $path);
+            $clear();
+
+            return new GenericCommand('Spawn facing edit', $clear, static fn() => $map->setEventField($marker, $path, $old));
+        }
         $heading = is_string($value) ? self::findSpawnHeading($value) : null;
         if ($heading === null) {
             throw new InspectorRefusal(sprintf('Choose %s for the spawn facing.', implode(', ', self::listSpawnHeadingNames())));
         }
-        $path = ['data', 'spawnSprite'];
-        $old = $map->getEventField($marker, $path);
         $next = [$heading->value];
         if ($old === $next) {
             return null;
         }
-        $held = $map->hasEventField($marker, $path);
         $apply = static fn() => $map->setEventField($marker, $path, $next);
         $restore = $held ? static fn() => $map->setEventField($marker, $path, $old) : static fn() => $map->removeEventField($marker, $path);
         $apply();
@@ -1432,17 +1473,21 @@ final readonly class MapInspector
      * @param list<array<string, mixed>> $fields
      * @return list<array<string, mixed>>
      */
-    private static function insertSpawnHeadingField(array $fields, string $marker, mixed $spawnSprite): array
+    private static function insertSpawnHeadingField(array $fields, string $marker, mixed $spawnSprite, bool $mayKeepHeading): array
     {
         $heading = is_array($spawnSprite) || is_string($spawnSprite) ? PlayerSpriteSet::headingFromName($spawnSprite) : null;
         $art = is_array($spawnSprite) ? implode(' ', array_map(static fn(mixed $row): string => is_scalar($row) ? (string) $row : '?', $spawnSprite)) : (is_scalar($spawnSprite) ? (string) $spawnSprite : '');
         $row = [
             'label' => 'Spawn Facing',
-            'value' => $heading?->value ?? sprintf('(sprite art: %s)', $art),
-            'selectedValue' => $heading?->value ?? '',
-            'choices' => array_map(static fn(string $name): array => ['label' => $name, 'value' => $name,
-                'description' => sprintf('The player arrives facing %s.', strtolower($name))], self::listSpawnHeadingNames()),
-            'options' => self::listSpawnHeadingNames(),
+            'value' => $heading?->value ?? ($spawnSprite === null ? self::KEEP_HEADING : sprintf('(sprite art: %s)', $art)),
+            'selectedValue' => $heading?->value ?? ($spawnSprite === null ? self::KEEP_HEADING : ''),
+            'choices' => [
+                ...($mayKeepHeading ? [['label' => self::KEEP_HEADING, 'value' => self::KEEP_HEADING,
+                    'description' => 'The player arrives facing the way they were walking.']] : []),
+                ...array_map(static fn(string $name): array => ['label' => $name, 'value' => $name,
+                    'description' => sprintf('The player arrives facing %s.', strtolower($name))], self::listSpawnHeadingNames()),
+            ],
+            'options' => [...($mayKeepHeading ? [self::KEEP_HEADING] : []), ...self::listSpawnHeadingNames()],
             'path' => ['data', 'spawnSprite'],
             'spawnHeading' => true,
             'target' => 'event',
@@ -1614,7 +1659,7 @@ final readonly class MapInspector
      *
      * @throws InspectorRefusal When it names an arena the presentation does not declare.
      */
-    private function requireArena(string $value, string $none): ?string
+    public function requireArena(string $value, string $none): ?string
     {
         $value = trim($value);
 
@@ -1865,6 +1910,7 @@ final readonly class MapInspector
             'editable' => false,
             'target' => 'map-encounters',
             'encounterList' => ['index' => max(0, count($rows) - 1)],
+            'listHeading' => true,
         ];
 
         foreach ($rows as $index => $row) {
@@ -1928,7 +1974,9 @@ final readonly class MapInspector
             }
         }
 
-        if ($rows === []) {
+        $fields = [...$fields, ...MapEncounterPoolFields::describe($this, $encounters, $this->readMapAreaIds($map),
+            $this->readEncounterTerrains($map) ?? [], $this->graphical)];
+        if ($rows === [] && $encounters->pools === []) {
             return $fields;
         }
 
@@ -1984,6 +2032,7 @@ final readonly class MapInspector
             // Named apart from the troop list's heading, which shares the target.
             'field' => 'arenaRules',
             self::ARENA_RULE_LIST => ['index' => max(0, count($rules) - 1)],
+            'listHeading' => true,
         ]];
 
         foreach ($rules as $index => $rule) {
@@ -2066,7 +2115,7 @@ final readonly class MapInspector
      * How an arena reads on a row: its name, what applies when none is set,
      * or a key the battle presentation does not declare, kept and said so.
      */
-    private function describeArena(?string $arena, string $none): string
+    public function describeArena(?string $arena, string $none): string
     {
         if ($arena === null) {
             return $none;
@@ -2094,6 +2143,7 @@ final readonly class MapInspector
                 'editable' => false,
                 'target' => 'map-bgm-variants',
                 'bgmVariantList' => ['index' => max(0, $variants->count() - 1)],
+                'listHeading' => true,
             ],
         ];
 
@@ -2202,7 +2252,8 @@ final readonly class MapInspector
                 $this->flattenInspectorFields([...self::withPageEmotions($eventData, $pages), ...array_diff_key($optional, $eventData)], ['data']),
             ));
             $fields = $this->describePageEmotions($fields, $pages);
-            if ($hasSpawnSprite) { $fields = self::insertSpawnHeadingField($fields, $marker, $spawnSprite); }
+            $mayKeepHeading = $className !== null && is_a($className, TransferPlayerTrigger::class, true);
+            if ($hasSpawnSprite || $mayKeepHeading) { $fields = self::insertSpawnHeadingField($fields, $marker, $spawnSprite, $mayKeepHeading); }
             if ($hasPresentation) { $fields = [...$fields, ...$this->buildInnPresentationFields($marker, $presentation)]; }
         }
 
@@ -2218,6 +2269,12 @@ final readonly class MapInspector
         }
         $cueKindFields = [];
         if (is_array($rootFields['cue'])) {
+            $range = $rootFields['cue']['maxDistance'] ?? '';
+            if (!is_scalar($range)) { $range = '(invalid range)'; }
+            unset($rootFields['cue']['maxDistance']);
+            $cueKindFields[] = ['label' => 'Cue Range (steps, blank = unlimited)', 'value' => (string) $range,
+                'control' => new InputControl(InputControlType::TEXT, (string) $range),
+                'path' => ['cue', 'maxDistance'], 'optional' => true];
             $hasKind = array_key_exists('kind', $rootFields['cue']);
             $kind = $hasKind ? $rootFields['cue']['kind'] : '';
             $validKind = ! $hasKind || (is_string($kind) && EventCueKind::tryFrom($kind) !== null);
@@ -2232,6 +2289,16 @@ final readonly class MapInspector
                 'path' => ['cue', 'kind'],
                 'optional' => true,
             ];
+        }
+
+        if (is_a($definition['class'] ?? '', PassageEventTrigger::class, true)) {
+            $fields = array_map(static function (array $field): array {
+                if (in_array($field['path'] ?? [], [['data', 'mode'], ['data', 'reusable']], true)) {
+                    unset($field['control'], $field['options']);
+                    $field['editable'] = false;
+                }
+                return $field;
+            }, $fields);
         }
 
         return [
@@ -2434,7 +2501,7 @@ final readonly class MapInspector
             $entries = $points->readEntries($route[$points->key] ?? []);
             $fields[] = ['label' => ucfirst($points->key), 'value' => strval(count($entries)), 'editable' => false,
                 'path' => [...$path, $points->key], 'movementRoutePath' => $path, 'movementRoutePoints' => true,
-                'list' => ['path' => [...$path, $points->key], 'index' => count($entries) - 1, 'blank' => $points->blank]];
+                'list' => ['path' => [...$path, $points->key], 'index' => count($entries) - 1, 'blank' => $points->blank], 'listHeading' => true];
         }
         return $fields;
     }
@@ -2477,7 +2544,7 @@ final readonly class MapInspector
         $listPath = [...$presentationPath, substr($list->key, strlen('presentation.'))];
         $fields[] = ['label' => $list->heading, 'value' => (string) count($entries), 'editable' => false,
             'target' => 'event', 'marker' => $marker, 'path' => $listPath, 'innPresentationPath' => $presentationPath,
-            'innPresentationList' => $context, 'list' => ['path' => $listPath, 'index' => -1]];
+            'innPresentationList' => $context, 'list' => ['path' => $listPath, 'index' => -1], 'listHeading' => true];
         foreach ($entries as $index => $entry) {
             if (! is_array($entry)) { continue; }
             foreach ($list->fieldsFor($entry) as $field) {
@@ -2663,6 +2730,7 @@ final readonly class MapInspector
     {
         return match ($className) {
             ScriptEventTrigger::class => ScriptEventTrigger::MODES,
+            PassageEventTrigger::class => [ScriptEventTrigger::MODE_ACTION],
             CinematicCommandSchema::CINEMATIC_TRIGGER_CLASS => CinematicCommandSchema::CINEMATIC_TRIGGER_MODES,
             default => null,
         };
@@ -2788,6 +2856,7 @@ final readonly class MapInspector
                             'index' => max(0, count($value) - 1),
                             'blank' => $this->blankInspectorListEntry($nextPath),
                         ],
+                        'listHeading' => true,
                     ];
 
                     foreach ($value as $index => $entry) {

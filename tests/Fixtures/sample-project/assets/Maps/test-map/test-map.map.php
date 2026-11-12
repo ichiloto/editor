@@ -2,7 +2,7 @@
 
 return <<<'ICHILOTO_MAP'
 ############
-#  <blue>~~~</blue>     #
+#  <fg=blue>~~~</>     #
 #          #
 #          #
 ############

@@ -152,3 +152,45 @@ it('sets the corner map\'s opacity as a number the Engine checks, and writes it 
         ->and(MapAtlasTheme::fromArray((require $file)['atlas'])->cornerOpacity)->toBe(0.5)
         ->and(file_get_contents($file))->toContain('// Breathing room.');
 });
+
+it('binds a badge image for every project state and its pending badge, unsaved states included, and undoes', function () {
+    [$root, $file, $session] = createMenuThemeProject(<<<'PHP'
+<?php
+return [
+  'schema' => 'ichiloto.menu/1',
+  'icons' => [
+    'notification.save' => 'Graphics/Icons/Save.png', // Bound by another page.
+  ],
+];
+PHP);
+    file_put_contents($root . '/assets/Data/states.php', "<?php\nreturn [['id' => 'poison', 'name' => 'Poison']];\n");
+    writeTilesetTestPng($root . '/assets/Graphics/Icons/Save.png', 8, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/Icons/Waiting.png', 8, 8);
+    $session = EditorSession::open($root);
+    // A state not saved yet already has its badge roles to bind.
+    $index = $session->createDatabaseRecord('states')['index'];
+    $id = array_find($session->readDatabaseRecord('states', $index)['rows'], static fn(array $row): bool => ($row['key']['field'] ?? null) === 'id');
+    $session->applyDatabaseRecord('states', $index, $id['key'], 'stun');
+
+    $labels = $session->listDatabaseRecords(MenuThemeFields::CATEGORY)['records'];
+    $roles = Ichiloto\Engine\Battle\Presentation\BattlerConditions::listStateIconRoles(['poison', 'stun']);
+    expect(array_values(array_filter($labels, static fn(string $label): bool => str_starts_with($label, 'icons.status.state.'))))
+        ->toBe(array_map(static fn(string $role): string => 'icons.' . $role, $roles))
+        ->and($labels)->toContain('icons.status.state.stun.pending', 'icons.notification.save');
+    $badge = array_find($session->readDatabaseRecord(MenuThemeFields::CATEGORY, findThemeSetting($session, 'icons.status.state.poison.pending'))['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'value');
+    expect($badge['kind'])->toBe('reference')->and($badge['reference'])->toBe('png_assets')
+        ->and($badge['noneLabel'])->toBe('(state icon or label)');
+
+    expect(fn() => setThemeSetting($session, 'icons.status.state.poison.pending', 'Graphics/Icons/Missing.png'))->toThrow(SessionRefusal::class);
+    setThemeSetting($session, 'icons.status.state.poison.pending', 'Graphics/Icons/Waiting.png');
+    $session->saveDatabase(MenuThemeFields::CATEGORY);
+    expect((require $file)['icons'])->toBe(['notification.save' => 'Graphics/Icons/Save.png', 'status.state.poison.pending' => 'Graphics/Icons/Waiting.png'])
+        ->and(file_get_contents($file))->toContain('// Bound by another page.');
+
+    // Undoing the binding and saving restores the theme as authored.
+    $session->undo();
+    $session->saveDatabase(MenuThemeFields::CATEGORY);
+    expect((require $file)['icons'])->toBe(['notification.save' => 'Graphics/Icons/Save.png'])
+        ->and(file_get_contents($file))->toContain('// Bound by another page.');
+});

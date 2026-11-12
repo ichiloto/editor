@@ -10,6 +10,7 @@ use Ichiloto\Editor\ListNavigation;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\ConversationFields;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
@@ -28,6 +29,7 @@ use Ichiloto\Editor\UI\SettingsPaneLayout;
 use Ichiloto\Editor\Validation\EffectValidator;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\IO\Console\TerminalText;
 use Throwable;
 
 /**
@@ -798,7 +800,8 @@ trait CutscenesWorkspace
             return;
         }
 
-        if (preg_match('/^\X$/u', $input) === 1 && ! ctype_cntrl($input)) {
+        $graphemes = TerminalText::splitGraphemes($input);
+        if ($graphemes !== false && count($graphemes) === 1 && ! ctype_cntrl($input)) {
             $this->cutsceneFilter->type($input);
             $this->syncCutsceneSelectionToFilter();
             $this->renderCutscenesArea();
@@ -879,6 +882,7 @@ trait CutscenesWorkspace
             CutsceneType::CINEMATIC => [
                 'Identity' => ['id', 'name', 'description', 'version'],
                 'Staging' => ['startMap', 'presentation.initial', 'presentation.reducedMotion'],
+                'Conversation' => [ConversationFields::INITIAL_GROUP_KEY],
                 'Script' => ['commandListCommands'],
                 'Skip' => ['skip.policy', 'checkpoints', 'commandListFinalizer'],
                 'Metadata' => ['authoring'],
@@ -896,7 +900,7 @@ trait CutscenesWorkspace
                 'Wielders' => ['wielders.mode', 'wielders.roles', 'wielders.characters', 'wielders.tenancy'],
                 'Playback' => ['playback.defaultSpeed', 'playback.allowSkip', 'playback.loopPreview', 'transitionIn.type', 'transitionIn.durationMs', 'transitionIn.color', 'transitionOut.type', 'transitionOut.durationMs', 'transitionOut.color', 'effectTiming.mode', 'effectTiming.cueId', 'effectTiming.frame', 'targetPresentation.mode', 'targetPresentation.showCasterNameBanner'],
                 'Timeline' => ['formatVersion', 'fps', 'lengthFrames', 'restFrame', 'editor', 'commandListTracks', 'commandListCues'],
-                'Stage' => ['stage.canvas', 'stage.startFrame', 'stage.restoreFrame', 'stage.background',
+                'Stage' => ['stage.canvas', 'stage.startFrame', 'stage.restoreFrame', 'stage.restFrame', 'stage.background',
                     'commandList' . ucfirst(CutsceneSchemas::STAGE_SUBJECTS_KEY), 'commandList' . ucfirst(CutsceneSchemas::STAGE_CAMERA_KEY),
                     'commandList' . ucfirst(CutsceneSchemas::STAGE_COVERS_KEY)],
             ],
@@ -912,6 +916,11 @@ trait CutscenesWorkspace
         foreach ($fields as $field) {
             $id = (string) ($field['field'] ?? '');
             $placed = false;
+
+            if ($asset->type === CutsceneType::CINEMATIC && self::isConversationRow($id)) {
+                // The conversation's list rows join its section, in the order the lists give them.
+                $sections['Conversation'][] = $id;
+            }
 
             foreach ($sections as $ids) {
                 if (in_array($id, $ids, true)) {
@@ -992,6 +1001,13 @@ trait CutscenesWorkspace
         }
 
         return $grouped;
+    }
+
+    /** Whether a cinematic row belongs to one of its conversation's lists. */
+    private static function isConversationRow(string $id): bool
+    {
+        return array_any([ConversationFields::SPEAKER_PREFIX, ConversationFields::ADDRESSEE_PREFIX, ConversationFields::GROUP_PREFIX],
+            static fn(string $prefix): bool => str_starts_with($id, $prefix));
     }
 
     /**
@@ -1694,7 +1710,9 @@ trait CutscenesWorkspace
             if ($this->workspace instanceof ProjectWorkspace) {
                 $uses = EffectValidator::findUses($this->workspace)[$asset->id] ?? [];
                 $scripts = EffectValidator::findScriptUses($this->workspace, $this->cutsceneLibrary()?->assets(CutsceneType::CINEMATIC) ?? []);
-                $references = [...($uses['battle'] ?? []), ...($uses['field'] ?? []), ...($uses['stage'] ?? []), ...($scripts[$asset->id] ?? [])];
+                $conditions = array_filter($uses, static fn(string $context): bool => str_starts_with($context, EffectValidator::CONDITION_CONTEXT), ARRAY_FILTER_USE_KEY);
+                $references = [...($uses['battle'] ?? []), ...($uses['field'] ?? []), ...($uses['stage'] ?? []),
+                    ...array_merge(...array_values($conditions)), ...($scripts[$asset->id] ?? [])];
             }
         } else {
             foreach ($this->workspace?->actorDatabase->getActors() ?? [] as $actor) {
@@ -2144,7 +2162,7 @@ trait CutscenesWorkspace
         $help = match (true) {
             $this->referencePicker->isOpen() => $this->fitHelp($layout['settingsWidth'], 'Enter:Choose  Type:Filter  Esc:Cancel', 'Enter:Choose  Esc:Cancel'),
             $this->isDatabaseEditing => 'Enter:Apply  Esc:Cancel',
-            $this->conditionEditor->isOpen() => $this->fitHelp($layout['settingsWidth'], 'a:Add  d:Del  t:Type  n:Name  x:Value  !:Not  Enter:Done  Esc:Cancel', 'a/d:Add/Del  t/n/x:Edit  Enter:Done'),
+            $this->conditionEditor->isOpen() => $this->fitHelp($layout['settingsWidth'], 'a:Add  d:Del  t:Type  n:Name  x:Step  v:Value  !:Not  Enter:Done  Esc:Cancel', 'a/d:Add/Del  t/n/x/v:Edit  Enter:Done'),
             $this->databaseCommandFramePath !== [] => $this->fitHelp($layout['settingsWidth'], 'Enter:Edit/Open  Esc:Back  Shift+O:Add  Shift+X/Del:Remove', 'Enter:Open  Esc:Back  Shift+O/Del', 'Esc:Back'),
             default => $this->fitHelp($layout['settingsWidth'], 'Enter:Edit/Open  Shift+O:Add  Shift+X/Del:Remove', 'Enter:Edit  Shift+O/Del', 'Enter:Edit'),
         };

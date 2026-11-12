@@ -5,6 +5,31 @@ declare(strict_types=1);
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 
+it('authors logical positions independently of graphical and terminal placement and refuses overlapping positions', function () {
+    $root = troopFormationProject();
+    $path = $root . '/assets/Data/troops.php';
+    $before = require $path;
+    $session = EditorSession::open($root);
+    $read = $session->readDatabaseRecord('troops', 0);
+    $first = array_find($read['rows'], static fn($row) => ($row['key']['field'] ?? null) === 'member0BattlePosition');
+    $second = array_find($read['rows'], static fn($row) => ($row['key']['field'] ?? null) === 'member1BattlePosition');
+    expect($first)->not->toBeNull()->and($second)->not->toBeNull();
+    $session->applyDatabaseRecord('troops', 0, $first['key'], 'back, 0');
+    expect(fn() => $session->applyDatabaseRecord('troops', 0, $first['key'], 'rear, 0'))->toThrow(SessionRefusal::class);
+    $session->saveDatabase('troops');
+    $saved = require $path;
+    expect($saved[0]['enemies'][0]['battlePosition'])->toBe(['row' => 'back', 'lane' => 0])
+        ->and($saved[0]['enemies'][0]['position'])->toBe($before[0]['enemies'][0]['position'])
+        ->and($saved[0]['enemies'][0]['graphicalPlacement'])->toBe($before[0]['enemies'][0]['graphicalPlacement']);
+    $session->applyDatabaseRecord('troops', 0, $second['key'], 'back, 0');
+    expect(fn() => $session->saveDatabase('troops'))->toThrow(SessionRefusal::class, 'same logical battle position')
+        ->and(require $path)->toBe($saved);
+    $session->undo();
+    $session->applyDatabaseRecord('troops', 0, $first['key'], '');
+    $session->saveDatabase('troops');
+    expect((require $path)[0]['enemies'][0])->not->toHaveKey('battlePosition');
+});
+
 it('reads a troop formation as the Engine composes it over a previewed arena, the party in its slots', function () {
     $session = EditorSession::open(troopFormationProject());
     $formation = $session->readTroopFormation(0);
@@ -46,6 +71,22 @@ it('sends the picture the battle draws at rest, for the frontend to paint with t
         // An arena whose background file is missing draws nothing behind the battlers, as in battle.
         ->and($session->readTroopFormation(0, 'arena.road')['picture']['images'])->toBe([]);
 });
+
+it('previews the configured frontline rather than the theme slot count', function (bool $battleTest) {
+    $root = troopFormationProject();
+    $party = array_map(static fn(int $index): string => 'actor.' . $index, range(1, 8));
+    $system = ['startingParty' => $party, 'battle' => ['partySize' => $battleTest ? 3 : 8]];
+    if ($battleTest) {
+        $system['battleTest'] = [
+            'members' => array_map(static fn(string $id): array => ['actor' => $id, 'level' => 1], array_reverse($party)),
+            'battleSize' => 8,
+        ];
+    }
+    file_put_contents($root . '/assets/Data/system.php', '<?php return ' . var_export($system, true) . ';');
+    $session = EditorSession::open($root);
+    $preview = $session->readTroopFormation(0);
+    expect(array_column($preview['party'], 'name'))->toBe($battleTest ? array_reverse($party) : $party);
+})->with([false, true]);
 
 it('moves a member by its battle placement as one undo step, keeping the troop file\'s comments and the terminal position', function () {
     $root = troopFormationProject();

@@ -42,7 +42,7 @@ function questViews(ProjectRecordDatabase $database): array
  */
 function scratchQuestProject(): string
 {
-  $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-quests-' . uniqid());
+  $root = reserveTemporaryPath('ichiloto-quests-');
   mkdir($root . '/assets/Data', 0777, true);
   copy(fixturePath('sample-project/ichiloto.json'), $root . '/ichiloto.json');
   copy(fixturePath('sample-project/assets/Data/quests.php'), $root . '/assets/Data/quests.php');
@@ -64,7 +64,7 @@ it('loads the quests from the fixture project', function () {
 });
 
 it('tolerates a missing quests.php and creates it on first save', function () {
-  $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-quests-empty-' . uniqid());
+  $root = reserveTemporaryPath('ichiloto-quests-empty-');
   mkdir($root, 0777, true);
   $database = questRecords($root);
 

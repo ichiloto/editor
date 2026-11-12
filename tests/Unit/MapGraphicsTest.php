@@ -365,24 +365,30 @@ it('reports glyphs no tile covers, NPCs without field sprites and copies of an N
     ])->and(graphicsIssueLines($root, Severity::WARNING))->toBe([]);
 });
 
-it('warns for tiles a piece draws whose glyph is no longer there, and only those', function () {
+it('warns for piece art that is not placed where it stands, and only for that', function () {
     $root = mapGraphicsProject();
     writeTestTileset($root, pieces: [
         'window' => ['name' => 'Window', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['5']]],
         'board' => ['name' => 'Board', 'layer' => 'buildings', 'glyphs' => ['/ '], 'tiles' => ['decor' => ['7 6']]],
     ]);
-    // Buildings: " /  " over " xx ". The windows at (1, 1) and (2, 1), and
-    // the board's / at (1, 0) with its blank cell beside it at (2, 0), are
-    // accounted for; a window tile at (3, 1) has no x, and a board tile at
-    // (3, 0) has no / beside it. The floor's 2816 is drawn by no piece, so
-    // it is never judged.
+    // Buildings: " /  " over " xx ", on walkable floor; x and / are solid.
+    // The windows at (1, 1) and (2, 1), and the board's / at (1, 0) with its
+    // blank cell beside it at (2, 0), are placed by their glyphs. A window
+    // tile at (3, 1) stands on walkable floor, where a window's solid ground
+    // is not, and the board tile at (3, 0) is half of a board. The floor's
+    // 2816 is drawn by no piece, so it is never judged.
+    writeWalkableFloorCollisions($root);
     writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', "0 0 0 6\n0 5 5 5");
-    $stale = array_values(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'no longer there')));
-    expect($stale)->toBe(['2 tiles on the decor tile layer are drawn by a tileset piece whose glyph is no longer there: (3, 0), (3, 1).'])
-        ->and(graphicsIssueLines($root, Severity::WARNING))->toContain($stale[0]);
+    $unplaced = array_values(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'is not placed there')));
+    expect($unplaced)->toBe(['2 tiles on the decor tile layer are art of a tileset piece that is not placed there: no glyph of the piece accounts for them, and they are in no whole copy of its art over ground with its collision: (3, 0), (3, 1).'])
+        ->and(graphicsIssueLines($root, Severity::WARNING))->toContain($unplaced[0]);
 
     writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', "0 7 6 0\n0 5 5 0");
-    expect(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'no longer there')))->toBe([]);
+    expect(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'is not placed there')))->toBe([]);
+
+    // A whole window's art over the board's solid / at (1, 0) is placed as art alone: its ground has a window's collision.
+    writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', "0 5 6 0\n0 5 5 0");
+    expect(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'is not placed there')))->toBe([]);
 });
 
 it('never judges a tile that a glyph-less piece also draws, wherever it stands', function () {
@@ -395,7 +401,7 @@ it('never judges a tile that a glyph-less piece also draws, wherever it stands',
     // Window tiles stand on the x cells and, as caps, on blank cells beside them.
     writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', "5 0 0 5\n0 5 5 5");
 
-    expect(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'no longer there')))->toBe([]);
+    expect(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'is not placed there')))->toBe([]);
 });
 
 it('lists the cells showing the tileset\'s missing-art placeholder', function () {

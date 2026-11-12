@@ -462,6 +462,22 @@ it('authors a protective state and cover, and refuses a protection the Engine co
     expect(fn() => $database->save())->toThrow('damageTakenRate cannot be negative');
 });
 
+it('authors a state accuracy adjustment through the shared validation and save path', function (): void {
+    $root = makeTemporaryProject();
+    $database = loadRecordDatabase($root, 'states');
+    expect(array_column($database->getSettingsFields(0), 'field'))->toContain('accuracyModifier');
+
+    $database->setField(0, 'accuracyModifier', '-25');
+    $database->save();
+    $stateFile = $root . '/assets/Data/states.php';
+    expect((require $stateFile)[0]['accuracyModifier'])->toBe(-25);
+
+    $reopened = loadRecordDatabase($root, 'states');
+    $reopened->setField(0, 'accuracyModifier', '-101');
+    expect(fn() => $reopened->save())->toThrow('accuracyModifier must be between -100 and 100');
+    expect((require $stateFile)[0]['accuracyModifier'])->toBe(-25);
+});
+
 it('authors an item cure through the states it removes and keeps value effects apart', function (): void {
     $root = makeTemporaryProject();
     $database = loadRecordDatabase($root, 'items');

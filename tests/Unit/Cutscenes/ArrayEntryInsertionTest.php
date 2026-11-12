@@ -137,14 +137,11 @@ it('keeps queued insertions at one offset in their queued order', function () {
     expect(require_once_source($written))->toBe(['a', 'b', 'c', 'z']);
 });
 
-/** Evaluates a returned PHP array source without leaving a file behind. */
+/** Evaluates a returned PHP array source from an owned throwaway file. */
 function require_once_source(string $source): mixed
 {
-    $path = tempnam(sys_get_temp_dir(), 'ichiloto-source-');
+    $path = makeTemporaryFile('ichiloto-source-', '.php');
     file_put_contents($path, $source);
-    try {
-        return require $path;
-    } finally {
-        unlink($path);
-    }
+
+    return require $path;
 }

@@ -10,6 +10,7 @@ use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Editor\Progression\ProjectWorldAbilities;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Storage\SourceSetPlan;
@@ -74,6 +75,18 @@ final class MapLinePlanner
         return ProjectDirectoryContext::run($projectRoot, static fn(string $root): MapLinePlan => self::buildPlan($root, $removal));
     }
 
+    /**
+     * Where the player can reach in the project as saved, with the project's current world abilities installed.
+     *
+     * @throws RuntimeException When the project's world abilities cannot be read.
+     */
+    private static function analyzeReachability(string $root): ProjectReachability
+    {
+        ProjectWorldAbilities::installFromProject($root)->assertReadable();
+
+        return ProjectReachability::analyze($root . '/assets');
+    }
+
     private static function buildPlan(string $root, MapLineEdit $edit): MapLinePlan
     {
         $directory = $root . '/assets/Maps/' . $edit->mapId;
@@ -81,6 +94,7 @@ final class MapLinePlanner
         [$width, $height] = [$map->getWidth(), $map->getHeight()];
         // Relative points are judged against where their subjects stand before the edit moves them.
         $subjects = MapSubjectCells::readMap($map);
+        $targetGrid = $map->getLayerSet()->getComposedGrid();
         $edit instanceof LineRemoval
             ? $map->removeLines($edit->axis, $edit->at, $edit->count)
             : $map->insertLines($edit->axis, $edit->at, $edit->count);
@@ -125,7 +139,15 @@ final class MapLinePlanner
                 $commonEvents[basename($path, '.php')] = ['file' => $path, 'commands' => $payloads[$path]];
             }
         }
-        $inventory = new MapLineInventory($edit, $commonEvents, $subjects);
+        // A script leaving through a door arrives on the door's destination map, read as the Engine reads the saved door.
+        $resolveDoor = static function (array $command) use ($root): ?string {
+            try {
+                return \Ichiloto\Engine\Field\MapDoorReference::fromCommand($command)->resolveFromProject($root . '/assets')->mapFilename;
+            } catch (\InvalidArgumentException|\Ichiloto\Engine\Exceptions\NotFoundException) {
+                return null;
+            }
+        };
+        $inventory = new MapLineInventory($edit, $commonEvents, $subjects, $targetGrid, $resolveDoor);
         foreach ($dataPaths as $path) {
             if (str_starts_with($path, $root . '/assets/Maps/') && is_array($payloads[$path])) {
                 $inventory->addMapData($path, substr(dirname($path), strlen($root . '/assets/Maps/')), $payloads[$path]);
@@ -174,13 +196,18 @@ final class MapLinePlanner
 
         $notes = [];
         $manifestPath = $root . '/' . self::MANIFEST;
-        $report = array_key_exists($manifestPath, $payloads) ? ProjectReachability::analyze($root . '/assets')->reports[$edit->mapId] ?? null : null;
+        $report = array_key_exists($manifestPath, $payloads) ? self::analyzeReachability($root)->reports[$edit->mapId] ?? null : null;
         if (! array_key_exists($manifestPath, $payloads)) {
             $notes[] = sprintf('Existing saves are not migrated: the project has no %s.', self::MANIFEST);
         } elseif (! ($report?->isAnyReachable(new Rect(0, 0, max(1, $width), max(1, $height))) ?? false)) {
             // As for save relocations: a map the player reaches nowhere today, such as one not yet joined to the
             // world, holds no save to move.
             $notes[] = 'No save moves: the player reaches this map nowhere today.';
+        } elseif (! self::reachesMovedCells($report, $edit, $width, $height)) {
+            // Only cells at or beyond the line move, or land when removed: a save stands on none the player cannot
+            // reach today, so a step would move no save.
+            $notes[] = sprintf('No save moves: the player reaches nothing at or beyond %s %d today.',
+                $edit->axis === 'y' ? 'row' : 'column', $edit->at + 1);
         } else {
             if ($edit instanceof LineRemoval) {
                 $edit = $edit->withLanding(self::findLanding($report, $edit, $width, $height));
@@ -207,6 +234,22 @@ final class MapLinePlanner
         );
 
         return new MapLinePlan($edit, $sources, $handEdits, $notes, $map->getWidth(), $map->getHeight());
+    }
+
+    /**
+     * Whether the player reaches, today, any cell the edit moves: every cell
+     * at or beyond its line, including removed ones, whose saves land.
+     */
+    private static function reachesMovedCells(MapReachabilityReport $report, MapLineEdit $edit, int $width, int $height): bool
+    {
+        $extent = $edit->axis === 'y' ? $height : $width;
+        if ($edit->at >= $extent) {
+            return false;
+        }
+
+        return $report->isAnyReachable($edit->axis === 'y'
+            ? new Rect(0, $edit->at, max(1, $width), $extent - $edit->at)
+            : new Rect($edit->at, 0, $extent - $edit->at, max(1, $height)));
     }
 
     /**
@@ -262,24 +305,30 @@ final class MapLinePlanner
     }
 
     /**
-     * Rewrites a data file's coordinates in place. A coordinate written as
-     * anything but a literal, or in a file that is not one returned array
+     * Rewrites a data file's coordinates in place; an area's row runs that
+     * part across inserted lines are written anew as a whole literal list.
+     * A coordinate written as anything but a literal, or in a file that is not one returned array
      * literal, is reported for a hand edit and left as authored.
      *
-     * @param list<array{path: list<int|string>, value: int}> $shifts
+     * @param list<array{path: list<int|string>, value: int|list<list<int>>, required?: true}> $shifts
      * @param list<array{file: string, where: string, reason: string}> $handEdits
      * @return array{source: string, value: array<array-key, mixed>}|null Null when nothing in the file can be rewritten.
      */
     private static function rewriteShifts(string $source, mixed $payload, array $shifts, string $file, array &$handEdits): ?array
     {
-        $report = static function (array $path, string $reason) use (&$handEdits, $file): void {
-            $handEdits[] = ['file' => $file, 'where' => PhpArraySourceDocument::describePath($path), 'reason' => $reason];
+        $report = static function (array $shift, string $reason) use (&$handEdits, $file): void {
+            $where = PhpArraySourceDocument::describePath($shift['path']);
+            if ($shift['required'] ?? false) {
+                throw new RuntimeException(sprintf('%s %s: compact area runs could not be moved (%s). Nothing was changed.',
+                    $file, $where, $reason));
+            }
+            $handEdits[] = ['file' => $file, 'where' => $where, 'reason' => $reason];
         };
         try {
             $document = PhpArraySourceDocument::parse($source);
         } catch (SourceUnreadable $unreadable) {
             foreach ($shifts as $shift) {
-                $report($shift['path'], 'the file is not one returned array literal (' . rtrim($unreadable->getMessage(), '.') . ')');
+                $report($shift, 'the file is not one returned array literal (' . rtrim($unreadable->getMessage(), '.') . ')');
             }
             return null;
         }
@@ -287,9 +336,9 @@ final class MapLinePlanner
         $next = $payload;
         $kept = [];
         foreach ($shifts as $shift) {
-            $refusal = self::findLiteralRefusal($document, $shift['path']);
+            $refusal = self::findLiteralRefusal($document, $shift['path'], is_array($shift['value']));
             if ($refusal !== null) {
-                $report($shift['path'], $refusal);
+                $report($shift, $refusal);
                 continue;
             }
             $value = &$next;
@@ -308,7 +357,7 @@ final class MapLinePlanner
             return ['source' => ArraySourceWriter::rewrite($document, $payload, $next)->source, 'value' => $next];
         } catch (SourcePreservationRefusal $refusal) {
             foreach ($kept as $shift) {
-                $report($shift['path'], rtrim($refusal->getMessage(), '.'));
+                $report($shift, rtrim($refusal->getMessage(), '.'));
             }
             return null;
         }
@@ -321,7 +370,7 @@ final class MapLinePlanner
      *
      * @param list<int|string> $path
      */
-    private static function findLiteralRefusal(PhpArraySourceDocument $document, array $path): ?string
+    private static function findLiteralRefusal(PhpArraySourceDocument $document, array $path, bool $wholeList = false): ?string
     {
         $node = $document->root();
         foreach ($path as $step) {
@@ -338,7 +387,29 @@ final class MapLinePlanner
             $node = $entry->value;
         }
 
+        if ($wholeList) {
+            return self::isLiteralTree($node) ? null : 'it is not written as a list of literal entries';
+        }
+
         return $node->kind === SourceNode::SCALAR ? null : 'it is written as an expression or variable, not a literal';
+    }
+
+    /** Whether a value is written wholly as literals: a scalar, or an array of literal entries with no spread or computed key. */
+    private static function isLiteralTree(SourceNode $node): bool
+    {
+        if ($node->kind === SourceNode::SCALAR) {
+            return true;
+        }
+        if ($node->kind !== SourceNode::ARRAY || $node->hasOpaqueKey) {
+            return false;
+        }
+        foreach ($node->entries as $entry) {
+            if (! self::isLiteralTree($entry->value)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

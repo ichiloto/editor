@@ -17,6 +17,7 @@ use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\Enumerations\DoorwayEntrance;
 use Ichiloto\Engine\Field\WorldObjectResource;
+use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
 use Throwable;
 
 /**
@@ -82,12 +83,20 @@ final class FieldResourceFields
         return [
             new RecordField('id', 'Stable Id'),
             new RecordField('name', 'Name'),
+            self::getAppearanceField(),
             new RecordField('pivot.x', 'Ground Contact X (0..1)', InputControlType::FLOAT),
             new RecordField('pivot.y', 'Ground Contact Y (0..1)', InputControlType::FLOAT),
             // Not stored: choosing it reshapes the resource ({@see checkEdit()}).
             new RecordField('presentation', 'Shows', options: [self::IMAGE, self::SIGN], displayDefault: $sign ? self::SIGN : self::IMAGE),
             ...($sign ? self::getSignFields() : FieldSpriteFields::getFields($entry)),
         ];
+    }
+
+    /** How an image depicts the ground, shared by resources and inline objects; clearing preserves legacy inference. */
+    public static function getAppearanceField(): RecordField
+    {
+        return new RecordField('appearance', 'Appearance', options: ['', ...array_column(TileAppearance::cases(), 'value')],
+            removeWhenEmpty: true, displayDefault: '(unclassified)');
     }
 
     /**

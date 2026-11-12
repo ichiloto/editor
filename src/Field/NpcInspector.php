@@ -44,11 +44,14 @@ final class NpcInspector
      */
     private const array SECTIONS = [
         'Identity' => ['id', 'name'],
-        'Placement' => ['x', 'y'],
+        // The root cell is the `default` placement; named ones are listed after it.
+        'Placement' => ['x', 'y', NpcPlacementFields::PREFIX . 'List', NpcPlacementFields::PREFIX . '*'],
+        // Every bed row; which exist depends on the bed ({@see NpcBedFields::getFields()}).
+        'Bed' => [NpcBedFields::BED . '.*'],
         'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
         'Movement' => ['movement', 'directionFix', 'facing', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
         'Visibility' => ['conditions'],
-        'Cue' => ['cue.symbol', 'cue.color', 'cue.conditions'],
+        'Cue' => ['cue.symbol', 'cue.color', 'cue.maxDistance', 'cue.conditions'],
         'Interaction' => ['commandListScript'],
         'Completion Writes' => ['sets'],
     ];
@@ -116,6 +119,7 @@ final class NpcInspector
 
         foreach (self::SECTIONS as $title => $ids) {
             $rows = [];
+            $ids = self::expandSectionIds($ids, array_map(strval(...), array_keys($byId)));
 
             if ($title === 'Cue' && $npc !== null && $npc->getScript() === []
                 && ! (is_array($npc->toArray()['cue'] ?? null) && $npc->hasDialogueVariants())) {
@@ -134,6 +138,10 @@ final class NpcInspector
                 }
 
                 unset($byId[$id]);
+            }
+
+            if ($title === 'Bed' && $npc !== null && is_array($npc->toArray()[NpcBedFields::BED] ?? null)) {
+                $rows[] = ['label' => '  X and Y', 'value' => 'where it stands once it gets up', 'editable' => false];
             }
 
             if ($rows !== []) {
@@ -158,6 +166,30 @@ final class NpcInspector
         }
 
         return $grouped;
+    }
+
+    /**
+     * A section's field ids, a trailing `*` standing for every row whose id
+     * starts with what precedes it (`bed.*`, every row under the bed), in the
+     * order the rows come.
+     *
+     * @param list<string> $ids
+     * @param list<string> $rowIds
+     * @return list<string>
+     */
+    private static function expandSectionIds(array $ids, array $rowIds): array
+    {
+        $expanded = [];
+        foreach ($ids as $id) {
+            if (! str_ends_with($id, '*')) {
+                $expanded[] = $id;
+                continue;
+            }
+            $prefix = substr($id, 0, -1);
+            array_push($expanded, ...array_filter($rowIds, static fn(string $row): bool => str_starts_with($row, $prefix)));
+        }
+
+        return $expanded;
     }
 
     /**
@@ -258,8 +290,9 @@ final class NpcInspector
     private function build(): ProjectRecordDatabase
     {
         $entries = [];
+        $authored = $this->map->getNpcs()->toMapData();
 
-        foreach ($this->map->getNpcs()->toMapData() as $entry) {
+        foreach ($authored as $entry) {
             if (is_array($entry)) {
                 $npc = new ProjectNpc($entry);
                 $entry['dialogue'] = $npc->getPages();
@@ -276,12 +309,24 @@ final class NpcInspector
             RecordSchemaCatalog::mapNpcs($this->graphical),
             $this->map->dataPath,
             $entries,
-            function (array $written): void {
+            function (array $written) use ($authored, $entries): void {
                 $stored = [];
 
-                foreach ($written as $entry) {
-                    if (is_array($entry) && isset($entry['dialogue']) && is_array($entry['dialogue'])) {
-                        $entry = ProjectNpc::storePages($entry, $entry['dialogue']);
+                foreach ($written as $index => $entry) {
+                    if (is_array($entry)) {
+                        $original = $authored[$index] ?? null;
+                        $projected = $entries[$index] ?? null;
+                        // The Inspector owns page projection, not normalization of untouched source.
+                        // Record positions stay fixed here; NPC structural operations use NpcAuthoring.
+                        $unchanged = is_array($original) && is_array($projected)
+                            && array_key_exists('dialogue', $entry) === array_key_exists('dialogue', $projected)
+                            && ($entry['dialogue'] ?? null) === ($projected['dialogue'] ?? null);
+                        if ($unchanged) {
+                            if (array_key_exists('dialogue', $original)) { $entry['dialogue'] = $original['dialogue']; }
+                            else { unset($entry['dialogue']); }
+                        } elseif (isset($entry['dialogue']) && is_array($entry['dialogue'])) {
+                            $entry = ProjectNpc::storePages($entry, $entry['dialogue']);
+                        }
                     }
 
                     $stored[] = $entry;

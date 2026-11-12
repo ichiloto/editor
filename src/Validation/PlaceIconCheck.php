@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\PlaceTypeCatalog;
 use Ichiloto\Engine\Field\Validation\MapEventResolver;
@@ -65,7 +66,7 @@ final class PlaceIconCheck
             }
             $events = MapEventResolver::inspect($map->getEditableData(), $map->getEventLayerCells(), $map->mapId)->events;
             $found = MapPlaceIconRule::inspect($map->mapId, $events, $map->getLayerSet(), $graphics, $types,
-                self::readPlaceTypes($mapsById));
+                self::readPlaceTypes($mapsById), self::readEntranceIconAreas($map));
         } catch (Throwable) {
             return []; // The map's own reading checks say why it cannot be read.
         }
@@ -73,6 +74,22 @@ final class PlaceIconCheck
         return array_map(static fn(MapValidationIssue $issue): Issue => new Issue(Severity::WARNING,
             $issue->marker === null ? $map->mapId : sprintf('%s event %s', $map->mapId, $issue->marker),
             $issue->message, $issue->hint, $issue->rule, $map->mapId, $issue->cells), $found);
+    }
+
+    /**
+     * The areas whose one place icon marks every entrance of a place inside them, by anchor event, from the map's
+     * landmarks as the Engine reads them. Landmarks that cannot be read share no icon; their own check reports why,
+     * and each entrance is then judged by itself.
+     *
+     * @return array<string, \Ichiloto\Engine\Core\CellArea>
+     */
+    private static function readEntranceIconAreas(ProjectMap $map): array
+    {
+        try {
+            return MapLandmarks::validateEntries($map, MapLandmarks::readMap($map)->entries, $map->loadMapCategories())->entranceIconAreas;
+        } catch (InvalidArgumentException) {
+            return [];
+        }
     }
 
     /**

@@ -10,6 +10,7 @@ use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\Slug;
 use Ichiloto\Engine\Core\WorldConditionExclusion;
+use Ichiloto\Engine\Field\NpcPlacementSet;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
@@ -28,7 +29,9 @@ use Throwable;
  * derives from its name, an id is unique on its map and changes only while
  * nothing names it, an NPC something names is never deleted, and a renamed
  * NPC whose id its name derived takes the id its new name derives only
- * while nothing names its old one; a chosen id stays. Each operation applies its
+ * while nothing names its old one; a chosen id stays. An NPC's named placements
+ * are ones the Engine reads, on clear physical floor, its own cell included,
+ * and a placement a command commits to is never removed or renamed. Each operation applies its
  * change to the map and returns an {@see NpcChange} whose command redoes and
  * undoes exactly the map's NPC collection; selection, prompts and status
  * belong to the interface. A change that cannot be made is an
@@ -46,7 +49,7 @@ final readonly class NpcAuthoring
 
     private NpcReferences $references;
 
-    public function __construct(ProjectWorkspace $workspace)
+    public function __construct(private ProjectWorkspace $workspace)
     {
         $this->references = new NpcReferences($workspace);
     }
@@ -91,6 +94,8 @@ final readonly class NpcAuthoring
 
         $moved = $npc->movedTo($x, $y);
         $this->assertPlaceable($map, $before, $index, $moved);
+        // Its own cell is its default placement.
+        $this->assertPlacements($map, $npc, $moved);
         $after = $before->withReplaced($index, $moved);
         $map->setNpcs($after);
 
@@ -256,6 +261,9 @@ final readonly class NpcAuthoring
             $after = $map->getNpcs();
             $placed = $after->get($index);
             $was = $before->get($index);
+            if ($placed !== null && $was !== null) {
+                $this->assertPlacements($map, $was, $placed);
+            }
 
             if ($placed !== null && $was !== null && ($placed->getX() !== $was->getX() || $placed->getY() !== $was->getY()
                 || $placed->getConditions() !== $was->getConditions())) {
@@ -295,7 +303,8 @@ final readonly class NpcAuthoring
      * a route step under the route the row belongs to, another option on a
      * choice option's row, or a command after the row's command (at the
      * end when the row names none); at the root, a line in the row's
-     * dialogue variant, or a new variant. Which item a row belongs to, and
+     * dialogue variant, a new variant, or a named placement at its list's
+     * heading or after a placement. Which item a row belongs to, and
      * how it is added, are the shared record rules' ({@see RecordAuthoring}).
      *
      * @param array<int, int|string> $framePath The frame the row belongs to.
@@ -316,6 +325,9 @@ final readonly class NpcAuthoring
                 $item?->kind === RecordItem::OPTION => $authoring->addOption($records, $index, $framePath, $item->entryIndex),
                 $framePath !== [] => $authoring->addEntry($records, $index, $framePath, $item?->entryIndex),
                 $item?->kind === RecordItem::NESTED => $authoring->addNestedItem($records, $index, $framePath, $item->entryIndex),
+                // A list beside the pages (its named placements): its heading adds at the end, an entry's row after it.
+                $item?->kind === RecordItem::LIST => $authoring->addEntry($records, $index, $framePath, null, $item->listKey),
+                $item?->listKey !== null => $authoring->addEntry($records, $index, $framePath, $item->entryIndex, $item->listKey),
                 default => $authoring->addEntry($records, $index, $framePath),
             });
     }
@@ -380,8 +392,18 @@ final readonly class NpcAuthoring
             // what this change's undo restores.
             $change(new RecordAuthoring());
             $inspector->commit();
+            [$was, $is] = [$before->get($index), $map->getNpcs()->get($index)];
+            if ($was !== null && $is !== null) {
+                $this->assertPlacements($map, $was, $is);
+            }
         } catch (RecordRefusal $refusal) {
             throw new NpcRefusal($refusal->getMessage(), previous: $refusal);
+        } catch (Throwable $failure) {
+            // A refused placement edit leaves the NPCs as they were.
+            if ($map->getNpcs()->toMapData() !== $before->toMapData()) {
+                $map->setNpcs($before);
+            }
+            throw $failure;
         } finally {
             $inspector->refresh();
         }
@@ -451,12 +473,14 @@ final readonly class NpcAuthoring
     }
 
     /**
-     * Refuses a tile outside the map, or one another NPC anchors to while
-     * both can be visible.
+     * Refuses a tile outside the map, or one another NPC can stand on while
+     * this one shows there.
      *
      * The game shows an NPC only while its visibility conditions hold, so
      * two NPCs may share a tile as phases of one presence when their
      * conditions provably exclude each other ({@see WorldConditionExclusion}).
+     * Each is judged where its scenes can leave it ({@see NpcPlacementLifecycle}):
+     * an NPC its scenes walk away before another arrives never meets it.
      * Any other pair would be two bodies on one tile.
      *
      * @param int|null $ownIndex The NPC being placed, when it is already on the map.
@@ -468,19 +492,65 @@ final readonly class NpcAuthoring
         $x = $npc->getX();
         $y = $npc->getY();
         $this->assertInsideMap($map, $x, $y);
+        // Phases are judged with the project's current world abilities, never another project's catalogue.
+        $prove = $this->workspace->getWorldAbilities()->proveExclusive(...);
+        $lifecycle = NpcPlacementLifecycle::read($this->workspace);
+        $own = array_filter($lifecycle->listVisibleStances($map->mapId, $npc->toArray(), ['x' => $x, 'y' => $y], $prove),
+            static fn(array $stance): bool => $stance['placement'] === NpcPlacementSet::DEFAULT);
 
-        foreach ($npcs->indicesAt($x, $y) as $occupant) {
-            $other = $npcs->get($occupant);
-
-            if ($occupant === $ownIndex || $other === null
-                || WorldConditionExclusion::proveExclusive($npc->getConditions(), $other->getConditions())) {
+        foreach ($npcs->all() as $occupant => $other) {
+            if ($occupant === $ownIndex) {
                 continue;
             }
 
-            throw new NpcRefusal(sprintf(
-                '%s already stands at %d,%d while both can be visible. Give one a condition the other negates, such as event:x and !event:x, to share the tile.',
-                $other->getName(), $x, $y,
-            ));
+            foreach ($lifecycle->listVisibleStances($map->mapId, $other->toArray(), ['x' => $other->getX(), 'y' => $other->getY()], $prove) as $theirs) {
+                foreach ($own as $stance) {
+                    if ($theirs['x'] !== $x || $theirs['y'] !== $y || $prove($stance['conditions'], $theirs['conditions'])) {
+                        continue;
+                    }
+
+                    throw new NpcRefusal(sprintf(
+                        '%s already stands at %d,%d%s while both can be visible. Give one a condition the other negates, such as event:x and !event:x, to share the tile.',
+                        $other->getName(), $x, $y,
+                        $theirs['placement'] === NpcPlacementSet::DEFAULT ? '' : sprintf(' at its %s placement', $theirs['placement']),
+                    ));
+                }
+            }
+        }
+    }
+
+    /**
+     * Refuses an edit that leaves an NPC's named placements ones the game
+     * would refuse to load, or removes or renames a placement a command still
+     * commits it to. Only an edit to its cell, heading, id or placements is
+     * judged; the Engine's own rules decide ({@see NpcPlacementFields::assertPlacements()}).
+     *
+     * @throws NpcRefusal
+     */
+    private function assertPlacements(ProjectMap $map, ProjectNpc $was, ProjectNpc $is): void
+    {
+        $before = $was->toArray();
+        $after = $is->toArray();
+        $judged = ['x', 'y', 'facing', 'id', NpcPlacementFields::PLACEMENTS];
+        if (array_intersect_key($before, array_flip($judged)) === array_intersect_key($after, array_flip($judged))) {
+            return;
+        }
+        try {
+            NpcPlacementFields::assertPlacements($map, $after);
+        } catch (InvalidArgumentException $invalid) {
+            throw new NpcRefusal($invalid->getMessage(), previous: $invalid);
+        }
+        $id = $was->getId();
+        $kept = NpcPlacementFields::listAuthoredNames($after);
+        foreach ($id === null ? [] : array_diff(NpcPlacementFields::listAuthoredNames($before), $kept) as $name) {
+            $references = $this->references->describePlacement($map, $id, $name);
+            if ($references !== []) {
+                throw new NpcRefusal(
+                    sprintf('%s keeps its placement "%s": %s commit%s it there. Change those first.', $was->getName(), $name,
+                        implode(', ', $references), count($references) === 1 ? 's' : ''),
+                    array_map(static fn(string $reference): string => '- ' . $reference, $references),
+                );
+            }
         }
     }
 

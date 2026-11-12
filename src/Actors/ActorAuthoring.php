@@ -8,6 +8,7 @@ use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\Database\RecordChange;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
+use Ichiloto\Editor\Database\SuperMoveFields;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
 use Ichiloto\Editor\Field\CharacterSheetFields;
 use Ichiloto\Editor\History\GenericCommand;
@@ -134,6 +135,12 @@ final class ActorAuthoring
                 // Prove literal source and external-file freshness before making an undo step.
                 $actor->getProposedSource($after);
                 $actor->restoreData($after);
+            } elseif ($field === SuperMoveFields::ACTOR_KEY) {
+                $reference = trim($rawValue);
+                $after = ProjectActor::withSuperMove($before, $reference === '' ? null : $reference);
+                // Prove the actor's source can take the one canonical key before making an undo step.
+                $actor->getProposedSource($after);
+                $workspace->actorDatabase->setField($index, $field, $reference);
             } else {
                 $workspace->actorDatabase->setField($index, $field, self::coerceActorFieldValue($field, $rawValue));
             }
@@ -614,7 +621,14 @@ final class ActorAuthoring
                 'noneLabel' => self::NO_COUNTER,
                 'field' => 'counterAttack',
             ],
+            $this->getSuperMoveField($actor),
             ...$this->actorSummonFields($workspace, $actor),
+            ...array_map(static fn(\Ichiloto\Engine\Entities\Inventory\EquipmentSlotType $slot): array => [
+                'label' => 'Starting ' . ucfirst($slot->value),
+                'value' => strval($actor->getData()['initialEquipment'][$slot->value] ?? ''),
+                'reference' => 'initial_' . $slot->value, 'allowsNone' => true,
+                'noneLabel' => '(None)', 'field' => 'initialEquipment.' . $slot->value,
+            ], \Ichiloto\Engine\Entities\Inventory\EquipmentSlotType::cases()),
             ...($this->graphical ? $this->getFieldAppearanceFields($workspace, $actor) : []),
             [
                 'label' => 'Level',
@@ -729,6 +743,31 @@ final class ActorAuthoring
     }
 
     /**
+     * The actor's Super Move row: a pick from the project's Super Moves, read
+     * by the Engine's rule from either actor key. A reference the Engine
+     * refuses shows no choice and says why; picking one writes the one key.
+     *
+     * @return array<string, mixed>
+     */
+    private function getSuperMoveField(ProjectActor $actor): array
+    {
+        try {
+            $value = $actor->getSuperMove() ?? '';
+            $problem = null;
+        } catch (InvalidArgumentException $refused) {
+            $value = '';
+            $problem = $refused->getMessage();
+        }
+
+        return [
+            'label' => 'Super Move', 'value' => $value,
+            'reference' => SuperMoveFields::CATEGORY, 'allowsNone' => true,
+            'noneLabel' => '(None)', 'field' => SuperMoveFields::ACTOR_KEY,
+            ...($problem === null ? [] : ['hint' => $problem]),
+        ];
+    }
+
+    /**
      * Returns the actor class picker options.
      *
      * The list is the project's own class names from
@@ -758,7 +797,7 @@ final class ActorAuthoring
      */
     private static function coerceActorFieldValue(string $field, string $rawValue): string|int
     {
-        if (in_array($field, ['name', 'description', 'class', 'attackStyle', 'attackSkill', 'counterAttack', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
+        if (str_starts_with($field, 'initialEquipment.') || in_array($field, ['name', 'description', 'class', 'attackStyle', 'attackSkill', 'counterAttack', SuperMoveFields::ACTOR_KEY, 'id', 'defaultNaturalVariantId', 'summons'], true)) {
             return trim($rawValue);
         }
 

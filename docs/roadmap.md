@@ -5,6 +5,46 @@ performance/architecture trace of the Ichiloto editor, a comparative study of
 the hand-built Sendama console editor (the responsiveness benchmark), and an
 authoring-UX review. All measurements taken on this machine.*
 
+## Variable party authoring — 29 October 2026
+
+System data exposes Engine `battle.partySize` (1–8), with project validation.
+Registered field commands expose capacity changes, current-group selection with
+Actor pickers and idempotent regrouping through the existing command list and
+source-preserving saves. Battle Test reads the unsaved System capacity and now
+supports eight members through Engine's shared setup contract. This removes the
+previous four-member test ceiling; the project's legacy default remains three.
+Runtime membership and persistence are owned by Engine Party, rather than a
+second Editor state. Native editor consumers have not been launched for this
+change; headless authoring and source round trips are the validation surface.
+
+## Super Move authoring, in progress since 29 October 2026 (renamed 10 November 2026)
+
+The shared Super Moves database category authors activation thresholds,
+state references and guarded skill variants. Actor pages select a Super Move
+through the existing reference picker. The Editor writes the Engine's canonical
+`super-moves.php` and actor `superMove` key, reads the earlier
+`crisis-abilities.php` and `crisisAbility` read-only, and moves a project to
+the canonical shape with Migrate to Super Moves in one transaction and one undo
+step. Validation reports two catalogues and disagreeing actor keys. Save validation uses Engine's definition
+contract; incomplete activation is refused before writing. State pickers now
+store stable state IDs and show display names beside them, removing the previous
+display-name storage behavior. Headless round trips cover these surfaces. Full
+battle-feature authoring and graphical interaction verification remain pending.
+
+Skill effects now expose the Engine's explicit guaranteed-state setting, with
+source-preserving save/load checks. System's Dash Unlock Conditions field reuses
+the shared conditions authoring path; guarded dash settings survive a saved
+project reload and evaluate against live story state.
+
+Prepared-counter skill effects select their response from the existing constrained
+counter-skill picker and their stance from the state picker. Source-preserving
+round trips retain both references. Project validation checks those references
+and rejects a stance that persists outside its battle-owned reaction context.
+
+Skill effect authoring includes an ATB reset effect. State authoring exposes a
+validated ATB fill multiplier. Both round trip through the normal record service
+and consume Engine's current runtime contract.
+
 ## The one-paragraph diagnosis
 
 The editor is not slow because PHP is slow — **a full frame of real rendering
@@ -203,7 +243,8 @@ Names edits `speakers`. Every line the Engine reads `emotion` from (event and
 cinematic `text`, NPC lines, skit beats, Dialogue and Shop event pages) offers
 the emotions of the identity its speaker resolves to through the Engine's own
 `resolveSpeakerId`; an emotion the identity lacks is kept and warned about, in
-the row and in validation. A catalogue that builds its identities with PHP code
+the row and in validation, as is a line naming no emotion while its speaker has
+emotions beyond Neutral. A catalogue that builds its identities with PHP code
 is read-only on Dialogue Portraits, saying so (Last Legend's builds them in a
 loop over directories, so its identities are authored there once the Game
 writes them as data); its literal speaker names stay editable. The GUI shows an
@@ -314,6 +355,82 @@ Remaining, waiting on the Engine taking caller-supplied data:
 - [ ] Cinematic preview field: `MapManager`, `FieldEffectManager`,
   `KnowledgeCatalog::fromProject()` and `PlayerPresentationConfig::load()` read
   the project from disk.
+
+### Cinematic capture (12 November 2026)
+
+`CinematicPreviewSession::startCapture()` presents a cinematic graphically
+from its first command (effects compile graphically, stages begin, dialogue
+and notices are paged for the graphical screen), and `composeFrame()` gives
+the Engine's `SceneFrameComposition` at the session's clock. `CinematicCapture`
+records it at a fixed rate, reading each waiting page for a reading time;
+`SceneFrameRaster` draws a frame (field still, screen text grid, screen canvas
+with its overlay, the stage plane and above-cover art included) and
+`CinematicCaptureWriter` writes numbered PNG frames and `capture.json`, served
+as `EditorSession::writeCinematicCapture()` / `cutscenes.cinematicCapture`.
+The preview game now delivers the Engine's notices to the preview's screen and
+holds the scene while one is shown, the preview scene is its scene manager's
+current scene, and the field installs the project's `WorldAbilityCatalog`.
+This closes the four preview findings of the Hybrid reveal review
+(10 November: no frame export, Terminal-compiled effects, no current scene,
+no world-ability catalog).
+
+Done on Engine `156840cd` and `06ecb262` (12 November):
+- [x] Campaign restoration for previews. A preview or capture given a save
+  (`campaignSave`) plays in that save's campaign:
+  `PreviewField::openSavedCampaign()` reads the save through the Engine's
+  `SaveManager` and restores it with the Engine's `CampaignSession`
+  (`PreviewCampaign`), the preview scene adopts it as the game's field does,
+  the player stands where the save left them and shows the party leader where
+  the project says so, and the campaign is released when the field is
+  disposed. Served through `EditorSession::writeCinematicCapture()` and
+  `cutscenes.cinematicCapture`.
+- [x] Per-game loading and notices. The preview binds its own `GameLoader`
+  and notice queue to its Game, and pages notices with the Engine's
+  `NoticePageModel`.
+
+Remaining, waiting on the Engine:
+- [x] Saves and the project's migration classes (Engine `06ecb262`). The
+  preview builds its save pipeline with
+  `ContentMigrationResolution::WHEN_REQUIRED`: a save at the project's
+  current content version restores whether or not the project's migration
+  classes can be loaded, and an older save needs them (the Console registers
+  a project's classes before it starts the Editor) or is refused naming the
+  class.
+- [x] The preview installs the project's control bindings, so the hints of a
+  dialogue or notice name the project's keys instead of "Unbound".
+- [ ] GUI: choosing the save a preview or capture starts from.
+- [ ] Capture labels. The session's capture composes no sign labels; the map
+  review prepares them through the packaged renderer (`StillLabelPreparation`),
+  which a capture could share.
+
+### Camera preview clock (remaining integration, 1 November 2026)
+
+Runtime Engine pans/routes can send a retained `camera_motion` destination while
+their logical samples follow PHP timing. The Editor's `PreviewPresentationCapabilities`
+withholds that optional free-running native interpolation in both live preview
+hosts and still composition. Paused, stepped and seeked previews continue to
+show their PHP playhead. This explicitly disables wall-clock camera motion in
+seekable previews until the Renderer accepts a controllable presentation clock.
+Smooth native previews remain required: the clock must support pause, resume,
+arbitrary seek/reset and consistent camera/sprite/world-canvas/text/edge-guidance
+sampling. Existing camera command fields, selectors and source round trips stay
+supported.
+
+### Retired NPC placement names (open, 5 November 2026)
+
+A save stores an NPC's selected placement by its stable name, and the Engine's
+`NpcPlacementSet::readSelection()` refuses a name the map no longer has until a
+migration renames it. `npc.remove` (and renaming a placement) drops the name
+without asking whether any save can select it, so the map saves cleanly and the
+first such save fails on load. Last Legend's Neon Row needed a hand-written
+class step to carry the street Vax's `inn-door` and `alley-door` selections to
+`west-arch`.
+
+- [ ] Before a map save that removes or renames a named placement, plan its
+  retired names the way `SaveRelocationPlanner` plans newly solid cells: ask
+  which current placement each retired name becomes, and write that as one
+  reviewed save compatibility step with the map, so no save can name a
+  placement the map lacks. Refuse the save when the author gives no target.
 
 ### Registered command lists (planned)
 
@@ -1246,6 +1363,21 @@ one test / 56 assertions on current Game; it was not weakened or replaced.
 GUI's complete offline release suite passes 140 tests. These checks do not
 close native visual acceptance, other platforms, or the separately assigned
 retained-underlay terminal/collision restoration correction.
+
+October 30 ordinary action cut-ins follow Engine e3bede2: an effect declaring
+the shared stage is admitted by its caller-owned stage or by battle, chosen by
+its consumer through one Editor rule (`EffectPreviewContext`): battle when an
+animation binds it as caster or target effect. Saving accepts a stage either
+consumer admits; validation reports each consumer's refusal at that consumer.
+The Terminal preview's `B` moves a staged effect between battle and its owned
+stage. The host's `cutscenes.timeline` reply adds `stageContext` (`battle`,
+`stage` or null) and keeps `ownedStage` true only for the owned-stage consumer;
+`cutscenes.preview` serves the stage canvas compiled with that consumer's
+admission. GUI develop `f261b9b` draws that stage canvas when the battle test
+party cannot play the effect, retains the battle refusal alongside the preview,
+and keeps the stage lanes available. Editor `b6317df` covers the same case at
+the host boundary. An explicit stage-context choice while a battle preview is
+available and native visual acceptance remain open.
 
 **A cutscene is a pair, and the pair is one asset.** `CutsceneAsset` reads
 `<id>.data.php` with `<id>.script.php` or `<id>.timeline.php`, knows which

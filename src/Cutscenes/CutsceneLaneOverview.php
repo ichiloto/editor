@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes;
 
+use Ichiloto\Editor\Database\StorybookPlaybackFields;
+
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Editor\Database\ProjectCatalogs;
 use Throwable;
@@ -58,7 +60,7 @@ final class CutsceneLaneOverview
         $parts = [];
 
         if ($seconds > 0.0 || $marks === []) {
-            $parts[] = sprintf('%.1fs', $seconds);
+            $parts[] = self::formatSeconds($seconds);
         }
 
         foreach (array_unique($marks) as $mark) {
@@ -70,6 +72,17 @@ final class CutsceneLaneOverview
         }
 
         return implode(' ', $parts);
+    }
+
+    /**
+     * Seconds to the hundredth, as cues are authored, with at least one
+     * decimal: 2.0s, 1.22s, 0.45s.
+     */
+    private static function formatSeconds(float $seconds): string
+    {
+        $text = number_format(round($seconds, 2), 2, '.', '');
+
+        return (str_ends_with($text, '0') ? substr($text, 0, -1) : $text) . 's';
     }
 
     /**
@@ -203,6 +216,24 @@ final class CutsceneLaneOverview
                 return [$longest, $rows[$rowIndex]['marks']];
         }
 
+        $finishField = StorybookPlaybackFields::getFinishField();
+        $finish = StorybookPlaybackFields::getFinishCommands($command);
+        if ($finishField !== null && $finish !== null) {
+            $index = count($rows);
+            $rows[] = ['depth' => $depth, 'key' => $key, 'label' => CutsceneOutline::summarize($command),
+                'seconds' => 0.0, 'marks' => [self::INPUT], 'kind' => 'block'];
+            $armKey = $key . '.' . $finishField;
+            $armIndex = count($rows);
+            $rows[] = ['depth' => $depth + 1, 'key' => $armKey, 'label' => 'after reading',
+                'seconds' => 0.0, 'marks' => [], 'kind' => 'arm'];
+            [$seconds, $marks] = self::walkList($finish, $armKey, $depth + 2, $rows, $effects);
+            $rows[$armIndex]['seconds'] = $rows[$index]['seconds'] = $seconds;
+            $rows[$armIndex]['marks'] = $marks;
+            $rows[$index]['marks'] = array_values(array_unique([self::INPUT, ...$marks]));
+
+            return [$seconds, $rows[$index]['marks']];
+        }
+
         [$seconds, $marks] = self::estimate($command, $effects);
         $rows[] = ['depth' => $depth, 'key' => $key, 'label' => CutsceneOutline::summarize($command), 'seconds' => $seconds, 'marks' => $marks, 'kind' => 'command'];
 
@@ -224,7 +255,10 @@ final class CutsceneLaneOverview
             'wait' => [$seconds('seconds', 0.5), []],
             'narration', 'title_card' => [$seconds('seconds', 2.5), []],
             'transition' => [$seconds('seconds', 0.24), []],
-            'text', 'choice' => [0.0, [self::INPUT]],
+            // A stage and a cinematic sound cue each run for exactly their authored seconds, in Terminal too.
+            'play_stage', 'cinematic_sound' => [$seconds('seconds', 0.0), []],
+            // Power unlock notices wait for the player to acknowledge each one.
+            'text', 'choice', 'play_storybook', 'show_power_unlocks' => [0.0, [self::INPUT]],
             'start_battle' => [0.0, [self::BATTLE]],
             'common_event' => [0.0, [self::UNKNOWN]],
             'move_route' => [self::routeSeconds($command), []],

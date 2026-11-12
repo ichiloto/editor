@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Validation;
 use Ichiloto\Editor\Database\EnemySprites;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
+use Ichiloto\Engine\Entities\Party;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Battle\Presentation\BattleStageSlot;
 use Ichiloto\Engine\Battle\Presentation\TerminalBattleEffects;
@@ -31,7 +32,20 @@ final class TroopFormationValidator
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
     {
-        return [...$this->validateTerminal($workspace), ...$this->validateGraphical($workspace)];
+        return [...$this->validateLogical($workspace), ...$this->validateTerminal($workspace), ...$this->validateGraphical($workspace)];
+    }
+
+    /** @return list<Issue> */
+    private function validateLogical(ProjectWorkspace $workspace): array
+    {
+        $issues = [];
+        foreach ($workspace->getRecordDatabase('troops')?->getRecords() ?? [] as $record) {
+            $where = 'troop ' . strval($record->get('name'));
+            if (($problem = \Ichiloto\Editor\Database\TroopLogicalFormationContract::findProblem($record->toArray())) !== null) {
+                $issues[] = Issue::error($where, $problem, 'Choose distinct logical row/lane positions for troop members.');
+            }
+        }
+        return $issues;
     }
 
     /**
@@ -89,8 +103,7 @@ final class TroopFormationValidator
         }
         $starting = $workspace->getSystemField('startingParty');
         $starting = array_values(array_filter(is_array($starting) ? $starting : [], is_string(...)));
-        // A theme formation holds so many; without one the battle arranges the whole party.
-        $party = $catalog->ui->partySlots === [] ? $starting : array_slice($starting, 0, count($catalog->ui->partySlots));
+        $party = array_slice($starting, 0, $workspace->getSystemField('battle.partySize') ?? Party::BATTLE_SIZE);
 
         try {
             $alone = BattleFormationLayout::compose($catalog, null, [], $party, $assets)->getClearanceDiagnostics($assets);

@@ -150,6 +150,18 @@ it('raises the save content version with a declarative map shift step', function
         ->and(describeSaveCompatibilityIssues($root))->toBe([]);
 });
 
+it('declares no save shift when the player reaches nothing at or beyond the inserted lines', function () {
+    // Column x 5 of home is wall from top to bottom: no save stands there, and nothing to its left moves.
+    $root = mapLineRemovalProject();
+    $manifest = (string) file_get_contents($root . '/assets/Data/save-compatibility.php');
+    $plan = planLineInsertion($root, 'x', 5, 3);
+    expect($plan->notes)->toBe(['No save moves: the player reaches nothing at or beyond column 6 today.']);
+    $plan->apply();
+
+    expect((string) file_get_contents($root . '/assets/Data/save-compatibility.php'))->toBe($manifest)
+        ->and(planLineInsertion($root, 'x', 4, 1)->notes)->toBe(['Saves move with the map: save content version 1 adds this map shift.']);
+});
+
 it('says existing saves are not migrated when the project has no save manifest', function () {
     $root = mapLineProject();
     unlink($root . '/assets/Data/save-compatibility.php');

@@ -2,8 +2,304 @@
 
 ## Unreleased
 
+### Fixed
+
+- `map:apply --check` and `map:render --changes` run on a scratch copy of the project, so edits that write at once
+  (imported assets, tileset cells, new maps) can never reach the project, even if the process dies part way.
+
 ### Added
 
+- Play statistic conditions (Engine 09b3b8f): the shared condition line, the condition grammar and both condition
+  editors author `play_statistic:<counter>:<op>:<count>` (or `play_statistic:<counter>:<count>`, keeping an absent
+  operator absent). The counter is picked from the Engine's `PlayStatistic` cases by their labels, never typed; the
+  operator is stepped and the count is a whole number from zero up. The Engine's world-condition validation judges
+  every line, and a hand-written condition it refuses stays read-only as written. The Terminal's condition editor
+  types a comparison value with `v`, for play statistics and variables alike; `x` steps the operator.
+
+- Database > Achievements: `assets/Data/achievements.php`, authored in its own source with undo: id, name,
+  description, icon, secret, points and the unlock conditions through the shared condition editor. Each save runs
+  the Engine's `Achievement` reader and world-condition validation, and refuses two achievements under one id.
+
+- Tutorial summaries (Engine c1a8ca0): Database > Tutorials authors the optional **Summary**. An omitted summary
+  writes no key, the text is saved trimmed, and a blank entry removes the key.
+
+- Per-keyframe images (Engine dfae912): an image keyframe of an effect or summon track, on a battler or on the
+  stage, picks its own **Image** through the shared asset picker, or `(the track's default image)`. The track's
+  **Default Image** is now optional, with `(none: each keyframe names its image)` as its none choice. Edits keep the
+  authored source; the Engine refuses a save with a keyframe that has no image or an image off the sheet grid,
+  before anything is written. `cutscenes.timeline` names each keyframe's image as authored, with its size.
+
+- State badge icon roles (Engine 78cab3e): Menu Theme offers `status.state.<id>` and `status.state.<id>.pending`
+  for every state, from the Engine's `BattlerConditions::listStateIconRoles`, beside the roles the theme binds and
+  the atlas marker roles, so a theme can bind a badge image for a state it does not bind yet. States added on the
+  States page are offered before they are saved. An unbound badge shows `(state icon or label)`, and choosing it
+  removes the binding. These roles join the icon roles a world power or Super Move technique may name.
+
+- Cinematic field planes (Engine aa0e5b8): `field_animation` commands, `stage_actor` commands (inline or wrapped in
+  `actor`) and staged cast members author **Draw Plane** (`plane`), offered from the Engine schema's `fieldPlane`
+  export (`field`, the default, or `aboveCover`), in both editors, through the existing rows, saves and undo.
+  Clearing it removes the key. Choosing `aboveCover` for a world object takeover, or binding a lifted actor to a
+  world object, is refused before anything changes, by the Engine's `CinematicStageManager::validateBinding`, and
+  the existing validation reports an unknown plane or a lifted takeover in a script.
+
+- Response-window warnings (Engine 27d2ac6): a skill's `prepare_response_window` effect authors **Follow-up Skill**
+  (`skill`), picked from the skills the Engine's `BattleReactions` resolves as a follow-up, and **Response Turns**
+  (`responseTurns`), through the existing rows, saves and undo. Picking a follow-up the Engine refuses (missing,
+  incompatible, another warning, or the warning itself) is refused before anything changes; the skill save check
+  runs the Engine's `SkillRecord` reader, and project validation reports a warning whose follow-up the Engine would
+  refuse. The Effects pane shows the follow-up and its response turns.
+
+- Landed-hit and pending state effects (Engine dc8ffe7, 9911a88): a skill's `add_state` effect authors **Applies**
+  (`trigger`), offered from the Engine's `SkillSecondaryTrigger` values, and **Pending Turns** (`delayTurns`), and a
+  state authors **Physical Damage Dealt Rate** (`physicalDamageDealtRate`), through the existing rows, saves and undo.
+  Each drops out of the record when cleared. The Engine's record readers refuse a delay on a skill usable outside
+  battle, a negative delay and a negative rate before anything is written. The Effects pane shows the trigger and
+  delay.
+
+- Straight flight fallback and arena impact (Engine 71c5714, 6a48757): a caster flight's **Straight Flight Fallback**
+  (`flight.fallback`, the Engine's `horizontal-exit`) is authored beside its contact mode, and an effect sequence's
+  **Impact Timing** and a summon's **Effect Timing** offer `arena`, through the existing rows, saves and undo; the
+  Engine's validator refuses a fallback off a straight route and an arena frame before the stage restore frame.
+  `effects.flightRoutes` checks each straight caster flight against every troop with the battle's own capture and
+  `BattleStraightShot::planRoute`: reaching a troop's targets only through the fallback is a warning, not reaching
+  them without one is an error, and a flight the battle cannot plan for another reason is reported apart.
+
+- Super Moves (Engine 01a0883): Database > Super Moves and the actor page's **Super Move** picker write the Engine's
+  canonical `assets/Data/super-moves.php` and actor `superMove` key. A project still keeping the earlier
+  `crisis-abilities.php` shows its records read-only, and its actors' `crisisAbility` keys read through the Engine's
+  own rule. **Migrate to Super Moves** (command palette, or `superMoves.migrate` through the editor session) asks,
+  then moves the catalogue byte for byte and renames every actor key in place in one transaction and one undo step,
+  and refuses without writing when the project holds both catalogues, the game cannot read the catalogue or an
+  actor's reference, or an actor's data is built in code. Validation reports both catalogues and disagreeing actor
+  keys. A file set can now remove a file reversibly, and a Database category can declare an earlier file it is read
+  from until a project migrates. The Database category and reference keys `crisis_abilities` and `crisis_skills` are
+  renamed `super_moves` and `super_move_skills`.
+
+- Project validation reports a staged actor the Engine's stage would refuse (`CinematicStageManager::validateBinding`)
+  at the owning script, in Common Events and map scripts, for the flat command and the wrapped `actor` form, through
+  nested sequences. The Engine owns the rule; the source stays as authored.
+- The `present_actor` and `present_party_size` world conditions (Engine 4d524de) in the condition line, the
+  Terminal's condition editor and the condition grammar: a member is chosen by stable actor id, and a party size names
+  the Engine's `PresentPartyScope` and the exact number of members present, which is required and always written.
+  A missing or non-positive quantity, another scope, or an extra after a member's id is refused, and a hand-written
+  size without its quantity stays read-only as authored.
+- `transfer_through_door` (Engine 62e5fdc) in event scripts, cinematics and finalizers: the command names a map
+  and one of its doors, chosen among the events the Engine's `MapDoorReference` resolves on that map, unsaved edits
+  included; the door owns where the player arrives and faces. Validation reports a command whose door the Engine
+  cannot resolve, and every walk that follows a script's current map (NPC checks, NPC placement lifecycles, map
+  line edits, a cinematic's maps) follows it through the door to the door's destination.
+- Tutorial start contexts, as the Engine's `TutorialStartContext` declares them: Database > Tutorials gains
+  **Starts In** (the field when unwritten, the Summons library or a battle's command window). A record that never
+  names a context keeps none. The Engine's catalogue and `TutorialProjectReferences` judge each save, so a context
+  on a script start, a first step off the context's own screen and view, or a battle lesson that is not one
+  `battle/command/summon` step completed by `summon.executed` with Read, Watch or no replay is refused before
+  anything is written.
+- The `assigned_summons` world condition (`assigned_summons:party:2`) in the condition line, the Terminal's
+  condition editor and the condition grammar: its quantity is required and always written, its name is chosen
+  from the Engine's `AssignedSummonScope` values (the party), and a missing or non-positive quantity or another name is refused by
+  the Engine's own validation, never read as a default.
+- Storybook playback, as Engine 78f1f12 plays it through `CinematicCommandSchema::export()['storybookPlayback']`: a
+  `play_storybook` command in event scripts, battle event pages and cinematics chooses its storybook in a
+  `Storybook` picker over the books the Engine's `StorybookLibrary` discovers under `assets/Data/Storybooks`,
+  listed as `Title (id)` and stored by stable id, in the Terminal and GUI editors. Edits are made in the script's
+  own source, with undo and redo byte for byte; a reference the source computes is refused before anything is
+  written. Validation reports a `play_storybook` naming no storybook, a missing one or one the Engine refuses, each
+  storybook the Engine refuses, and a page picture the game cannot read.
+- A review raster for whole graphical canvases (`Review\CanvasStillRaster`): menus, dialogue, storybooks and
+  modals over a scene, drawn from the canvas the Engine composed in the renderer's paint order (images, indicators,
+  text layers and label rasters by layer). The map still's world canvases now use it, so their text layers and
+  indicators are drawn too; composites are left out and named.
+- Tileset pieces that back onto a wall declare **Overhang Rows**, authored in the GUI
+  tileset view and kept by the TUI. Every placement path stands a piece on the cell
+  the author points at, with its overhang drawn over the wall face behind it, so
+  wall furniture takes one floor row. Pieces without overhang place as before.
+- A graphical placement mode for pieces (`pieces.place` with `ownership: "graphical"`, for `map:apply`, the edit
+  host and the GUI editor): a piece's art is laid over the footprint the map already has, so new art can replace old
+  without touching the glyphs, their colours or collision, which stay byte for byte through save, reload and undo.
+  It is refused before anything is written when the map's collision under the piece's ground is not the piece's own
+  (its declared occupancy, or its glyph's collision), when its art would rise over walkable floor, with a footprint,
+  or for a connected piece.
+- A graphical placement previews as it lays: `pieces.preview` takes the same `ownership` and answers with the cells
+  the art covers and, before anything is applied, why it would be refused, and `canvas.exchange` takes
+  `pieceArt: {piece, from, to}` to draw that art in the map's canvas exactly as applying it draws. Preview, apply,
+  reload and undo share one plan (`PiecePlacer::planArt()`). The GUI editor's piece options choose **Whole piece**
+  or **Art only**.
+
+### Changed
+
+- The warning for tiles a piece draws whose glyph is no longer there now reports piece art that is not placed where
+  it stands: tiles no glyph of the piece accounts for that are not a whole copy of its art over ground with its
+  collision, by the rule art laid alone follows. Collision is the physical map and glyphs and art present it
+  independently, so a graphical placement's art (such as shelving over green `%`) is not reported. Art on ground
+  with another collision, such as a window's tile on walkable floor, and a copy partly painted over, still are.
+  This narrows the warning: a whole copy of a piece's art over ground with its collision is no longer reported,
+  including a lone one-cell piece's tile. For example, a wall tile on a window glyph's solid cell, left after the
+  window's own art changed, was reported and is not any more.
+
+### Fixed
+
+- NPC tile sharing follows each NPC's named-placement lifecycle. Validation, moves and visibility edits judge
+  every placement a scene can leave an NPC on, with the story events that scene records, instead of the default
+  cell alone. Two NPCs whose scene walks one away before the other arrives may share a default tile; a tile both
+  can show on is still an error, now including committed placements. Event-marker and arrival-tile warnings
+  follow the same placements.
+
+- NPC Inspector writes retain every unchanged authored dialogue representation, including explicit empty
+  fields and single-page wrappers on other residents. Only edited interaction pages are unfolded.
+  Unrelated NPC edits, save and undo preserve the original source values and comments.
+
+### Added
+
+- The existing battler role picker exposes Engine `move` and `return` roles.
+  Effect battle previews use their phase clocks and finish anchored recovery
+  before returning, matching production. Reduced-motion preview cache identity
+  keeps its prior timing separate from the normal-motion preview.
+
+- The map Inspector's Saving choice authors the Engine's `savePolicy` enum through
+  shared constrained choices in Terminal and graphical editors. Undo preserves an
+  omitted default; source-preserving save and reload retain the selected rule.
+
+- Graphical NPC named placements expose the shared resting-art image/sheet/animation fields and asset picker.
+  Save, validation and undo retain the existing placement identity and physical cells. Terminal placement
+  editing preserves graphical metadata while exposing physical fields only.
+
+- World Power first-use control hints are editable with the shared structured list: select a semantic action from
+  the project's current input catalogue (including unbound actions and Engine defaults), then author its label.
+  Terminal and graphical authoring share the picker, add/remove, save and undo paths. Selecting an unknown action
+  is refused before mutation; existing authored actions survive unrelated label edits. Reading the catalogue
+  leaves installed player bindings, project input files and the working directory untouched.
+
+- Effect battle previews pass the selected actor's impact-anchored pose to the shared command timeline, so the
+  final recovery entry and hold remain visible at Fast pacing. The stable actor id selects the pose after display
+  names change. Terminal and arena-less inspection keep their existing clocks; movement and impact cues are unchanged.
+
+- Sound import: `assets.import` brings music and sound effects into a project through the same planned, staged,
+  read-back and undoable write as images, the kind chosen by the name given (`AssetKind`: image or audio). A sound
+  must be the MP3, WAV or Ogg (Vorbis or Opus) its name says, read whole from its own bytes, and goes straight into
+  `assets/Audio/BGM` or `assets/Audio/SFX`; one sharing its name with another format there is refused, since the game
+  plays sounds by name. The reply gives its role and stored name with the format, duration, sample rate and channels
+  read from the file. Sounds of more than 48 MiB or 30 minutes are refused. Image replies now also carry
+  `kind: image`, and a destination with an unknown extension is refused naming both image and sound extensions.
+
+- Source-preserving edits around spreads and helper calls: a command list that splices in one spread keeps the
+  spread and the commands it adds byte for byte while the entries written before and after it are edited, inserted,
+  moved and removed; a keyed array that merges in spreads edits keys written after every spread and adds new keys at
+  its end; and a record a file's helper call returns takes a new field as `[...$line(...), 'emotion' => 'Sad']`,
+  edited in place afterwards. Changes to what a spread adds, lists with two or more spreads, keys written before a
+  spread and fields a helper call returns are refused, naming the path. Last Legend's emotion pass can now save its
+  remaining lines in Listening Stone, High Shadow, Lanternrest and the Vax bargain.
+
+- Action impact alignment, as Engine abbc883 reads it: a battle pose's **Impact Entry** (`impactFrame`) is chosen
+  among its own playback entries, repeats included, each shown with the sheet cell it plays (`Entry 3 · cell 2`),
+  and only for a pose that plays once; an animation's **Caster Effect Starts** (`sourceEffectAnchor`) chooses
+  `source`, omitted as the Engine's default, or `target`. Edits are refused before anything changes when the pose
+  could not take them, saves are read by the Engine's `BattlerBindings` and `Animation` readers and refused before
+  writing, and undo and redo restore the file byte for byte. The effect battle preview plans the command with the
+  animation's anchor in the graphical presentation (the terminal keeps the source phase), so the caster effect and
+  the pose's impact entry meet on the command's own target boundary; a pose without an impact entry keeps its own
+  clock. Its reply names the `sourceEffectAnchor` it played. Validation reports a caster effect declaring a
+  cinematic stage that is started at the target phase, with the Engine's reason.
+
+- Dialogue lines naming no emotion: every skit beat, event and cinematic `text` command, NPC line and map Dialogue
+  or Shop event page whose speaker's catalogue identity has emotions beyond Neutral, yet names none, now gets an
+  `Emotion Warning` row beside its `Emotion` picker and a validation warning. Both list the speaker's emotions as
+  the Engine's dialogue catalogue resolves them (`resolveSpeakerId`), and choosing any emotion, `Neutral` included,
+  clears them. Validation now names each skit beat, NPC line and event page with the opening of its text, as it
+  already did for `text` commands.
+- Database > World Powers authors `assets/Data/world-abilities.php` in its own source: each power's name (the id
+  follows it until a condition or command names the power), description, `Unlocks When` conditions, theme
+  `Icon Role` (picked through the new `icon_roles` reference category) and first-use message and effect (picked
+  from the project's effects). First-use hints are shown and kept as written: the Engine does not yet expose the
+  semantic input actions they name. Saving puts the file through the Engine's `WorldAbilityCatalog` and refuses
+  duplicate ids, undeclared dependencies, dependency cycles and malformed prompts before writing. A named power
+  cannot be deleted. Pickers, validation and reachability read the powers as the page holds them, unsaved edits
+  included; validation also reports a first-use effect that does not play once on the field and quests or items
+  an unlock condition names that the project lacks.
+- NPC named placements and `commit_npc_placement`, as the Engine's `CinematicCommandSchema::export()['npcPlacements']`
+  defines them: the NPC Inspector's `Named Placements` rows author each placement's name, cell and optional facing.
+  The Engine's `NpcPlacementSet` and `MapNpcPlacementRule` judge every edit, the NPC's own cell (its `default`
+  placement) and canvas moves included, and a name or cell they refuse is refused before the edit is kept. The
+  `npc_placement` script reference kind is picked among the placements of the NPC the command's own NPC field
+  selects, on the event's map or every map a cinematic runs on, and a value outside them is refused before
+  writing. A placement a command names is not removed or renamed. Validation reports a placement the NPC does not
+  declare on the map the script is on, an NPC with no placements, a declaration with no single NPC field beside
+  its placement field, and hand-written placements off the map's physical floor (`npc.placement`).
+- World powers, as the Engine's `WorldAbilityCatalog` reads them from `assets/Data/world-abilities.php`: the
+  `world_ability` script reference kind (the `show_power_unlocks` command's **Power** rows) and the `world_ability`
+  condition's **World Power** name pick among the project's declared powers through the new `world_abilities`
+  reference category, by stable id, labelled with their names, read as Database > World Powers holds them. Validation reports
+  a power the file does not declare in scripts, condition lines and the dash's unlock conditions, and reports a
+  file the Engine refuses. Opening a project installs its catalogue for Engine evaluation (a project whose file
+  cannot be read installs none, so another project's powers never answer), and reachability analysis, save
+  relocation and map line planning install the current file's powers first, so `ichiloto validate` no longer
+  stops on `world_ability` conditions with "Install the current WorldAbilityCatalog". NPC tile sharing in authoring
+  and validation judges exclusion with the project's powers; a condition naming an undeclared power proves nothing.
+- NPC beds, as Engine bf49893 reads them (`CinematicCommandSchema::export()['bedOccupancy']`): the NPC Inspector's
+  **Bed** rows pick the world object on the NPC's map it rests in (`bed.object`, among objects whose field resource
+  declares attachments), the resource attachment its occupant lies on (`bed.attachment`), its `Starting Posture`
+  from the Engine's `BedPosture` (`lying`, `sitting`, `standing`) and its `Occupied Bed Glyph` (`bed.terminal`). The
+  GUI editor's NPC rows add the character's lying and sitting poses (`bed.poses2d`) and its into-posture clips
+  (`bed.transitions2d`), a clip written with `loop => false`. Every edit is read by the Engine's
+  `NpcBedDefinition` and refused before anything changes when it would not load; edits stay in the map's own
+  source with undo and redo byte for byte, in the Terminal and GUI editors alike. Validation now gives the
+  Engine's bed preflight the map's resolved physical occupancy, so `npc.bed` reports a missing bed object, an object
+  without the attachment, a bed cell that is not solid, a blocked exit and shared slots on legacy maps too, where it
+  previously reported only that the occupancy was missing.
+- Cinematic conversations, as Engine bf49893 and e26fa26 read them (`conversationFacing`): a cinematic's
+  **Conversation** section binds `Conversation Speakers` (a stable key to the player, an NPC of the maps it runs on
+  or a staged cast member), picks each speaker's default addressee, declares `Conversation Groups` of bound
+  speakers, and picks the `Initial Conversation Group`; its text lines pick their `Conversation Speaker` and
+  `Addressee` among the bound speakers. Renaming a speaker or group renames it wherever the cinematic names it, and
+  removing one still named is refused, naming where. The new `cinematic_conversation_speakers` reference kind lists
+  a cinematic's speakers, and a list of scoped references (a group's speakers) is refused before writing when it
+  names one outside its choices. Validation adds a hint naming each group or addressee that names an unbound
+  speaker to the Engine's refusal, and reports speakers the cinematic cannot reach and lines selecting an unbound
+  speaker. A group's own addressees and facing overrides, and the conversation's facing overrides, are preserved
+  as authored without rows of their own.
+- Shared record layer: a keyed list can rewrite its record's references to an entry's key when the key changes, or
+  refuse removing an entry still named (`RecordSubList::$remapKeyReferences`); a record-level field chosen among
+  values its own record decides now offers them as options, as list entries' fields did; a schema's `prepareEdit`
+  receives the record before the edit; and `RecordField::withLabel()` relabels a field where several of its kind
+  share a pane. `FieldSpriteFields` takes the path and label of the role it authors.
+- Bed posture and conversation group commands, as Engine bf49893 registers them: `set_bed_posture` picks its
+  `Occupant` among the NPCs of the map an event belongs to, or of a cinematic's start map and every map it
+  transfers to, and chooses its `Posture` and `Transition Seconds`; `select_conversation_group` picks its `Group`
+  among the groups the cinematic's `presentation.conversation` declares. Both are edited in their own source with
+  undo and redo byte for byte, and a value outside the known choices is refused before anything is written.
+  Validation reports an NPC not on the map the script is on at that command, a group the cinematic does not
+  declare and a group selected outside a cinematic. The session's `map_npcs` choices for a cinematic now include
+  the NPCs of the maps it transfers to, and the new `cinematic_conversation_groups` reference kind lists a
+  cinematic's groups.
+- Story-selected Skits, as Engine 5b3558b plays them through `CinematicCommandSchema::export()['skitPlayback']`: a
+  `play_skit` command in event scripts and cinematics chooses its Skit in a `Skit` picker over the project's Skits,
+  listed as `Title (id)` and stored by stable id, and a Skit's `Trigger` (`prompt` or `script`, the Engine's
+  default `prompt`) and optional `Open Sound` and `Close Sound` (`sounds.open`, `sounds.close`) are chosen from the
+  Engine's values and the project's SFX in the Terminal and GUI editors. Edits are made in the Skit's own source,
+  with undo and redo byte for byte; saving refuses a Skit the Engine would skip and a change its source cannot
+  hold before anything is written. Validation reports a `play_skit` naming no Skit or a missing one, one playing a
+  Skit gated to another map, a trigger or cue the Engine refuses and a cue sound the project has no file for.
+- Tileset layer offsets, as Engine f76964e reads them: Database > Tilesets in the GUI editor gives a tile layer of
+  the tileset's own pieces, kinds and stacks its drawing **Offset** under **Layer Offsets** (`layerOffsets`),
+  typed as decimals or fractions such as `0, -1/3` and validated by the Engine's `TileLayerOffset`. A map's tile
+  layer settings take any fraction within the Engine's limit, and `tileLayer.settings` takes `offset` `null` to
+  inherit the tileset's. The session's tile layers add `inheritedOffset`, `overridesTileset` and `offsetLimit`,
+  and `offset` is the offset the layer draws at. The Terminal editor is unchanged.
+
+- World-object tiles, as Engine 81c5961 composes them: a world object's **Graphical Tiles** rows (`tiles2d`) choose
+  one of the map's tile layers, a cell the object owns and a tile of the map's tileset (the row carries
+  `tilePicker` for the palette), and the session's `worldObjects.setTiles` and `worldObjects.unsetTiles` set and
+  remove them for scripts and `map:apply`. The Engine's declaration rules validate them before anything changes,
+  save keeps the rest of the source as written, and undo and redo restore it byte for byte. Moving an object moves
+  its tiles; an object left without tiles or art keeps an explicit absence of art. The editing canvas draws them
+  before neighbour shaping, and an object presented by its tiles alone keeps its covered glyphs, as the field does.
+  The Terminal editor is unchanged.
+- Ordinary battle action cut-ins, as Engine e3bede2 plays them: an effect declaring the shared cinematic stage is
+  authored with the same camera, cover, subject and stage image rows, selectors and undo as a Summon stage, and
+  bound through an animation's existing Caster Effect and Target Effect pickers. Battle or the caller owning the
+  stage admits it, chosen by the effect's consumer: battle when an animation binds it. Saving accepts a stage
+  either consumer admits, validation reports a refusal at the consumer that names it, and the GUI host's
+  `cutscenes.timeline` reply adds `stageContext`. The Terminal preview's `B` now moves a staged effect between
+  battle and its owned stage, where it previously stayed on the owned stage.
 - Skit backdrops that follow the place, through the Engine's `SkitBackdrop`: a map's `Skit Backdrop` Inspector
   row (`skitBackdrop`), a Regions Database page over the Engine's `RegionCatalog` (`assets/Data/regions.php`, one
   record per region name with its skit backdrop) and a skit's optional `Backdrop` (`backdrop`), each chosen with
@@ -77,10 +373,75 @@
 
 ### Removed
 
+- Typing an NPC id that is not on the map or cinematic being edited: a `move_route` `NPC Id`, like the new
+  `set_bed_posture` `Occupant`, is now refused before anything is written wherever the Editor knows the script's
+  maps, where it was previously written and reported only by validation.
+- A map's tile layer offset no longer has to be -0.5, 0 or 0.5: the Editor's refusal of other fractions is
+  removed, as the Engine now accepts any offset from -0.5 to 0.5 field cells.
+- A map no longer writes a tile layer offset equal to the one its tileset gives the layer, and an explicit
+  `[0, 0]` is now written where the tileset gives the layer another offset. Setting a tile layer's offset or
+  `movesWith` is now refused while the map's tileset cannot load, where it previously wrote the settings without
+  knowing what the layer inherits.
+- The legacy-tag reading of map rows: an unrecognised tag such as `<blue>` is read as its glyphs, as the Engine
+  reads it, no longer as a style.
 - The dialogue catalogue's `skits` key: Dialogue Portraits and Speaker Names refuse a catalogue that still has it
   and name `ichiloto upgrade` (format 4), which moves each skit background to its skit's `Backdrop`.
+- The refusal of `<` as a stamped piece's cell glyph (`tilesets.setPieceGlyph`). A piece cell now takes `<`, `>`
+  and `\` like any other glyph; formatter markup or several characters offered as one glyph are still refused.
 
 ### Fixed
+
+- Terminal and headless field previews declare their own presentation owner for their whole life: an isolated,
+  non-graphical scene presentation with the preview's dialogue and choices and its clock, so cinematic dialogue
+  framing reads the preview's owners after a finalizer moves the player instead of a runtime UI the preview never
+  has. A graphical still or the window's attached view gives back the presentation it replaced when it ends, and a
+  resize gives the Terminal presentation the new screen size. The runtime UI singleton is neither initialized nor
+  borrowed.
+
+- A boolean field whose absence means true, or something other than false, now keeps `false` in the file: a
+  battle pose's **Loops** `false` was dropped, so the pose went on looping; a pose's **Art Paints Its Shadow**
+  `false` was dropped, so it followed the battler; and a consumable item's **Consumable** `false` was dropped. As
+  for integers, false is removed only where absence reads as false.
+- A field chosen among its own entry's values now reads the entry as its list holds it when an edit is checked,
+  as its row does; an entry of a keyed list was read from its stored position, where the edit check found nothing.
+
+- Registered commands that name an NPC through an `npc` reference field (`set_bed_posture`, `commit_npc_placement`)
+  now count as naming it: such an NPC is no longer deleted, or its id changed, while a script still names it.
+- Adding at an NPC's `Named Placements` heading or placement row adds to that list, never to its pages.
+- Every project failed to open, validate or render with `Unhandled match case ... CONVERSATION_GROUP` after Engine
+  bf49893 added the `npc` and `conversation_group` reference kinds: the Editor mapped Engine reference kinds to
+  pickers in a closed `match` that the schema catalogue runs for every project. `ScriptReferenceSource` now maps
+  every current kind to its picker and where its values come from, and a kind this Editor does not know becomes
+  a plain text field reported by validation, so a later Engine kind no longer stops a project from loading.
+  `ProjectScriptCommands::getReferenceCategory()` is removed; `ScriptReferenceSource::forReference()` replaces it.
+- `references.list` for a cinematic's row reads the cinematic's own maps. The map selected beside it no longer
+  replaces them, where it offered that map's NPCs, world objects and markers for a command the cinematic runs elsewhere.
+- The `skits` reference kind lists Skits by the stable id the Engine keys them by, where it listed their titles.
+- `composer analyse` and a bare `vendor/bin/phpstan analyse` read the Engine named by `ICHILOTO_ENGINE_SRC`, as
+  `vendor/bin/pest` does: `phpstan.neon` includes `tests/phpstan-engine.php`, which adds that checkout's source
+  when the variable is set. Before, only `-c tests/phpstan-engine.php` read it, and the default run analysed the
+  installed Engine and reported its missing classes and methods as Editor errors.
+- A Crisis Abilities variant's Skill picker offers only the skills the Engine's `CrisisAbility` accepts, from a
+  `crisis_skills` reference source; it previously offered every skill, summons and menu-only skills included,
+  which the Engine then refused. A new record's first variant comes from the same source.
+- Map rows are read by the Engine's `TerminalText::parseSourceCells()`, so the Editor reads every row exactly as
+  the Engine does. A row the Engine cannot split into independent cells makes its map read-only with the row and
+  reason, and a changed row is read back the same way before it is written. A cell's colour is read as the
+  Engine's formatter shows it, closed styles included.
+- A new Crisis Abilities record starts as one the Engine reads (active below 10% HP, on the project's first
+  battle-usable basic or special skill) and saves; without such a skill, creation is refused and says so.
+- A mastery branch's Within Branch offers the tree's other branches, never the branch itself.
+- Removing the last entry of plain data writes `[]`, so adding a value and undoing it restores the file's bytes.
+
+- A coloured `\` painted on a map, or set as a piece cell, no longer escapes its closing colour tag, and painted
+  `<` and `>` cells no longer join their neighbours into a formatter tag. The Editor writes those cells through
+  the Engine's `TerminalText::composeSourceCell()`, so the game, a reload and the terminal canvas read the glyph
+  painted, in its column and colour. Rows nobody edited keep their authored bytes.
+- Save relocation planning and workspace reachability read the current tileset catalogue, including a newly staged tileset in the same atomic transaction. Saved baseline reachability remains separate; missing or invalid current dependencies still refuse.
+
+- Directory records identified by filename, including tilesets and event scripts, now honor explicit identities when creating and duplicating records. Unsafe or occupied names are refused, and generated names remain unique across unsaved records.
+
+- Batch piece placement (`pieces.place` with `origins`) now honors an explicit `footprint: true` for every copy, with artwork and physical occupancy in one undo/redo step. Unrequested collision remains unchanged.
 - `map:render` review pages carry their graphical stills inside the page, so they show when the page is opened or sent on its own; they used to reference the PNG files beside them and showed no pictures elsewhere.
 
 - A preview field's Terminal picture draws its world objects' Terminal cells,

@@ -51,6 +51,8 @@ final class RecordReferenceValidator
         'common_events' => null,
         // ProjectValidator::checkQuests: what an objective names depends on its type, and start waymarks name map subjects.
         'quests' => ['objectives', 'startWaymarks'],
+        // EffectValidator: each battle condition effect binding, by its group's own rule.
+        'configuration' => ['value'],
     ];
 
     /** @var array<string, list<string>> What each kind holds, read once per validation. */
@@ -98,7 +100,7 @@ final class RecordReferenceValidator
             }
         }
 
-        foreach ($schema->getInlineSubLists() as $list) {
+        foreach ($schema->getInlineSubLists($record->toArray()) as $list) {
             if (in_array($list->key, self::OWNED_ELSEWHERE[$schema->key] ?? [], true)) {
                 continue;
             }

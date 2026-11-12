@@ -145,14 +145,14 @@ final readonly class RecordAuthoring
 
         if ($child) {
             return match ($item->kind === RecordItem::ENTRY ? $item->childKind : null) {
-                RecordItem::NESTED => $this->addNestedItem($database, $index, $framePath, $item->entryIndex),
+                RecordItem::NESTED => $this->addNestedItem($database, $index, $framePath, $item->entryIndex, listKey: $item->listKey),
                 RecordItem::OPTION => $this->addOption($database, $index, $framePath, $item->entryIndex),
                 default => throw new RecordRefusal(sprintf('A %s holds nothing that can be added beneath it.', $item->noun)),
             };
         }
 
         return match ($item->kind) {
-            RecordItem::NESTED => $this->addNestedItem($database, $index, $framePath, $item->entryIndex, $item->childIndex),
+            RecordItem::NESTED => $this->addNestedItem($database, $index, $framePath, $item->entryIndex, $item->childIndex, $item->listKey),
             RecordItem::OPTION => $this->addOption($database, $index, $framePath, $item->entryIndex, $item->childIndex),
             default => $this->addEntry($database, $index, $framePath, $item->entryIndex, $item->listKey),
         };
@@ -174,7 +174,8 @@ final readonly class RecordAuthoring
 
         return match ($item?->kind) {
             null, RecordItem::LIST => new RecordChange(null),
-            RecordItem::NESTED => $this->removeNestedItem($database, $index, $framePath, $item->entryIndex, (int) $item->childIndex),
+            RecordItem::NESTED => $item->childIndex === null ? new RecordChange(null)
+                : $this->removeNestedItem($database, $index, $framePath, $item->entryIndex, $item->childIndex, $item->listKey),
             RecordItem::OPTION => $this->removeOption($database, $index, $framePath, $item->entryIndex, (int) $item->childIndex),
             default => $this->removeEntry($database, $index, $framePath, $item->entryIndex, $item->listKey),
         };
@@ -281,14 +282,17 @@ final readonly class RecordAuthoring
      * @param int|null $after The nested entry it follows; null for the end.
      * @throws RecordRefusal When the category or record is read-only or gone, or the frame is gone.
      */
-    public function addNestedItem(ProjectRecordDatabase $database, int $index, array $framePath, int $parentIndex, ?int $after = null): RecordChange
+    public function addNestedItem(ProjectRecordDatabase $database, int $index, array $framePath, int $parentIndex, ?int $after = null,
+        ?string $listKey = null): RecordChange
     {
-        $list = $this->requireList($database, $index, $framePath);
-        $nestedList = $this->findNestedList($database, $index, $framePath, $list, $parentIndex);
-        $at = $nestedList === null ? null : $database->addFrameNestedItem($index, $framePath, $parentIndex, null, $after === null ? null : $after + 1);
-        $entry = $at === null || $nestedList === null
-            ? null
-            : (new ProjectRecord($database->getFrameCommands($index, $framePath)[$parentIndex]))->getEntries($nestedList)[$at] ?? null;
+        $list = $this->requireList($database, $index, $framePath, $listKey);
+        $parent = $this->getNestedParent($database, $index, $framePath, $parentIndex, $listKey);
+        $nestedList = $parent === null ? null : $list->nestedListFor($parent);
+        $at = $nestedList === null ? null
+            : $database->addFrameNestedItem($index, $framePath, $parentIndex, null, $after === null ? null : $after + 1, $listKey);
+        $entry = $at === null || $nestedList === null ? null
+            : (new ProjectRecord($this->getNestedParent($database, $index, $framePath, $parentIndex, $listKey) ?? []))
+                ->getEntries($nestedList)[$at] ?? null;
 
         if ($at === null || $nestedList === null || ! is_array($entry)) {
             return new RecordChange(null);
@@ -296,8 +300,8 @@ final readonly class RecordAuthoring
 
         return new RecordChange(new GenericCommand(
             sprintf('%s add', ucfirst($nestedList->singular)),
-            static fn() => $database->addFrameNestedItem($index, $framePath, $parentIndex, $entry, $at),
-            static fn() => $database->removeFrameNestedItem($index, $framePath, $parentIndex, $at),
+            static fn() => $database->addFrameNestedItem($index, $framePath, $parentIndex, $entry, $at, $listKey),
+            static fn() => $database->removeFrameNestedItem($index, $framePath, $parentIndex, $at, $listKey),
         ), $at);
     }
 
@@ -307,11 +311,13 @@ final readonly class RecordAuthoring
      * @param array<int, int|string> $framePath The frame the owning entry is in.
      * @throws RecordRefusal When the category or record is read-only or gone, or the frame is gone.
      */
-    public function removeNestedItem(ProjectRecordDatabase $database, int $index, array $framePath, int $parentIndex, int $nestedIndex): RecordChange
+    public function removeNestedItem(ProjectRecordDatabase $database, int $index, array $framePath, int $parentIndex, int $nestedIndex,
+        ?string $listKey = null): RecordChange
     {
-        $list = $this->requireList($database, $index, $framePath);
-        $nestedList = $this->findNestedList($database, $index, $framePath, $list, $parentIndex);
-        $removed = $nestedList === null ? null : $database->removeFrameNestedItem($index, $framePath, $parentIndex, $nestedIndex);
+        $list = $this->requireList($database, $index, $framePath, $listKey);
+        $parent = $this->getNestedParent($database, $index, $framePath, $parentIndex, $listKey);
+        $nestedList = $parent === null ? null : $list->nestedListFor($parent);
+        $removed = $nestedList === null ? null : $database->removeFrameNestedItem($index, $framePath, $parentIndex, $nestedIndex, $listKey);
 
         if ($removed === null || $nestedList === null) {
             return new RecordChange(null);
@@ -319,8 +325,8 @@ final readonly class RecordAuthoring
 
         return new RecordChange(new GenericCommand(
             sprintf('%s remove', ucfirst($nestedList->singular)),
-            static fn() => $database->removeFrameNestedItem($index, $framePath, $parentIndex, $nestedIndex),
-            static fn() => $database->addFrameNestedItem($index, $framePath, $parentIndex, $removed, $nestedIndex),
+            static fn() => $database->removeFrameNestedItem($index, $framePath, $parentIndex, $nestedIndex, $listKey),
+            static fn() => $database->addFrameNestedItem($index, $framePath, $parentIndex, $removed, $nestedIndex, $listKey),
         ), $nestedIndex, $removed);
     }
 
@@ -392,9 +398,9 @@ final readonly class RecordAuthoring
     }
 
     /**
-     * Duplicates a record below itself, under a fresh identity: the one given
-     * (made unique), else one made from the original's. The copy's index is
-     * the change's.
+     * Duplicates a record below itself under a fresh identity. An explicit file
+     * identity must be unused; payload identities and omitted identities are
+     * made unique. The copy's index is the change's.
      *
      * @throws RecordRefusal When the category or record is read-only or gone, or the record cannot be duplicated.
      */
@@ -530,15 +536,19 @@ final readonly class RecordAuthoring
         $this->requireRecord($database, $index);
         $this->requireFrame($database, $index, $framePath);
 
-        return ($framePath === [] && $listKey !== null ? $database->schema->findInlineSubList($listKey) : $database->getFrameSubList($framePath))
+        // The record's shape selects its lists, so the record says which list a key names.
+        return ($framePath === [] && $listKey !== null
+            ? $database->schema->findInlineSubList($listKey, $database->getRecordByIndex($index)?->toArray()) : $database->getFrameSubList($framePath))
             ?? throw new RecordRefusal(sprintf('A %s has no list of its own to add to.', $database->schema->entryNoun));
     }
 
-    /** The nested list an entry of a frame owns, or null when it owns none. */
-    private function findNestedList(ProjectRecordDatabase $database, int $index, array $framePath, RecordSubList $list, int $parentIndex): ?RecordSubList
+    /** The entry owning a nested list, inside a frame or in a named inline list. */
+    private function getNestedParent(ProjectRecordDatabase $database, int $index, array $framePath, int $parentIndex,
+        ?string $listKey): ?array
     {
-        $parent = $database->getFrameCommands($index, $framePath)[$parentIndex] ?? null;
+        $entries = $framePath === [] ? $database->getSubItems($index, $listKey) : $database->getFrameCommands($index, $framePath);
+        $parent = $entries[$parentIndex] ?? null;
 
-        return is_array($parent) ? $list->nestedListFor($parent) : null;
+        return is_array($parent) ? $parent : null;
     }
 }

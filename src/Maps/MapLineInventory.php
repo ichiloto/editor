@@ -8,6 +8,7 @@ use Ichiloto\Editor\Database\RelativePositionFields;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Field\MapAreaAuthoring;
 use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
+use Ichiloto\Engine\Field\MapAreaCatalog;
 
 /**
  * Finds every coordinate a row or column insertion or removal moves, across
@@ -33,7 +34,7 @@ use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
  */
 final class MapLineInventory
 {
-    /** @var array<string, array<string, array{path: list<int|string>, value: int}>> Moves by file, keyed by path. */
+    /** @var array<string, array<string, array{path: list<int|string>, value: int|list<list<int>>, required?: true}>> Moves by file, keyed by path. */
     private array $shifts = [];
 
     /** @var array<string, array<string, array{path: list<int|string>, reason: string}>> Hand edits by file, keyed by path. */
@@ -55,18 +56,22 @@ final class MapLineInventory
      * @param MapLineEdit $edit The insertion or removal.
      * @param array<string, array{file: string, commands: mixed}> $commonEvents Reusable event scripts by id.
      * @param MapSubjectCells|null $subjects Where the edited map's subjects stood before the edit.
+     * @param list<list<string>> $targetGrid The physical map before the edit.
      */
     public function __construct(
         private readonly MapLineEdit $edit,
         private readonly array $commonEvents,
         private readonly ?MapSubjectCells $subjects = null,
+        private readonly array $targetGrid = [],
+        /** A door command's destination map ({@see \Ichiloto\Editor\Events\CommandMapContext::findDestinationMap()}). */
+        private readonly ?\Closure $resolveDoor = null,
     ) {
     }
 
     /**
      * Moves by file, in the order found.
      *
-     * @return array<string, list<array{path: list<int|string>, value: int}>>
+     * @return array<string, list<array{path: list<int|string>, value: int|list<list<int>>, required?: true}>>
      */
     public function getShifts(): array
     {
@@ -318,7 +323,7 @@ final class MapLineInventory
                     ? $this->commonEvents[$id]['commands']
                     : null;
                 $destinations = array_map(
-                    static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, $stack),
+                    fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, $stack, $this->resolveDoor),
                     $lanes,
                 );
                 // The block ends where a transferring lane can leave it, or where it started.
@@ -356,9 +361,10 @@ final class MapLineInventory
                 $context = self::mergeContexts($ends);
             }
 
-            if ($type === 'transfer') {
-                $destination = trim(strval($command['map'] ?? ''));
-                if ($file !== null && $destination === $this->edit->mapId) {
+            $destination = CommandMapContext::findDestinationMap($command, $this->resolveDoor);
+            if ($destination !== null) {
+                // A door owns its own landing, which moves with the door's destination map; a transfer names its cell.
+                if ($type === 'transfer' && $file !== null && $destination === $this->edit->mapId) {
                     $this->shiftPoint($file, $at, $command);
                 }
                 $context = self::mergeContexts(array_map(self::getTransferContext(...), [$destination, ...$concurrent]));
@@ -572,6 +578,10 @@ final class MapLineInventory
      */
     private function shiftNamedArea(string $file, array $path, array $area, string $id): void
     {
+        if (array_key_exists('runs', $area)) {
+            $this->shiftNamedAreaRuns($file, $path, $area, $id);
+            return;
+        }
         if (! array_key_exists('cells', $area)) {
             $this->shiftArea($file, $path, $area);
             return;
@@ -596,6 +606,80 @@ final class MapLineInventory
             } else {
                 $this->shifts[$file][self::formatKey($cellPath)] = ['path' => $cellPath, 'value' => $shifted];
             }
+        }
+    }
+
+    /**
+     * Moves a named area written as row runs (`[y, x, length]`) exactly as
+     * its cells would move: the same territory, the same removal refusal and
+     * the same reported gap. A run lying across inserted columns parts there,
+     * so the area's runs are written anew; every other run keeps its entry
+     * and only its moved coordinate changes.
+     *
+     * @param list<int|string> $path
+     * @param array<string, mixed> $area
+     */
+    private function shiftNamedAreaRuns(string $file, array $path, array $area, string $id): void
+    {
+        $catalog = MapAreaCatalog::readMap(['areas' => [['id' => $id, 'area' => $area]]], $this->targetGrid);
+        $cells = $catalog->getArea($id)->cells;
+        $runs = $area['runs'];
+        $byColumn = $this->edit->axis === 'x';
+        if ($this->edit instanceof LineInsertion && self::spansLine($cells, $byColumn ? 0 : 1, $this->edit->at)) {
+            $this->reportHandEdit($file, [...$path, 'runs'], sprintf('area %s has cells on both sides of the inserted lines, which leave a gap in it; reshape it over them', $id));
+        }
+
+        $parted = [];
+        $moves = [];
+        $refused = false;
+        foreach ($runs as $runIndex => [$y, $x, $length]) {
+            if (! $byColumn) {
+                if ($y < $this->edit->at) {
+                    $parted[] = [$y, $x, $length];
+                    continue;
+                }
+                $shifted = $this->edit->getShiftedCoordinate($y);
+                if ($shifted === null) {
+                    $this->reportBlocked($file, [...$path, 'runs', $runIndex, 0], sprintf('area %s has a cell on a removed line', $id));
+                    $refused = true;
+                    continue;
+                }
+                $parted[] = [$shifted, $x, $length];
+                $moves[] = [[...$path, 'runs', $runIndex, 0], $shifted];
+                continue;
+            }
+            $end = $x + $length;
+            if ($end <= $this->edit->at) {
+                $parted[] = [$y, $x, $length];
+                continue;
+            }
+            if ($this->edit instanceof LineRemoval && $x < $this->edit->at + $this->edit->count) {
+                $this->reportBlocked($file, [...$path, 'runs', $runIndex], sprintf('area %s has a cell on a removed line', $id));
+                $refused = true;
+                continue;
+            }
+            if ($x < $this->edit->at) {
+                $before = $this->edit->at - $x;
+                $parted[] = [$y, $x, $before];
+                $parted[] = [$y, $this->edit->at + $this->edit->count, $length - $before];
+                $moves = null;
+                continue;
+            }
+            $shifted = (int) $this->edit->getShiftedCoordinate($x);
+            $parted[] = [$y, $shifted, $length];
+            if ($moves !== null) {
+                $moves[] = [[...$path, 'runs', $runIndex, 1], $shifted];
+            }
+        }
+        if ($refused) {
+            return;
+        }
+        if ($moves === null) {
+            $this->shifts[$file][self::formatKey([...$path, 'runs'])] = ['path' => [...$path, 'runs'], 'value' => $parted, 'required' => true];
+            return;
+        }
+        foreach ($moves as [$movePath, $value]) {
+            $this->shifts[$file][self::formatKey($movePath)] = ['path' => $movePath, 'value' => $value, 'required' => true];
         }
     }
 

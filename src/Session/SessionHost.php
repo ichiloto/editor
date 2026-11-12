@@ -6,6 +6,8 @@ namespace Ichiloto\Editor\Session;
 
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
+use Ichiloto\Engine\UI\Presentation\ToolTheme;
+use Ichiloto\Editor\Canvas\PieceOwnership;
 use Ichiloto\Editor\Console\ConsoleBinary;
 use Ichiloto\Editor\Console\ProjectCreator;
 use Ichiloto\Editor\Playtest\PlaytestStart;
@@ -23,7 +25,10 @@ use Throwable;
  * `refusal` for an edit or read the session will not make (the author reads
  * the message), `request` for a malformed or unknown request, `failure` for
  * anything unexpected. The first request must be `hello`, which opens the
- * project and agrees the protocol version.
+ * project and agrees the protocol version. Two requests need no project:
+ * `project.create`, and `tools.theme`, which names the file holding the
+ * Engine's tool chrome so a native editor draws the same tool palette as
+ * the Engine's own tool screens.
  */
 final class SessionHost
 {
@@ -117,6 +122,11 @@ final class SessionHost
             return ['protocol' => self::PROTOCOL, 'project' => $this->session->describeProject()];
         }
 
+        // The tool palette is the Engine's, the same for every game: the file this host's Engine reads.
+        if ($method === 'tools.theme') {
+            return ['path' => self::locateToolTheme()];
+        }
+
         // Creating a project needs none open: an editor with no project offers it.
         if ($method === 'project.create') {
             try {
@@ -194,13 +204,19 @@ final class SessionHost
             'worldObjects.place' => $session->placeWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
                 is_bool($params['coverage'] ?? false) ? ($params['coverage'] ?? false) : throw new InvalidRequest('"coverage" must be a boolean.')),
+            'worldObjects.setCoverage' => $session->setWorldObjectCoverage(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireCells($params)),
+            'worldObjects.setTiles' => $session->setWorldObjectTiles(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireString($params, 'layer'), self::requireArray($params, 'cells')),
+            'worldObjects.unsetTiles' => $session->unsetWorldObjectTiles(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireString($params, 'layer'), self::requireArray($params, 'cells')),
             'worldObjects.move' => $session->moveWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireInt($params, 'dx'), self::requireInt($params, 'dy'), self::readChoices($params)),
             'worldObjects.moveVariant' => $session->moveWorldObjectVariant(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireString($params, 'variant'), self::requireInt($params, 'offset')),
             'canvas.exchange' => $session->exchangeAuthoringCanvas(self::requireString($params, 'map'), self::requireLines($params, 'events'),
                 isset($params['variants']) ? self::requireArray($params, 'variants') : [], isset($params['seconds']) ? self::requireNumber($params, 'seconds') : 0,
-                self::readOptionalString($params, 'sessionId')),
+                self::readOptionalString($params, 'sessionId'), self::readPieceArt($params)),
             'canvas.close' => $session->closeAuthoringCanvas(self::requireString($params, 'map')),
             'map.world' => $session->readWorld(self::requireString($params, 'map'),
                 is_bool($params['tileShadows'] ?? false) ? ($params['tileShadows'] ?? false) : throw new InvalidRequest('"tileShadows" must be a boolean.')),
@@ -290,10 +306,12 @@ final class SessionHost
                 self::requireCell($params, 'from'),
                 self::requireCell($params, 'to'),
                 self::readOptionalString($params, 'color'),
+                self::readPieceOwnership($params),
             ),
             'pieces.place' => array_key_exists('origins', $params)
                 ? $session->placePieceCopies(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
-                    self::requireString($params, 'piece'), self::requireCells(['cells' => $params['origins']]), self::readOptionalString($params, 'color'))
+                    self::requireString($params, 'piece'), self::requireCells(['cells' => $params['origins']]), self::readOptionalString($params, 'color'),
+                    self::readOptionalBool($params, 'footprint'), self::readPieceOwnership($params))
                 : $session->placePiece(
                     self::requireString($params, 'map'),
                     self::requireInt($params, 'revision'),
@@ -302,6 +320,7 @@ final class SessionHost
                     self::requireCell($params, 'to'),
                     self::readOptionalString($params, 'color'),
                     self::readOptionalBool($params, 'footprint'),
+                    self::readPieceOwnership($params),
                 ),
             'map.review' => $session->writeMapReview(self::requireString($params, 'map'), self::requireString($params, 'directory'),
                 self::readOptionalRegion($params), array_key_exists('player', $params) && $params['player'] !== null ? self::requireCell($params, 'player') : null,
@@ -383,6 +402,10 @@ final class SessionHost
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
             ),
+            'map.packOccupancy' => $session->packPhysicalOccupancy(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm'),
+            ),
             'map.paintOccupancy' => $session->paintOccupancy(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
@@ -461,9 +484,9 @@ final class SessionHost
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
                 self::requireString($params, 'name'),
-                is_array($params['offset'] ?? null) && array_is_list($params['offset']) && count($params['offset']) === 2
-                    && array_all($params['offset'], static fn(mixed $value): bool => is_int($value) || is_float($value))
-                    ? $params['offset'] : throw new InvalidRequest('"offset" must be two numbers, across and down.'),
+                array_key_exists('offset', $params) && ($params['offset'] === null || (is_array($params['offset']) && array_is_list($params['offset'])
+                    && count($params['offset']) === 2 && array_all($params['offset'], static fn(mixed $value): bool => is_int($value) || is_float($value))))
+                    ? $params['offset'] : throw new InvalidRequest('"offset" must be two numbers, across and down, or null to inherit the tileset\'s.'),
                 array_key_exists('movesWith', $params) && (is_string($params['movesWith']) || $params['movesWith'] === null)
                     ? $params['movesWith'] : throw new InvalidRequest('"movesWith" must be a gameplay layer name or null.'),
             ),
@@ -550,7 +573,8 @@ final class SessionHost
             'troops.page' => $session->readTroopPage(self::requireInt($params, 'index'),
                 is_string($params['arena'] ?? null) ? $params['arena'] : null,
                 is_array($params['moving'] ?? null) ? [self::requireInt($params['moving'], 'member'),
-                    self::requireNumber($params['moving'], 'x'), self::requireNumber($params['moving'], 'depth')] : null),
+                    self::requireNumber($params['moving'], 'x'), self::requireNumber($params['moving'], 'depth')] : null,
+                self::readOptionalBool($params, 'imageBottomFade')),
             'troops.addMember' => $session->addTroopMember(self::requireInt($params, 'index'), self::requireString($params, 'enemy')),
             'troops.removeMember' => $session->removeTroopMember(self::requireInt($params, 'index'), self::requireInt($params, 'member')),
             'troops.clearMembers' => $session->clearTroopMembers(self::requireInt($params, 'index')),
@@ -558,7 +582,8 @@ final class SessionHost
             'arenas.preview' => $session->readArenaPreview(self::requireInt($params, 'index'),
                 is_int($params['troop'] ?? null) ? $params['troop'] : null,
                 is_array($params['ground'] ?? null) ? $params['ground'] : [],
-                is_array($params['footing'] ?? null) ? $params['footing'] : []),
+                is_array($params['footing'] ?? null) ? $params['footing'] : [],
+                self::readOptionalBool($params, 'imageBottomFade')),
             'arenas.setFooting' => $session->setArenaFooting(self::requireInt($params, 'index'),
                 match ($params['habitat'] ?? null) {
                     'land' => EnemyHabitat::LAND,
@@ -572,7 +597,8 @@ final class SessionHost
             'actors.preview' => $session->readActorPreview(self::requireInt($params, 'index'),
                 is_string($params['arena'] ?? null) ? $params['arena'] : null),
             'enemies.preview' => $session->readEnemyPreview(self::requireInt($params, 'index'),
-                is_string($params['arena'] ?? null) ? $params['arena'] : null),
+                is_string($params['arena'] ?? null) ? $params['arena'] : null,
+                self::readOptionalBool($params, 'imageBottomFade')),
             'database.record' => $session->readDatabaseRecord(
                 self::requireString($params, 'category'),
                 self::requireInt($params, 'index'),
@@ -614,6 +640,9 @@ final class SessionHost
                 self::requireString($params, 'node'), self::requireString($params, 'requires')),
             'mastery.adopt' => $session->adoptMasterySkills(self::requireString($params, 'actor'),
                 self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm')),
+            'effects.flightRoutes' => $session->checkEffectFlightRoutes(self::requireInt($params, 'index')),
+            'superMoves.migrate' => $session->migrateSuperMoves(self::readOptionalString($params, 'answer'),
+                self::readOptionalString($params, 'confirm')),
             'skills.retire' => $session->retireSkill(self::requireInt($params, 'index'), self::readOptionalString($params, 'replacement'),
                 self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm')),
             'database.move' => $session->moveDatabaseRecord(
@@ -638,6 +667,10 @@ final class SessionHost
             'cutscenes.cinematicStop' => $session->stopCinematicPreview(),
             'cutscenes.cinematicScene' => $session->exchangeCinematicScene(self::requireLines($params, 'events'), self::readOptionalString($params, 'sessionId')),
             'cutscenes.cinematicSceneDetach' => $session->detachCinematicScene(),
+            'cutscenes.cinematicCapture' => $session->writeCinematicCapture(self::requireInt($params, 'index'),
+                self::requireString($params, 'directory'), self::requireInt($params, 'width'), self::requireInt($params, 'height'),
+                self::requireNumber($params, 'fps'), self::requireNumber($params, 'readingSeconds'), self::requireNumber($params, 'maxSeconds'),
+                self::readOptionalString($params, 'campaignSave')),
             'cutscenes.effectField' => $session->showEffectOnField(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
                 self::requireInt($params, 'width'), self::requireInt($params, 'height')),
             'cutscenes.effectFieldScene' => $session->exchangeEffectFieldScene(self::requireLines($params, 'events'), self::readOptionalString($params, 'sessionId')),
@@ -647,7 +680,12 @@ final class SessionHost
                 EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
                     ?? throw new InvalidRequest('"presentation" must be terminal or graphical.'),
                 is_int($params['authoredFrame'] ?? null) ? $params['authoredFrame'] : null,
-                is_int($params['binding'] ?? null) ? $params['binding'] : 0),
+                is_int($params['binding'] ?? null) ? $params['binding'] : 0,
+                ($params['imageRotation'] ?? false) === true,
+                isset($params['targetIndex']) ? self::requireInt($params, 'targetIndex') : null,
+                ($params['coverageDabs'] ?? false) === true,
+                ($params['textureStrip'] ?? false) === true,
+                ($params['regionBudget'] ?? false) === true),
             'cutscenes.battlePreview' => $session->readSummonBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
                 ($params['reducedMotion'] ?? false) === true,
                 EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
@@ -818,6 +856,21 @@ final class SessionHost
         return $selectors;
     }
 
+    /**
+     * The Engine's tool theme file, as the Engine loaded in this host names
+     * it. The file itself is read and validated by whoever draws with it.
+     *
+     * @throws SessionRefusal When the loaded Engine has no tool theme.
+     */
+    private static function locateToolTheme(): string
+    {
+        if (! class_exists(ToolTheme::class)) {
+            throw new SessionRefusal(sprintf('The Engine this host loaded has no tool theme (%s). Update the Engine.', ToolTheme::class));
+        }
+
+        return realpath(ToolTheme::FILE) ?: ToolTheme::FILE;
+    }
+
     /** @param array<string, mixed> $params */
     private static function requireString(array $params, string $key): string
     {
@@ -910,6 +963,38 @@ final class SessionHost
         $value = $params[$key] ?? $default;
 
         return is_bool($value) ? $value : throw new InvalidRequest(sprintf('"%s" must be a boolean when given.', $key));
+    }
+
+    /**
+     * A graphical placement's art the map's canvas lays before it is applied, when given:
+     * `{piece, from: [x, y], to: [x, y]}`, as `pieces.preview` names it.
+     *
+     * @param array<string, mixed> $params
+     * @return array{piece: string, from: array{0: int, 1: int}, to: array{0: int, 1: int}}|null
+     */
+    private static function readPieceArt(array $params): ?array
+    {
+        if (($params['pieceArt'] ?? null) === null) {
+            return null;
+        }
+        $art = self::requireArray($params, 'pieceArt');
+
+        return ['piece' => self::requireString($art, 'piece'), 'from' => self::requireCell($art, 'from'), 'to' => self::requireCell($art, 'to')];
+    }
+
+    /**
+     * What a piece placement authors: `gameplay` (the default) for the whole
+     * piece, `graphical` for its art alone over the footprint the map has.
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function readPieceOwnership(array $params): PieceOwnership
+    {
+        $value = $params['ownership'] ?? PieceOwnership::GAMEPLAY->value;
+
+        return is_string($value) ? PieceOwnership::tryFrom($value) ?? throw new InvalidRequest(sprintf('"ownership" must be one of %s.',
+            implode(', ', array_map(static fn(PieceOwnership $case): string => $case->value, PieceOwnership::cases()))))
+            : throw new InvalidRequest('"ownership" must be a string when given.');
     }
 
     /**

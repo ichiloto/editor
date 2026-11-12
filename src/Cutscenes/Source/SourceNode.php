@@ -66,4 +66,41 @@ final readonly class SourceNode
 
         return null;
     }
+
+    /**
+     * Returns the positions of the array's spread entries, in source order.
+     *
+     * @return list<int>
+     */
+    public function findSpreadPositions(): array
+    {
+        return array_keys(array_filter($this->entries, static fn(SourceEntry $entry): bool => $entry->isSpread));
+    }
+
+    /**
+     * Returns whether every entry but its spreads is one the file can name:
+     * a literal key in a keyed array, a plain value in a list. Such an array
+     * is opaque only because of what its spreads add, so entries written
+     * outside them stay the file's to edit.
+     */
+    public function canAddressAroundSpreads(): bool
+    {
+        $spreads = 0;
+        $keyed = false;
+        $positional = false;
+
+        foreach ($this->entries as $entry) {
+            if ($entry->isSpread) {
+                $spreads++;
+            } elseif ($entry->keyIsOpaque) {
+                return false;
+            } elseif ($entry->key === null) {
+                $positional = true;
+            } else {
+                $keyed = true;
+            }
+        }
+
+        return $spreads > 0 && ! ($keyed && $positional);
+    }
 }

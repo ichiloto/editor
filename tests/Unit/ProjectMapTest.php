@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Engine\IO\Console\TerminalText;
 
 /**
  * Loads the fixture map fresh from disk.
@@ -52,8 +53,9 @@ it('marks the map dirty on tile and event mutations', function () {
 
 it('renders a preview with the event overlay merged over tiles', function () {
   $map = fixtureMap();
-  $withOverlay = $map->renderPreview(12, 5);
-  $withoutOverlay = $map->renderPreview(12, 5, showEventOverlay: false);
+  // The fixture's water is coloured; the overlay is about which glyph shows.
+  $withOverlay = array_map(TerminalText::stripAnsi(...), $map->renderPreview(12, 5));
+  $withoutOverlay = array_map(TerminalText::stripAnsi(...), $map->renderPreview(12, 5, showEventOverlay: false));
 
   expect($withOverlay[0])->toBe('############')
     ->and($withOverlay[1])->toBe('#  ~~E     #')
@@ -62,7 +64,7 @@ it('renders a preview with the event overlay merged over tiles', function () {
 
 it('renders an offset preview window', function () {
   $map = fixtureMap();
-  $lines = $map->renderPreview(4, 2, offsetX: 3, offsetY: 1);
+  $lines = array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, offsetX: 3, offsetY: 1));
 
   expect($lines)->toHaveCount(2)
     ->and($lines[0])->toBe('~~E');
@@ -195,7 +197,7 @@ it('saves in place and preserves styled tile formatting', function () {
     $rawMap = (string) file_get_contents($root . '/assets/Maps/test-map/test-map.map.php');
 
     // The styled water run survives the round trip and the edit lands.
-    expect($rawMap)->toContain('<blue>~~~</blue>')
+    expect($rawMap)->toContain('<fg=blue>~~~</>')
       ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $root . '/assets/Maps/test-map')->getTileSymbol(1, 2))->toBe('@');
   } finally {
     removeScratchTree($root);

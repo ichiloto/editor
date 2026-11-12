@@ -44,7 +44,7 @@ it('keeps every field it does not edit, comments and the header, and numbers a n
     // An older record shows its own frames and cues read-only; a current one has none.
     expect($legacy['Legacy Frames'])->toMatchArray(['value' => '(1)', 'editable' => false])
         ->and($legacy['Legacy Position']['value'])->toBe('center')
-        ->and($current)->toBe(['Id', 'Name', 'Caster Effect', 'Target Effect', 'Roles']);
+        ->and($current)->toBe(['Id', 'Name', 'Movement', 'Caster Effect', 'Target Effect', 'Roles']);
 
     $database->setField(0, 'name', 'Blade Slash');
     $database->save();
@@ -66,4 +66,36 @@ it('keeps every field it does not edit, comments and the header, and numbers a n
     expect($again)->toHaveCount(3)
         ->and($again[$index])->toBe(['id' => 5, 'name' => 'New Animation'])
         ->and($again[0]['targetEffect'])->toBe('battle-physical-impact');
+});
+
+it('authors flash-step timing through the animation record and preserves its source', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/animations.php';
+    file_put_contents($path, "<?php\n// Preserve this animation note.\nreturn [['id' => 1, 'name' => 'Test']];\n");
+    $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('animations');
+    $database->setField(0, 'movement', 'flash-step');
+    $timing = ['fps' => 24, 'guardFrames' => 20, 'advanceFrames' => 3, 'holdFrames' => 10,
+        'returnFrames' => 3, 'settleFrames' => 7, 'echoes' => 0, 'overlapEffectTail' => true, 'placeTransitOnPoseKeys' => true];
+    foreach ($timing as $field => $value) {
+        $database->setField(0, 'flashStep.' . $field, $value === true ? 'true' : (string) $value);
+    }
+    $wake = ['image' => 'Graphics/Wake.png', 'crop' => ['x' => 20, 'y' => 20, 'width' => 100, 'height' => 25],
+        'baseWidth' => .3, 'maxWidth' => .6, 'height' => .08, 'offsetY' => -.4, 'outboundGap' => .02,
+        'widthPerDistance' => .2, 'opacityPercent' => [25, 34, 25]];
+    writeTilesetTestPng($root . '/assets/Graphics/Wake.png', 160, 80);
+    foreach ($wake as $field => $value) {
+        $database->setField(0, 'flashStep.wake.' . $field, is_array($value) ? implode(', ', $value) : (string) $value);
+    }
+    $database->save();
+    $saved = (require $path)[0];
+    $timing['wake'] = $wake;
+    expect($saved['movement'])->toBe('flash-step')
+        ->and($saved['flashStep'])->toBe($timing)
+        ->and(file_get_contents($path))->toContain('// Preserve this animation note.');
+    $database->setField(0, 'flashStep.wake.image', '');
+    $database->save();
+    expect((require $path)[0]['flashStep'])->not->toHaveKey('wake');
+    $database->setField(0, 'movement', 'run-to-target');
+    $database->save();
+    expect((require $path)[0])->toMatchArray(['movement' => 'run-to-target'])->not->toHaveKey('flashStep');
 });

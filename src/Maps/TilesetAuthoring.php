@@ -49,7 +49,7 @@ final class TilesetAuthoring
             try {
                 // The glyph footprint remains author-owned even while tile rows are being repaired.
                 $glyphData = $dataPiece;
-                unset($glyphData['tiles'], $glyphData['effect'], $glyphData['occupancy'], $glyphData['doorway']);
+                unset($glyphData['tiles'], $glyphData['effect'], $glyphData['occupancy'], $glyphData['doorway'], $glyphData['overhang']);
                 $blueprint = TilesetPiece::fromArray((string) $id, $glyphData, 'Tileset authoring');
             } catch (InvalidArgumentException $error) {
                 $issue = $error->getMessage();
@@ -67,6 +67,16 @@ final class TilesetAuthoring
                     TilesetPiece::fromArray((string) $id, $glyphData + ['occupancy' => $dataPiece['occupancy']], 'Tileset authoring');
                 } catch (InvalidArgumentException $error) {
                     $occupancyIssue = $error->getMessage();
+                }
+            }
+            // The rows over the wall stand on the ground rows' footprint, so they are read with it.
+            $overhangIssue = null;
+            if (array_key_exists('overhang', $dataPiece)) {
+                try {
+                    $physical = array_intersect_key($dataPiece, ['occupancy' => true, 'doorway' => true, 'overhang' => true]);
+                    TilesetPiece::fromArray((string) $id, $glyphData + $physical, 'Tileset authoring');
+                } catch (InvalidArgumentException $error) {
+                    $overhangIssue = $error->getMessage();
                 }
             }
             $layers = [];
@@ -94,7 +104,9 @@ final class TilesetAuthoring
                 'width' => $blueprint?->width, 'height' => $blueprint?->height,
                 'key' => $keys[$prefix . 'Name'] ?? null, 'layers' => $layers, 'issue' => $issue,
                 'occupancy' => $occupancy, 'occupancyKey' => $keys[$prefix . 'Occupancy'] ?? null,
-                'occupancyDeclared' => $occupancyDeclared, 'occupancyIssue' => $occupancyIssue];
+                'occupancyDeclared' => $occupancyDeclared, 'occupancyIssue' => $occupancyIssue,
+                'overhang' => is_int($dataPiece['overhang'] ?? null) ? $dataPiece['overhang'] : 0,
+                'overhangKey' => $keys[$prefix . 'Overhang'] ?? null, 'overhangIssue' => $overhangIssue];
         }
 
         return $pieces;

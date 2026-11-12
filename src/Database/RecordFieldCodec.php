@@ -19,6 +19,12 @@ enum RecordFieldCodec: string
     /** A list of engine world-conditions, shown as `type:name:extras; …`. */
     case CONDITIONS = 'conditions';
 
+    /**
+     * One engine world-condition stored as itself, not in a list: a tutorial
+     * step's completion. Shown and built as a condition list that holds at most one.
+     */
+    case WORLD_CONDITION = 'world_condition';
+
     /** A list of plain strings, shown comma-separated. */
     case CSV_LIST = 'csv_list';
 
@@ -110,6 +116,9 @@ enum RecordFieldCodec: string
      */
     case STAGE_SLOT = 'stage_slot';
 
+    /** Logical combat row/lane, independent of the graphical stage and terminal coordinates. */
+    case BATTLE_POSITION = 'battle_position';
+
     /**
      * A project's battle test, the Engine's ProjectBattleTest: the troop to
      * preselect, the party (each member's actor, level, equipment and
@@ -124,4 +133,21 @@ enum RecordFieldCodec: string
      * page's conditions and battle commands name an enemy by.
      */
     case TROOP_MEMBER = 'troop_member';
+
+    /**
+     * A tile layer's drawing offset, the Engine's TileLayerOffset: across and
+     * down in field cells, stored as `[x, y]` and shown as `x, y`. Each is any
+     * fraction within the Engine's limit, typed as a decimal or as `a/b` (a
+     * third of a row is `-1/3`); whole numbers stay integers.
+     */
+    case LAYER_OFFSET = 'layer_offset';
+
+    /**
+     * A battle pose's impact: a 0-based index into its own `frames` playback
+     * list, repeated holds included, never a sheet cell number. It is chosen
+     * among that list's entries, each shown with the sheet cell it plays, as
+     * `Entry 3 · cell 2`, and only for a pose that plays once (`loop` false),
+     * as the Engine's BattlerPose requires. Absent, the pose keeps its own clock.
+     */
+    case POSE_IMPACT_ENTRY = 'pose_impact_entry';
 }

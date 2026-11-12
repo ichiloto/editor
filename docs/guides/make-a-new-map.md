@@ -44,6 +44,13 @@ from the command palette (`Ctrl+P`). It shows the current and proposed ids and
 asks for `y`. References to the old id are not updated. See
 [Stable map identities](../manual.md#stable-map-identities).
 
+## Choose Where Players Can Save
+
+The Inspector's **Saving** row offers **Save points** and **Anywhere**. Save points
+is the default for maps without an authored rule. Choose Anywhere for a map where
+players can save throughout exploration. The choice writes `savePolicy` in the
+map data and supports the same undo, save and reload paths in both Editor interfaces.
+
 ## Paint The Tile Layer
 
 1. `Tab` to the `Canvas`.
@@ -109,6 +116,17 @@ refused save can never leave new data over old tiles, or a half-written map.
 A hand-written `.data.php` is edited in place, not regenerated: your comments,
 imports and expressions survive every save, and an edit the editor cannot make
 without destroying an authored expression is refused by name instead.
+
+## Opening A Hidden Passage
+
+Choose **Opening Passage** from the event-type picker and place its marker on
+walkable floor. It uses a one-shot Action interaction from the adjacent facing
+cell. **Available When** selects the conditions for sensing and interacting;
+**Cue Range** limits the marker to nearby logical steps. Clearing range restores
+unlimited cue range. The passage stays blocked until its Action completes.
+Use a world object's negated map-event condition to conceal the entrance until
+that completion. An optional secret Passage landmark can use the same saved
+completion for its reveal condition. Save, undo and redo preserve the source.
 
 ## Try It
 

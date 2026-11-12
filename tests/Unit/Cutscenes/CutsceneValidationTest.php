@@ -97,6 +97,40 @@ it('resolves the references the Engine only sees at play time', function () {
         ->and($messages)->toContain('"nowhere"');
 });
 
+it('resolves registered command references against every category the shared reference catalogue defines', function () {
+    $root = cutsceneProject();
+    $actor = new \Ichiloto\Editor\Database\ReferenceCatalog(ProjectWorkspace::fromProject($root))->valuesFor('actors')[0];
+    // Authored skipping rejects registered commands, so the scene forbids it.
+    forbidHarbourCinematicSkip($root);
+    insertHarbourCommands($root, [
+        ['type' => 'recruit_actor', 'actor' => $actor],
+        ['type' => 'select_party', 'members' => [['actor' => $actor]]],
+        ['type' => 'recruit_actor', 'actor' => 'synthetic-absent-actor'],
+    ]);
+
+    $messages = issueMessages(cutsceneIssues($root));
+    $actorMessages = array_values(array_filter($messages, static fn(string $message): bool => str_contains($message, 'actor "')));
+
+    expect($actorMessages)->toHaveCount(1)
+        ->and($actorMessages[0])->toContain('"synthetic-absent-actor"')
+        ->and(implode("\n", $messages))->not->toContain('"' . $actor . '"');
+});
+
+it('accepts remove_actor of an absent staged actor and still requires show and hide targets', function () {
+    $root = cutsceneProject();
+    insertHarbourCommands($root, [
+        ['type' => 'remove_actor', 'actorId' => 'retry-owned-actor'],
+        ['type' => 'show_actor', 'actorId' => 'never-staged-shown'],
+        ['type' => 'hide_actor', 'actorId' => 'never-staged-hidden'],
+    ]);
+
+    $messages = implode("\n", issueMessages(cutsceneIssues($root)));
+
+    expect($messages)->not->toContain('"retry-owned-actor"')
+        ->and($messages)->toContain('It addresses staged actor "never-staged-shown"')
+        ->and($messages)->toContain('It addresses staged actor "never-staged-hidden"');
+});
+
 it('flags a staged actor without a graphical look only on a map drawn from a tileset', function () {
     $root = cutsceneProject();
     $codes = static fn(): array => array_values(array_map(static fn(Issue $issue): string => $issue->message,

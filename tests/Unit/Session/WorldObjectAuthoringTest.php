@@ -236,6 +236,28 @@ it('refuses referenced and opaque cinematic deletions before source history or r
     $opaque = EditorSession::open($root);
     expect(fn() => $opaque->deleteWorldObject('test-map', $opaque->readMap('test-map')['revision'], 'fixture-prop'))
         ->toThrow(SessionRefusal::class, 'fixture-cutscene');
+    // A list spreading in a shared route is proved by the plain data it loads as, wherever entries follow the spread.
+    $spread = static fn(string $tail): string => "<?php \$route = [['x'=>1,'y'=>0], ['x'=>1,'y'=>1]];
+        return [['type'=>'move_route', 'waypoints'=>[...\$route, ['x'=>0,'y'=>1]]], ...[['type'=>'wait','seconds'=>0.5]], {$tail}];";
+    $refuse = static function (string $root): string {
+        $session = EditorSession::open($root);
+        try {
+            $session->deleteWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop');
+        } catch (SessionRefusal $error) {
+            return $error->getMessage();
+        }
+        return '';
+    };
+    file_put_contents($scriptFile, $spread("['type'=>'wait','seconds'=>1.0]"));
+    expect($refuse($root))->toBe('');
+    // A reference after a spread is still found in what the list loads as.
+    file_put_contents($scriptFile, $spread("['type'=>'camera','operation'=>'focus','target'=>['kind'=>'world_object','id'=>'fixture-prop']]"));
+    expect($refuse($root))->toContain('fixture-cutscene.commands.2.target');
+    // A closure spread in is not plain data, so the list cannot vouch for it.
+    file_put_contents($scriptFile, $spread("...[['type'=>'wait','seconds'=>0.5,'until'=>static fn(): bool => true]]"));
+    expect($refuse($root))->toContain('fixture-cutscene');
+    // Proving a deletion safe left nothing behind.
+    expect(file_get_contents($file))->toBe($source);
     file_put_contents($scriptFile, "<?php \$wait = static fn(float \$seconds): array => ['type'=>'wait','seconds'=>\$seconds];
         return [\$wait(0.5), \$wait(1.0)];");
     $helper = EditorSession::open($root);
@@ -524,4 +546,168 @@ it('judges a world object where a line removal moves it, so one beyond the map\'
         ->and($session->readMap('test-map')['width'])->toBe(3)
         ->and($session->readMap('test-map')['worldObjects'][0]['anchor'])->toBe(['x' => 2, 'y' => 1])
         ->and((require $file)['worldObjects'][0]['anchor'])->toBe(['x' => 2, 'y' => 1]);
+});
+
+/** The floor cell at 1, 1 as the canvas draws it, or null where it shows no tile. */
+function readCanvasFloorCell(array $preview): ?array
+{
+    foreach ($preview['operations'] as $op) {
+        if (($op['op'] ?? '') !== 'worldTiles' || $op['layerId'] !== 'tiles:floor') { continue; }
+        foreach ($op['rows'] as $row) {
+            if ($row['row'] !== 1) { continue; }
+            $cell = array_find($row['cells'], static fn(array $cell): bool => $cell['column'] === 1);
+            if ($cell !== null) { return $cell; }
+        }
+    }
+    return null;
+}
+
+it('authors map-owned object tiles with byte-exact save, undo and redo, leaving the terminal alone', function () {
+    [$root, $file, $session] = createWorldObjectProject();
+    $before = (string) file_get_contents($file);
+    $terminal = ProjectWorkspace::fromProject($root)->maps[0]->getLayerSet()->getComposedGrid();
+    $revision = $session->readMap('test-map')['revision'];
+    expect($session->setWorldObjectTiles('test-map', $revision, 'fixture-prop', 'decor', [[1, 1, 5]])['changed'])->toBeTrue();
+    $session->saveMap('test-map');
+    $after = (string) file_get_contents($file);
+    expect($after)->toContain("'tiles2d'", '/* map-owned identity */', "'preserved' => abs(7)")
+        ->and(EditorSession::open($root)->readMap('test-map')['worldObjects'][0]['tiles2d'])->toBe(['decor' => [['x' => 1, 'y' => 1, 'tile' => 5]]])
+        ->and(ProjectWorkspace::fromProject($root)->maps[0]->getLayerSet()->getComposedGrid())->toBe($terminal);
+    $session->undo();
+    $session->saveMap('test-map');
+    expect(file_get_contents($file))->toBe($before);
+    $session->redo();
+    $session->saveMap('test-map');
+    expect(file_get_contents($file))->toBe($after);
+    // Changing a declared cell edits it in place; unsetting the last one removes the declaration.
+    $revision = $session->readMap('test-map')['revision'];
+    $session->setWorldObjectTiles('test-map', $revision, 'fixture-prop', 'decor', [[1, 1, 0]]);
+    expect($session->readMap('test-map')['worldObjects'][0]['tiles2d'])->toBe(['decor' => [['x' => 1, 'y' => 1, 'tile' => 0]]]);
+    $session->unsetWorldObjectTiles('test-map', $session->readMap('test-map')['revision'], 'fixture-prop', 'decor', [[1, 1]]);
+    $session->saveMap('test-map');
+    expect(file_get_contents($file))->toBe($before);
+});
+
+it('edits object tiles as rows choosing a map layer and a palette tile on owned cells', function () {
+    [, , $session] = createWorldObjectProject();
+    $view = $session->readWorldObject('test-map', 'fixture-prop');
+    $heading = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === 'objectTileList');
+    $session->changeWorldObjectItem('test-map', $view['revision'], 'fixture-prop', $heading['key'], false);
+    // A new row starts on the first tile layer and the anchor, showing the tile already there.
+    expect($session->readMap('test-map')['worldObjects'][0]['tiles2d'])->toBe(['floor' => [['x' => 1, 'y' => 1, 'tile' => 2816]]]);
+    $rows = $session->readWorldObject('test-map', 'fixture-prop')['rows'];
+    $layer = array_find($rows, static fn($row): bool => ($row['key']['field'] ?? null) === 'objectTile0Layer');
+    $tile = array_find($rows, static fn($row): bool => ($row['key']['field'] ?? null) === 'objectTile0Tile');
+    expect($layer['options'])->toBe(['floor', 'decor'])
+        ->and($tile['tilePicker'])->toBeTrue()
+        ->and($session->readWorldObject('test-map', 'fixture-prop')['worldObject']['tiles2d'])->toBe(['floor' => [['x' => 1, 'y' => 1, 'tile' => 2816]]]);
+    applyWorldObjectRow($session, 'objectTile0Tile', '0');
+    applyWorldObjectRow($session, 'objectTile0Layer', 'decor');
+    expect($session->readMap('test-map')['worldObjects'][0]['tiles2d'])->toBe(['decor' => [['x' => 1, 'y' => 1, 'tile' => 0]]])
+        ->and(fn() => applyWorldObjectRow($session, 'objectTile0Layer', 'walls'))->toThrow(SessionRefusal::class, 'Choose a listed value');
+    $view = $session->readWorldObject('test-map', 'fixture-prop');
+    $row = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === 'objectTile0Layer');
+    $session->changeWorldObjectItem('test-map', $view['revision'], 'fixture-prop', $row['key'], true);
+    expect($session->readMap('test-map')['worldObjects'][0])->not->toHaveKey('tiles2d');
+    $session->saveMap('test-map');
+});
+
+it('refuses object tiles the Engine refuses before anything changes', function () {
+    [, $file, $session] = createWorldObjectProject();
+    $source = (string) file_get_contents($file);
+    $revision = $session->readMap('test-map')['revision'];
+    $set = static fn(string $layer, array $cells, string $id = 'fixture-prop') => $session->setWorldObjectTiles('test-map',
+        $session->readMap('test-map')['revision'], $id, $layer, $cells);
+    expect(fn() => $set('walls', [[1, 1, 5]]))->toThrow(SessionRefusal::class, 'no tile layer walls')
+        ->and(fn() => $set('decor', [[2, 1, 5]]))->toThrow(SessionRefusal::class, 'inside its map footprint')
+        ->and(fn() => $set('decor', [[9, 1, 5]]))->toThrow(SessionRefusal::class, 'inside its map footprint')
+        ->and(fn() => $set('decor', [[1, 1, -3]]))->toThrow(SessionRefusal::class, 'valid tile cells')
+        ->and(fn() => $set('decor', [[1, 1, '5']]))->toThrow(SessionRefusal::class, 'whole numbers');
+    $session->createWorldObject('test-map', $session->readMap('test-map')['revision'], 'second-prop', 1, 1);
+    $set('decor', [[1, 1, 5]]);
+    expect(fn() => $set('decor', [[1, 1, 5]], 'second-prop'))->toThrow(SessionRefusal::class)
+        ->and($session->readMap('test-map')['worldObjects'][1])->not->toHaveKey('tiles2d')
+        ->and($session->readMap('test-map')['revision'])->toBeGreaterThan($revision)
+        ->and(file_get_contents($file))->toBe($source);
+});
+
+it('composes object tiles into the canvas before shaping and moves them with their object', function () {
+    [, , $session] = createWorldObjectProject();
+    $base = readCanvasFloorCell(drawAuthoringCanvas($session, 'test-map'));
+    expect($base)->not->toBeNull();
+    $session->setWorldObjectTiles('test-map', $session->readMap('test-map')['revision'], 'fixture-prop', 'floor', [[1, 1, 0]]);
+    expect(readCanvasFloorCell(drawAuthoringCanvas($session, 'test-map')))->toBeNull();
+    $session->moveWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop', 1, 0);
+    expect($session->readMap('test-map')['worldObjects'][0]['tiles2d'])->toBe(['floor' => [['x' => 2, 'y' => 1, 'tile' => 0]]])
+        // The floor shows at 1, 1 again, shaped against the neighbour the object now clears.
+        ->and(readCanvasFloorCell(drawAuthoringCanvas($session, 'test-map')))->not->toBeNull()->not->toBe($base);
+    $session->undo();
+    $session->undo();
+    expect(readCanvasFloorCell(drawAuthoringCanvas($session, 'test-map')))->toBe($base);
+});
+
+it('keeps an object presented only by its tiles valid when its last tile goes', function () {
+    [$root, $file] = createWorldObjectProject();
+    file_put_contents($file, str_replace("'sprites2d' => null],", "'tiles2d' => ['decor' => [['x' => 1, 'y' => 1, 'tile' => 5]]]],",
+        (string) file_get_contents($file)));
+    $session = EditorSession::open($root);
+    expect($session->readMap('test-map')['worldObjects'][0])->not->toHaveKey('sprites2d');
+    $host = new SessionHost(fopen('php://memory', 'r+'), fopen('php://memory', 'r+'), fopen('php://memory', 'r+'));
+    $request = static fn(string $method, array $params): array => $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params]));
+    $request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+    $revision = $request('map.read', ['map' => 'test-map'])['result']['revision'];
+    $set = $request('worldObjects.setTiles', ['map' => 'test-map', 'revision' => $revision, 'id' => 'fixture-prop', 'layer' => 'floor', 'cells' => [[1, 1, 0]]]);
+    expect($set['result']['changed'])->toBeTrue();
+    $unset = $request('worldObjects.unsetTiles', ['map' => 'test-map', 'revision' => $set['result']['revision'], 'id' => 'fixture-prop',
+        'layer' => 'floor', 'cells' => [[1, 1]]]);
+    $unset = $request('worldObjects.unsetTiles', ['map' => 'test-map', 'revision' => $unset['result']['revision'], 'id' => 'fixture-prop',
+        'layer' => 'decor', 'cells' => [[1, 1]]]);
+    expect($unset['result']['changed'])->toBeTrue()
+        ->and($request('map.read', ['map' => 'test-map'])['result']['worldObjects'][0])->toMatchArray(['sprites2d' => null])
+        ->and($request('map.read', ['map' => 'test-map'])['result']['worldObjects'][0])->not->toHaveKey('tiles2d');
+});
+
+
+it('sets a wide coverage selection in one host edit and reopens it without touching the map cells', function () {
+    [$root, $file] = createWorldObjectProject();
+    $directory = dirname($file);
+    $gridSource = \Ichiloto\Engine\Field\MapGridSource::class;
+    $width = 34;
+    $height = 11;
+    $blank = implode("\n", array_fill(0, $height, str_repeat(' ', $width)));
+    $terrain = implode("\n", array_fill(0, $height, str_repeat('.', $width)));
+    foreach (['layers/01.terrain.map.php' => $terrain, 'layers/04.buildings.map.php' => $blank,
+        'layers/07.detail.deco.php' => $blank, 'test-map.event.php' => $blank] as $path => $text) {
+        file_put_contents($directory . '/' . $path, $gridSource::buildSource($text, 'GRID'));
+    }
+    foreach (['01.floor.tiles.php' => 2816, '02.decor.tiles.php' => 0] as $path => $tile) {
+        writeTileLayer($directory, $path, implode("\n", array_fill(0, $height, implode(' ', array_fill(0, $width, $tile)))));
+    }
+    $session = EditorSession::open($root);
+    applyWorldObjectRow($session, 'covers.layer', 'terrain');
+    $session->saveMap('test-map');
+    $before = $session->readMap('test-map');
+    $host = new SessionHost(fopen('php://memory', 'r+'), fopen('php://memory', 'r+'), fopen('php://memory', 'r+'));
+    $request = static fn(string $method, array $params): array => $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params]));
+    $request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+    $read = static fn(): array => $request('map.read', ['map' => 'test-map'])['result'];
+    $cells = [];
+    foreach (range(0, 9) as $y) {
+        foreach (range(0, 29) as $x) { $cells[] = [$x, $y]; }
+    }
+    $params = ['map' => 'test-map', 'id' => 'fixture-prop', 'revision' => $read()['revision']];
+    expect($request('worldObjects.setCoverage', [...$params, 'cells' => $cells])['result']['changed'])->toBeTrue()
+        ->and($read()['worldObjects'][0]['covers']['cells'])->toBe($cells)
+        ->and($read()['occupancy'])->toBe($before['occupancy'])
+        ->and($read()['layers'])->toBe($before['layers']);
+    $after = $read();
+    $invalid = $request('worldObjects.setCoverage', [...$params, 'revision' => $after['revision'], 'cells' => [...$cells, [0, 0]]]);
+    expect($invalid)->toHaveKey('error')
+        ->and($read())->toBe($after);
+    $request('history.undo', []);
+    expect($read()['worldObjects'][0]['covers']['cells'])->toBe([[1, 1]]);
+    $request('history.redo', []);
+    $request('map.save', ['map' => 'test-map']);
+    expect(EditorSession::open($root)->readMap('test-map')['worldObjects'][0]['covers']['cells'])->toBe($cells)
+        ->and(file_get_contents($file))->toContain('/* map-owned identity */', "'preserved' => abs(7)");
 });

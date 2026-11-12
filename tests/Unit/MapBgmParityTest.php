@@ -29,21 +29,16 @@ function mapMusicEngineRoot(): ?string
  */
 function resolveThroughAcceptedEngine(string $engineRoot, array $cases): array
 {
-    $caseFile = tempnam(sys_get_temp_dir(), 'ichiloto-bgm-parity-');
+    $caseFile = makeTemporaryFile('ichiloto-bgm-parity-', '.json');
     file_put_contents($caseFile, json_encode(['cases' => $cases]));
-
-    try {
-        $command = sprintf(
-            '%s %s %s %s 2>/dev/null',
-            escapeshellarg(PHP_BINARY),
-            escapeshellarg(dirname(__DIR__) . '/Support/map-bgm-parity-runner.php'),
-            escapeshellarg($engineRoot),
-            escapeshellarg($caseFile),
-        );
-        $decoded = json_decode((string) shell_exec($command), true);
-    } finally {
-        unlink($caseFile);
-    }
+    $command = sprintf(
+        '%s %s %s %s 2>/dev/null',
+        escapeshellarg(PHP_BINARY),
+        escapeshellarg(dirname(__DIR__) . '/Support/map-bgm-parity-runner.php'),
+        escapeshellarg($engineRoot),
+        escapeshellarg($caseFile),
+    );
+    $decoded = json_decode((string) shell_exec($command), true);
 
     if (! is_array($decoded) || ! array_key_exists('results', $decoded)) {
         throw new RuntimeException('The map music parity runner produced no result.');

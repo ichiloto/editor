@@ -260,21 +260,23 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/ichiloto/engine.git",
-                "reference": "799203d609fc6f22651db5816946e8987afe646c"
+                "reference": "06ecb2626171e0d3f24e613b0cc1f83ba09f84f5"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/ichiloto/engine/zipball/799203d609fc6f22651db5816946e8987afe646c",
-                "reference": "799203d609fc6f22651db5816946e8987afe646c",
+                "url": "https://api.github.com/repos/ichiloto/engine/zipball/06ecb2626171e0d3f24e613b0cc1f83ba09f84f5",
+                "reference": "06ecb2626171e0d3f24e613b0cc1f83ba09f84f5",
                 "shasum": ""
             },
             "require": {
                 "amasiye/figlet": "^1.2.1",
                 "assegaiphp/collections": "^0.3.2",
                 "assegaiphp/util": "^0.4.3",
+                "atatusoft-ltd/plural": "^1.2",
                 "league/climate": "^3.9",
                 "php": "^8.4.1",
                 "symfony/console": "^8.0",
+                "symfony/polyfill-intl-grapheme": "^1.33",
                 "voku/portable-ascii": "^2.0"
             },
             "require-dev": {
@@ -306,7 +308,7 @@
                 "issues": "https://github.com/ichiloto/engine/issues",
                 "source": "https://github.com/ichiloto/engine/tree/develop"
             },
-            "time": "2026-10-19T15:55:46+00:00"
+            "time": "2026-11-12T09:02:58+00:00"
         },
         {
             "name": "league/climate",

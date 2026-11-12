@@ -159,7 +159,7 @@ it('builds a whole condition from nothing', function () {
     $editor->add();
 
     // A new condition starts as a switch; the key item is as many steps on as the Engine lists it.
-    $types = ConditionCodec::types();
+    $types = ConditionCodec::getLeafTypes();
     $editor->cycleType(array_search('key_item', $types, true) - array_search('switch', $types, true));
     $editor->setName('Rusty Key');
 

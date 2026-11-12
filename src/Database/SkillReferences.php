@@ -219,7 +219,10 @@ final class SkillReferences
         return $value;
     }
 
-    /** @param list<array{path: list<int|string>, skill: string, inList: bool}> $found */
+    /**
+     * @param list<int|string> $path
+     * @param list<array{path: list<int|string>, skill: string, inList: bool}> $found
+     */
     private static function walk(mixed $value, array $path, array &$found): void
     {
         if (! is_array($value)) {

@@ -106,7 +106,7 @@ PHP_SOURCE;
  */
 function evaluateSource(string $source): mixed
 {
-    $root = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('ichiloto-source-', true));
+    $root = reserveTemporaryPath('ichiloto-source-');
     mkdir($root, 0o777, true);
     $path = $root . '/evaluated.php';
     file_put_contents($path, $source);
@@ -794,10 +794,9 @@ it('writes a new entry\'s long list of small values one per line, and keeps a sh
 
     $written = \Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter::rewrite(\Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument::parse($source), $old, $new)->source;
 
-    $path = tempnam(sys_get_temp_dir(), 'ichiloto-writer-') . '.php';
+    $path = makeTemporaryFile('ichiloto-writer-', '.php');
     file_put_contents($path, $written);
     $read = require $path;
-    unlink($path);
 
     expect($read)->toBe($new)
         ->and($written)->toContain("'tags' => ['a', 'b'],")
@@ -812,10 +811,9 @@ it('writes a one-line list that grows past the width an entry per line, and leav
         ['id' => 'crawl', 'kind' => 'application', 'skill' => 'Crawl'], ['id' => 'warp', 'kind' => 'advanced', 'skill' => 'Warp']]];
 
     $written = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
-    $path = tempnam(sys_get_temp_dir(), 'ichiloto-writer-') . '.php';
+    $path = makeTemporaryFile('ichiloto-writer-', '.php');
     file_put_contents($path, $written);
     $read = require $path;
-    unlink($path);
 
     expect($read)->toBe($new)
         ->and($written)->toContain("'short' => ['a', 'b'],")

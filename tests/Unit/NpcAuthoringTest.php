@@ -1179,18 +1179,6 @@ it('validates NPCs the editor created, not only hand-written ones', function () 
 // -- Engine ----------------------------------------------------------------
 
 it('loads an editor-written map through the engine\'s own NPC configuration', function () {
-    $game = gameSourceRoot();
-
-    if ($game === null || ! is_file($game . '/vendor/autoload.php')) {
-        $this->markTestSkipped('The engine is not reachable from this checkout.');
-    }
-
-    require_once $game . '/vendor/autoload.php';
-
-    if (! class_exists(\Ichiloto\Engine\Field\NpcManager::class)) {
-        $this->markTestSkipped('The engine is not reachable from this checkout.');
-    }
-
     [$root, $path] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
     $editor = npcEditor($root);
     createNpcThroughCanvas($editor, 8, 3, 'Gate Guard');
@@ -1224,7 +1212,8 @@ it('loads an editor-written map through the engine\'s own NPC configuration', fu
         ->and($guard->wanders)->toBeTrue()
         ->and($guard->wanderArea)->toBe(['x' => 7, 'y' => 2, 'width' => 3, 'height' => 2])
         ->and($guard->sprite)->toBe('<fg=#ffaf00>@</>')
-        ->and($guard->dialogue)->toBe([['text' => 'Halt, traveller.']])
+        ->and($guard->isTalkable)->toBeTrue()
+        ->and($guard->currentPage?->lines)->toBe([['text' => 'Halt, traveller.']])
         ->and($guard->sets)->toBe([['type' => 'switch', 'name' => 'met_guard']])
         ->and($guard->allowsWanderTo(7, 2))->toBeTrue()
         ->and($guard->allowsWanderTo(6, 2))->toBeFalse()
@@ -1394,10 +1383,10 @@ it('heads each NPC page and shortens its rows, without touching field ids', func
         ),
         static fn(array $r): bool => preg_match('/^Page \d/', $r['label']) === 1 || str_starts_with((string) $r['field'], 'variant'),
     ));
-    $page = ['When', 'Then Set', 'Cue Symbol', 'Cue Colour', 'Cue When', 'Event Script', 'Cinematic', 'Repeats', 'Page Id',
+    $page = ['When', 'Then Set', 'Cue Symbol', 'Cue Colour', 'Cue Range (0..64 steps)', 'Cue When', 'Event Script', 'Cinematic', 'Repeats', 'Page Id',
         'Staged Speakers', 'Script Commands', 'Line 1 Speaker', 'Line 1 Emotion', 'Line 1 Text'];
     $fields = static fn(int $n): array => ["variant{$n}Conditions", "variant{$n}Sets", "variant{$n}Cuesymbol", "variant{$n}Cuecolor",
-        "variant{$n}Cueconditions", "variant{$n}ScriptId", "variant{$n}CinematicId", "variant{$n}Reusable", "variant{$n}Id",
+        "variant{$n}CuemaxDistance", "variant{$n}Cueconditions", "variant{$n}ScriptId", "variant{$n}CinematicId", "variant{$n}Reusable", "variant{$n}Id",
         "variant{$n}Speakers", "variant{$n}Script", "variant{$n}Line0Name", "variant{$n}Line0Emotion", "variant{$n}Line0Text"];
     $next = count($page) + 1;
 

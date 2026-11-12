@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Engine\Audio\BackgroundMusicState;
+use Closure;
 use Ichiloto\Engine\Battle\BattleResult;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
@@ -12,6 +13,8 @@ use Ichiloto\Engine\Events\Interpreter\EventExecutionLane;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionSession;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionStatus;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
+use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposition;
+use Ichiloto\Engine\Rendering\Text\TextPreparationProviderInterface;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Throwable;
 
@@ -25,6 +28,13 @@ use Throwable;
  * waits for the author, and read-only views of the lanes, checkpoints and
  * final state — so what the pane shows is what the game would do, command
  * for command, with the author's project untouched.
+ *
+ * Notices the Engine delivers (a power showcase, an income notice) wait on
+ * the preview's screen; while one is shown the scene is held, as the game's
+ * blocking notice window holds its frame loop, until the author acknowledges
+ * it. A captured session ({@see startCapture()}) is presented graphically
+ * from its first command, and {@see composeFrame()} gives the Engine's
+ * renderer-neutral composition of the scene at the session's clock.
  */
 final class CinematicPreviewSession
 {
@@ -64,12 +74,16 @@ final class CinematicPreviewSession
     private PreviewField $field;
 
     /**
-     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string} $options
+     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string, campaignSave?: string|null} $options
+     */
+    /**
+     * @param array{supports: Closure(string): bool, textPreparation: TextPreparationProviderInterface|null}|null $capture
      */
     private function __construct(
         private readonly string $projectRoot,
         private readonly CinematicDefinition $definition,
         private readonly array $options,
+        private readonly ?array $capture = null,
     ) {
     }
 
@@ -80,11 +94,40 @@ final class CinematicPreviewSession
      * entry the stage cannot place); that is reported through `status()`
      * and `failure()` rather than thrown, so the pane can show it.
      *
-     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string} $options
+     * With `campaignSave`, an absolute path to a save file, the scene plays
+     * in that save's campaign ({@see PreviewField::openSavedCampaign()}): its
+     * party, world state and quests, on its map, with the player where the
+     * save left them; `mapId`, `x` and `y` are then the save's. A save that
+     * cannot be restored is refused with the Engine's reason.
+     *
+     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string, campaignSave?: string|null} $options
      */
     public static function start(string $projectRoot, CinematicDefinition $definition, array $options = []): self
     {
         $preview = new self($projectRoot, $definition, $options);
+        $preview->boot();
+
+        return $preview;
+    }
+
+    /**
+     * Starts a cinematic in an isolated scene presented graphically for its
+     * whole run, for a renderer of the given capabilities with no window
+     * ({@see PreviewField::beginCapture()}): its effects, stages and dialogue
+     * are started graphically from the first command, as in the game's
+     * graphical window, and each {@see composeFrame()} is the scene at the
+     * session's clock. A capture is renderer-neutral: the caller draws the
+     * compositions as it chooses.
+     *
+     * @param Closure(string): bool $supports The capture renderer's capabilities.
+     * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string, campaignSave?: string|null} $options
+     * @param TextPreparationProviderInterface|null $textPreparation Where project labels are measured; without one
+     *     the scene composes no labels.
+     */
+    public static function startCapture(string $projectRoot, CinematicDefinition $definition, Closure $supports,
+        array $options = [], ?TextPreparationProviderInterface $textPreparation = null): self
+    {
+        $preview = new self($projectRoot, $definition, $options, ['supports' => $supports, 'textPreparation' => $textPreparation]);
         $preview->boot();
 
         return $preview;
@@ -96,19 +139,34 @@ final class CinematicPreviewSession
     public function restart(): self
     {
         $this->dispose();
+        $preview = new self($this->projectRoot, $this->definition, $this->options, $this->capture);
+        $preview->boot();
 
-        return self::start($this->projectRoot, $this->definition, $this->options);
+        return $preview;
     }
 
     private function boot(): void
     {
-        $mapId = $this->options['mapId'] ?? $this->definition->startMap;
-        $mapId = is_string($mapId) && trim($mapId) !== '' ? trim($mapId) : '';
-        $this->field = PreviewField::open($this->projectRoot, $mapId,
-            new Vector2(intval($this->options['x'] ?? 0), intval($this->options['y'] ?? 0)),
-            intval($this->options['width'] ?? 60), intval($this->options['height'] ?? 18), fn(): float => $this->elapsed);
+        $save = $this->options['campaignSave'] ?? null;
+        if (is_string($save) && $save !== '') {
+            // The save decides where the scene begins, as a game launched from it does.
+            $this->field = PreviewField::openSavedCampaign($this->projectRoot, $save,
+                intval($this->options['width'] ?? 60), intval($this->options['height'] ?? 18), fn(): float => $this->elapsed);
+            $mapId = strval($this->field->getCampaignMapId());
+            $this->note('Campaign restored from the save.');
+        } else {
+            $mapId = $this->options['mapId'] ?? $this->definition->startMap;
+            $mapId = is_string($mapId) && trim($mapId) !== '' ? trim($mapId) : '';
+            $this->field = PreviewField::open($this->projectRoot, $mapId,
+                new Vector2(intval($this->options['x'] ?? 0), intval($this->options['y'] ?? 0)),
+                intval($this->options['width'] ?? 60), intval($this->options['height'] ?? 18), fn(): float => $this->elapsed);
+        }
         $this->scene = $this->field->scene;
         $this->presentation = $this->field->presentation;
+        if ($this->capture !== null) {
+            // Before the launch, so the first command already runs in the graphical presentation.
+            $this->field->beginCapture($this->capture['supports'], $this->capture['textPreparation']);
+        }
         if ($mapId === '') {
             $this->note('No start map: the cinematic plays over undefined terrain.');
         } elseif ($this->field->mapFailure !== null) {
@@ -241,7 +299,8 @@ final class CinematicPreviewSession
     }
 
     /**
-     * Confirms waiting dialogue or the highlighted choice.
+     * Acknowledges the notice page on screen, or confirms waiting dialogue
+     * or the highlighted choice.
      */
     public function confirm(): bool
     {
@@ -253,7 +312,7 @@ final class CinematicPreviewSession
         return $this->presentation->moveHighlight($delta);
     }
 
-    /** What waits on the author: `dialogue`, `choice`, or null. */
+    /** What waits on the author: `notice`, `dialogue`, `choice`, or null. */
     public function getWaitKind(): ?string
     {
         return $this->presentation->getWaitKind();
@@ -518,6 +577,24 @@ final class CinematicPreviewSession
         return $this->lastActiveKeys;
     }
 
+    /** Whether the session is captured ({@see startCapture()}). */
+    public function isCaptured(): bool
+    {
+        return $this->field->isCaptured();
+    }
+
+    /**
+     * The scene at the session's clock as the captured graphical field shows
+     * it, composed by the Engine as for the game's graphical window
+     * ({@see PreviewField::composeCapturedFrame()}).
+     *
+     * @throws \LogicException When the session is not captured.
+     */
+    public function composeFrame(): SceneFrameComposition
+    {
+        return $this->field->composeCapturedFrame();
+    }
+
     /**
      * The composed picture of the scene at this moment.
      *
@@ -671,6 +748,13 @@ final class CinematicPreviewSession
         }
 
         $this->run(function () use ($seconds): void {
+            if ($this->presentation->isNoticeShown()) {
+                // The game's notice window blocks its frame loop: nothing moves until the notice is acknowledged.
+                $this->presentation->update();
+                if ($this->presentation->isNoticeShown()) {
+                    return;
+                }
+            }
             $session = $this->session;
 
             if ($session !== null
@@ -687,6 +771,11 @@ final class CinematicPreviewSession
             // The engine's own audio upkeep, as a game frame runs it.
             $this->scene->getGame()->audioManager->update();
             $this->elapsed += $seconds;
+            // The game delivers queued notices at its frame boundary, never while dialogue holds the screen.
+            $notices = $this->scene->getPreviewGame()->notices;
+            if (! $this->presentation->isWaiting() && $notices->hasQueuedNotices()) {
+                $notices->processPendingAlerts();
+            }
             $this->rememberActiveKeys();
             $this->recordTerminalOutcome();
         });

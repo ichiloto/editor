@@ -10,8 +10,9 @@ use InvalidArgumentException;
  * The one-line form world conditions and world writes are edited in: entries
  * separated by `;`, each made of parts separated by `:`. The Engine accepts
  * any non-empty name, colons included (a completion flag such as
- * `deckers:won`), so a name or value is written with its `\`, `:` and `;`
- * escaped by a backslash, and the line splits only on unescaped separators.
+ * `deckers:won`), so a name or value is written with its `\`, `:`, `;`, `(`
+ * and `)` escaped by a backslash. Conditions opt in to grouping at the entry
+ * boundary. World writes and individual parts use flat separators.
  * {@see ConditionCodec} and {@see WorldWriteCodec} read their types' parts
  * from it.
  */
@@ -22,13 +23,14 @@ final class WorldStateLine
     }
 
     /**
-     * Splits a line into its entries, each still escaped, at every unescaped `;`.
+     * Splits a line at unescaped semicolons, keeping an opted-in group whole.
+     * The group type must start the entry, with optional whitespace and negation.
      *
      * @return list<string>
      */
-    public static function splitEntries(string $line): array
+    public static function splitEntries(string $line, ?string $groupType = null): array
     {
-        return self::splitAt($line, ';');
+        return self::splitAt($line, ';', $groupType);
     }
 
     /**
@@ -43,10 +45,10 @@ final class WorldStateLine
         return array_map(static fn(string $part): string => self::unescape(trim($part)), self::splitAt($entry, ':'));
     }
 
-    /** Writes one part with its `\`, `:` and `;` escaped, so it reads back whole. */
+    /** Writes one part with its `\`, `:`, `;`, `(` and `)` escaped, so it reads back whole. */
     public static function escape(string $part): string
     {
-        return strtr($part, ['\\' => '\\\\', ':' => '\\:', ';' => '\\;']);
+        return strtr($part, ['\\' => '\\\\', ':' => '\\:', ';' => '\\;', '(' => '\\(', ')' => '\\)']);
     }
 
     /**
@@ -60,10 +62,14 @@ final class WorldStateLine
     }
 
     /** @return list<string> */
-    private static function splitAt(string $text, string $separator): array
+    private static function splitAt(string $text, string $separator, ?string $groupType = null): array
     {
         $pieces = [];
         $current = '';
+        $depth = 0;
+        $groupPrefix = $groupType === null
+            ? null
+            : '/^\s*(?:!\s*)?' . preg_quote($groupType, '/') . '\s*$/iD';
         $length = strlen($text);
         for ($index = 0; $index < $length; $index++) {
             $character = $text[$index];
@@ -72,7 +78,12 @@ final class WorldStateLine
                 $current .= $character . $text[++$index];
                 continue;
             }
-            if ($character === $separator) {
+            if ($character === '(' && ($depth > 0 || ($groupPrefix !== null && preg_match($groupPrefix, $current) === 1))) {
+                $depth++;
+            } elseif ($character === ')' && $depth > 0) {
+                $depth--;
+            }
+            if ($character === $separator && $depth === 0) {
                 $pieces[] = $current;
                 $current = '';
                 continue;
@@ -88,8 +99,8 @@ final class WorldStateLine
     private static function unescape(string $part): string
     {
         return (string) preg_replace_callback('/\\\\(.?)/s', static function (array $match): string {
-            if (! in_array($match[1], ['\\', ':', ';'], true)) {
-                throw new InvalidArgumentException(sprintf('"\\%s" escapes nothing; write \\: for a colon, \\; for a semicolon and \\\\ for a backslash.', $match[1]));
+            if (! in_array($match[1], ['\\', ':', ';', '(', ')'], true)) {
+                throw new InvalidArgumentException(sprintf('"\\%s" escapes nothing; write \\: for a colon, \\; for a semicolon, \\( and \\) for parentheses and \\\\ for a backslash.', $match[1]));
             }
 
             return $match[1];

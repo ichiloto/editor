@@ -4,8 +4,19 @@ namespace Ichiloto\Editor\Debug;
 
 final class Debug
 {
+    private static ?string $logDirectory = null;
+
     private function __construct()
     {
+    }
+
+    /**
+     * Sends the Editor's logs to a directory the running process owns, or,
+     * with null, back to `logs` under the working directory.
+     */
+    public static function setLogDirectory(?string $logDirectory): void
+    {
+        self::$logDirectory = $logDirectory;
     }
 
     public static function log(mixed $message, array $context = []): void
@@ -98,7 +109,7 @@ final class Debug
 
     private static function getLogFilePath(string $filename): string
     {
-        return getcwd() . DIRECTORY_SEPARATOR . "logs" . DIRECTORY_SEPARATOR . $filename;
+        return (self::$logDirectory ?? getcwd() . DIRECTORY_SEPARATOR . "logs") . DIRECTORY_SEPARATOR . $filename;
     }
 
     private static function ensureLogDirectoryExists(string $logFilePath): bool

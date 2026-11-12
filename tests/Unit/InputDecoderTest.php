@@ -65,6 +65,24 @@ it('decodes utf-8 graphemes as single tokens', function () {
   expect(decodeBytes(new InputDecoder(), '⚔ab'))->toBe(['⚔', 'a', 'b']);
 });
 
+it('decodes adjacent pictographs as one token each', function () {
+  expect(decodeBytes(new InputDecoder(), "♣♣♥♥\r😀😀"))->toBe(['♣', '♣', '♥', '♥', "\r", '😀', '😀']);
+});
+
+it('keeps a combining mark with its base and waits for an incomplete UTF-8 tail', function () {
+  $decoder = new InputDecoder();
+
+  expect(decodeBytes($decoder, "e\u{0301}x\n\xE2\x99"))->toBe(["e\u{0301}", 'x', "\n"])
+    ->and(decodeBytes($decoder, "\xA3"))->toBe(['♣']);
+});
+
+it('drops a junk byte that survives a poll and decodes what follows', function () {
+  $decoder = new InputDecoder();
+
+  expect(decodeBytes($decoder, "\xFFa"))->toBe([])
+    ->and($decoder->drain())->toBe(['a']);
+});
+
 it('keeps tokens ordered across a mixed burst', function () {
   expect(decodeBytes(new InputDecoder(), "x\033[Ay\033[<0;3;4mz"))
     ->toBe(['x', "\033[A", 'y', "\033[<0;3;4m", 'z']);

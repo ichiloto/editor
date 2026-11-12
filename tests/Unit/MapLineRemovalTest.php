@@ -156,6 +156,21 @@ it('lands saves on the author\'s cell when it is reachable, and refuses one that
         ->toThrow(RuntimeException::class, 'Saves cannot land at x 0, y 1: the player cannot reach that cell.');
 });
 
+it('declares no save step and needs no landing when the player reaches nothing on or beyond the removed lines', function () {
+    $root = mapLineRemovalProject();
+    $manifest = (string) file_get_contents($root . '/assets/Data/save-compatibility.php');
+    // Columns added past the east wall, where the player cannot go: adding them moves nothing either.
+    $added = planLineInsertion($root, 'x', 6, 2);
+    expect($added->notes)->toBe(['No save moves: the player reaches nothing at or beyond column 7 today.']);
+    $added->apply();
+    $plan = planLineRemoval($root, 'x', 6, 1);
+    expect($plan->notes)->toBe(['No save moves: the player reaches nothing at or beyond column 7 today.'])
+        ->and($plan->edit->landing)->toBeNull();
+    $plan->apply();
+
+    expect((string) file_get_contents($root . '/assets/Data/save-compatibility.php'))->toBe($manifest);
+});
+
 it('says existing saves are not migrated, and needs no landing, when the project has no save manifest', function () {
     $root = mapLineRemovalProject();
     unlink($root . '/assets/Data/save-compatibility.php');

@@ -204,3 +204,80 @@ it('sets how a battler meets the surface: its body rises or sinks by its elevati
     setBattlerRow($session, $index, 'grounding.bakedShadow', 'true');
     expect(fn() => $session->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class, 'stands at the height it was painted');
 });
+
+
+it('authors movement roles through the existing shared role picker and binding writer', function (string $role) {
+    $root = battlerArtProject();
+    $session = EditorSession::open($root);
+    $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
+    setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
+    $heading = array_find($session->readDatabaseRecord('battler_enemies', $index)['rows'], static fn(array $row): bool => ($row['listHeading'] ?? false) === true);
+    $session->addDatabaseItem('battler_enemies', $index, $heading['key'], true);
+    expect(readBattlerRow($session, $index, 'pose0Role')['options'])->toContain('move', 'return');
+    setBattlerRow($session, $index, 'pose0Role', $role);
+    setBattlerRow($session, $index, 'pose0Image', 'Graphics/Enemies/BatAttack.png');
+    if ($role === 'return') { setBattlerRow($session, $index, 'pose0Loop', 'false'); }
+    $session->saveDatabase('battler_enemies');
+    $pose = BattlerBindings::load($root . '/assets')->enemyPoses['Regular Bat']->getPose(
+        \Ichiloto\Engine\Battle\Presentation\BattlePoseRole::from($role));
+    expect($pose->asset)->toBe('Graphics/Enemies/BatAttack.png')->and($pose->loop)->toBe($role === 'move');
+})->with(['move', 'return']);
+
+it('round trips contact points and signed body-unit pose reach with undo and save refusal', function () {
+    $root = battlerArtProject();
+    $session = EditorSession::open($root);
+    $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
+    setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
+    $heading = array_find($session->readDatabaseRecord('battler_enemies', $index)['rows'], static fn(array $row): bool => ($row['listHeading'] ?? false) === true);
+    $session->addDatabaseItem('battler_enemies', $index, $heading['key'], true);
+    setBattlerRow($session, $index, 'pose0Role', 'attack');
+    setBattlerRow($session, $index, 'pose0Image', 'Graphics/Enemies/BatAttack.png');
+    $session->saveDatabase('battler_enemies');
+    $path = $root . '/assets/' . BattlerBindings::FILE;
+    $before = file_get_contents($path);
+    setBattlerRow($session, $index, 'strikePoint', '0.25, 0.75');
+    setBattlerRow($session, $index, 'pose0Reach', '0.6, -0.4');
+    $session->undo(); $session->undo();
+    expect($session->listUnsavedChanges())->toBe([]);
+    $session->redo(); $session->redo(); $session->saveDatabase('battler_enemies');
+    $saved = file_get_contents($path);
+    $binding = BattlerBindings::load($root . '/assets');
+    expect($binding->enemyStrikePoints['Regular Bat']->toArray())->toBe(['x' => .25, 'y' => .75])
+        ->and($binding->enemyPoses['Regular Bat']->roles['attack']->reach->toArray())->toBe(['x' => .6, 'y' => -.4]);
+    $reloaded = EditorSession::open($root);
+    setBattlerRow($reloaded, $index, 'pose0Reach', '-0.1, 0');
+    expect(fn() => $reloaded->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class)
+        ->and(file_get_contents($path))->toBe($saved);
+    $reloaded->undo();
+    setBattlerRow($reloaded, $index, 'pose0Reach', '');
+    setBattlerRow($reloaded, $index, 'strikePoint', '');
+    $reloaded->saveDatabase('battler_enemies');
+    expect(file_get_contents($path))->toBe($before);
+});
+
+
+it('round trips optional movement entry and exit cells through the existing pose editor', function () {
+    $root = battlerArtProject(); $session = EditorSession::open($root);
+    $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
+    setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
+    $heading = array_find($session->readDatabaseRecord('battler_enemies', $index)['rows'], static fn(array $row): bool => ($row['listHeading'] ?? false) === true);
+    $session->addDatabaseItem('battler_enemies', $index, $heading['key'], true);
+    setBattlerRow($session, $index, 'pose0Role', 'move');
+    setBattlerRow($session, $index, 'pose0Image', 'Graphics/Enemies/BatAttack.png');
+    setBattlerRow($session, $index, 'pose0Columns', '4');
+    $session->saveDatabase('battler_enemies');
+    $path = $root . '/assets/' . BattlerBindings::FILE; $before = file_get_contents($path);
+    setBattlerRow($session, $index, 'pose0EntryFrames', '0,1');
+    setBattlerRow($session, $index, 'pose0ExitFrames', '2,3');
+    $session->undo(); $session->undo(); expect($session->listUnsavedChanges())->toBe([]);
+    $session->redo(); $session->redo(); $session->saveDatabase('battler_enemies');
+    $pose = BattlerBindings::load($root . '/assets')->enemyPoses['Regular Bat']->getPose(\Ichiloto\Engine\Battle\Presentation\BattlePoseRole::MOVE);
+    expect($pose->entryFrames)->toBe([0,1])->and($pose->exitFrames)->toBe([2,3]);
+    $saved = file_get_contents($path); $reloaded = EditorSession::open($root);
+    setBattlerRow($reloaded, $index, 'pose0EntryFrames', '4');
+    expect(fn() => $reloaded->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class)->and(file_get_contents($path))->toBe($saved);
+    $reloaded->undo();
+    setBattlerRow($reloaded, $index, 'pose0EntryFrames', '');
+    setBattlerRow($reloaded, $index, 'pose0ExitFrames', '');
+    $reloaded->saveDatabase('battler_enemies'); expect(file_get_contents($path))->toBe($before);
+});

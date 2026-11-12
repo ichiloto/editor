@@ -6,14 +6,20 @@ namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\BattleConditionEffectFields;
+use Ichiloto\Editor\Database\BattleConditionGroup;
 use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Events\ScriptCommandUses;
 use Ichiloto\Engine\Animations\Field\FieldEffectManager;
+use Ichiloto\Engine\Animations\SourceEffectAnchor;
+use Ichiloto\Engine\Battle\BattleTurnTimings;
+use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Presentation\PartyStageSelection;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
@@ -25,7 +31,8 @@ use Throwable;
  * each consumer: battle animations' source and target effects in battle;
  * the field presentation's cue and action prompt effects, maps' field
  * effects and tileset pieces' effects on the field; inns' rest stages as a
- * stage of their own. Battle and field effects are compiled for both the
+ * stage of their own; the effects battle conditions play, by the Engine's
+ * rule for their group, as the editor holds them, unsaved edits included. Battle and field effects are compiled for both the
  * terminal and the graphical presentation, so a sequence that only one
  * renderer would refuse is still found; graphical stages use stage admission,
  * while a paired Terminal sequence retains its own cues and tracks.
@@ -33,6 +40,9 @@ use Throwable;
 final class EffectValidator
 {
     private const string FIELD_PRESENTATION = 'assets/Data/Presentation/field.php';
+
+    /** The use context of an effect a battle condition group binds, followed by the group ({@see findUses()}). */
+    public const string CONDITION_CONTEXT = 'condition:';
 
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
@@ -44,6 +54,11 @@ final class EffectValidator
 
         foreach ($uses as $effect => $contexts) {
             foreach ($contexts as $context => $places) {
+                if (str_starts_with($context, self::CONDITION_CONTEXT)) {
+                    $group = BattleConditionGroup::from(substr($context, strlen(self::CONDITION_CONTEXT)));
+                    array_push($issues, ...self::checkConditionEffect($catalogs, $group, $effect, $places));
+                    continue;
+                }
                 if ($context === 'stage') {
                     try {
                         $catalogs->loadEffectTimeline($effect, forStage: true);
@@ -67,6 +82,87 @@ final class EffectValidator
                                 count($places) > 1 ? sprintf(' Also used by %d more.', count($places) - 1) : ''));
                     }
                 }
+            }
+        }
+
+        return [...$issues, ...self::checkSourceEffectAnchors($workspace), ...self::checkConditionBindings($workspace)];
+    }
+
+    /**
+     * Checks an effect a battle condition group binds, by the Engine's rule for the group in each presentation.
+     *
+     * @param list<string> $places The bindings that name it.
+     * @return Issue[]
+     */
+    private static function checkConditionEffect(ProjectCatalogs $catalogs, BattleConditionGroup $group, string $effect, array $places): array
+    {
+        $also = count($places) > 1 ? sprintf(' Also used by %d more.', count($places) - 1) : '';
+        $fallback = $group->isLooping() ? 'the condition shows only its badge' : 'the interception shows the ordinary miss';
+
+        return array_map(static fn(array $failure): Issue => Issue::error($places[0], $failure['message'],
+            sprintf('Fix assets/Animations/%s, or choose another effect. Until then %s.%s', $effect, $fallback, $also)),
+            BattleConditionEffectFields::findTimelineFailures($group, $effect,
+                static fn(string $id, EffectPresentation $presentation): mixed => $catalogs->loadConditionTimeline($id, $presentation, $group)));
+    }
+
+    /**
+     * Checks each battle condition group as the Engine's binding boundary reads it, and that each state binding
+     * names a state the project defines: a binding to a renamed or deleted state never plays.
+     *
+     * @return Issue[]
+     */
+    private static function checkConditionBindings(ProjectWorkspace $workspace): array
+    {
+        $states = new ReferenceCatalog($workspace)->valuesFor('states');
+        $issues = [];
+        foreach (BattleConditionGroup::cases() as $group) {
+            $bindings = $workspace->config?->getRecord($group->getConfigPath())->get('value');
+            try {
+                BattleConditionEffectFields::assertShape($group, $bindings, $workspace->catalogs->getAssetRoot());
+            } catch (Throwable $failure) {
+                $issues[] = Issue::error('config.php: ' . $group->getConfigPath(), 'Its battle condition effects are invalid: ' . $failure->getMessage(),
+                    'Choose each binding from the pickers in Configuration. Until then none of the group\'s effects play.');
+                continue;
+            }
+            if ($group === BattleConditionGroup::STAT_STAGES) { continue; }
+            foreach ((array) $bindings as $state => $effect) {
+                if (! in_array((string) $state, $states, true)) {
+                    $issues[] = Issue::error($group->describeBinding((string) $state, null), sprintf('Its effect %s is bound to state %s, which the project does not define.',
+                        strval($effect), $state), 'Choose a project state for the binding, or remove it. Until then the binding plays nothing.');
+                }
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Checks each animation whose caster effect starts at the target phase, as the Engine's graphical battle
+     * plans it: the caster effect then overlaps the target, on battlefield tracks, so a source cinematic stage,
+     * which needs its own sequential phase, is refused with the Engine's own reason. An effect that does not
+     * compile at all is reported with its other battle uses.
+     *
+     * @return Issue[]
+     */
+    private static function checkSourceEffectAnchors(ProjectWorkspace $workspace): array
+    {
+        $issues = [];
+        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
+            $effect = $animation->get('sourceEffect');
+            if ($animation->get('sourceEffectAnchor') !== SourceEffectAnchor::TARGET->value || ! is_string($effect) || $effect === '') {
+                continue;
+            }
+            try {
+                $source = $workspace->catalogs->loadEffectTimeline($effect, true, EffectPresentation::GRAPHICAL);
+            } catch (Throwable) {
+                continue;
+            }
+            try {
+                new BattleCommandTimeline(BattleTurnTimings::fromTotalDuration(1.0), $source, sourceEffectAnchor: SourceEffectAnchor::TARGET);
+            } catch (\InvalidArgumentException $refusal) {
+                $issues[] = Issue::error(sprintf('assets/Data/animations.php: %s sourceEffectAnchor', strval($animation->get('name'))),
+                    sprintf('Its caster effect %s cannot start at the target phase: %s', $effect, $refusal->getMessage()),
+                    'Start it in its own phase (source), or choose a caster effect played on battlefield tracks.');
             }
         }
 
@@ -111,11 +207,12 @@ final class EffectValidator
      * Returns where the project plays each effect, by context: battle
      * animations' source and target effects in battle; the field
      * presentation's cues and action prompt, maps' field effects and tileset
-     * pieces' effects on the field; and the rest stage of Sleep events, `inn`
-     * commands at any depth and the project's default inn presentation.
+     * pieces' effects on the field; the rest stage of Sleep events, `inn`
+     * commands at any depth and the project's default inn presentation; and
+     * the effects battle conditions play, by group.
      *
      * @param Issue[] $issues Receives what could not be read.
-     * @return array<string, array{battle?: list<string>, field?: list<string>, stage?: list<string>}>
+     * @return array<string, array{battle?: list<string>, field?: list<string>, stage?: list<string>, 'condition:states'?: list<string>, 'condition:statStages'?: list<string>, 'condition:interceptions'?: list<string>}>
      */
     public static function findUses(ProjectWorkspace $workspace, array &$issues = []): array
     {
@@ -124,17 +221,21 @@ final class EffectValidator
             $uses[$effect][$battle ? 'battle' : 'field'][] = $where;
         };
 
-        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
-            foreach (['sourceEffect', 'targetEffect'] as $field) {
-                $effect = $animation->get($field);
-                if (is_string($effect) && $effect !== '') {
-                    $use($effect, true, sprintf('assets/Data/animations.php: %s %s', strval($animation->get('name')), $field));
-                }
-            }
+        foreach (self::findBattleUses($workspace) as $effect => $places) {
+            $uses[$effect]['battle'] = $places;
         }
 
         foreach (self::findStageUses($workspace, $issues) as $effect => $places) {
             $uses[$effect]['stage'] = $places;
+        }
+
+        // Malformed bindings name no effect here; checkConditionBindings() reports them.
+        foreach (BattleConditionGroup::cases() as $group) {
+            foreach ($group->listBindings($workspace->config?->getRecord($group->getConfigPath())->get('value')) as $binding) {
+                if (is_string($binding['effect']) && preg_match(EffectTimelineLibrary::ID_PATTERN, $binding['effect']) === 1) {
+                    $uses[$binding['effect']][self::CONDITION_CONTEXT . $group->value][] = $group->describeBinding($binding['subject'], $binding['role']);
+                }
+            }
         }
 
         try {
@@ -174,6 +275,28 @@ final class EffectValidator
             foreach ($tileset->pieces as $piece) {
                 if ($piece->effect !== null) {
                     $use($piece->effect, false, sprintf('assets/%s/%s.php piece %s', Tileset::DIRECTORY, $id, $piece->id));
+                }
+            }
+        }
+
+        return $uses;
+    }
+
+    /**
+     * Returns where battle plays each effect: the battle animations that
+     * bind it as their source or target effect, which is also how battle
+     * selects an ordinary action's staged cut-in and its impact.
+     *
+     * @return array<string, list<string>> Effect id to the animation fields that bind it.
+     */
+    public static function findBattleUses(ProjectWorkspace $workspace): array
+    {
+        $uses = [];
+        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
+            foreach (['sourceEffect', 'targetEffect'] as $field) {
+                $effect = $animation->get($field);
+                if (is_string($effect) && $effect !== '') {
+                    $uses[$effect][] = sprintf('assets/Data/animations.php: %s %s', strval($animation->get('name')), $field);
                 }
             }
         }

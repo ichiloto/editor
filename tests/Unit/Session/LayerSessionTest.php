@@ -34,9 +34,11 @@ it('lists a map\'s tile layers with their files and settings as the Engine reads
     $map = EditorSession::open($root)->readMap('test-map');
 
     expect($map['tileLayers'])->toBe(['layers' => [
-        ['name' => 'floor', 'order' => 1, 'file' => 'graphics/01.floor.tiles.php', 'offset' => [0.0, 0.0], 'movesWith' => null, 'owner' => null],
-        ['name' => 'decor', 'order' => 2, 'file' => 'graphics/02.decor.tiles.php', 'offset' => [0.0, -0.5], 'movesWith' => 'buildings', 'owner' => 'buildings'],
-    ], 'issue' => null]);
+        ['name' => 'floor', 'order' => 1, 'file' => 'graphics/01.floor.tiles.php', 'offset' => [0.0, 0.0], 'inheritedOffset' => [0.0, 0.0],
+            'overridesTileset' => false, 'movesWith' => null, 'owner' => null],
+        ['name' => 'decor', 'order' => 2, 'file' => 'graphics/02.decor.tiles.php', 'offset' => [0.0, -0.5], 'inheritedOffset' => [0.0, 0.0],
+            'overridesTileset' => true, 'movesWith' => 'buildings', 'owner' => 'buildings'],
+    ], 'issue' => null, 'offsetLimit' => 0.5]);
 });
 
 it('asks before a glyph layer edit that changes collisions, then applies it confirmed as one undo step', function () {
@@ -92,9 +94,11 @@ it('serves tile layer editing over the line protocol, refusing malformed request
         ->and($request(5, 'tileLayer.settings', ['map' => 'test-map', 'revision' => $revision(), 'name' => 'carpets',
             'offset' => [0.5, 0], 'movesWith' => 'buildings'])['result']['status'])->toBe('applied')
         ->and($request(6, 'tileLayer.settings', ['map' => 'test-map', 'revision' => $revision(), 'name' => 'carpets',
-            'offset' => [0.25, 0], 'movesWith' => null])['error']['kind'])->toBe('refusal')
+            'offset' => [0.75, 0], 'movesWith' => null])['error']['kind'])->toBe('refusal')
         ->and($request(7, 'tileLayer.settings', ['map' => 'test-map', 'revision' => $revision(), 'name' => 'carpets', 'offset' => [0]])['error'])
-            ->toBe(['kind' => 'request', 'message' => '"offset" must be two numbers, across and down.'])
+            ->toBe(['kind' => 'request', 'message' => '"offset" must be two numbers, across and down, or null to inherit the tileset\'s.'])
+        ->and($request(71, 'tileLayer.settings', ['map' => 'test-map', 'revision' => $revision(), 'name' => 'decor',
+            'offset' => null, 'movesWith' => null])['result']['status'])->toBe('applied')
         ->and($request(8, 'tileLayer.remove', ['map' => 'test-map', 'revision' => $revision(), 'name' => 'decor'])['result']['layer'])->toBeNull()
         ->and($request(9, 'layer.decoration', ['map' => 'test-map', 'revision' => $revision(), 'layer' => 'map:4'])['error']['kind'])->toBe('request')
         ->and($request(10, 'map.save', ['map' => 'test-map'])['result']['saved'])->toBe('test-map');

@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Canvas;
 
 use Closure;
 use Ichiloto\Editor\History\Command;
+use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\ProjectMap;
@@ -81,9 +82,24 @@ final class PiecePlacer
     }
 
     /**
+     * The top-left cell of a copy standing on a cell: the cell an author
+     * points at is where the piece stands, the top-left of its ground
+     * footprint, and its overhang rises from there over what stands behind
+     * it, such as a bookcase's top over the wall face. A piece without an
+     * overhang stands with its top-left on the cell.
+     *
+     * @return array{x: int, y: int}
+     */
+    public static function getOriginAt(TilesetPiece $piece, int $x, int $y): array
+    {
+        return ['x' => $x, 'y' => $y - $piece->overhang];
+    }
+
+    /**
      * The top-left cells an item piece is stamped at across the area from one
-     * corner to the other: whole copies only, so an area smaller than the
-     * piece holds one copy, at its top-left.
+     * corner to the other, the area being where the copies stand
+     * ({@see getOriginAt()}): whole copies only, so an area smaller than the
+     * piece holds one copy, standing at its top-left.
      *
      * @param array{x: int, y: int} $from
      * @param array{x: int, y: int} $to
@@ -102,7 +118,7 @@ final class PiecePlacer
         $origins = [];
         foreach ($span($from['y'], $to['y'], $piece->height) as $y) {
             foreach ($span($from['x'], $to['x'], $piece->width) as $x) {
-                $origins[] = ['x' => $x, 'y' => $y];
+                $origins[] = self::getOriginAt($piece, $x, $y);
             }
         }
 
@@ -208,24 +224,29 @@ final class PiecePlacer
      * @throws MapSourceRefusal When the piece is connected, its layer is missing or a copy falls off the map.
      */
     public static function stampArea(ProjectMap $map, TilesetPiece $piece, array $from, array $to, ?string $fallbackColor,
-        string $label = 'Piece stamp'): array
+        string $label = 'Piece stamp', PieceOwnership $ownership = PieceOwnership::GAMEPLAY): array
     {
         $origins = self::getAreaOrigins($piece, $from, $to);
 
-        return ['command' => self::stampOrigins($map, $piece, $origins, $fallbackColor, $label), 'origins' => $origins];
+        return ['command' => self::stampOrigins($map, $piece, $origins, $fallbackColor, $label, $ownership), 'origins' => $origins];
     }
 
     /**
      * Stamps whole copies of an item piece with their top-left cells at the
      * given origins, as one undo step, by the rules of {@see stampArea()}.
+     * A graphical stamp lays the copies' art alone ({@see layArt()}).
      *
      * @param list<array{x: int, y: int}> $origins
      * @return ?Command The applied, unrecorded edit, or null when it changed nothing.
-     * @throws MapSourceRefusal When the piece is connected, its layer is missing or a copy falls off the map.
+     * @throws MapSourceRefusal When the piece is connected, its layer is missing, a copy falls off the map, or a
+     *     graphical copy's art does not fit the footprint the map has.
      */
     public static function stampOrigins(ProjectMap $map, TilesetPiece $piece, array $origins, ?string $fallbackColor,
-        string $label = 'Piece stamp'): ?Command
+        string $label = 'Piece stamp', PieceOwnership $ownership = PieceOwnership::GAMEPLAY): ?Command
     {
+        if ($ownership === PieceOwnership::GRAPHICAL) {
+            return self::layArt($map, $piece, $origins, $label);
+        }
         if ($piece->connects !== null) {
             throw new MapSourceRefusal(sprintf('%s is drawn as connected cells, not stamped. Nothing was changed.', $piece->name));
         }
@@ -253,7 +274,7 @@ final class PiecePlacer
                 foreach (array_keys($symbols) as $column) {
                     if (! $map->hasLayerCell($layer, $x + $column, $y + $row)) {
                         throw new MapSourceRefusal(sprintf('%s (%d x %d) does not fit at (%d, %d): the map has no cell at (%d, %d). Nothing was changed.',
-                            $piece->name, $piece->width, $piece->height, $x, $y, $x + $column, $y + $row));
+                            $piece->name, $piece->width, $piece->height, $x, $y + $piece->overhang, $x + $column, $y + $row));
                     }
                 }
             }
@@ -274,9 +295,102 @@ final class PiecePlacer
         $tilesAfter = $map->getTileLayerSources();
         [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, $label);
 
-        return $stroke->hasChanges() || $tilesAfter !== $tilesBefore
+        $stamp = $stroke->hasChanges() || $tilesAfter !== $tilesBefore
             ? CanvasEditor::combineStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter)
             : null;
+
+        return SavePointMarks::addCollision($map, $piece, $stamp, $origins, $label);
+    }
+
+    /**
+     * Lays the art of an item piece's copies and nothing else, as one undo
+     * step: its tiles on its tile layers, as its stack orders them when it has
+     * one, `0` entries leaving their cells as they are. Every glyph, its colour
+     * and the map's collision stay exactly as authored, so the piece's art may
+     * replace another's over a footprint the author drew in their own glyphs.
+     * The art must fit that footprint first ({@see PieceArtFootprint}); what
+     * it writes is {@see planArt()}'s plan, which its preview shows.
+     *
+     * @param list<array{x: int, y: int}> $origins
+     * @return ?Command The applied, unrecorded edit, or null when it changed nothing.
+     * @throws MapSourceRefusal When the art does not fit the map's footprint or a tile layer cannot take it; nothing is changed.
+     */
+    private static function layArt(ProjectMap $map, TilesetPiece $piece, array $origins, string $label): ?Command
+    {
+        $before = $map->getTileLayerSources();
+        // Every layer is written before anything changes, so a refusal leaves the map as it was.
+        $map->writeTileCells(self::planArt($map, $piece, $origins));
+        $after = $map->getTileLayerSources();
+        if ($after === $before) {
+            return null;
+        }
+
+        return new GenericCommand($label,
+            static fn() => $map->restoreTileLayerSources($after),
+            static fn() => $map->restoreTileLayerSources($before),
+        );
+    }
+
+    /**
+     * What laying the art of an item piece's copies writes, changing nothing:
+     * each cell's entry on each tile layer, as its stack orders them when it
+     * has one, cells its `0` entries leave as they are left out. A graphical
+     * placement writes exactly this ({@see layArt()}), and its preview shows
+     * exactly this, so the two never disagree.
+     *
+     * @param list<array{x: int, y: int}> $origins Each copy's top-left, overhang included ({@see getOriginAt()}).
+     * @return array<string, list<array{x: int, y: int, entry: string}>> The entries by tile layer name, in copy order.
+     * @throws MapSourceRefusal When the art does not fit the footprint the map has ({@see PieceArtFootprint}) or its
+     *     stack cannot order it.
+     */
+    public static function planArt(ProjectMap $map, TilesetPiece $piece, array $origins): array
+    {
+        PieceArtFootprint::assertFits($map, $piece, $origins);
+        $stack = self::findStack($map, $piece);
+        if ($stack !== null) {
+            return self::layStacked($map, $piece, $stack, $origins);
+        }
+        $cells = [];
+        foreach ($origins as ['x' => $x, 'y' => $y]) {
+            foreach ($piece->tiles as $layer => $rows) {
+                foreach ($rows as $row => $entries) {
+                    foreach ($entries as $column => $entry) {
+                        if ($entry !== (string) TileId::EMPTY) {
+                            $cells[$layer][] = ['x' => $x + $column, 'y' => $y + $row, 'entry' => $entry];
+                        }
+                    }
+                }
+            }
+        }
+
+        return $cells;
+    }
+
+    /**
+     * The cells the art of an item piece's copies covers: each cell where one
+     * of its tile layers has a tile, in row order, whether or not the art
+     * fits there. A preview outlines them.
+     *
+     * @param list<array{x: int, y: int}> $origins Each copy's top-left, overhang included ({@see getOriginAt()}).
+     * @return list<array{x: int, y: int}>
+     */
+    public static function getArtCells(TilesetPiece $piece, array $origins): array
+    {
+        $cells = [];
+        foreach ($origins as ['x' => $x, 'y' => $y]) {
+            foreach ($piece->tiles as $rows) {
+                foreach ($rows as $row => $entries) {
+                    foreach ($entries as $column => $entry) {
+                        if ($entry !== (string) TileId::EMPTY) {
+                            $cells[($y + $row) . ',' . ($x + $column)] = ['x' => $x + $column, 'y' => $y + $row];
+                        }
+                    }
+                }
+            }
+        }
+        uasort($cells, static fn(array $a, array $b): int => [$a['y'], $a['x']] <=> [$b['y'], $b['x']]);
+
+        return array_values($cells);
     }
 
     /** The stack the piece is laid on in the map's tileset, or null when it is stamped as authored. */
