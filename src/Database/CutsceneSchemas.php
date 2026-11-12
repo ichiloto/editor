@@ -9,6 +9,7 @@ use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Timelines\BattleMotionAnchor;
 use Ichiloto\Engine\Animations\Timelines\BattleMotionSpace;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectTrackType;
 use Ichiloto\Engine\Animations\Timelines\EffectAnchorLifetime;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
@@ -68,23 +69,11 @@ final class CutsceneSchemas
      */
     public const string CUES_KEY = 'cues';
 
-    /**
-     * The battle effect track that moves the whole battlefield, as the Engine's
-     * `BattleFieldMotionTrack` reads it; the Engine names it only inline.
-     */
-    public const string FIELD_MOTION_TRACK = 'field-motion';
+    /** The battle effect track that moves the whole battlefield, by the Engine's name for it. */
+    public const string FIELD_MOTION_TRACK = EffectTrackType::FIELD_MOTION->value;
 
-    /**
-     * The battle effect track that moves the caster or the selected targets, as the Engine's
-     * `BattleBattlerMotionTrack` reads it.
-     */
-    public const string BATTLER_MOTION_TRACK = 'battler-motion';
-
-    /**
-     * The battle effect tracks only the graphical battle draws, as the Engine's effect validator scopes
-     * them: authored in the graphical editor, and always of the `graphical` presentation.
-     */
-    private const array GRAPHICAL_TRACK_TYPES = ['trail', 'tether', self::FIELD_MOTION_TRACK, self::BATTLER_MOTION_TRACK];
+    /** The battle effect track that moves the caster or the selected targets, by the Engine's name for it. */
+    public const string BATTLER_MOTION_TRACK = EffectTrackType::BATTLER_MOTION->value;
 
     /** The payload key a summon stage's subjects are edited under. */
     public const string STAGE_SUBJECTS_KEY = 'stage.subjects';
@@ -772,6 +761,18 @@ final class CutsceneSchemas
     }
 
     /**
+     * The battle effect tracks only the graphical battle draws, as the Engine scopes them: authored in the
+     * graphical editor, and always of the `graphical` presentation.
+     *
+     * @return list<string>
+     */
+    private static function getGraphicalTrackTypes(): array
+    {
+        return array_values(array_map(static fn(EffectTrackType $type): string => $type->value,
+            array_filter(EffectTrackType::cases(), static fn(EffectTrackType $type): bool => $type->requiresGraphicalPresentation())));
+    }
+
+    /**
      * Returns the track list of an effect timeline: the keys every track
      * reads, an image track's sheet and cells as its own rows, and each
      * track's keyframes as a nested list of the keys its type reads.
@@ -798,7 +799,7 @@ final class CutsceneSchemas
             singular: 'track',
             fields: [
                 new RecordField('id', 'Id'),
-                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake', ...($graphical ? self::GRAPHICAL_TRACK_TYPES : [])]),
+                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake', ...($graphical ? self::getGraphicalTrackTypes() : [])]),
                 new RecordField('presentation', 'Presentation',
                     options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
                     removeWhenEmpty: true, displayDefault: 'all'),
@@ -832,7 +833,7 @@ final class CutsceneSchemas
                     self::FIELD_MOTION_TRACK => $motionSamples, self::BATTLER_MOTION_TRACK => $motionSamples] : []),
             ],
             prepareEdit: static function (array $entry, string $field): array {
-                if ($field === 'type' && in_array($entry['type'] ?? null, self::GRAPHICAL_TRACK_TYPES, true)) {
+                if ($field === 'type' && in_array($entry['type'] ?? null, self::getGraphicalTrackTypes(), true)) {
                     unset($entry['presentation']);
                 }
 
