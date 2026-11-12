@@ -56,9 +56,10 @@ final class PreviewCampaign
         }
         $assetRoot = $projectRoot . '/assets';
         $game->bindGameLoader(new GameLoader($game, $actors, $items, $assetRoot));
-        // This Game's own save pipeline, never the process-wide one: it reads the one file it is given. The Editor
-        // never loads a project's PHP classes, so the manifest resolves a migration class only when the save needs
-        // that step; a save that does is refused by the Engine, naming the class it could not find.
+        // This Game's own save pipeline, never the process-wide one: it reads the one file it is given. Whoever
+        // starts the Editor decides whether the project's own classes can be loaded (the Console registers them),
+        // so the manifest resolves a migration class only when the save needs that step; where one is needed and
+        // cannot be loaded, the Engine refuses the save, naming the class.
         $manifest = SaveCompatibilityManifest::fromProjectRoot($projectRoot,
             migrationResolution: ContentMigrationResolution::WHEN_REQUIRED);
         $config = (new SaveManager($game, compatibilityManifest: $manifest))->loadSaveFile($path)->config;

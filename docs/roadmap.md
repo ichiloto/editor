@@ -389,11 +389,15 @@ Done on Engine `156840cd` and `06ecb262` (12 November):
   `NoticePageModel`.
 
 Remaining, waiting on the Engine:
-- [x] Decoding a save without the project's classes (Engine `06ecb262`). The
+- [x] Saves and the project's migration classes (Engine `06ecb262`). The
   preview builds its save pipeline with
-  `ContentMigrationResolution::WHEN_REQUIRED`, so a save at the project's
-  current content version restores without the project's migration classes,
-  and an older save is refused naming the class it needs.
+  `ContentMigrationResolution::WHEN_REQUIRED`: a save at the project's
+  current content version restores whether or not the project's migration
+  classes can be loaded, and an older save needs them (the Console registers
+  a project's classes before it starts the Editor) or is refused naming the
+  class.
+- [x] The preview installs the project's control bindings, so the hints of a
+  dialogue or notice name the project's keys instead of "Unbound".
 - [ ] GUI: choosing the save a preview or capture starts from.
 - [ ] Capture labels. The session's capture composes no sign labels; the map
   review prepares them through the packaged renderer (`StillLabelPreparation`),

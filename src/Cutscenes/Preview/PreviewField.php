@@ -12,6 +12,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\IO\Console\Console;
+use Ichiloto\Engine\IO\InputManager;
 use Ichiloto\Engine\Progression\WorldAbilityCatalog;
 use Ichiloto\Engine\Util\Stores\ActorStore;
 use Ichiloto\Engine\Util\Stores\ItemStore;
@@ -51,8 +52,9 @@ use Throwable;
  *
  * The Engine configuration it installs is the project's, as the game
  * installs it before a campaign: the preview's play and project settings,
- * and the project's world abilities, which world conditions and power
- * showcases read. A field opened on a save ({@see openSavedCampaign()}) also
+ * the project's world abilities, which world conditions and power
+ * showcases read, and the project's control bindings, which the control
+ * hints of a dialogue or notice name. A field opened on a save ({@see openSavedCampaign()}) also
  * installs the project's actors and items and restores the save's campaign
  * for its own Game, which it releases when it is disposed.
  */
@@ -81,6 +83,8 @@ final class PreviewField
     /** @var (Closure(string): bool)|null The capture's renderer capabilities. */
     private ?Closure $captureSupports = null;
     private bool $configured = false;
+    /** @var array<string, array<string, mixed>> The Engine's input bindings as the field found them. */
+    private array $previousBindings = [];
     /** The saved campaign the field plays, when it was opened on one. */
     private ?PreviewCampaign $campaign = null;
     /** Every Engine configuration the field may install; each is given back as it was found. */
@@ -568,6 +572,7 @@ final class PreviewField
                 ConfigStore::remove($class);
             }
         }
+        InputManager::setBindings($this->previousBindings);
 
         $this->configured = false;
     }
@@ -635,6 +640,16 @@ final class PreviewField
             ConfigStore::put(WorldAbilityCatalog::class, WorldAbilityCatalog::fromProject($this->projectRoot . '/assets'));
         } catch (Throwable $failure) {
             $this->configurationDiagnostics[] = 'The project\'s world abilities could not be read: ' . $failure->getMessage();
+        }
+        // The project's control bindings, as the game installs them, so the hints a dialogue or notice shows name the
+        // project's keys. Only the names are read: the preview takes no input through the Engine.
+        $this->previousBindings = InputManager::getBindings();
+        try {
+            // A project that authors no bindings has the Engine's own.
+            InputManager::setBindings(is_file($this->projectRoot . '/input.php')
+                ? InputManager::getProjectBindings($this->projectRoot) : []);
+        } catch (Throwable $failure) {
+            $this->configurationDiagnostics[] = 'The project\'s control bindings could not be read: ' . $failure->getMessage();
         }
         // Where the Engine writes its diagnostics belongs to the process
         // running the Editor, so the field leaves it as it found it.
