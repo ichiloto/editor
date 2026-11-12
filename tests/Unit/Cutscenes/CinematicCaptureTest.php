@@ -191,3 +191,44 @@ it('captures a project cinematic through the session where its preview starts, t
         ->and(fn() => $session->writeCinematicCapture(0, $folder, 40, 12, 4.0, 0.5, 30.0))
         ->toThrow(SessionRefusal::class, 'holds files');
 });
+
+/** Every character a composed frame draws as Terminal text, in order. */
+function readCapturedText(\Ichiloto\Engine\Rendering\Presentation\SceneFrameComposition $frame): string
+{
+    $text = '';
+    foreach ($frame->snapshot?->textLayers ?? [] as $layer) {
+        foreach ($layer->runs as $run) {
+            $text .= trim($run->text);
+        }
+    }
+
+    return $text;
+}
+
+it('draws no glyph for the player while staged art stands in for them, as the game\'s field does', function () {
+    $root = captureShowcaseProject();
+    $definition = CinematicDefinition::fromArrays([
+        'id' => 'stand-in', 'name' => 'Stand-in', 'startMap' => 'harbour',
+        'presentation' => ['initial' => 'field'], 'cast' => [], 'skip' => ['policy' => 'forbidden'], 'checkpoints' => [], 'finalizer' => [],
+    ], [
+        ['type' => 'wait', 'seconds' => 0.2],
+        ['type' => 'stage_actor', 'id' => 'stand-in', 'subject' => ['kind' => 'player'],
+            'sprites2d' => ['asset' => 'Graphics/Effects/glow.png', 'cells' => ['width' => 1, 'height' => 1]]],
+        ['type' => 'wait', 'seconds' => 0.4],
+    ]);
+    $preview = CinematicPreviewSession::startCapture($root, $definition, SceneFrameRaster::supports(...), captureOptions());
+
+    try {
+        // This project gives the player no graphical art, so before the stage their Terminal glyph is in the frame.
+        $before = readCapturedText($preview->composeFrame());
+        $preview->step(0.3);
+        $staged = $preview->composeFrame();
+        $stagedText = readCapturedText($staged);
+        expect($preview->failure())->toBeNull()
+            ->and(array_column($staged->sprites, 'asset'))->toContain('Graphics/Effects/glow.png')
+            ->and(mb_strlen($stagedText))->toBe(mb_strlen($before) - 1)
+            ->and(array_diff(mb_str_split($stagedText), mb_str_split($before)))->toBe([]);
+    } finally {
+        $preview->dispose();
+    }
+});

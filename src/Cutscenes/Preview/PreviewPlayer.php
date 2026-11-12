@@ -63,12 +63,15 @@ final class PreviewPlayer extends Player
      * Draws the player's Terminal glyph on their own presentation layer, as
      * the game's player does, so a graphical frame that shows them by their
      * sprite leaves that glyph cell out instead of painting it beneath them.
+     * Nothing is drawn while the player's presentation is suppressed.
      */
     public function render(): void
     {
         $scene = $this->scene ?? null;
 
-        if ($scene instanceof GameScene) {
+        // A stage that stands in for the player hides them, as in the game: their glyph would otherwise show
+        // beside the staged art.
+        if ($scene instanceof GameScene && ! ($scene->cinematicStage?->suppresses($this) ?? false)) {
             Console::withLayer($this->getGraphicalSpriteId(),
                 fn() => $scene->camera->renderOnScreen($this->sprite, $this->position));
         }
