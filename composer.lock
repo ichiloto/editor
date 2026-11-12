@@ -260,12 +260,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/ichiloto/engine.git",
-                "reference": "3d08e18fd7618371cec78ab04769ac02bd77410f"
+                "reference": "156840cd3190b3b341418ee493e291337ce8c786"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/ichiloto/engine/zipball/3d08e18fd7618371cec78ab04769ac02bd77410f",
-                "reference": "3d08e18fd7618371cec78ab04769ac02bd77410f",
+                "url": "https://api.github.com/repos/ichiloto/engine/zipball/156840cd3190b3b341418ee493e291337ce8c786",
+                "reference": "156840cd3190b3b341418ee493e291337ce8c786",
                 "shasum": ""
             },
             "require": {
@@ -308,7 +308,7 @@
                 "issues": "https://github.com/ichiloto/engine/issues",
                 "source": "https://github.com/ichiloto/engine/tree/develop"
             },
-            "time": "2026-11-11T19:30:36+00:00"
+            "time": "2026-11-12T01:19:26+00:00"
         },
         {
             "name": "league/climate",
