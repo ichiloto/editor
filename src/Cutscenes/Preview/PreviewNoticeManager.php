@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
-use Assegai\Collections\Stack;
 use Ichiloto\Engine\Core\Game;
-use Ichiloto\Engine\UI\Interfaces\ModalInterface;
 use Ichiloto\Engine\UI\Modal\ModalManager;
 use Ichiloto\Engine\UI\Modal\NoticeContent;
 
@@ -28,8 +26,7 @@ final class PreviewNoticeManager extends ModalManager
 
     public function __construct(Game $game)
     {
-        $this->game = $game;
-        $this->modals = new Stack(ModalInterface::class);
+        parent::__construct($game);
     }
 
     /** Delivers to this screen from now on. */

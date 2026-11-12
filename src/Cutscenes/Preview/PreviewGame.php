@@ -24,7 +24,9 @@ final class PreviewGame extends Game
     public function __construct()
     {
         $this->audioManager = new PreviewAudioManager($this);
-        $this->modalManager = $this->notices = new PreviewNoticeManager($this);
+        // This Game's own queue, bound before anything acquires one, as the Engine's per-Game contract asks.
+        $this->notices = new PreviewNoticeManager($this);
+        $this->bindModalManager($this->notices);
     }
 
     public function __destruct()
