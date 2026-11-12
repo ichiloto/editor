@@ -66,6 +66,18 @@ final class CutsceneSchemas
      */
     public const string CUES_KEY = 'cues';
 
+    /**
+     * The battle effect track that moves the whole battlefield, as the Engine's
+     * `BattleFieldMotionTrack` reads it; the Engine names it only inline.
+     */
+    public const string FIELD_MOTION_TRACK = 'field-motion';
+
+    /**
+     * The battle effect tracks only the graphical battle draws, as the Engine's effect validator scopes
+     * them: authored in the graphical editor, and always of the `graphical` presentation.
+     */
+    private const array GRAPHICAL_TRACK_TYPES = ['trail', 'tether', self::FIELD_MOTION_TRACK];
+
     /** The payload key a summon stage's subjects are edited under. */
     public const string STAGE_SUBJECTS_KEY = 'stage.subjects';
 
@@ -775,7 +787,7 @@ final class CutsceneSchemas
             singular: 'track',
             fields: [
                 new RecordField('id', 'Id'),
-                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake', ...($graphical ? ['trail', 'tether'] : [])]),
+                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake', ...($graphical ? self::GRAPHICAL_TRACK_TYPES : [])]),
                 new RecordField('presentation', 'Presentation',
                     options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
                     removeWhenEmpty: true, displayDefault: 'all'),
@@ -793,7 +805,8 @@ final class CutsceneSchemas
                 'text' => $anchors,
                 'flash' => $anchors,
                 'shake' => $anchors,
-                ...($graphical ? ['trail' => self::battleTrailFields(), 'tether' => self::battleTetherFields()] : []),
+                // A whole-field motion has no subject: its samples are all it holds.
+                ...($graphical ? ['trail' => self::battleTrailFields(), 'tether' => self::battleTetherFields(), self::FIELD_MOTION_TRACK => []] : []),
             ],
             variantKey: 'type',
             nestedLists: [
@@ -803,10 +816,11 @@ final class CutsceneSchemas
                 'text' => $keyframes,
                 'flash' => $keyframes,
                 'shake' => $keyframes,
-                ...($graphical ? ['trail' => self::battleTrailBands(), 'tether' => self::battleTetherSamples()] : []),
+                ...($graphical ? ['trail' => self::battleTrailBands(), 'tether' => self::battleTetherSamples(),
+                    self::FIELD_MOTION_TRACK => self::battleFieldMotionSamples()] : []),
             ],
             prepareEdit: static function (array $entry, string $field): array {
-                if ($field === 'type' && in_array($entry['type'] ?? null, ['trail', 'tether'], true)) {
+                if ($field === 'type' && in_array($entry['type'] ?? null, self::GRAPHICAL_TRACK_TYPES, true)) {
                     unset($entry['presentation']);
                 }
 
@@ -932,6 +946,28 @@ final class CutsceneSchemas
                 new RecordField('approach', 'Head Approach Fraction', InputControlType::FLOAT, removeWhenEmpty: true),
             ],
             blank: ['frame' => 0, 'x' => 0, 'y' => 0, 'targetWeight' => 0, 'rotation' => 0, 'lift' => 0],
+        );
+    }
+
+    /**
+     * The held samples of a whole-field motion track, as the Engine's `BattleFieldMotionTrack` reads them:
+     * an offset of the battlefield in logical pixels, fractions allowed, from a frame for a duration (one
+     * frame when omitted). A sample that is not enabled moves nothing.
+     */
+    private static function battleFieldMotionSamples(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'keyframes',
+            prefix: 'keyframe',
+            singular: 'field motion sample',
+            fields: [
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('duration', 'Duration', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+                new RecordField('payload.x', 'Field Offset X', InputControlType::FLOAT),
+                new RecordField('payload.y', 'Field Offset Y', InputControlType::FLOAT),
+                RecordField::boolean('visible', 'Enabled', displayDefault: 'true'),
+            ],
+            blank: ['frame' => 0, 'payload' => ['x' => 0, 'y' => 0]],
         );
     }
 

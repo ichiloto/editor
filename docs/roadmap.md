@@ -305,6 +305,26 @@ battle or the field places it, with the caster on either side. Remaining
 for the GUI editor: drawing image frames, sheet and cell picking by eye, and
 image timing; the TUI only names them.
 
+Whole-field motion (status, 12 November 2026, Engine `22954f40`): a battle
+effect's `field-motion` track is kept as written by every edit and save,
+fractional offsets, omitted durations and comments included. The graphical
+editor authors it through the shared record rows: the track type, and each
+sample's frame, duration, field offset X and Y in logical pixels and whether it
+is enabled; its timeline lane lists the samples. The TUI names the track, lists
+its samples in the Timeline pane and gains no sample form. In every record
+list, an entry of a type the editor does not offer (this track in the TUI,
+`tone` in both editors) keeps its type: changing it is refused before anything
+is written. Each save compiles through the Engine, which judges sample order,
+overlap, the `graphical` presentation and the fixed, once-playing battle
+timeline. Remaining for the GUI editor:
+- Visual controls for the samples, such as placing an offset on the battle
+  preview; today each value is typed in its row.
+- Showing the motion. The battle preview does not ask the Engine for
+  `canvas_groups`, so a moving frame draws the battlefield still and carries
+  the Engine's diagnostic. Painting canvas groups in the editor window and
+  negotiating them for the preview belong together; the still rasters already
+  draw groups.
+
 Battle effect orientation and weapon roles (Engine contract in progress,
 2026-10): a battle track may declare `facing` (`east` or `west`), the
 direction its stroke is drawn in; playback mirrors it for an attack the other

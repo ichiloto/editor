@@ -84,6 +84,7 @@ final class CutsceneOutline
                 $outline->rows[] = [
                     'depth' => 2,
                     'text' => sprintf('f%d +%d  %s', $frame, $duration, match (true) {
+                        ($track['type'] ?? null) === CutsceneSchemas::FIELD_MOTION_TRACK => self::describeFieldMotionSample($keyframe),
                         $content !== '' => $content,
                         isset($keyframe['assetId']) => 'asset ' . strval($keyframe['assetId']),
                         isset($keyframe['sourceFrame']) => self::describeImageKeyframe($keyframe),
@@ -141,6 +142,20 @@ final class CutsceneOutline
         }
 
         return $scope;
+    }
+
+    /**
+     * Returns a whole-field motion sample's offset in logical pixels as authored, fractions kept, and
+     * whether the sample is disabled.
+     *
+     * @param array<string, mixed> $sample
+     */
+    public static function describeFieldMotionSample(array $sample): string
+    {
+        $offset = is_array($sample['payload'] ?? null) ? $sample['payload'] : [];
+        $read = static fn(string $axis): string => is_int($offset[$axis] ?? null) || is_float($offset[$axis] ?? null) ? strval($offset[$axis]) : '?';
+
+        return sprintf('field offset %s, %s', $read('x'), $read('y')) . (($sample['visible'] ?? true) === false ? ' (disabled)' : '');
     }
 
     /**

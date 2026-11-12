@@ -109,6 +109,25 @@ final readonly class RecordSubList
         return $this->variantKey === null ? '' : strval($entry[$this->variantKey] ?? $this->variantDefault ?? '');
     }
 
+    /**
+     * Whether the list edits entries of the variant an entry is: one its variant field offers. An
+     * entry of another variant (a track type another editor authors, or one a newer Engine reads)
+     * is listed and kept as written, since the list has no fields for what it holds and no way back
+     * to its variant.
+     *
+     * @param array<string, mixed> $entry The entry payload.
+     */
+    public function authorsVariant(array $entry): bool
+    {
+        $variant = $this->getVariant($entry);
+        if ($this->variantKey === null || $variant === '') {
+            return true;
+        }
+        $field = array_find($this->fieldsFor($entry), fn(RecordField $field): bool => $field->key === $this->variantKey);
+
+        return $field === null || $field->options === [] || in_array($variant, $field->options, true);
+    }
+
     /** Where a keyed list's entry keeps a value the editor does not read, to write it back as it was. */
     public const string RAW_VALUE = '__value';
 
