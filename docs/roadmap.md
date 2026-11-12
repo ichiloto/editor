@@ -305,21 +305,42 @@ battle or the field places it, with the caster on either side. Remaining
 for the GUI editor: drawing image frames, sheet and cell picking by eye, and
 image timing; the TUI only names them.
 
-Whole-field motion (status, 12 November 2026, Engine `22954f40`): a battle
-effect's `field-motion` track is kept as written by every edit and save,
-fractional offsets, omitted durations and comments included. The graphical
-editor authors it through the shared record rows: the track type, and each
-sample's frame, duration, field offset X and Y in logical pixels and whether it
-is enabled; its timeline lane lists the samples. The TUI names the track, lists
-its samples in the Timeline pane and gains no sample form. In every record
-list, an entry of a type the editor does not offer (this track in the TUI,
-`tone` in both editors) keeps its type: changing it is refused before anything
-is written. Each save compiles through the Engine, which judges sample order,
-overlap, the `graphical` presentation and the fixed, once-playing battle
-timeline. Remaining for the GUI editor:
-- Visual controls for the samples, such as placing an offset on the battle
-  preview; today each value is typed in its row.
-- Seeing the motion in the editor window. The negotiation is in place:
+Whole-field and battler motion (status, 12 November 2026, Engine `22954f40`
+and `06ec2c47`): a battle effect's `field-motion` and `battler-motion` tracks
+are kept as written by every edit and save, fractional offsets, omitted
+durations, an omitted space and comments included. The graphical editor
+authors both through the shared record rows: the track type, and each sample's
+frame, duration, offset X and Y in logical pixels and whether it is enabled;
+the timeline lane lists the samples. Both types read the one sample list, as
+the Engine compiles both with one sample compiler, so a track turned from one
+motion into the other keeps its samples. A battler motion also has its moved
+battler (caster or target) and its offset space (canvas, or opponents: X runs
+from the moved battler toward the side it fights). A space left out reads as
+the canvas and a save writes none. The TUI names each track, lists its samples
+in the Timeline pane with what they move and gains no battler, space or sample
+form. In every record list, an entry of a type the editor does not offer
+(these tracks in the TUI, `tone` in both editors) keeps its type: changing it
+is refused before anything is written. Each save compiles through the Engine,
+which judges sample order, overlap, the `graphical` presentation, the fixed,
+once-playing battle timeline and a battler motion's battler and space.
+Remaining for the GUI editor:
+- Visual controls for the samples of both tracks, such as placing an offset on
+  the battle preview or dragging the moved battler there; today each value is
+  typed in its row.
+- Seeing a battler motion in the editor window. The negotiation is in place:
+  `cutscenes.effectBattlePreview` composes a frame with
+  `canvas_image_rotation` negotiated when its `imageRotation` flag is `true`
+  and `canvas_clip_opacity` when its `clipOpacity` flag is `true`. With both,
+  a frame inside an enabled sample draws the named battler at its offset, its
+  whole image kept behind a clip to the canvas, and carries no diagnostic.
+  Missing either, the frame is the ordinary battlefield with the Engine's
+  diagnostic. A sample of zero holds its battler in place; a disabled sample,
+  a frame outside the samples, reduced motion and the terminal arena move
+  nothing. A frame with no battler motion is composed exactly as it was
+  before the two were negotiated. The graphical editor sends each flag where
+  the canvas it paints with has the capability. The painted result has not
+  been checked in a window.
+- Seeing a whole-field motion in the editor window. The negotiation is in place:
   `cutscenes.effectBattlePreview` takes an optional `canvasGroups` flag beside
   its other drawing features, and composes that frame with `canvas_groups`
   negotiated only when the flag is `true`. The frame's canvas then holds the
@@ -330,8 +351,8 @@ timeline. Remaining for the GUI editor:
   battlefield still and carries the Engine's diagnostic, as before. The
   graphical editor sends the flag where the canvas it paints with draws
   groups. The painted result has not been checked in a window. A summon's
-  battle preview takes no such flag: the Engine refuses the track in a summon
-  timeline.
+  battle preview takes none of these flags: the Engine refuses both tracks in
+  a summon timeline.
 
 Battle effect orientation and weapon roles (Engine contract in progress,
 2026-10): a battle track may declare `facing` (`east` or `west`), the

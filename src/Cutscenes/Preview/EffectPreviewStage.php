@@ -28,8 +28,8 @@ use InvalidArgumentException;
  * side. On the field an effect has one subject, its target.
  *
  * What a terminal cannot draw (images, flashes, shakes, a whole-field
- * motion) is described, not imitated: the graphical renderer owns those
- * pictures.
+ * motion, a battler motion) is described, not imitated: the graphical
+ * renderer owns those pictures.
  */
 final readonly class EffectPreviewStage
 {
@@ -129,8 +129,8 @@ final readonly class EffectPreviewStage
 
     /**
      * Describes the active draws a terminal cannot show: images with their
-     * sheet frame and flips, flashes and shakes with their subject, and a
-     * whole-field motion's offset.
+     * sheet frame and flips, flashes and shakes with their subject, and the
+     * offset of a whole-field motion or of a battler motion.
      *
      * @param array<int, array<string, mixed>> $segments The playhead's active segments.
      * @return string[]
@@ -150,7 +150,13 @@ final readonly class EffectPreviewStage
             foreach (array_filter((array) ($segment['drawCommands'] ?? []), is_array(...)) as $command) {
                 if ($layer === CutsceneSchemas::FIELD_MOTION_TRACK) {
                     // The battle moves its whole field by the sample; it has no subject.
-                    $lines[] = CutsceneOutline::describeFieldMotionSample($command);
+                    $lines[] = CutsceneOutline::describeMotionSample($command);
+
+                    continue;
+                }
+                if ($layer === CutsceneSchemas::BATTLER_MOTION_TRACK) {
+                    // The battle moves the battler the compiled sample names, by the sample; no stroke is turned.
+                    $lines[] = CutsceneOutline::describeMotionSample($command, is_array($command['payload'] ?? null) ? $command['payload'] : []);
 
                     continue;
                 }

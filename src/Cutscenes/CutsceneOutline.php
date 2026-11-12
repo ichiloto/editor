@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Cutscenes;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\Database\StorybookPlaybackFields;
+use Ichiloto\Engine\Animations\Timelines\BattleMotionSpace;
 
 /**
  * The command tree of a cinematic, or the track and cue list of a summon,
@@ -84,7 +85,8 @@ final class CutsceneOutline
                 $outline->rows[] = [
                     'depth' => 2,
                     'text' => sprintf('f%d +%d  %s', $frame, $duration, match (true) {
-                        ($track['type'] ?? null) === CutsceneSchemas::FIELD_MOTION_TRACK => self::describeFieldMotionSample($keyframe),
+                        ($track['type'] ?? null) === CutsceneSchemas::FIELD_MOTION_TRACK => self::describeMotionSample($keyframe),
+                        ($track['type'] ?? null) === CutsceneSchemas::BATTLER_MOTION_TRACK => self::describeMotionSample($keyframe, $track),
                         $content !== '' => $content,
                         isset($keyframe['assetId']) => 'asset ' . strval($keyframe['assetId']),
                         isset($keyframe['sourceFrame']) => self::describeImageKeyframe($keyframe),
@@ -145,17 +147,23 @@ final class CutsceneOutline
     }
 
     /**
-     * Returns a whole-field motion sample's offset in logical pixels as authored, fractions kept, and
-     * whether the sample is disabled.
+     * Returns a motion sample's offset in logical pixels as authored, fractions kept, and whether the
+     * sample is disabled: the whole field's, or the offset of the battler a battler motion names. A
+     * battler's offset says when its X runs toward that battler's opponents instead of across the canvas.
      *
      * @param array<string, mixed> $sample
+     * @param array<string, mixed>|null $battlerMotion What names the moved battler and the offset space,
+     *   by `anchor` and `space`: the authored track, or a compiled sample's payload. Null for the field.
      */
-    public static function describeFieldMotionSample(array $sample): string
+    public static function describeMotionSample(array $sample, ?array $battlerMotion = null): string
     {
         $offset = is_array($sample['payload'] ?? null) ? $sample['payload'] : [];
         $read = static fn(string $axis): string => is_int($offset[$axis] ?? null) || is_float($offset[$axis] ?? null) ? strval($offset[$axis]) : '?';
+        $moved = $battlerMotion === null ? 'field' : (is_string($battlerMotion['anchor'] ?? null) ? $battlerMotion['anchor'] : '?');
+        $towardOpponents = $battlerMotion !== null && ($battlerMotion['space'] ?? null) === BattleMotionSpace::OPPONENTS->value;
 
-        return sprintf('field offset %s, %s', $read('x'), $read('y')) . (($sample['visible'] ?? true) === false ? ' (disabled)' : '');
+        return sprintf('%s offset %s, %s', $moved, $read('x'), $read('y')) . ($towardOpponents ? ' with x toward opponents' : '')
+            . (($sample['visible'] ?? true) === false ? ' (disabled)' : '');
     }
 
     /**

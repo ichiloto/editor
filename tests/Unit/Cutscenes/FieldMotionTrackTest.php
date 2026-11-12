@@ -106,31 +106,19 @@ function fieldMotionProject(): string
 
 function fieldMotionPath(string $root, string $id = 'quake-strike'): string
 {
-    return $root . '/assets/Animations/' . $id . '/' . $id . '.timeline.php';
+    return effectTimelinePath($root, $id);
 }
 
 /** The terminal editor's Cutscenes screen on one effect of the project. */
 function openFieldMotionEditor(string $root, string $id = 'quake-strike'): Editor
 {
-    $editor = cutscenesEditor($root, 160, 50);
-    callEditorMethod($editor, 'switchCutsceneType', CutsceneType::EFFECT);
-    callEditorMethod($editor, 'selectCutsceneById', $id);
-    setEditorProperty($editor, 'databaseCommandFramePath', []);
-
-    return $editor;
+    return openEffectEditor($root, $id);
 }
 
 /** @return array{0: EditorSession, 1: int, 2: Closure(string): array<string, mixed>, 3: Closure(string, string): array<string, mixed>} */
 function openFieldMotionSession(string $root, string $id = 'quake-strike'): array
 {
-    $session = EditorSession::open($root);
-    $index = findEffectIndex($session, $id);
-    $row = static fn(string $field): array => array_find($session->readDatabaseRecord('cutscenes/effect', $index, ['tracks'])['rows'],
-        static fn(array $entry): bool => ($entry['key']['field'] ?? null) === $field)
-        ?? throw new RuntimeException("No row {$field}.");
-    $apply = static fn(string $field, string $value): array => $session->applyDatabaseRecord('cutscenes/effect', $index, $row($field)['key'], $value);
-
-    return [$session, $index, $row, $apply];
+    return openEffectTrackSession($root, $id);
 }
 
 it('opens a field-motion track as written and lists its samples with their fractional offsets', function () {

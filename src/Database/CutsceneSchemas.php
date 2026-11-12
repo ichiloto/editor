@@ -6,6 +6,8 @@ namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Engine\Animations\Timelines\BattleMotionAnchor;
+use Ichiloto\Engine\Animations\Timelines\BattleMotionSpace;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectAnchorLifetime;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
@@ -73,10 +75,16 @@ final class CutsceneSchemas
     public const string FIELD_MOTION_TRACK = 'field-motion';
 
     /**
+     * The battle effect track that moves the caster or the selected targets, as the Engine's
+     * `BattleBattlerMotionTrack` reads it.
+     */
+    public const string BATTLER_MOTION_TRACK = 'battler-motion';
+
+    /**
      * The battle effect tracks only the graphical battle draws, as the Engine's effect validator scopes
      * them: authored in the graphical editor, and always of the `graphical` presentation.
      */
-    private const array GRAPHICAL_TRACK_TYPES = ['trail', 'tether', self::FIELD_MOTION_TRACK];
+    private const array GRAPHICAL_TRACK_TYPES = ['trail', 'tether', self::FIELD_MOTION_TRACK, self::BATTLER_MOTION_TRACK];
 
     /** The payload key a summon stage's subjects are edited under. */
     public const string STAGE_SUBJECTS_KEY = 'stage.subjects';
@@ -771,6 +779,9 @@ final class CutsceneSchemas
     public static function effectTrackList(bool $graphical = false): RecordSubList
     {
         $keyframes = self::effectKeyframeList();
+        // One list for both motion tracks, as the Engine compiles both with its one `EffectMotionSamples`:
+        // a motion turned from the field's into a battler's, or back, keeps its samples.
+        $motionSamples = self::battleMotionSamples();
         $anchors = [
             new RecordField('anchor', 'Anchor', options: ['target', 'caster', 'screen'], removeWhenEmpty: true, displayDefault: 'target'),
             new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
@@ -806,7 +817,8 @@ final class CutsceneSchemas
                 'flash' => $anchors,
                 'shake' => $anchors,
                 // A whole-field motion has no subject: its samples are all it holds.
-                ...($graphical ? ['trail' => self::battleTrailFields(), 'tether' => self::battleTetherFields(), self::FIELD_MOTION_TRACK => []] : []),
+                ...($graphical ? ['trail' => self::battleTrailFields(), 'tether' => self::battleTetherFields(), self::FIELD_MOTION_TRACK => [],
+                    self::BATTLER_MOTION_TRACK => self::battleBattlerMotionFields()] : []),
             ],
             variantKey: 'type',
             nestedLists: [
@@ -817,7 +829,7 @@ final class CutsceneSchemas
                 'flash' => $keyframes,
                 'shake' => $keyframes,
                 ...($graphical ? ['trail' => self::battleTrailBands(), 'tether' => self::battleTetherSamples(),
-                    self::FIELD_MOTION_TRACK => self::battleFieldMotionSamples()] : []),
+                    self::FIELD_MOTION_TRACK => $motionSamples, self::BATTLER_MOTION_TRACK => $motionSamples] : []),
             ],
             prepareEdit: static function (array $entry, string $field): array {
                 if ($field === 'type' && in_array($entry['type'] ?? null, self::GRAPHICAL_TRACK_TYPES, true)) {
@@ -950,21 +962,39 @@ final class CutsceneSchemas
     }
 
     /**
-     * The held samples of a whole-field motion track, as the Engine's `BattleFieldMotionTrack` reads them:
-     * an offset of the battlefield in logical pixels, fractions allowed, from a frame for a duration (one
-     * frame when omitted). A sample that is not enabled moves nothing.
+     * Whom a battler motion track moves and how its samples' X is read, as the Engine's
+     * `BattleBattlerMotionTrack` reads them. The track names its battler: the Engine gives it none. A
+     * space left out is the canvas, where X runs to the right of the screen; among opponents X runs from
+     * the moved battler toward the side it fights, so a negative X pushes either side back from the other.
+     * Y runs down the screen in both.
+     *
+     * @return list<RecordField>
      */
-    private static function battleFieldMotionSamples(): RecordSubList
+    private static function battleBattlerMotionFields(): array
+    {
+        return [
+            new RecordField('anchor', 'Moved Battler', options: array_column(BattleMotionAnchor::cases(), 'value')),
+            new RecordField('space', 'Offset Space', options: ['', ...array_column(BattleMotionSpace::cases(), 'value')],
+                removeWhenEmpty: true, displayDefault: BattleMotionSpace::CANVAS->value),
+        ];
+    }
+
+    /**
+     * The held samples of a motion track, the whole field's or a battler's, as the Engine's
+     * `EffectMotionSamples` reads them for both: an offset in logical pixels, fractions allowed, from a
+     * frame for a duration (one frame when omitted). A sample that is not enabled moves nothing.
+     */
+    private static function battleMotionSamples(): RecordSubList
     {
         return new RecordSubList(
             key: 'keyframes',
             prefix: 'keyframe',
-            singular: 'field motion sample',
+            singular: 'motion sample',
             fields: [
                 new RecordField('frame', 'Frame', InputControlType::INTEGER),
                 new RecordField('duration', 'Duration', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
-                new RecordField('payload.x', 'Field Offset X', InputControlType::FLOAT),
-                new RecordField('payload.y', 'Field Offset Y', InputControlType::FLOAT),
+                new RecordField('payload.x', 'Offset X', InputControlType::FLOAT),
+                new RecordField('payload.y', 'Offset Y', InputControlType::FLOAT),
                 RecordField::boolean('visible', 'Enabled', displayDefault: 'true'),
             ],
             blank: ['frame' => 0, 'payload' => ['x' => 0, 'y' => 0]],

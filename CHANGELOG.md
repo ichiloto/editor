@@ -4,15 +4,30 @@
 
 ### Fixed
 
-- A list entry whose type or kind the editor does not offer (a `field-motion`, `trail` or `tether` track in the
-  Terminal editor, a `tone` track in either editor, a world object cast member in the Terminal editor) can no longer
-  be given another type. Choosing one re-read the entry's keys as the new type's and saved them that way; it is now
-  refused with nothing changed. Remove the entry to replace it.
+- A list entry whose type or kind the editor does not offer (a `field-motion`, `battler-motion`, `trail` or `tether`
+  track in the Terminal editor, a `tone` track in either editor, a world object cast member in the Terminal editor)
+  can no longer be given another type. Choosing one re-read the entry's keys as the new type's and saved them that
+  way; it is now refused with nothing changed. Remove the entry to replace it.
 
 - `map:apply --check` and `map:render --changes` run on a scratch copy of the project, so edits that write at once
   (imported assets, tileset cells, new maps) can never reach the project, even if the process dies part way.
 
 ### Added
+
+- Battler motion tracks (Engine 06ec2c47): the graphical editor's effect rows author a battle effect's
+  `battler-motion` track: the track type, the moved battler (`caster` or `target`), the offset space (`canvas`, or
+  `opponents`, where X runs from the moved battler toward the side it fights) and the samples a whole-field motion
+  uses. A space left out reads as `canvas` and a save writes none. Both motion tracks read the one sample list, whose
+  offset rows are **Offset X** and **Offset Y** for both, so a track turned from one into the other keeps its
+  samples. `cutscenes.timeline` lists the samples on the track's lane. The track is kept as written by every other
+  edit and save, and each save compiles through the Engine. The Terminal editor names the track and lists its samples
+  in the Timeline pane as `target offset x, y` or `caster offset x, y` (`with x toward opponents` for that space); its
+  preview names the offset under **Not drawn here**.
+  `cutscenes.effectBattlePreview` takes an optional `clipOpacity` flag: the frame is composed with
+  `canvas_clip_opacity` negotiated when it is `true`, and with `canvas_image_rotation` negotiated when the existing
+  `imageRotation` flag is `true`. With both, a moving frame draws the named battler at the sample's offset; missing
+  either, it draws the ordinary battlefield and carries the Engine's diagnostic. A frame with no battler motion is
+  composed as before.
 
 - Whole-field motion tracks (Engine 22954f40): the graphical editor's effect rows author a battle effect's
   `field-motion` track: the track type, and each sample's frame, duration, field offset X and Y in logical pixels and

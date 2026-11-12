@@ -3754,7 +3754,7 @@ point or unreadable artwork is reported apart, with the Engine's reason.
 A battle effect may hold a `field-motion` track, which moves the whole
 battlefield in the graphical battle. In the GUI it is one of the track types.
 It has no anchor; each sample gives its **Frame**, **Duration** (one frame when
-left out), **Field Offset X** and **Field Offset Y** in logical pixels,
+left out), **Offset X** and **Offset Y** in logical pixels,
 fractions allowed, and **Enabled** (`false` keeps the sample and moves
 nothing). On save the Engine refuses samples out of order or overlapping, a
 presentation other than `graphical`, and a looping or battle-phase timeline,
@@ -3766,6 +3766,32 @@ canvas groups. The editor session composes them only for a
 `cutscenes.effectBattlePreview` request whose `canvasGroups` is `true`; any
 other request draws the battlefield still on a moving frame, with the
 Engine's diagnostic that the motion is not applied.
+
+A battle effect may also hold a `battler-motion` track, which moves one side
+of the action in the graphical battle. In the GUI it is one of the track
+types, with the same sample rows as a whole-field motion; a track turned from
+one of the two types into the other keeps its samples. **Moved Battler** is
+`caster` or `target` (every selected target moves). **Offset Space** is
+`canvas`, where X runs to the right of the screen, or `opponents`, where X
+runs from the moved battler toward the side it fights, so a negative X pushes
+either side back from the other. Y runs down the screen in both. A space left
+out reads as `canvas`; choosing the empty value leaves it out of the file. A
+frame inside an enabled sample holds the battler at that offset in place of
+the battle's own damage recoil, a sample of zero included; a frame outside
+the samples and a disabled sample leave the battler to the battle. A track
+given this type names no battler until one is chosen. On save the Engine
+refuses a missing battler, the faults it refuses in a whole-field motion's
+samples, a presentation other than `graphical`, and a looping or battle-phase
+timeline, and nothing is written. The Terminal editor names the track, lists
+its samples in the Timeline pane as `target offset x, y` or `caster offset
+x, y`, adding `with x toward opponents` for that space, and leaves them as
+written; its preview names the offset under **Not drawn here**. The GUI's
+battle preview draws the battler at each enabled sample's offset where its
+canvas draws rotated and clipped images. The editor session composes the
+motion only for a `cutscenes.effectBattlePreview` request whose
+`imageRotation` and `clipOpacity` are both `true`; any other request draws the
+ordinary battlefield on a moving frame, with the Engine's diagnostic that the
+motion is not applied.
 
 In either editor, a track whose type that editor does not offer keeps its
 type: choosing another is refused and nothing changes. Remove the track to

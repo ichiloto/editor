@@ -242,22 +242,26 @@ final class EffectBattlePreview
 
     /**
      * One command frame as the battle draws it, composed with the drawing
-     * features asked for and no other. The Engine reads the region budget
-     * and canvas groups from the renderer session it composes for, so each
-     * is negotiated for this frame only when it is asked for: without
-     * canvas groups an authored whole-field motion leaves the battlefield
-     * still and the frame carries the Engine's diagnostic.
+     * features asked for and no other. The Engine reads the region budget,
+     * canvas groups, image rotation and clipped images from the renderer
+     * session it composes for, so each is negotiated for this frame only
+     * when it is asked for. Without canvas groups an authored whole-field
+     * motion leaves the battlefield still; without both image rotation and
+     * clipped images an authored battler motion leaves its battler where
+     * it stands. Either way the frame carries the Engine's diagnostic.
      *
      * @return array<string, mixed>
      * @throws InvalidArgumentException When the frame is outside the command.
      */
     public function readFrame(int $frame, bool $reducedMotion, bool $imageRotation = false, bool $coverageDabs = false,
-        bool $textureStrip = false, bool $regionBudget = false, bool $canvasGroups = false): array
+        bool $textureStrip = false, bool $regionBudget = false, bool $canvasGroups = false, bool $clipOpacity = false): array
     {
         $read = fn(): array => $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation, $coverageDabs, $textureStrip)->toArray();
         $negotiated = array_keys(array_filter([
             RendererSessionConfig::CANVAS_REGION_BUDGET => $regionBudget,
             RendererSessionConfig::CANVAS_GROUPS => $canvasGroups,
+            RendererSessionConfig::CANVAS_IMAGE_ROTATION => $imageRotation,
+            RendererSessionConfig::CANVAS_CLIP_OPACITY => $clipOpacity,
         ]));
 
         return $negotiated === [] ? $read()
