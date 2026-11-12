@@ -873,9 +873,10 @@ as the game's notice window holds it. A canvas group, a drawing the game
 places as one piece, is drawn where its origin puts it, inside its clip, and
 in its colour treatment (an inversion or a tint of the whole group) when the
 game gives it one. Each frame's canvases are admitted on the terms the game's
-graphical window admits them: an image costs the crop it is drawn from, and a
-frame whose images exceed the Engine's budget ends the capture with the
-Engine's account of them. A video encoder reads the frames in order,
+graphical window admits them: an image costs the crop it is drawn from and
+each toned, mirrored, turned, faded or colour-treated variant of it the frame
+draws, and a frame whose images exceed the Engine's budget ends the capture
+with the Engine's account of them. A video encoder reads the frames in order,
 for example `ffmpeg -framerate 30 -i frame-%06d.png review.mp4`. The capture
 starts from the preview's own empty campaign unless it is given a save
 (`campaignSave`, an absolute path): the scene then plays in that save's

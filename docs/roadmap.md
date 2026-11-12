@@ -488,12 +488,19 @@ steps and coverage within 1 of 127. All three rasters name
 `canvas_group_color` with `canvas_region_budget`, as the Engine pairs them
 (Engine `fe238189`, checked against `30a0db81`), and keep the region budget's
 terms. A still's canvases are
-admitted together before any is drawn, through the Engine's
-`CanvasImagePreflight::inspect()` for a renderer of the raster's features: a
-canvas image costs the crop it is drawn from and its toned, mirrored or turned
-variants, and a picture a composite operation uses whole costs all of itself. A
+admitted together before any is drawn, whole and with their groups, through
+the Engine's `CanvasImagePreflight::inspectCanvasResources()` (Engine
+`47dc6409`) for a renderer of the raster's features: a canvas image costs the
+crop it is drawn from and one variant for each distinct way the crop is drawn
+changed (toned, mirrored, turned, faded toward its bottom edge, or in the
+colour treatment of the groups it is drawn in, a group's own first and its
+parent's after); a composite in a treated group costs its finished surface
+once for each treatment; a treatment that changes nothing costs nothing; and a
+picture a composite operation uses whole costs all of itself. A
 scene frame admits its screen canvas, overlay and world canvases as one frame;
-a map still admits all of its world canvases. A still over the limits (64 MiB
+a map still admits all of its world canvases, however many they are. A still
+that was admitted with uncounted treated or bottom-fade variants over the
+limits is now refused. A still over the limits (64 MiB
 and 4096 prepared regions) is refused whole with the Engine's
 `CanvasImageBudgetExceeded` message, which the session returns as its refusal;
 a map still that is refused can be rendered as smaller regions. The canvas
@@ -504,8 +511,9 @@ the regions held exceed the same 64 MiB. A picture the Engine's asset rules do
 not read (missing, or not a PNG within its size limits) is charged nothing and
 drawn or left out as before, read for each drawing and never kept. A treatment
 is applied to a group's flattened drawing, which is released when it is
-blended, so it prepares no region; the Engine's preflight charges none for a
-treatment either. Stills drawn before this change keep their bytes.
+blended, so the raster prepares no region for it; the Engine's preflight
+charges the variants the graphical window prepares. Stills within the limits
+keep their bytes.
 `cutscenes.effectBattlePreview` takes an optional `groupColor` flag and
 advertises `canvas_group_color` to the Engine for that frame only when the flag
 is `true`. Remaining: the Engine binds no field colour timeline yet, so no

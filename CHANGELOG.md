@@ -12,6 +12,15 @@
 - `map:apply --check` and `map:render --changes` run on a scratch copy of the project, so edits that write at once
   (imported assets, tileset cells, new maps) can never reach the project, even if the process dies part way.
 
+- Stills charge treated and faded variants (Engine 47dc6409): map stills, canvas stills and cinematic capture frames
+  are admitted through the Engine's `CanvasImagePreflight::inspectCanvasResources()` with their canvases whole,
+  groups included. An image drawn in a group's colour treatment costs a variant of its crop for each distinct
+  treatment, a group's own applied first and its parent's after; a composite in a treated group costs its finished
+  surface; an image faded toward its bottom edge costs a variant of its crop; a treatment that changes nothing costs
+  nothing. Narrowed: a still that was admitted with uncounted treated or bottom-fade variants over the limits (64 MiB
+  and 4096 prepared regions) is now refused with the Engine's account of them. Stills within the limits keep their
+  bytes, and art the Engine does not read is charged nothing and drawn or left out as before.
+
 ### Added
 
 - Reduced-motion samples and motion scopes (Engine e1438b34): the graphical editor's effect and summon rows author a

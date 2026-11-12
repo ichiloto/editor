@@ -8,7 +8,6 @@ use GdImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasColorTransform;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
-use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasFrameBudget;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasGroup;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageBottomFade;
@@ -48,8 +47,9 @@ use RuntimeException;
  * once in {@see $diagnostics}.
  *
  * A still's canvases are admitted together before any of them is drawn, as the Engine admits a frame's for a
- * renderer with the region budget ({@see prepareCanvases()}): an image costs the crop it is drawn from, and a
- * still whose images exceed the Engine's limits is refused whole, with the Engine's own account of them.
+ * renderer with the region budget ({@see prepareCanvases()}): an image costs the crop it is drawn from and each
+ * changed variant of it the still draws, a group's colour treatment of it among them, and a still whose images
+ * exceed the Engine's limits is refused whole, with the Engine's own account of them.
  */
 final class CanvasStillRaster
 {
@@ -155,11 +155,14 @@ final class CanvasStillRaster
      * raster that draws canvases itself ({@see drawCanvas()}, {@see paintLocalCanvas()}) gives every canvas of
      * its still here first.
      *
-     * The canvases are admitted by the Engine's own accounting ({@see CanvasImagePreflight::inspect()}) for a
-     * renderer of this raster's features. With the region budget among them an image costs the crop it is drawn
-     * from and each toned, mirrored or turned variant of it, never the whole picture the crop is cut from; a
-     * picture a composite operation uses whole still costs all of itself. A still over the Engine's limits is
-     * refused before any of it is drawn, with the Engine's account of what exceeds them.
+     * The canvases are admitted whole, groups and all, by the Engine's own accounting
+     * ({@see CanvasImagePreflight::inspectCanvasResources()}) for a renderer of this raster's features. With the
+     * region budget among them an image costs the crop it is drawn from and one variant for each distinct way that
+     * crop is drawn changed: toned, mirrored, turned, faded toward its bottom edge, or in the colour treatment of
+     * the groups it is drawn in, a group's own first and its parent's after. A composite costs its finished
+     * surface once for each such treatment, a treatment that changes nothing costs nothing, and a picture a
+     * composite operation uses whole still costs all of itself. A still over the Engine's limits is refused before
+     * any of it is drawn, with the Engine's account of what exceeds them.
      *
      * The raster then holds no more than was charged: each picture is decoded once, the crops the canvases draw
      * are cut from it, and the picture is let go; a variant is made for the drawing that needs it and kept by
@@ -173,20 +176,18 @@ final class CanvasStillRaster
      */
     public function prepareCanvases(array $canvases): void
     {
-        $images = $composites = [];
-        foreach ($canvases as $canvas) {
-            foreach (CanvasFrameBudget::getCanvases([$canvas]) as $drawn) {
-                array_push($images, ...$drawn->images);
-                array_push($composites, ...$drawn->composites);
-            }
-        }
-        $images = PresentationSession::runForSession(self::supports(...), fn(): array => PngAssetPreflight::runWithSnapshot(
-            function () use ($images, $composites): array {
-                $images = array_values(array_filter($images, $this->canInspect(...)));
-                CanvasImagePreflight::inspect($images, $this->assetRoot, array_values(array_filter($composites, $this->canInspect(...))));
+        $images = [];
+        PresentationSession::runForSession(self::supports(...), fn(): array => PngAssetPreflight::runWithSnapshot(
+            fn(): array => CanvasImagePreflight::inspectCanvasResources($canvases, $this->assetRoot,
+                function (CanvasImage|CanvasComposite $drawing) use (&$images): bool {
+                    $charged = $this->canInspect($drawing);
+                    if ($charged && $drawing instanceof CanvasImage) {
+                        // The crops prepared are the crops the Engine charged.
+                        $images[] = $drawing;
+                    }
 
-                return $images;
-            }));
+                    return $charged;
+                })));
         $crops = [];
         foreach ($images as $image) {
             $key = self::getRegionKey($image);
@@ -221,7 +222,7 @@ final class CanvasStillRaster
 
     /**
      * Whether the Engine can account for a drawing: every picture it draws from is one the Engine reads from
-     * the project's assets, and each crop lies inside its picture.
+     * the project's assets, and each crop lies inside its picture. The drawing is asked about alone, in no group.
      *
      * @throws CanvasImageBudgetExceeded When the drawing alone exceeds the Engine's budget.
      */
