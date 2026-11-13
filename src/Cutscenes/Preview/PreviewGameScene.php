@@ -21,6 +21,7 @@ use Ichiloto\Engine\Events\Interpreter\EventExecutionSession;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Field\Location;
 use Ichiloto\Engine\Field\NpcManager;
+use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePresentationProviderInterface;
 use Ichiloto\Engine\Progress\Bestiary;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeCatalog;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeProgressService;
@@ -54,6 +55,15 @@ final class PreviewGameScene extends GameScene
     /** @var array{0: Closure(EffectPresentation): CompiledEffectTimeline, 1: int}|null The effect an author previews, at its frame. */
     private ?array $shownEffect = null;
 
+    /** @var array<string, non-empty-list<float>> The host's playhead, in seconds, each time the Engine began reporting a dialogue framing diagnostic, by its text. */
+    private array $dialogueFramingReports = [];
+
+    /** Whether the Engine reported a dialogue framing diagnostic at the last refresh. */
+    private bool $dialogueFramingFailed = false;
+
+    /** The dialogue line the last report was made under, so one line is reported once. */
+    private ?DialoguePresentationProviderInterface $reportedDialogueLine = null;
+
     public function __construct(
         public readonly PreviewSceneManager $previewSceneManager,
         int $screenWidth,
@@ -84,6 +94,40 @@ final class PreviewGameScene extends GameScene
         $this->cinematicStage = new CinematicStageManager($this);
         $this->cinematicPresentation = new CinematicPresentationManager($this);
         $this->cinematicController = new CinematicController($this);
+    }
+
+    /**
+     * Resolves the field's viewport and the cinematic's dialogue framing, as
+     * the game's scene does, and keeps what the Engine reports about a cast
+     * it cannot frame clear of the dialogue. The Engine holds that
+     * diagnostic only while the cast does not fit and drops it when the
+     * cinematic ends; the preview keeps each report with the playhead it
+     * began at, for as long as the scene lives.
+     */
+    #[\Override]
+    public function synchronizeFieldViewport(): void
+    {
+        parent::synchronizeFieldViewport();
+        $this->recordDialogueFramingDiagnostic();
+    }
+
+    /**
+     * What the Engine reported about casts it could not frame clear of the
+     * dialogue, each in the Engine's words with the scene time it first
+     * occurred and the time of every later line it occurred under.
+     *
+     * @return list<string>
+     */
+    public function getDialogueFramingDiagnostics(): array
+    {
+        $diagnostics = [];
+        foreach ($this->dialogueFramingReports as $message => $times) {
+            $later = array_map(static fn(float $seconds): string => sprintf('%.2f s', $seconds), array_slice($times, 1));
+            $diagnostics[] = sprintf('%s First at %.2f s of the scene%s.', $message, $times[0],
+                $later === [] ? '' : '; again at ' . implode(', ', $later));
+        }
+
+        return $diagnostics;
     }
 
     /**
@@ -234,6 +278,10 @@ final class PreviewGameScene extends GameScene
         }
     }
 
+    // The game's field repaints its retained screen through the four methods below. A preview keeps no screen: it
+    // draws a whole picture each time one is asked for, and whoever draws it first resolves the viewport and the
+    // dialogue framing ({@see synchronizeFieldViewport()}), which is all of the game's repaint a preview needs.
+
     public function renderBackgroundTile(int $x, int $y): void
     {
     }
@@ -248,5 +296,30 @@ final class PreviewGameScene extends GameScene
 
     public function restoreFieldAfterOverlay(): void
     {
+    }
+
+    /**
+     * Notes the Engine's dialogue framing diagnostic when it begins, and
+     * again for each further dialogue line it stands under, at the host's
+     * playhead. The diagnostic stays set between lines; a line already
+     * reported is never reported twice.
+     */
+    private function recordDialogueFramingDiagnostic(): void
+    {
+        $diagnostic = $this->getDialogueFramingDiagnostic();
+        if ($diagnostic === null) {
+            $this->dialogueFramingFailed = false;
+
+            return;
+        }
+        $line = array_find($this->getActiveFieldPresentations(),
+            static fn(object $owner): bool => $owner instanceof DialoguePresentationProviderInterface);
+        if ($line === null ? ! $this->dialogueFramingFailed : $line !== $this->reportedDialogueLine) {
+            // The field's own clock, which a preview scene is always presented with.
+            $this->dialogueFramingReports[$diagnostic][] = ($this->getPresentationContext()
+                ?? throw new \LogicException('The preview scene frames dialogue without its field\'s presentation.'))->getPresentationTime();
+            $this->reportedDialogueLine = $line ?? $this->reportedDialogueLine;
+        }
+        $this->dialogueFramingFailed = true;
     }
 }

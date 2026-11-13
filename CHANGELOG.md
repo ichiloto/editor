@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- A previewed or captured cinematic frames its cast clear of the dialogue where the game does. The Engine's dialogue
+  framing ran only when a preview's presentation was attached, so the Terminal picture, the GPUI view and capture
+  frames kept the camera where it was while a line was on screen, and a cast too large to fit was never reported. The
+  preview now resolves the framing as the game's field does, after every tick of the scene and before every picture.
+  A cast that cannot be framed is listed in the preview's diagnostics and in `capture.json` in the Engine's words,
+  with the scene time it first occurred and the time of each later line, and the report stays after the scene ends.
+  A preview resized while it plays now tells the Engine its new text screen, so the Terminal dialogue box the cast is
+  framed clear of is the one on the resized screen; it kept the footprint of the size the preview opened at.
+
 - A list entry whose type or kind the editor does not offer (a `field-motion`, `battler-motion`, `trail` or `tether`
   track in the Terminal editor, a `tone` track in either editor, a world object cast member in the Terminal editor)
   can no longer be given another type. Choosing one re-read the entry's keys as the new type's and saved them that

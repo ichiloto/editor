@@ -23,7 +23,8 @@ use Ichiloto\Engine\Scenes\Game\GameScene;
  * A preview scene drawn by the editor window as the game's field is drawn.
  *
  * The Engine's own pieces do the work, as they do for the game: the scene's
- * presentation context selects the field the composer reads, the composer
+ * presentation context selects the field the composer reads, the scene
+ * resolves its viewport and dialogue framing before each frame, the composer
  * assembles the frame (the retained world, sprites, viewport, dialogue and
  * covers) with the scene's Terminal text from an isolated Console capture,
  * and the renderer presentation sends it through the relay to the window,
@@ -100,6 +101,8 @@ final class PreviewSceneHost
         }
         if ($this->ready) {
             $this->attachContext();
+            // As the game's field does before it draws: the viewport, and the cinematic's dialogue framing for what is on screen now.
+            $this->scene->synchronizeFieldViewport();
             $composition = $this->composer->composeFrame($this->scene, $this->grid, $this->capabilities->supportsFeature(...),
                 fn(array $excluded, array $worldLayers) => Console::capturePresentation($this->grid->columns, $this->grid->rows,
                     $this->renderTerminal, $excluded, $worldLayers,
