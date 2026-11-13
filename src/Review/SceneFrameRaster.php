@@ -7,9 +7,11 @@ namespace Ichiloto\Editor\Review;
 use GdImage;
 use Ichiloto\Engine\IO\Console\ConsolePresentationSnapshot;
 use Ichiloto\Engine\Rendering\FieldViewport;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageBudgetExceeded;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasTextLayer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Presentation\PresentationTextLayer;
+use Ichiloto\Engine\Rendering\Presentation\PresentationWorldCanvas;
 use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposition;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
@@ -26,7 +28,9 @@ use InvalidArgumentException;
  * the Engine composes them ({@see PresentationCanvas::composeOverlay()}):
  * dialogue, notices, cinematic covers, stages and what is lifted above the
  * cover, drawn by the canvas raster ({@see CanvasStillRaster}), which paints
- * a canvas's translated groups at their layers.
+ * a canvas's translated groups at their layers, each in its colour treatment.
+ * The frame's screen canvas and world canvases are admitted together before the frame is drawn, on the region
+ * budget's terms ({@see CanvasStillRaster::prepareCanvases()}), as a graphical renderer admits the whole frame.
  *
  * It reads only what the Engine composed. What the two rasters leave out is
  * named in {@see $diagnostics}.
@@ -49,8 +53,9 @@ final class SceneFrameRaster
 
     public function __construct(string $assetRoot, ?string $fontPath = null)
     {
-        $this->field = new FieldStillRaster($assetRoot, $fontPath);
         $this->canvas = new CanvasStillRaster($assetRoot, $fontPath);
+        // One canvas raster draws the screen and the field's world canvases, so a frame's regions are held once.
+        $this->field = new FieldStillRaster($assetRoot, $fontPath, $this->canvas);
     }
 
     /** Whether the frame raster draws a renderer feature. */
@@ -63,9 +68,13 @@ final class SceneFrameRaster
      * Draws a frame composed for a graphical screen of the given grid.
      *
      * @throws InvalidArgumentException When the frame's field has no complete text snapshot.
+     * @throws CanvasImageBudgetExceeded When the images of the frame's canvases exceed the Engine's budget for one frame.
      */
     public function rasterize(SceneFrameComposition $frame, RendererGridConfig $grid): GdImage
     {
+        $screen = $frame->screenOverlay === null ? $frame->canvas : PresentationCanvas::composeOverlay($frame->canvas, $frame->screenOverlay);
+        $this->canvas->prepareCanvases([...($screen === null ? [] : [$screen]),
+            ...array_map(static fn(PresentationWorldCanvas $canvas): PresentationCanvas => $canvas->canvas, $frame->worldCanvases)]);
         $width = $grid->columns * $grid->cellWidth;
         $height = $grid->rows * $grid->cellHeight;
         $image = imagecreatetruecolor($width, $height);
@@ -76,7 +85,6 @@ final class SceneFrameRaster
             $this->drawField($image, $frame, $grid);
         }
         $this->drawScreenText($image, $frame, $grid);
-        $screen = $frame->screenOverlay === null ? $frame->canvas : PresentationCanvas::composeOverlay($frame->canvas, $frame->screenOverlay);
         if ($screen !== null) {
             $this->drawScreen($image, $screen, $width, $height);
         }

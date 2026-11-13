@@ -6,13 +6,17 @@ namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Engine\Animations\Timelines\BattleMotionAnchor;
+use Ichiloto\Engine\Animations\Timelines\BattleMotionSpace;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectTrackType;
 use Ichiloto\Engine\Animations\Timelines\EffectAnchorLifetime;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightContact;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
 use Ichiloto\Engine\Animations\Timelines\EffectImpactTimingMode;
+use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
 use Ichiloto\Engine\Animations\Timelines\EffectStraightFlightFallback;
 use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
 use Ichiloto\Engine\Animations\Timelines\EffectImageDepth;
@@ -66,17 +70,11 @@ final class CutsceneSchemas
      */
     public const string CUES_KEY = 'cues';
 
-    /**
-     * The battle effect track that moves the whole battlefield, as the Engine's
-     * `BattleFieldMotionTrack` reads it; the Engine names it only inline.
-     */
-    public const string FIELD_MOTION_TRACK = 'field-motion';
+    /** The battle effect track that moves the whole battlefield, by the Engine's name for it. */
+    public const string FIELD_MOTION_TRACK = EffectTrackType::FIELD_MOTION->value;
 
-    /**
-     * The battle effect tracks only the graphical battle draws, as the Engine's effect validator scopes
-     * them: authored in the graphical editor, and always of the `graphical` presentation.
-     */
-    private const array GRAPHICAL_TRACK_TYPES = ['trail', 'tether', self::FIELD_MOTION_TRACK];
+    /** The battle effect track that moves the caster or the selected targets, by the Engine's name for it. */
+    public const string BATTLER_MOTION_TRACK = EffectTrackType::BATTLER_MOTION->value;
 
     /** The payload key a summon stage's subjects are edited under. */
     public const string STAGE_SUBJECTS_KEY = 'stage.subjects';
@@ -88,6 +86,12 @@ final class CutsceneSchemas
     public const string STAGE_COVERS_KEY = 'stage.covers';
 
     public const string RANGE_TIMING_KEYS = 'rangeTiming.keys';
+
+    /** The payload key a timeline's reduced-motion samples are edited under, by the Engine's name for them. */
+    public const string REDUCED_MOTION_SAMPLES_KEY = 'reducedMotionSamples';
+
+    /** How a reduced-motion sample that clears the picture reads: its source frame is the Engine's explicit null. */
+    public const string REDUCED_MOTION_CLEAR = '(clears the picture)';
 
     /** How an image track without a default image reads: each of its keyframes names its own. */
     public const string TRACK_IMAGE_NONE = '(none: each keyframe names its image)';
@@ -148,8 +152,11 @@ final class CutsceneSchemas
     /**
      * Returns the summon category: one record per asset, its definition as
      * fields, its tracks and cues as command-style lists opened as frames.
+     * The graphical editor also authors what only the graphical presentation
+     * reads: each track's motion scope and the timeline's reduced-motion
+     * samples.
      */
-    public static function summons(): RecordSchema
+    public static function summons(bool $graphical = false): RecordSchema
     {
         $fields = [
             new RecordField('id', 'Id', isReadOnly: true),
@@ -223,18 +230,84 @@ final class CutsceneSchemas
                 self::CUES_KEY => [],
             ],
             commandLists: [
-                self::TRACKS_KEY => self::trackList(),
+                self::TRACKS_KEY => self::trackList($graphical),
                 self::CUES_KEY => self::cueList(),
                 self::STAGE_SUBJECTS_KEY => self::stageSubjectList(),
                 self::STAGE_CAMERA_KEY => self::stageCameraList(),
                 self::STAGE_COVERS_KEY => self::stageCoverList(),
+                ...($graphical ? [self::REDUCED_MOTION_SAMPLES_KEY => self::reducedMotionSampleList()] : []),
             ],
             // A sequence with a stage edits it as rows and lists of its own.
             fieldsFor: static fn(array $payload): array => is_array($payload['stage'] ?? null) ? [...$fields, ...self::stageFields()] : $fields,
-            commandListsFor: static fn(array $payload): array => is_array($payload['stage'] ?? null)
-                ? [self::TRACKS_KEY, self::CUES_KEY, self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY]
-                : [self::TRACKS_KEY, self::CUES_KEY],
+            commandListsFor: static fn(array $payload): array => [
+                self::TRACKS_KEY, self::CUES_KEY,
+                ...(is_array($payload['stage'] ?? null) ? [self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY] : []),
+                ...($graphical && self::offersReducedMotionSamples($payload) ? [self::REDUCED_MOTION_SAMPLES_KEY] : []),
+            ],
         );
+    }
+
+    /**
+     * Whether a timeline's reduced-motion samples are authored in the sequence being edited. The Engine
+     * selects held drawings for the graphical presentation alone, so of a timeline with separate terminal
+     * and graphical sequences the plan belongs in the graphical one; a terminal sequence that already holds
+     * one still lists it.
+     *
+     * @param array<string, mixed> $payload The record as it is edited.
+     */
+    private static function offersReducedMotionSamples(array $payload): bool
+    {
+        return ($payload[CutsceneAsset::SEQUENCE_KEY] ?? null) !== EffectPresentation::TERMINAL->value
+            || array_key_exists(self::REDUCED_MOTION_SAMPLES_KEY, $payload);
+    }
+
+    /**
+     * A fixed, once-playing timeline's reduced-motion samples, as the Engine's `EffectReducedMotionSamples`
+     * reads them: from frame zero to the timeline's last frame, one after another, each holding the drawing
+     * of an authored frame for its duration, or clearing the picture. The Engine judges their order and
+     * cover on save. A list emptied of its last sample goes from the file: the Engine reads none as the
+     * timeline's rest frame, and refuses an empty list.
+     *
+     * A sample that clears holds an explicit `null` source frame, never a missing key. The source frame's
+     * row reads {@see REDUCED_MOTION_CLEAR} for it; that label, or an empty value, written to the row keeps
+     * the key with `null`, and a number holds that frame, zero included.
+     */
+    public static function reducedMotionSampleList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: self::REDUCED_MOTION_SAMPLES_KEY,
+            prefix: 'reducedSample',
+            singular: 'reduced-motion sample',
+            fields: [
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('duration', 'Duration', InputControlType::INTEGER),
+                // Removed when cleared, as the row machinery clears any field, and put back as null below.
+                new RecordField('sourceFrame', 'Source Frame', InputControlType::INTEGER, removeWhenEmpty: true,
+                    displayDefault: self::REDUCED_MOTION_CLEAR),
+            ],
+            blank: ['frame' => 0, 'duration' => 1, 'sourceFrame' => 0],
+            heading: 'Reduced Motion Samples',
+            removeWhenEmpty: true,
+            prepareEdit: static function (array $entry, string $field): array {
+                if ($field === 'sourceFrame' && ! array_key_exists('sourceFrame', $entry)) {
+                    $entry['sourceFrame'] = null;
+                }
+
+                return $entry;
+            },
+        );
+    }
+
+    /**
+     * Which motion setting draws a track, as the Engine's `EffectMotionScope` names them: every one, or
+     * only normal or only reduced motion. A track that names none is drawn in every one, and stays
+     * without the key; the empty choice removes it. The Engine draws a motion-specific track in the
+     * graphical presentation alone and judges the rest on save.
+     */
+    private static function trackMotionField(): RecordField
+    {
+        return new RecordField('motion', 'Motion', options: ['', ...array_column(EffectMotionScope::cases(), 'value')],
+            removeWhenEmpty: true, displayDefault: EffectMotionScope::ALL->value);
     }
 
     /**
@@ -753,14 +826,30 @@ final class CutsceneSchemas
                         heading: 'Far Range Timing Keys',
                         removeWhenEmpty: true,
                     ),
+                    self::REDUCED_MOTION_SAMPLES_KEY => self::reducedMotionSampleList(),
                 ] : []),
             ],
             fieldsFor: static fn(array $payload): array => $graphical && is_array($payload['stage'] ?? null)
                 ? [...$fields, ...self::stageFields()] : $fields,
-            commandListsFor: static fn(array $payload): array => $graphical && is_array($payload['stage'] ?? null)
-                ? [self::TRACKS_KEY, self::CUES_KEY, self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY]
-                : [self::TRACKS_KEY, self::CUES_KEY, ...($graphical ? [self::RANGE_TIMING_KEYS] : [])],
+            commandListsFor: static fn(array $payload): array => [
+                self::TRACKS_KEY, self::CUES_KEY,
+                ...($graphical ? (is_array($payload['stage'] ?? null)
+                    ? [self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY] : [self::RANGE_TIMING_KEYS]) : []),
+                ...($graphical && self::offersReducedMotionSamples($payload) ? [self::REDUCED_MOTION_SAMPLES_KEY] : []),
+            ],
         );
+    }
+
+    /**
+     * The battle effect tracks only the graphical battle draws, as the Engine scopes them: authored in the
+     * graphical editor, and always of the `graphical` presentation.
+     *
+     * @return list<string>
+     */
+    private static function getGraphicalTrackTypes(): array
+    {
+        return array_values(array_map(static fn(EffectTrackType $type): string => $type->value,
+            array_filter(EffectTrackType::cases(), static fn(EffectTrackType $type): bool => $type->requiresGraphicalPresentation())));
     }
 
     /**
@@ -771,6 +860,9 @@ final class CutsceneSchemas
     public static function effectTrackList(bool $graphical = false): RecordSubList
     {
         $keyframes = self::effectKeyframeList();
+        // One list for both motion tracks, as the Engine compiles both with its one `EffectMotionSamples`:
+        // a motion turned from the field's into a battler's, or back, keeps its samples.
+        $motionSamples = self::battleMotionSamples();
         $anchors = [
             new RecordField('anchor', 'Anchor', options: ['target', 'caster', 'screen'], removeWhenEmpty: true, displayDefault: 'target'),
             new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
@@ -787,10 +879,11 @@ final class CutsceneSchemas
             singular: 'track',
             fields: [
                 new RecordField('id', 'Id'),
-                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake', ...($graphical ? self::GRAPHICAL_TRACK_TYPES : [])]),
+                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake', ...($graphical ? self::getGraphicalTrackTypes() : [])]),
                 new RecordField('presentation', 'Presentation',
                     options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
                     removeWhenEmpty: true, displayDefault: 'all'),
+                ...($graphical ? [self::trackMotionField()] : []),
             ],
             blank: ['id' => 'track', 'type' => 'glyph', 'keyframes' => [['frame' => 0, 'duration' => 1, 'content' => '*', 'position' => ['x' => 0, 'y' => 0]]]],
             variants: [
@@ -806,7 +899,8 @@ final class CutsceneSchemas
                 'flash' => $anchors,
                 'shake' => $anchors,
                 // A whole-field motion has no subject: its samples are all it holds.
-                ...($graphical ? ['trail' => self::battleTrailFields(), 'tether' => self::battleTetherFields(), self::FIELD_MOTION_TRACK => []] : []),
+                ...($graphical ? ['trail' => self::battleTrailFields(), 'tether' => self::battleTetherFields(), self::FIELD_MOTION_TRACK => [],
+                    self::BATTLER_MOTION_TRACK => self::battleBattlerMotionFields()] : []),
             ],
             variantKey: 'type',
             nestedLists: [
@@ -817,10 +911,10 @@ final class CutsceneSchemas
                 'flash' => $keyframes,
                 'shake' => $keyframes,
                 ...($graphical ? ['trail' => self::battleTrailBands(), 'tether' => self::battleTetherSamples(),
-                    self::FIELD_MOTION_TRACK => self::battleFieldMotionSamples()] : []),
+                    self::FIELD_MOTION_TRACK => $motionSamples, self::BATTLER_MOTION_TRACK => $motionSamples] : []),
             ],
             prepareEdit: static function (array $entry, string $field): array {
-                if ($field === 'type' && in_array($entry['type'] ?? null, self::GRAPHICAL_TRACK_TYPES, true)) {
+                if ($field === 'type' && in_array($entry['type'] ?? null, self::getGraphicalTrackTypes(), true)) {
                     unset($entry['presentation']);
                 }
 
@@ -950,21 +1044,39 @@ final class CutsceneSchemas
     }
 
     /**
-     * The held samples of a whole-field motion track, as the Engine's `BattleFieldMotionTrack` reads them:
-     * an offset of the battlefield in logical pixels, fractions allowed, from a frame for a duration (one
-     * frame when omitted). A sample that is not enabled moves nothing.
+     * Whom a battler motion track moves and how its samples' X is read, as the Engine's
+     * `BattleBattlerMotionTrack` reads them. The track names its battler: the Engine gives it none. A
+     * space left out is the canvas, where X runs to the right of the screen; among opponents X runs from
+     * the moved battler toward the side it fights, so a negative X pushes either side back from the other.
+     * Y runs down the screen in both.
+     *
+     * @return list<RecordField>
      */
-    private static function battleFieldMotionSamples(): RecordSubList
+    private static function battleBattlerMotionFields(): array
+    {
+        return [
+            new RecordField('anchor', 'Moved Battler', options: array_column(BattleMotionAnchor::cases(), 'value')),
+            new RecordField('space', 'Offset Space', options: ['', ...array_column(BattleMotionSpace::cases(), 'value')],
+                removeWhenEmpty: true, displayDefault: BattleMotionSpace::CANVAS->value),
+        ];
+    }
+
+    /**
+     * The held samples of a motion track, the whole field's or a battler's, as the Engine's
+     * `EffectMotionSamples` reads them for both: an offset in logical pixels, fractions allowed, from a
+     * frame for a duration (one frame when omitted). A sample that is not enabled moves nothing.
+     */
+    private static function battleMotionSamples(): RecordSubList
     {
         return new RecordSubList(
             key: 'keyframes',
             prefix: 'keyframe',
-            singular: 'field motion sample',
+            singular: 'motion sample',
             fields: [
                 new RecordField('frame', 'Frame', InputControlType::INTEGER),
                 new RecordField('duration', 'Duration', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
-                new RecordField('payload.x', 'Field Offset X', InputControlType::FLOAT),
-                new RecordField('payload.y', 'Field Offset Y', InputControlType::FLOAT),
+                new RecordField('payload.x', 'Offset X', InputControlType::FLOAT),
+                new RecordField('payload.y', 'Offset Y', InputControlType::FLOAT),
                 RecordField::boolean('visible', 'Enabled', displayDefault: 'true'),
             ],
             blank: ['frame' => 0, 'payload' => ['x' => 0, 'y' => 0]],
@@ -1128,7 +1240,7 @@ final class CutsceneSchemas
      * anchor (the target, by default) with the effect schema's fields and
      * keyframes, so a summon's art is authored as any effect's is.
      */
-    public static function trackList(): RecordSubList
+    public static function trackList(bool $graphical = false): RecordSubList
     {
         return new RecordSubList(
             key: self::TRACKS_KEY,
@@ -1141,6 +1253,7 @@ final class CutsceneSchemas
                 new RecordField('presentation', 'Presentation',
                     options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
                     removeWhenEmpty: true, displayDefault: 'all'),
+                ...($graphical ? [self::trackMotionField()] : []),
             ],
             blank: ['type' => 'glyph', 'id' => 'track', 'keyframes' => []],
             // On a graphical stage, art is placed in stage units on a subject,

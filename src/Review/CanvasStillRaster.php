@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Review;
 
 use GdImage;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasColorTransform;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasGroup;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageBottomFade;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageBudgetExceeded;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImagePreflight;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicator;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicatorKind;
@@ -17,6 +19,9 @@ use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasLabel;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasTextLayer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
+use Ichiloto\Engine\Rendering\Presentation\PresentationSession;
+use Ichiloto\Engine\Rendering\Presentation\SpriteSourceRect;
+use Ichiloto\Engine\Rendering\Sprites\PngAssetPreflight;
 use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 use InvalidArgumentException;
 use RuntimeException;
@@ -31,7 +36,8 @@ use RuntimeException;
  * cell's background and glyph, centred in the cell, in a monospaced system
  * font fitted to the layer's cell; labels show the graphical renderer's own
  * raster of them. A group paints its local canvas as one drawing at the
- * group's origin ({@see paintLocalCanvas()}), groups within it included.
+ * group's origin ({@see paintLocalCanvas()}), groups within it included, in
+ * the group's colour treatment when it has one.
  *
  * It reads only the canvas the Engine composed, so what it draws is what the
  * game would send a graphical renderer. It is a review picture, not the
@@ -39,16 +45,27 @@ use RuntimeException;
  * coordinates are rounded to whole pixels. Unmasked source-over fills,
  * coverage dabs and texture strips are supported. Glyph effects are drawn plain. Everything left out is named
  * once in {@see $diagnostics}.
+ *
+ * A still's canvases are admitted together before any of them is drawn, as the Engine admits a frame's for a
+ * renderer with the region budget ({@see prepareCanvases()}): an image costs the crop it is drawn from and each
+ * changed variant of it the still draws, a group's colour treatment of it among them, and a still whose images
+ * exceed the Engine's limits is refused whole, with the Engine's own account of them.
  */
 final class CanvasStillRaster
 {
-    /** The renderer features the raster draws, as a graphical renderer negotiates them. */
+    /**
+     * The renderer features the raster draws, as a graphical renderer negotiates them. The region budget is the
+     * terms its images are admitted and held on ({@see prepareCanvases()}); the Engine composes a group's colour
+     * treatment only for a renderer that names it beside the treatment.
+     */
     public const array CAPABILITIES = [
-        RendererSessionConfig::GRAPHICAL_CANVAS, RendererSessionConfig::CANVAS_OVERLAY, RendererSessionConfig::CANVAS_CLIP_OPACITY,
+        RendererSessionConfig::GRAPHICAL_CANVAS, RendererSessionConfig::CANVAS_REGION_BUDGET,
+        RendererSessionConfig::CANVAS_OVERLAY, RendererSessionConfig::CANVAS_CLIP_OPACITY,
         RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::CANVAS_IMAGE_TONE, RendererSessionConfig::CANVAS_IMAGE_FLIP,
         RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
         RendererSessionConfig::CANVAS_IMAGE_ROTATION, RendererSessionConfig::CANVAS_TEXTURE_STRIP,
         RendererSessionConfig::CANVAS_IMAGE_BOTTOM_FADE, RendererSessionConfig::CANVAS_GROUPS,
+        RendererSessionConfig::CANVAS_GROUP_COLOR,
     ];
 
     /** Fonts tried, in order, when none is given: the graphical renderer's own text font first. */
@@ -64,11 +81,19 @@ final class CanvasStillRaster
     /** The renderer's paint order for items of one layer. */
     private const array KIND_ORDER = ['image' => 0, 'composite' => 1, 'indicator' => 2, 'text' => 3, 'label' => 4, 'group' => 5];
 
+    /** The most colours a colour treatment remembers the result for at one time ({@see treatColors()}). */
+    private const int TREATED_COLOR_MEMORY = 4096;
+
     /** @var list<string> What the still could not draw, once each. */
     public private(set) array $diagnostics = [];
 
-    /** @var array<string, GdImage|null> */
-    private array $images = [];
+    /**
+     * The regions the stills' images are drawn from, each a crop of a picture or the whole of one, by picture and
+     * crop, the least recently prepared first ({@see prepareCanvases()}).
+     *
+     * @var array<string, GdImage>
+     */
+    private array $regions = [];
     /** @var array<string, float> Font sizes fitted to each cell size. */
     private array $fontSizes = [];
     /**
@@ -108,9 +133,14 @@ final class CanvasStillRaster
         $this->labelRasters = $rasters;
     }
 
-    /** A still of a whole canvas at its logical size over a background colour (0xRRGGBB). */
+    /**
+     * A still of a whole canvas at its logical size over a background colour (0xRRGGBB).
+     *
+     * @throws CanvasImageBudgetExceeded When the canvas's images exceed the Engine's budget for one frame.
+     */
     public function rasterize(PresentationCanvas $canvas, int $background = TerminalPalette::DEFAULT_BACKGROUND): GdImage
     {
+        $this->prepareCanvases([$canvas]);
         $image = self::createCanvas($canvas->width, $canvas->height);
         imagealphablending($image, false);
         imagefilledrectangle($image, 0, 0, $canvas->width - 1, $canvas->height - 1, self::allocate($image, $background));
@@ -118,6 +148,96 @@ final class CanvasStillRaster
         $this->drawCanvas($image, $canvas, 'canvas');
 
         return $image;
+    }
+
+    /**
+     * Admits the canvases one still draws, together, and prepares the regions their images are drawn from. A
+     * raster that draws canvases itself ({@see drawCanvas()}, {@see paintLocalCanvas()}) gives every canvas of
+     * its still here first.
+     *
+     * The canvases are admitted whole, groups and all, by the Engine's own accounting
+     * ({@see CanvasImagePreflight::inspectCanvasResources()}) for a renderer of this raster's features. With the
+     * region budget among them an image costs the crop it is drawn from and one variant for each distinct way that
+     * crop is drawn changed: toned, mirrored, turned, faded toward its bottom edge, or in the colour treatment of
+     * the groups it is drawn in, a group's own first and its parent's after. A composite costs its finished
+     * surface once for each such treatment, a treatment that changes nothing costs nothing, and a picture a
+     * composite operation uses whole still costs all of itself. A still over the Engine's limits is refused before
+     * any of it is drawn, with the Engine's account of what exceeds them.
+     *
+     * The raster then holds no more than was charged: each picture is decoded once, the crops the canvases draw
+     * are cut from it, and the picture is let go; a variant is made for the drawing that needs it and kept by
+     * nothing. Regions prepared for earlier stills stay while they fit the same budget beside this still's, the
+     * least recently prepared released first. A drawing the Engine cannot account for, because a picture of it
+     * is missing or is not one the Engine reads, is charged nothing and kept nowhere: its picture is read for
+     * each drawing ({@see findRegion()}), and left out and named when it cannot be.
+     *
+     * @param list<PresentationCanvas> $canvases Every canvas the still draws; the canvases their groups draw are found here.
+     * @throws CanvasImageBudgetExceeded When the canvases' images exceed the Engine's budget for one frame.
+     */
+    public function prepareCanvases(array $canvases): void
+    {
+        $images = [];
+        PresentationSession::runForSession(self::supports(...), fn(): array => PngAssetPreflight::runWithSnapshot(
+            fn(): array => CanvasImagePreflight::inspectCanvasResources($canvases, $this->assetRoot,
+                function (CanvasImage|CanvasComposite $drawing) use (&$images): bool {
+                    $charged = $this->canInspect($drawing);
+                    if ($charged && $drawing instanceof CanvasImage) {
+                        // The crops prepared are the crops the Engine charged.
+                        $images[] = $drawing;
+                    }
+
+                    return $charged;
+                })));
+        $crops = [];
+        foreach ($images as $image) {
+            $key = self::getRegionKey($image);
+            if (isset($this->regions[$key])) {
+                // Drawn again, so released after every region this still does not draw.
+                $region = $this->regions[$key];
+                unset($this->regions[$key]);
+                $this->regions[$key] = $region;
+            } else {
+                $crops[$image->asset][$key] = $image->sourceRect;
+            }
+        }
+        foreach ($crops as $asset => $regions) {
+            $picture = $this->decodeImage($asset);
+            foreach ($picture === null ? [] : $regions as $key => $crop) {
+                $region = self::cutRegion($picture, $crop);
+                if ($region !== null) {
+                    $this->regions[$key] = $region;
+                }
+            }
+        }
+        $held = array_sum(array_map(self::measureRegion(...), $this->regions));
+        foreach ($this->regions as $key => $region) {
+            // This still's regions are the last, and the Engine charged each more than it holds.
+            if ($held <= CanvasImagePreflight::MAX_BYTES) {
+                break;
+            }
+            $held -= self::measureRegion($region);
+            unset($this->regions[$key]);
+        }
+    }
+
+    /**
+     * Whether the Engine can account for a drawing: every picture it draws from is one the Engine reads from
+     * the project's assets, and each crop lies inside its picture. The drawing is asked about alone, in no group.
+     *
+     * @throws CanvasImageBudgetExceeded When the drawing alone exceeds the Engine's budget.
+     */
+    private function canInspect(CanvasImage|CanvasComposite $drawing): bool
+    {
+        try {
+            $drawing instanceof CanvasImage ? CanvasImagePreflight::inspect([$drawing], $this->assetRoot)
+                : CanvasImagePreflight::inspect([], $this->assetRoot, [$drawing]);
+
+            return true;
+        } catch (CanvasImageBudgetExceeded $refusal) {
+            throw $refusal;
+        } catch (RuntimeException) {
+            return false;
+        }
     }
 
     /** Draws a canvas into a surface of its size, in the renderer's paint order. */
@@ -150,9 +270,13 @@ final class CanvasStillRaster
      * geometry and is masked by its own rectangle, by a clip of the canvas being drawn when one is given, and
      * by the surface, so the clips of every canvas it is nested in intersect. A corner off the surface stays
      * there: what does not show is not drawn, and only the part that shows takes memory.
+     *
+     * A colour treatment is applied once to that flattened part, after everything in the local canvas is drawn
+     * and before the part is blended onto the canvas being drawn ({@see treatColors()}). A group within the local
+     * canvas is treated the same way when it is flattened, so its own treatment comes first and this one follows.
      */
     public function paintLocalCanvas(GdImage $surface, PresentationCanvas $canvas, int $left, int $top, ?CanvasRectangle $clip,
-        string $context): void
+        string $context, ?CanvasColorTransform $colorTransform = null): void
     {
         $left += $this->originX;
         $top += $this->originY;
@@ -174,17 +298,53 @@ final class CanvasStillRaster
         } finally {
             [$this->originX, $this->originY] = [$originX, $originY];
         }
+        if ($colorTransform !== null) {
+            self::treatColors($part, $colorTransform);
+        }
         imagecopy($surface, $part, $visibleLeft, $visibleTop, 0, 0, $visibleRight - $visibleLeft, $visibleBottom - $visibleTop);
     }
 
     /**
-     * Paints a group's canvas at the group's origin, inside the group's clip. The origin is taken to the nearest
-     * whole pixel, a half upwards on either side of zero, so equal steps of an origin move the drawing equally.
+     * Paints a group's canvas at the group's origin, inside the group's clip and in the group's colour treatment.
+     * The origin is taken to the nearest whole pixel, a half upwards on either side of zero, so equal steps of an
+     * origin move the drawing equally.
      */
     private function paintGroup(GdImage $surface, CanvasGroup $group, string $context): void
     {
         $this->paintLocalCanvas($surface, $group->canvas, (int) floor($group->x + 0.5), (int) floor($group->y + 0.5),
-            $group->clipRect, sprintf('%s group %s', $context, $group->id));
+            $group->clipRect, sprintf('%s group %s', $context, $group->id), $group->colorTransform);
+    }
+
+    /**
+     * Gives a flattened drawing a group's colour treatment: every pixel's straight colour, each channel taken to
+     * 0..1, goes through the Engine's own calculation ({@see CanvasColorTransform::transformRgb()}) and back to
+     * the nearest of GD's 256 steps. Coverage is never changed, and a pixel nothing covers is left as it is, so
+     * no offset can give it a colour.
+     */
+    private static function treatColors(GdImage $image, CanvasColorTransform $transform): void
+    {
+        // Flat artwork repeats few colours; the memory of them is emptied before it can outgrow the drawing.
+        $treated = [];
+        imagealphablending($image, false);
+        for ($y = 0, $height = imagesy($image); $y < $height; $y++) {
+            for ($x = 0, $width = imagesx($image); $x < $width; $x++) {
+                $pixel = imagecolorat($image, $x, $y);
+                $transparency = $pixel & 0x7F000000;
+                if ($transparency === 0x7F000000) {
+                    continue;
+                }
+                $rgb = $pixel & 0xFFFFFF;
+                if (! isset($treated[$rgb])) {
+                    if (count($treated) >= self::TREATED_COLOR_MEMORY) {
+                        $treated = [];
+                    }
+                    [$red, $green, $blue] = $transform->transformRgb(($rgb >> 16) / 255, (($rgb >> 8) & 255) / 255, ($rgb & 255) / 255);
+                    $treated[$rgb] = ((int) round($red * 255) << 16) | ((int) round($green * 255) << 8) | (int) round($blue * 255);
+                }
+                imagesetpixel($image, $x, $y, $transparency | $treated[$rgb]);
+            }
+        }
+        imagealphablending($image, true);
     }
 
     private function drawComposite(GdImage $surface, CanvasComposite $composite, string $context): void
@@ -363,38 +523,31 @@ final class CanvasStillRaster
     /** Draws one canvas image: cropped, mirrored, brightened, stretched to its destination and clipped. */
     public function drawImage(GdImage $surface, CanvasImage $part, string $context): void
     {
-        $source = $this->loadImage($part->asset, 'canvas image');
-        if ($source === null) {
+        $region = $this->findRegion($part, $context);
+        if ($region === null) {
             return;
         }
-        $rect = $part->sourceRect;
-        [$sourceX, $sourceY, $sourceWidth, $sourceHeight] = $rect === null
-            ? [0, 0, imagesx($source), imagesy($source)] : [$rect->x, $rect->y, $rect->width, $rect->height];
-        if ($sourceX + $sourceWidth > imagesx($source) || $sourceY + $sourceHeight > imagesy($source)) {
-            $this->diagnose(sprintf('%s is smaller than the crop image %s of the %s draws from it; the image is left out.',
-                $part->asset, $part->id, $context));
-
-            return;
-        }
+        $width = imagesx($region);
+        $height = imagesy($region);
         $rotation = $part->rotation ?? 0;
         if ($rotation === 0) {
-            $this->drawPicture($surface, $source, [$sourceX, $sourceY, $sourceWidth, $sourceHeight], $part->destination,
+            $this->drawPicture($surface, $region, [0, 0, $width, $height], $part->destination,
                 $part->clipRect, $part->opacity, $part->brightness, $part->flipX, $part->flipY, $part->bottomFade);
             return;
         }
-        if (CanvasImage::getRotatedRegionBytes($sourceWidth, $sourceHeight, $rotation) > CanvasImagePreflight::MAX_BYTES) {
+        if (CanvasImage::getRotatedRegionBytes($width, $height, $rotation) > CanvasImagePreflight::MAX_BYTES) {
             $this->diagnose(sprintf('Rotated image %s of the %s exceeds the renderer region budget.', $part->id, $context));
             return;
         }
         try {
-            $destination = $part->getPreparedDestination(imagesx($source), imagesy($source));
+            $destination = $part->getPreparedDestination($width, $height);
         } catch (InvalidArgumentException $failure) {
             $this->diagnose(sprintf('Image %s of the %s cannot be rotated: %s', $part->id, $context, $failure->getMessage()));
             return;
         }
-        $crop = self::createCanvas($sourceWidth, $sourceHeight);
+        $crop = self::createCanvas($width, $height);
         imagealphablending($crop, false);
-        imagecopy($crop, $source, 0, 0, $sourceX, $sourceY, $sourceWidth, $sourceHeight);
+        imagecopy($crop, $region, 0, 0, 0, 0, $width, $height);
         if ($part->flipX || $part->flipY) {
             imageflip($crop, $part->flipX && $part->flipY ? IMG_FLIP_BOTH
                 : ($part->flipX ? IMG_FLIP_HORIZONTAL : IMG_FLIP_VERTICAL));
@@ -405,6 +558,59 @@ final class CanvasStillRaster
         $rotated = CanvasStillRotation::rotate($crop, $rotation);
         $this->drawPicture($surface, $rotated, [0, 0, imagesx($rotated), imagesy($rotated)], $destination,
             $part->clipRect, $part->opacity, 1, false, false);
+    }
+
+    /**
+     * The region an image is drawn from: the one prepared for its still ({@see prepareCanvases()}), or one read
+     * for this drawing alone and kept by nothing, when the image was not prepared. An image whose picture cannot
+     * be read, or is smaller than its crop, has none and is named.
+     */
+    private function findRegion(CanvasImage $part, string $context): ?GdImage
+    {
+        $prepared = $this->regions[self::getRegionKey($part)] ?? null;
+        if ($prepared !== null) {
+            return $prepared;
+        }
+        $picture = $this->readImage($part->asset, 'canvas image');
+        if ($picture === null) {
+            return null;
+        }
+        $region = self::cutRegion($picture, $part->sourceRect);
+        if ($region === null) {
+            $this->diagnose(sprintf('%s is smaller than the crop image %s of the %s draws from it; the image is left out.',
+                $part->asset, $part->id, $context));
+        }
+
+        return $region;
+    }
+
+    /** What names an image's region: its picture and its crop of it. */
+    private static function getRegionKey(CanvasImage $image): string
+    {
+        return $image->asset . "\0" . ($image->sourceRect === null ? '' : implode(',', $image->sourceRect->toArray()));
+    }
+
+    /** A crop of a picture as an image of its own, the picture itself when there is no crop, or null when the crop runs off it. */
+    private static function cutRegion(GdImage $picture, ?SpriteSourceRect $crop): ?GdImage
+    {
+        if ($crop === null) {
+            return $picture;
+        }
+        if ($crop->x + $crop->width > imagesx($picture) || $crop->y + $crop->height > imagesy($picture)) {
+            return null;
+        }
+        $region = imagecreatetruecolor($crop->width, $crop->height);
+        imagealphablending($region, false);
+        imagecopy($region, $picture, 0, 0, $crop->x, $crop->y, $crop->width, $crop->height);
+        imagesavealpha($region, true);
+
+        return $region;
+    }
+
+    /** The bytes a region holds: four for each of its pixels, as the Engine counts a decoded picture. */
+    private static function measureRegion(GdImage $region): int
+    {
+        return imagesx($region) * imagesy($region) * 4;
     }
 
     /**
@@ -603,25 +809,25 @@ final class CanvasStillRaster
         imagealphablending($image, true);
     }
 
-    /** An asset-root image, read once, or null and a diagnostic when it cannot be read. */
-    private function loadImage(string $path, string $role): ?GdImage
+    /** A picture of the project's assets, decoded whole for one use and kept by nothing, or null and a diagnostic when it cannot be read. */
+    private function readImage(string $path, string $role): ?GdImage
     {
-        if (!array_key_exists($path, $this->images)) {
-            $this->images[$path] = $this->readImage($path, $role);
+        $image = $this->decodeImage($path);
+        if ($image === null) {
+            $this->diagnose(sprintf('The %s %s cannot be read from the project\'s assets; what it draws is left out.', $role, $path));
         }
-        return $this->images[$path];
+
+        return $image;
     }
 
-    /** Decode a bounded use of an asset without retaining the full atlas. */
-    private function readImage(string $path, string $role): ?GdImage
+    /** A picture of the project's assets, decoded whole, or null when it cannot be read. */
+    private function decodeImage(string $path): ?GdImage
     {
         $root = realpath($this->assetRoot);
         $file = $root === false ? false : realpath($root . DIRECTORY_SEPARATOR . $path);
         $bytes = $file !== false && str_starts_with($file, $root . DIRECTORY_SEPARATOR) ? @file_get_contents($file) : false;
         $image = $bytes === false ? false : @imagecreatefromstring($bytes);
         if ($image === false) {
-            $this->diagnose(sprintf('The %s %s cannot be read from the project\'s assets; what it draws is left out.', $role, $path));
-
             return null;
         }
         if (! imageistruecolor($image)) {

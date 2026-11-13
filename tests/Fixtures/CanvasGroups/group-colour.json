@@ -1,0 +1,245 @@
+{
+    "capabilities": [
+        "graphical_canvas",
+        "canvas_groups",
+        "canvas_group_color",
+        "canvas_region_budget",
+        "canvas_compositing"
+    ],
+    "canvas": {
+        "width": 32,
+        "height": 16,
+        "groups": [
+            {
+                "id": "dim-parent",
+                "origin": {
+                    "x": -2,
+                    "y": 1
+                },
+                "layer": 1,
+                "canvas": {
+                    "width": 32,
+                    "height": 16,
+                    "groups": [
+                        {
+                            "id": "invert",
+                            "origin": {
+                                "x": 0,
+                                "y": 0
+                            },
+                            "layer": 0,
+                            "canvas": {
+                                "width": 32,
+                                "height": 16,
+                                "images": [],
+                                "indicators": [],
+                                "textLayers": [],
+                                "composites": [
+                                    {
+                                        "id": "red-half",
+                                        "width": 16,
+                                        "height": 16,
+                                        "destination": {
+                                            "x": 0,
+                                            "y": 0,
+                                            "width": 16,
+                                            "height": 16
+                                        },
+                                        "layer": 0,
+                                        "operations": [
+                                            {
+                                                "type": "fill",
+                                                "opacity": 0.5,
+                                                "blend": "source_over",
+                                                "masks": [],
+                                                "destination": {
+                                                    "x": 0,
+                                                    "y": 0,
+                                                    "width": 16,
+                                                    "height": 16
+                                                },
+                                                "brush": {
+                                                    "type": "solid",
+                                                    "color": {
+                                                        "kind": "rgb",
+                                                        "r": 255,
+                                                        "g": 0,
+                                                        "b": 0
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "id": "blue-half",
+                                        "width": 16,
+                                        "height": 16,
+                                        "destination": {
+                                            "x": 8,
+                                            "y": 0,
+                                            "width": 16,
+                                            "height": 16
+                                        },
+                                        "layer": 0,
+                                        "operations": [
+                                            {
+                                                "type": "fill",
+                                                "opacity": 0.5,
+                                                "blend": "source_over",
+                                                "masks": [],
+                                                "destination": {
+                                                    "x": 0,
+                                                    "y": 0,
+                                                    "width": 16,
+                                                    "height": 16
+                                                },
+                                                "brush": {
+                                                    "type": "solid",
+                                                    "color": {
+                                                        "kind": "rgb",
+                                                        "r": 0,
+                                                        "g": 0,
+                                                        "b": 255
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            "colorTransform": {
+                                "matrix": [
+                                    [
+                                        -1,
+                                        0,
+                                        0
+                                    ],
+                                    [
+                                        0,
+                                        -1,
+                                        0
+                                    ],
+                                    [
+                                        0,
+                                        0,
+                                        -1
+                                    ]
+                                ],
+                                "offset": [
+                                    1,
+                                    1,
+                                    1
+                                ]
+                            }
+                        }
+                    ],
+                    "images": [],
+                    "indicators": [],
+                    "textLayers": []
+                },
+                "clipRect": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 28,
+                    "height": 16
+                },
+                "colorTransform": {
+                    "matrix": [
+                        [
+                            0.5,
+                            0,
+                            0
+                        ],
+                        [
+                            0,
+                            0.5,
+                            0
+                        ],
+                        [
+                            0,
+                            0,
+                            0.5
+                        ]
+                    ],
+                    "offset": [
+                        0,
+                        0,
+                        0
+                    ]
+                }
+            }
+        ],
+        "images": [],
+        "indicators": [],
+        "textLayers": [],
+        "composites": [
+            {
+                "id": "untreated-green",
+                "width": 16,
+                "height": 16,
+                "destination": {
+                    "x": 16,
+                    "y": 0,
+                    "width": 16,
+                    "height": 16
+                },
+                "layer": 0,
+                "operations": [
+                    {
+                        "type": "fill",
+                        "opacity": 1,
+                        "blend": "source_over",
+                        "masks": [],
+                        "destination": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 16,
+                            "height": 16
+                        },
+                        "brush": {
+                            "type": "solid",
+                            "color": {
+                                "kind": "rgb",
+                                "r": 0,
+                                "g": 255,
+                                "b": 0
+                            }
+                        }
+                    }
+                ]
+            }
+        ]
+    },
+    "reference": {
+        "space": "straight normalized RGB in existing drawing channels; no extra transfer function",
+        "nestedOrder": "invert child then dim parent; alpha unchanged",
+        "childRedOnly": {
+            "rgb": [
+                0,
+                0.5,
+                0.5
+            ],
+            "alpha": 0.5
+        },
+        "childBlueOverRed": {
+            "rgb": [
+                0.33333333333333337,
+                0.5,
+                0.16666666666666669
+            ],
+            "alpha": 0.75
+        },
+        "untreatedSibling": {
+            "rgb": [
+                0,
+                1,
+                0
+            ],
+            "alpha": 1
+        },
+        "transparentUnpainted": {
+            "alpha": 0
+        },
+        "note": "These are analytic child-surface values before parent source-over onto a sibling; translated clipping and depth remain ordinary group semantics. No rendered\/native pixels are claimed."
+    }
+}

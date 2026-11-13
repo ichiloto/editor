@@ -305,21 +305,42 @@ battle or the field places it, with the caster on either side. Remaining
 for the GUI editor: drawing image frames, sheet and cell picking by eye, and
 image timing; the TUI only names them.
 
-Whole-field motion (status, 12 November 2026, Engine `22954f40`): a battle
-effect's `field-motion` track is kept as written by every edit and save,
-fractional offsets, omitted durations and comments included. The graphical
-editor authors it through the shared record rows: the track type, and each
-sample's frame, duration, field offset X and Y in logical pixels and whether it
-is enabled; its timeline lane lists the samples. The TUI names the track, lists
-its samples in the Timeline pane and gains no sample form. In every record
-list, an entry of a type the editor does not offer (this track in the TUI,
-`tone` in both editors) keeps its type: changing it is refused before anything
-is written. Each save compiles through the Engine, which judges sample order,
-overlap, the `graphical` presentation and the fixed, once-playing battle
-timeline. Remaining for the GUI editor:
-- Visual controls for the samples, such as placing an offset on the battle
-  preview; today each value is typed in its row.
-- Seeing the motion in the editor window. The negotiation is in place:
+Whole-field and battler motion (status, 12 November 2026, Engine `22954f40`
+and `06ec2c47`): a battle effect's `field-motion` and `battler-motion` tracks
+are kept as written by every edit and save, fractional offsets, omitted
+durations, an omitted space and comments included. The graphical editor
+authors both through the shared record rows: the track type, and each sample's
+frame, duration, offset X and Y in logical pixels and whether it is enabled;
+the timeline lane lists the samples. Both types read the one sample list, as
+the Engine compiles both with one sample compiler, so a track turned from one
+motion into the other keeps its samples. A battler motion also has its moved
+battler (caster or target) and its offset space (canvas, or opponents: X runs
+from the moved battler toward the side it fights). A space left out reads as
+the canvas and a save writes none. The TUI names each track, lists its samples
+in the Timeline pane with what they move and gains no battler, space or sample
+form. In every record list, an entry of a type the editor does not offer
+(these tracks in the TUI, `tone` in both editors) keeps its type: changing it
+is refused before anything is written. Each save compiles through the Engine,
+which judges sample order, overlap, the `graphical` presentation, the fixed,
+once-playing battle timeline and a battler motion's battler and space.
+Remaining for the GUI editor:
+- Visual controls for the samples of both tracks, such as placing an offset on
+  the battle preview or dragging the moved battler there; today each value is
+  typed in its row.
+- Seeing a battler motion in the editor window. The negotiation is in place:
+  `cutscenes.effectBattlePreview` composes a frame with
+  `canvas_image_rotation` negotiated when its `imageRotation` flag is `true`
+  and `canvas_clip_opacity` when its `clipOpacity` flag is `true`. With both,
+  a frame inside an enabled sample draws the named battler at its offset, its
+  whole image kept behind a clip to the canvas, and carries no diagnostic.
+  Missing either, the frame is the ordinary battlefield with the Engine's
+  diagnostic. A sample of zero holds its battler in place; a disabled sample,
+  a frame outside the samples, reduced motion and the terminal arena move
+  nothing. A frame with no battler motion is composed exactly as it was
+  before the two were negotiated. The graphical editor sends each flag where
+  the canvas it paints with has the capability. The painted result has not
+  been checked in a window.
+- Seeing a whole-field motion in the editor window. The negotiation is in place:
   `cutscenes.effectBattlePreview` takes an optional `canvasGroups` flag beside
   its other drawing features, and composes that frame with `canvas_groups`
   negotiated only when the flag is `true`. The frame's canvas then holds the
@@ -330,8 +351,49 @@ timeline. Remaining for the GUI editor:
   battlefield still and carries the Engine's diagnostic, as before. The
   graphical editor sends the flag where the canvas it paints with draws
   groups. The painted result has not been checked in a window. A summon's
-  battle preview takes no such flag: the Engine refuses the track in a summon
-  timeline.
+  battle preview takes none of these flags: the Engine refuses both tracks in
+  a summon timeline.
+
+Reduced-motion samples and motion scopes (status, 12 November 2026, Engine
+`e1438b34`): an effect's or a summon's `reducedMotionSamples` and each track's
+`motion` are kept as written by every edit and save: values, omitted keys,
+key order, comments and a clearing sample's `'sourceFrame' => null`. Before
+this they were kept by saves and shown nowhere. The graphical editor authors
+both through the shared record rows. **Reduced Motion Samples** is a list of
+the sequence: each sample's frame, duration and source frame. The source frame
+row reads `(clears the picture)` for a sample whose source frame is `null`;
+that text or an empty value written to the row keeps the key with `null`, a
+number holds that frame, zero included, and a row's own text written back
+changes nothing. Removing the last sample takes the key from the file. Each
+track has a **Motion** row with the Engine's `EffectMotionScope` values; a
+track that names none reads `all` and stays without the key, and the empty
+choice removes it. For an effect or summon with separate sequences the list is
+offered in the graphical sequence, where the Engine reads it; a terminal
+sequence that already holds one still lists it. `cutscenes.timeline` gives
+each track's `motion` and the sequence's `reducedMotionSamples`, a clearing
+sample's source frame as `null`, with the row keys that edit them. The TUI
+lists both in the Timeline pane (`· reduced motion only` on a track,
+`Reduced motion (n samples)` with `holds frame n` or `clears the picture`
+under it) and has no row and no outline operation for either. Each save
+compiles through the Engine, which judges that the samples run from frame
+zero to the last frame without gap or overlap, their source frames, the
+fixed once-playing timeline, and that a motion-specific track is graphical and
+moves neither the field nor a battler under reduced motion alone.
+Previews: `cutscenes.effectBattlePreview` and `cutscenes.battlePreview`
+already take `reducedMotion`; with it the Engine draws each frame's held
+drawing and the reduced-motion tracks, and nothing where a sample clears. The
+timeline previews and the stage canvas play with motion and leave out the
+tracks drawn for reduced motion alone.
+Remaining for the GUI editor:
+- Visual controls for the samples, such as dragging a hold's edges on the
+  timeline or picking its source frame from the playhead; today each value is
+  typed in its row, and the Engine refuses a gap on save.
+- A reduced-motion view of the timeline preview, the effect on the field and
+  the standalone stage canvas. None of them takes a reduced-motion input, so
+  held drawings are seen only in the two battle previews.
+- The **Presentation** row of a motion-specific track that names no
+  presentation reads `all`; the Engine draws such a track in the graphical
+  presentation alone, as it does a `trail` or a motion track.
 
 Battle effect orientation and weapon roles (Engine contract in progress,
 2026-10): a battle track may declare `facing` (`east` or `west`), the
@@ -411,6 +473,51 @@ pixel, inside the group's clip, its own canvas and every canvas and clip around
 it; an origin off the surface draws nothing. World canvases and groups share
 one painter (`paintLocalCanvas()`), so a world canvas draws its groups too, and
 a still reads the label rasters of every canvas a world canvas's groups draw.
+
+The stills draw a group's colour treatment (`CanvasGroup` `colorTransform`,
+capability `canvas_group_color`, Engine `fe238189`). The painter flattens the
+visible part of a group's canvas, composites and nested groups included, then
+turns that part's straight colour through the treatment's matrix and offset
+once, with the Engine's `transformRgb()`, before it is blended onto the parent.
+Coverage is unchanged and an unpainted pixel stays unpainted. A nested group is
+treated by its own treatment when it is flattened and by its parent's after.
+A group with no treatment draws to the same bytes as before. A still holds 8
+bits a channel and 7 bits of coverage: against the Engine's analytic fixture
+(`tests/Fixtures/CanvasGroups/group-colour.json`) a channel is within 1 of 255
+steps and coverage within 1 of 127. All three rasters name
+`canvas_group_color` with `canvas_region_budget`, as the Engine pairs them
+(Engine `fe238189`, checked against `30a0db81`), and keep the region budget's
+terms. A still's canvases are
+admitted together before any is drawn, whole and with their groups, through
+the Engine's `CanvasImagePreflight::inspectCanvasResources()` (Engine
+`47dc6409`) for a renderer of the raster's features: a canvas image costs the
+crop it is drawn from and one variant for each distinct way the crop is drawn
+changed (toned, mirrored, turned, faded toward its bottom edge, or in the
+colour treatment of the groups it is drawn in, a group's own first and its
+parent's after); a composite in a treated group costs its finished surface
+once for each treatment; a treatment that changes nothing costs nothing; and a
+picture a composite operation uses whole costs all of itself. A
+scene frame admits its screen canvas, overlay and world canvases as one frame;
+a map still admits all of its world canvases, however many they are. A still
+that was admitted with uncounted treated or bottom-fade variants over the
+limits is now refused. A still over the limits (64 MiB
+and 4096 prepared regions) is refused whole with the Engine's
+`CanvasImageBudgetExceeded` message, which the session returns as its refusal;
+a map still that is refused can be rendered as smaller regions. The canvas
+raster holds the crops, never the whole pictures they are cut from: a picture
+is decoded once for a still, its crops are cut and it is released, and the
+regions of earlier stills are released, least recently prepared first, once
+the regions held exceed the same 64 MiB. A picture the Engine's asset rules do
+not read (missing, or not a PNG within its size limits) is charged nothing and
+drawn or left out as before, read for each drawing and never kept. A treatment
+is applied to a group's flattened drawing, which is released when it is
+blended, so the raster prepares no region for it; the Engine's preflight
+charges the variants the graphical window prepares. Stills within the limits
+keep their bytes.
+`cutscenes.effectBattlePreview` takes an optional `groupColor` flag and
+advertises `canvas_group_color` to the Engine for that frame only when the flag
+is `true`. Remaining: the Engine binds no field colour timeline yet, so no
+battle preview frame carries a treatment, and there is nothing to author.
 
 Done on Engine `156840cd` and `06ecb262` (12 November):
 - [x] Campaign restoration for previews. A preview or capture given a save

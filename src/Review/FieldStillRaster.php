@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Review;
 
 use GdImage;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageBudgetExceeded;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSprite;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSubjectOrder;
 use Ichiloto\Engine\Rendering\Presentation\PresentationTextLayer;
@@ -26,8 +28,10 @@ use RuntimeException;
  * filling its size and a whole image contained in it; each text cell its
  * background, the field's own when it names none, and glyph; each world
  * canvas's pivot on its cell's ground anchor, drawn by the shared canvas
- * raster ({@see CanvasStillRaster}), its groups included, and clipped to the
- * canvas. Glyphs are drawn in a monospaced system font fitted to the cell.
+ * raster ({@see CanvasStillRaster}), its groups and their colour treatments
+ * included, and clipped to the canvas. Glyphs are drawn in a monospaced system font fitted to the cell.
+ * A still's world canvases are admitted together before the still is drawn, on the region budget's terms
+ * ({@see CanvasStillRaster::prepareCanvases()}), and a still whose canvas images exceed them is refused.
  *
  * It reads only the presentation the Engine composed, never a map's source,
  * so what it draws is what the game would send a graphical renderer. Motion,
@@ -42,7 +46,7 @@ final class FieldStillRaster
         RendererSessionConfig::SPRITE_LIFT, RendererSessionConfig::SPRITE_QUARTER_TURNS, RendererSessionConfig::TILE_COVERS,
         RendererSessionConfig::TILE_SHADOWS, RendererSessionConfig::WORLD_CANVAS, RendererSessionConfig::GRAPHICAL_CANVAS,
         RendererSessionConfig::CANVAS_CLIP_OPACITY, RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
-        RendererSessionConfig::CANVAS_GROUPS,
+        RendererSessionConfig::CANVAS_GROUPS, RendererSessionConfig::CANVAS_GROUP_COLOR, RendererSessionConfig::CANVAS_REGION_BUDGET,
     ];
 
     /** The most pixels one native-size image holds; a larger view is drawn scaled down, a block of cells at a time. */
@@ -85,12 +89,17 @@ final class FieldStillRaster
     /** Draws the world canvases, with the label rasters of the still being drawn. */
     private readonly CanvasStillRaster $canvases;
 
-    public function __construct(private readonly string $assetRoot, private readonly ?string $fontPath = null)
+    /**
+     * @param CanvasStillRaster|null $canvases The canvas raster that draws the world canvases, when a raster that
+     *     draws other canvases beside the field shares its own, so one still's canvases are admitted and held together.
+     */
+    public function __construct(private readonly string $assetRoot, private readonly ?string $fontPath = null,
+        ?CanvasStillRaster $canvases = null)
     {
         if (! extension_loaded('gd')) {
             throw new RuntimeException('Drawing a graphical still needs the PHP gd extension.');
         }
-        $this->canvases = new CanvasStillRaster($assetRoot, $fontPath);
+        $this->canvases = $canvases ?? new CanvasStillRaster($assetRoot, $fontPath);
     }
 
     /** Whether the raster draws a renderer feature. */
@@ -111,6 +120,7 @@ final class FieldStillRaster
      * pixels square; a quarter or a half shows an overview.
      *
      * @throws InvalidArgumentException When the scale is not in (0, 1], or a native image would be too large.
+     * @throws CanvasImageBudgetExceeded When the images of the still's world canvases exceed the Engine's budget for one frame.
      */
     public function rasterize(FieldStill $still, float $scale = 1.0): GdImage
     {
@@ -151,7 +161,10 @@ final class FieldStillRaster
         return $output;
     }
 
-    /** Reads the world's upload: its layers, glyph cells, tiles and the cells those tiles cover. */
+    /**
+     * Reads the world's upload: its layers, glyph cells, tiles and the cells those tiles cover. The still's world
+     * canvases are admitted together and their regions prepared.
+     */
     private function prepare(FieldStill $still): void
     {
         $operations = $still->world->getOperations(true, true);
@@ -160,6 +173,8 @@ final class FieldStillRaster
         $this->tileset = $definition['tileset'] ?? null;
         $this->layers = $this->cells = $this->tiles = $this->covered = $this->sheets = $this->composed = [];
         $this->canvases->setLabelRasters($still->labelRasters);
+        $this->canvases->prepareCanvases(array_map(static fn(PresentationWorldCanvas $canvas): PresentationCanvas => $canvas->canvas,
+            $still->worldCanvases));
         foreach ($definition['layers'] as $index => $layer) {
             $this->layers[] = ['id' => $layer['id'], 'layer' => (int) $layer['layer'], 'kind' => $layer['kind'],
                 'covers' => $layer['coversLayerId'] ?? null, 'index' => $index];

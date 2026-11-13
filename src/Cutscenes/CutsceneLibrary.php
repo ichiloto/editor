@@ -10,7 +10,6 @@ use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\Database\RecordSchema;
-use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Storage\PreparedSave;
 use RuntimeException;
@@ -452,7 +451,7 @@ final class CutsceneLibrary
     {
         return match ($type) {
             CutsceneType::CINEMATIC => \Ichiloto\Editor\Database\CutsceneSchemas::cinematics($graphical),
-            CutsceneType::SUMMON => RecordSchemaCatalog::summons(),
+            CutsceneType::SUMMON => \Ichiloto\Editor\Database\CutsceneSchemas::summons($graphical),
             CutsceneType::EFFECT => \Ichiloto\Editor\Database\CutsceneSchemas::effects($graphical),
         };
     }

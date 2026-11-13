@@ -845,7 +845,10 @@ writes the Terminal field's characters and colours (`.ans` and a page of its
 own), a native-size PNG of the graphical field as the game composes it (tiles,
 sprites, world canvases such as a bed and its sleeper, and the field text of
 subjects shown by their glyph), and a `review.html` with the two side by side
-for every view. Sign labels are measured and drawn by the installed GPUI
+for every view. The world canvases of one still are held to the image budget
+the game's graphical window gives one frame (64 MiB of the crops they draw); a
+still over it is refused with the Engine's account of the largest pictures,
+and a smaller region can be rendered instead. Sign labels are measured and drawn by the installed GPUI
 renderer without a window (`--prepare-text`), so a sign reads as it does in
 play; a renderer that is missing or too old to have that mode leaves each
 sign out, and the view names every one it left out and why. `--player X,Y[,HEADING]` stands the player
@@ -867,8 +870,13 @@ capture and scene times, what waited on the player and what the frames could
 not draw. Each waiting dialogue page, choice and notice stays on screen for the
 reading time and is then acknowledged; while a notice is shown the scene holds,
 as the game's notice window holds it. A canvas group, a drawing the game
-places as one piece, is drawn where its origin puts it, inside its clip. A
-video encoder reads the frames in order,
+places as one piece, is drawn where its origin puts it, inside its clip, and
+in its colour treatment (an inversion or a tint of the whole group) when the
+game gives it one. Each frame's canvases are admitted on the terms the game's
+graphical window admits them: an image costs the crop it is drawn from and
+each toned, mirrored, turned, faded or colour-treated variant of it the frame
+draws, and a frame whose images exceed the Engine's budget ends the capture
+with the Engine's account of them. A video encoder reads the frames in order,
 for example `ffmpeg -framerate 30 -i frame-%06d.png review.mp4`. The capture
 starts from the preview's own empty campaign unless it is given a save
 (`campaignSave`, an absolute path): the scene then plays in that save's
@@ -3754,7 +3762,7 @@ point or unreadable artwork is reported apart, with the Engine's reason.
 A battle effect may hold a `field-motion` track, which moves the whole
 battlefield in the graphical battle. In the GUI it is one of the track types.
 It has no anchor; each sample gives its **Frame**, **Duration** (one frame when
-left out), **Field Offset X** and **Field Offset Y** in logical pixels,
+left out), **Offset X** and **Offset Y** in logical pixels,
 fractions allowed, and **Enabled** (`false` keeps the sample and moves
 nothing). On save the Engine refuses samples out of order or overlapping, a
 presentation other than `graphical`, and a looping or battle-phase timeline,
@@ -3767,9 +3775,60 @@ canvas groups. The editor session composes them only for a
 other request draws the battlefield still on a moving frame, with the
 Engine's diagnostic that the motion is not applied.
 
+A battle effect may also hold a `battler-motion` track, which moves one side
+of the action in the graphical battle. In the GUI it is one of the track
+types, with the same sample rows as a whole-field motion; a track turned from
+one of the two types into the other keeps its samples. **Moved Battler** is
+`caster` or `target` (every selected target moves). **Offset Space** is
+`canvas`, where X runs to the right of the screen, or `opponents`, where X
+runs from the moved battler toward the side it fights, so a negative X pushes
+either side back from the other. Y runs down the screen in both. A space left
+out reads as `canvas`; choosing the empty value leaves it out of the file. A
+frame inside an enabled sample holds the battler at that offset in place of
+the battle's own damage recoil, a sample of zero included; a frame outside
+the samples and a disabled sample leave the battler to the battle. A track
+given this type names no battler until one is chosen. On save the Engine
+refuses a missing battler, the faults it refuses in a whole-field motion's
+samples, a presentation other than `graphical`, and a looping or battle-phase
+timeline, and nothing is written. The Terminal editor names the track, lists
+its samples in the Timeline pane as `target offset x, y` or `caster offset
+x, y`, adding `with x toward opponents` for that space, and leaves them as
+written; its preview names the offset under **Not drawn here**. The GUI's
+battle preview draws the battler at each enabled sample's offset where its
+canvas draws rotated and clipped images. The editor session composes the
+motion only for a `cutscenes.effectBattlePreview` request whose
+`imageRotation` and `clipOpacity` are both `true`; any other request draws the
+ordinary battlefield on a moving frame, with the Engine's diagnostic that the
+motion is not applied.
+
 In either editor, a track whose type that editor does not offer keeps its
 type: choosing another is refused and nothing changes. Remove the track to
 replace it. The same holds for every list whose entries have a type or kind.
+
+An effect or a summon that plays once at a fixed rate may say what reduced
+motion shows in its place: `reducedMotionSamples`, a list that runs from frame
+zero to the last frame, each sample holding the drawing of one authored frame
+for its duration or clearing the picture. In the GUI the record's **Reduced
+Motion Samples** list has a **Frame**, a **Duration** and a **Source Frame**
+for each sample. A sample that clears reads `(clears the picture)` in its
+Source Frame row; empty the row, or enter that text, to make a sample clear,
+and enter a frame number, zero included, to make it hold that frame. Removing
+the last sample removes the list from the file, and reduced motion then holds
+the rest frame as before. A track's **Motion** row says which setting draws
+it: `all`, `normal` or `reduced`. A track that names none is drawn in every
+setting; the empty choice leaves the key out of the file. A track for one
+setting is drawn by the graphical presentation alone, so art can be drawn
+separately for reduced motion. On save the Engine refuses samples with a gap,
+an overlap or a frame outside the timeline, samples on a looping or
+battle-phase timeline, a motion-specific track given a presentation other than
+`graphical`, and a whole-field or battler motion drawn for reduced motion
+alone, and nothing is written. Where an effect or summon has separate
+sequences, the samples belong to the graphical one. The Terminal editor shows
+`· normal motion only` or `· reduced motion only` on such a track and lists
+the samples at the end of the Timeline pane as `holds frame n` or `clears the
+picture`; it has no rows for either and leaves them as written. The battle
+previews draw the held drawings when asked for reduced motion; every other
+preview plays with motion.
 
 A summon's **Effect Timing** offers the same `arena` mode, checked by the same
 validator against its graphical stage's restore frame.

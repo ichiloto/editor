@@ -7,6 +7,8 @@ namespace Ichiloto\Editor\Cutscenes;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\Database\StorybookPlaybackFields;
+use Ichiloto\Engine\Animations\Timelines\BattleMotionSpace;
+use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
 
 /**
  * The command tree of a cinematic, or the track and cue list of a summon,
@@ -18,6 +20,11 @@ use Ichiloto\Editor\Database\StorybookPlaybackFields;
  * lanes, branches, choices -- have children and may be folded shut. The
  * outline is a projection of the authoritative command tree, never a
  * second copy of it.
+ *
+ * A timeline's reduced-motion samples are listed after its cues, each with
+ * the frame it holds or that it clears the picture. They are graphical
+ * metadata: their rows open the record's own rows, and no tree operation
+ * moves, adds or removes one.
  *
  * @package Ichiloto\Editor\Cutscenes
  */
@@ -84,7 +91,8 @@ final class CutsceneOutline
                 $outline->rows[] = [
                     'depth' => 2,
                     'text' => sprintf('f%d +%d  %s', $frame, $duration, match (true) {
-                        ($track['type'] ?? null) === CutsceneSchemas::FIELD_MOTION_TRACK => self::describeFieldMotionSample($keyframe),
+                        ($track['type'] ?? null) === CutsceneSchemas::FIELD_MOTION_TRACK => self::describeMotionSample($keyframe),
+                        ($track['type'] ?? null) === CutsceneSchemas::BATTLER_MOTION_TRACK => self::describeMotionSample($keyframe, $track),
                         $content !== '' => $content,
                         isset($keyframe['assetId']) => 'asset ' . strval($keyframe['assetId']),
                         isset($keyframe['sourceFrame']) => self::describeImageKeyframe($keyframe),
@@ -120,12 +128,42 @@ final class CutsceneOutline
             ];
         }
 
+        if (is_array($payload[CutsceneSchemas::REDUCED_MOTION_SAMPLES_KEY] ?? null)) {
+            $samples = array_values($payload[CutsceneSchemas::REDUCED_MOTION_SAMPLES_KEY]);
+            $key = CutsceneSchemas::REDUCED_MOTION_SAMPLES_KEY;
+            $outline->rows[] = ['depth' => 0, 'text' => sprintf('Reduced motion (%d sample%s)', count($samples), count($samples) === 1 ? '' : 's'),
+                'frame' => [], 'index' => null, 'key' => $key, 'kind' => 'list', 'foldable' => $samples !== [], 'children' => $samples !== []];
+
+            foreach ($samples as $index => $sample) {
+                $outline->rows[] = ['depth' => 1, 'text' => is_array($sample) ? self::describeReducedMotionSample($sample) : '(not a sample)',
+                    'frame' => [], 'index' => null, 'key' => $key . '.' . $index, 'kind' => 'reducedSample', 'foldable' => false, 'children' => false];
+            }
+        }
+
         return $outline;
     }
 
     /**
+     * Returns a reduced-motion sample as authored: where it starts, how long it lasts, and the authored
+     * frame whose drawing it holds or that it clears the picture (an explicit null source frame).
+     *
+     * @param array<string, mixed> $sample
+     */
+    public static function describeReducedMotionSample(array $sample): string
+    {
+        $read = static fn(string $key): string => is_int($sample[$key] ?? null) ? strval($sample[$key]) : '?';
+
+        return sprintf('f%s +%s  %s', $read('frame'), $read('duration'), match (true) {
+            ! array_key_exists('sourceFrame', $sample) => 'names no source frame',
+            $sample['sourceFrame'] === null => 'clears the picture',
+            default => 'holds frame ' . $read('sourceFrame'),
+        });
+    }
+
+    /**
      * Returns where a track plays and which way it is drawn, when authored:
-     * one presentation only, or a battle stroke's facing.
+     * one presentation only, one motion setting only, or a battle stroke's
+     * facing.
      *
      * @param array<string, mixed> $track
      */
@@ -137,6 +175,11 @@ final class CutsceneOutline
             $scope .= ' · ' . $track['presentation'] . ' only';
         }
 
+        // A track drawn in every motion setting, named or not, has no motion scope to tell.
+        if (is_string($track['motion'] ?? null) && ! in_array($track['motion'], ['', EffectMotionScope::ALL->value], true)) {
+            $scope .= ' · ' . $track['motion'] . ' motion only';
+        }
+
         if (is_string($track['facing'] ?? null) && $track['facing'] !== '') {
             $scope .= ' · faces ' . $track['facing'];
         }
@@ -145,17 +188,23 @@ final class CutsceneOutline
     }
 
     /**
-     * Returns a whole-field motion sample's offset in logical pixels as authored, fractions kept, and
-     * whether the sample is disabled.
+     * Returns a motion sample's offset in logical pixels as authored, fractions kept, and whether the
+     * sample is disabled: the whole field's, or the offset of the battler a battler motion names. A
+     * battler's offset says when its X runs toward that battler's opponents instead of across the canvas.
      *
      * @param array<string, mixed> $sample
+     * @param array<string, mixed>|null $battlerMotion What names the moved battler and the offset space,
+     *   by `anchor` and `space`: the authored track, or a compiled sample's payload. Null for the field.
      */
-    public static function describeFieldMotionSample(array $sample): string
+    public static function describeMotionSample(array $sample, ?array $battlerMotion = null): string
     {
         $offset = is_array($sample['payload'] ?? null) ? $sample['payload'] : [];
         $read = static fn(string $axis): string => is_int($offset[$axis] ?? null) || is_float($offset[$axis] ?? null) ? strval($offset[$axis]) : '?';
+        $moved = $battlerMotion === null ? 'field' : (is_string($battlerMotion['anchor'] ?? null) ? $battlerMotion['anchor'] : '?');
+        $towardOpponents = $battlerMotion !== null && ($battlerMotion['space'] ?? null) === BattleMotionSpace::OPPONENTS->value;
 
-        return sprintf('field offset %s, %s', $read('x'), $read('y')) . (($sample['visible'] ?? true) === false ? ' (disabled)' : '');
+        return sprintf('%s offset %s, %s', $moved, $read('x'), $read('y')) . ($towardOpponents ? ' with x toward opponents' : '')
+            . (($sample['visible'] ?? true) === false ? ' (disabled)' : '');
     }
 
     /**

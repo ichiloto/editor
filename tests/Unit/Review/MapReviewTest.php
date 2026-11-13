@@ -2,27 +2,34 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewField;
 use Ichiloto\Editor\Review\FieldStill;
 use Ichiloto\Editor\Review\FieldStillRaster;
 use Ichiloto\Editor\Review\MapRenderSubject;
 use Ichiloto\Editor\Review\MapRenderView;
 use Ichiloto\Editor\Review\MapReviewWriter;
+use Ichiloto\Editor\Review\SceneFrameRaster;
 use Ichiloto\Editor\Review\TerminalPicture;
 use Ichiloto\Editor\Session\ChangeBatch;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Core\Vector2;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\IO\Console\TerminalText;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasColorTransform;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasGroup;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageBudgetExceeded;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Presentation\PresentationColor;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSpritePivot;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorldCanvas;
+use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposition;
 
 /**
  * A synthetic 12 x 5 layered map, its water blue, with an NPC, and a player
@@ -329,6 +336,99 @@ it('draws the groups of a world canvas inside that canvas, where each group plac
         ->and([$shown($image, 167, 100), $shown($image, 192, 100), $shown($image, 180, 95), $shown($image, 180, 114)])
         ->toBe([false, false, false, false])
         ->and([$shown($half, 90, 52), $shown($half, 80, 52), $shown($half, 98, 52)])->toBe([true, false, false])
+        ->and($raster->diagnostics)->toBe([]);
+});
+
+it('draws a world canvas\'s group in the group\'s colour treatment, and the field around it as it was', function () {
+    $root = mapReviewBedProject();
+    $still = EditorSession::open($root)->renderMapReview(new MapRenderView('test-map'))->still;
+    $drawing = new PresentationCanvas(48, 24, composites: [new CanvasComposite('fill', 1, 1, new CanvasRectangle(0, 0, 48, 24),
+        [new CanvasCompositeOperation(['type' => 'fill', 'destination' => ['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1],
+            'brush' => ['type' => 'solid', 'color' => PresentationColor::rgb(250, 0, 250)->toArray()]])])]);
+    $field = static fn(?CanvasColorTransform $treatment): FieldStill => new FieldStill($still->world, [], $still->region,
+        worldCanvases: [new PresentationWorldCanvas('grouped', 3, 2, new PresentationSpritePivot(0.5, 1.0),
+            new PresentationCanvas(48, 48, groups: [new CanvasGroup('part', 24, -6, $drawing, colorTransform: $treatment)]))]);
+    $raster = new FieldStillRaster($root . '/assets');
+    $plain = $raster->rasterize($field(null));
+    $treated = $raster->rasterize($field(new CanvasColorTransform([[-1, 0, 0], [0, -1, 0], [0, 0, -1]], [1, 1, 1])));
+
+    // The group shows at x 168..192, y 96..114 of the still: magenta turned over there, every other pixel as it was.
+    $changed = 0;
+    for ($y = 0; $y < imagesy($plain); $y++) {
+        for ($x = 0; $x < imagesx($plain); $x++) {
+            $inside = $x >= 168 && $x < 192 && $y >= 96 && $y < 114;
+            $changed += (int) (! $inside && imagecolorat($plain, $x, $y) !== imagecolorat($treated, $x, $y));
+            if ($inside) {
+                expect([readReviewPixel($plain, $x, $y), readReviewPixel($treated, $x, $y)])->toBe([[250, 0, 250], [5, 255, 5]]);
+            }
+        }
+    }
+    expect($changed)->toBe(0)
+        ->and($raster->diagnostics)->toBe([]);
+});
+
+it('refuses a field still whose world canvases together exceed the region budget, and draws each that fits', function () {
+    $root = mapReviewBedProject();
+    $still = EditorSession::open($root)->renderMapReview(new MapRenderView('test-map'))->still;
+    writeReviewPng($root . '/assets/Graphics/Objects/Wide-Red.png', 4096, 2100, [230, 0, 0]);
+    writeReviewPng($root . '/assets/Graphics/Objects/Wide-Blue.png', 4096, 2100, [0, 0, 220]);
+    // Each whole picture is one region of 33 MiB with its guard: one fits the Engine's 64 MiB of regions, two do not.
+    $prop = static fn(string $id, int $x, string $asset): PresentationWorldCanvas => new PresentationWorldCanvas($id, $x, 2,
+        new PresentationSpritePivot(0.5, 1.0), new PresentationCanvas(48, 48, [new CanvasImage('art', $asset, new CanvasRectangle(0, 0, 48, 48))]));
+    $field = static fn(PresentationWorldCanvas ...$canvases): FieldStill => new FieldStill($still->world, [], $still->region,
+        worldCanvases: $canvases);
+    $red = $prop('red', 3, 'Graphics/Objects/Wide-Red.png');
+    $blue = $prop('blue', 5, 'Graphics/Objects/Wide-Blue.png');
+    $raster = new FieldStillRaster($root . '/assets');
+
+    expect(fn() => $raster->rasterize($field($red, $blue)))->toThrow(CanvasImageBudgetExceeded::class, 'Canvas prepared regions exceed')
+        ->and(fn() => $raster->rasterize($field($red, $blue), 0.5))->toThrow(CanvasImageBudgetExceeded::class, 'Canvas prepared regions exceed')
+        ->and(readReviewPixel($raster->rasterize($field($red)), 3 * 48 + 24, 2 * 48 + 24))->toBe([230, 0, 0])
+        ->and(readReviewPixel($raster->rasterize($field($blue)), 5 * 48 + 24, 2 * 48 + 24))->toBe([0, 0, 220])
+        ->and($raster->diagnostics)->toBe([]);
+});
+
+it('admits a frame\'s screen canvas with its world canvases, refusing a frame whose canvases exceed the region budget together', function () {
+    $root = mapReviewBedProject();
+    writeReviewPng($root . '/assets/Graphics/Objects/Wide-Red.png', 4096, 2100, [230, 0, 0]);
+    writeReviewPng($root . '/assets/Graphics/Objects/Wide-Blue.png', 4096, 2100, [0, 0, 220]);
+    $definition = CinematicDefinition::fromArrays(['id' => 'bedside', 'name' => 'Bedside', 'startMap' => 'test-map',
+        'presentation' => ['initial' => 'field'], 'cast' => [], 'skip' => ['policy' => 'forbidden'], 'checkpoints' => [], 'finalizer' => []],
+        [['type' => 'wait', 'seconds' => 0.2]]);
+    $preview = CinematicPreviewSession::startCapture($root, $definition, SceneFrameRaster::supports(...),
+        ['x' => 4, 'y' => 2, 'width' => 12, 'height' => 5]);
+    try {
+        $frame = $preview->composeFrame();
+        $grid = $preview->getSceneGrid();
+    } finally {
+        $preview->dispose();
+    }
+    $wide = static fn(string $asset): PresentationCanvas => new PresentationCanvas(48, 48,
+        [new CanvasImage('art', $asset, new CanvasRectangle(0, 0, 48, 48))]);
+    // The frame the Engine composed, its bed's canvas drawing one wide picture and its screen canvas another, or neither.
+    $compose = static fn(?PresentationCanvas $bed, ?PresentationCanvas $screen): SceneFrameComposition => new SceneFrameComposition(
+        $frame->snapshot, $frame->sprites, $frame->viewport, $frame->world, $screen, null,
+        array_map(static fn(PresentationWorldCanvas $canvas): PresentationWorldCanvas => $bed === null ? $canvas
+            : new PresentationWorldCanvas($canvas->id, $canvas->x, $canvas->y, $canvas->pivot, $bed, $canvas->layer), $frame->worldCanvases));
+    $screen = new PresentationCanvas($grid->columns * $grid->cellWidth, $grid->rows * $grid->cellHeight,
+        [new CanvasImage('banner', 'Graphics/Objects/Wide-Blue.png', new CanvasRectangle(0, 0, 48, 48))]);
+    $raster = new SceneFrameRaster($root . '/assets');
+    $count = static function (GdImage $image, array $rgb): int {
+        $shown = 0;
+        for ($y = 0; $y < imagesy($image); $y++) {
+            for ($x = 0; $x < imagesx($image); $x++) {
+                $shown += (int) (readReviewPixel($image, $x, $y) === $rgb);
+            }
+        }
+
+        return $shown;
+    };
+
+    expect($frame->worldCanvases)->toHaveCount(1)
+        ->and(fn() => $raster->rasterize($compose($wide('Graphics/Objects/Wide-Red.png'), $screen), $grid))
+        ->toThrow(CanvasImageBudgetExceeded::class, 'Canvas prepared regions exceed')
+        ->and(readReviewPixel($raster->rasterize($compose(null, $screen), $grid), 24, 24))->toBe([0, 0, 220])
+        ->and($count($raster->rasterize($compose($wide('Graphics/Objects/Wide-Red.png'), null), $grid), [230, 0, 0]))->toBeGreaterThan(1000)
         ->and($raster->diagnostics)->toBe([]);
 });
 

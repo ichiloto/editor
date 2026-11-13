@@ -4,15 +4,65 @@
 
 ### Fixed
 
-- A list entry whose type or kind the editor does not offer (a `field-motion`, `trail` or `tether` track in the
-  Terminal editor, a `tone` track in either editor, a world object cast member in the Terminal editor) can no longer
-  be given another type. Choosing one re-read the entry's keys as the new type's and saved them that way; it is now
-  refused with nothing changed. Remove the entry to replace it.
+- A list entry whose type or kind the editor does not offer (a `field-motion`, `battler-motion`, `trail` or `tether`
+  track in the Terminal editor, a `tone` track in either editor, a world object cast member in the Terminal editor)
+  can no longer be given another type. Choosing one re-read the entry's keys as the new type's and saved them that
+  way; it is now refused with nothing changed. Remove the entry to replace it.
 
 - `map:apply --check` and `map:render --changes` run on a scratch copy of the project, so edits that write at once
   (imported assets, tileset cells, new maps) can never reach the project, even if the process dies part way.
 
+- Stills charge treated and faded variants (Engine 47dc6409): map stills, canvas stills and cinematic capture frames
+  are admitted through the Engine's `CanvasImagePreflight::inspectCanvasResources()` with their canvases whole,
+  groups included. An image drawn in a group's colour treatment costs a variant of its crop for each distinct
+  treatment, a group's own applied first and its parent's after; a composite in a treated group costs its finished
+  surface; an image faded toward its bottom edge costs a variant of its crop; a treatment that changes nothing costs
+  nothing. Narrowed: a still that was admitted with uncounted treated or bottom-fade variants over the limits (64 MiB
+  and 4096 prepared regions) is now refused with the Engine's account of them. Stills within the limits keep their
+  bytes, and art the Engine does not read is charged nothing and drawn or left out as before.
+
 ### Added
+
+- Reduced-motion samples and motion scopes (Engine e1438b34): the graphical editor's effect and summon rows author a
+  sequence's `reducedMotionSamples` (each sample's frame, duration and source frame) and each track's `motion` (`all`,
+  `normal` or `reduced`). A sample that clears the picture reads `(clears the picture)`; that text or an empty value
+  keeps its key with `null`, and a number holds that frame, zero included. A track that names no motion stays without
+  the key. `cutscenes.timeline` gives both with the row keys that edit them. Both are kept as written by every other
+  edit and save, and each save compiles through the Engine. The Terminal editor lists a track's motion scope and the
+  samples in the Timeline pane and has no rows for them. For an effect or summon with separate sequences the samples
+  are authored in the graphical one.
+
+- Region budget for stills (Engine fe238189): map stills, canvas stills and cinematic capture frames name
+  `canvas_region_budget` beside `canvas_group_color`, as the Engine pairs them, so a still meets the Engine's
+  terms for a group's colour treatment as the graphical window does. A still's canvases are admitted together through
+  the Engine's image preflight before any is drawn: an image costs the crop it is drawn from, and a still whose
+  images exceed the Engine's limits (64 MiB and 4096 prepared regions) is refused with the Engine's account of them
+  instead of being drawn. The stills keep the crops they draw, up to the same 64 MiB, and no longer keep every whole
+  picture they read. A composition whose whole pictures exceed 64 MiB while its crops fit is admitted for a still,
+  where the Engine refused it before. Stills drawn before keep their bytes.
+
+- Group colour treatments (Engine fe238189): map stills, canvas stills and cinematic capture frames draw a canvas
+  group's colour treatment. The group's flattened drawing, composites and nested groups included, has its colour
+  turned through the treatment's matrix and offset once, before it is blended onto what is beneath it; coverage is
+  unchanged, unpainted pixels stay unpainted, and a nested group is treated by its own treatment first and its
+  parent's after. A group with no treatment draws as before. `cutscenes.effectBattlePreview` takes an optional
+  `groupColor` flag: the frame is composed with `canvas_group_color` negotiated when it is `true`. No battle preview
+  frame carries a treatment yet.
+
+- Battler motion tracks (Engine 06ec2c47): the graphical editor's effect rows author a battle effect's
+  `battler-motion` track: the track type, the moved battler (`caster` or `target`), the offset space (`canvas`, or
+  `opponents`, where X runs from the moved battler toward the side it fights) and the samples a whole-field motion
+  uses. A space left out reads as `canvas` and a save writes none. Both motion tracks read the one sample list, whose
+  offset rows are **Offset X** and **Offset Y** for both, so a track turned from one into the other keeps its
+  samples. `cutscenes.timeline` lists the samples on the track's lane. The track is kept as written by every other
+  edit and save, and each save compiles through the Engine. The Terminal editor names the track and lists its samples
+  in the Timeline pane as `target offset x, y` or `caster offset x, y` (`with x toward opponents` for that space); its
+  preview names the offset under **Not drawn here**.
+  `cutscenes.effectBattlePreview` takes an optional `clipOpacity` flag: the frame is composed with
+  `canvas_clip_opacity` negotiated when it is `true`, and with `canvas_image_rotation` negotiated when the existing
+  `imageRotation` flag is `true`. With both, a moving frame draws the named battler at the sample's offset; missing
+  either, it draws the ordinary battlefield and carries the Engine's diagnostic. A frame with no battler motion is
+  composed as before.
 
 - Whole-field motion tracks (Engine 22954f40): the graphical editor's effect rows author a battle effect's
   `field-motion` track: the track type, and each sample's frame, duration, field offset X and Y in logical pixels and
@@ -141,6 +191,10 @@
   or **Art only**.
 
 ### Changed
+
+- The timeline previews and the stage canvas of `cutscenes.preview` play with motion: a track whose `motion` is
+  `reduced` is no longer drawn, listed under **Drawn now** or described under **Not drawn here** there. The battle
+  previews draw it when asked for reduced motion.
 
 - The warning for tiles a piece draws whose glyph is no longer there now reports piece art that is not placed where
   it stands: tiles no glyph of the piece accounts for that are not a whole copy of its art over ground with its

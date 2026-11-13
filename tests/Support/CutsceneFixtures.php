@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\UI\CutscenesScreen;
 
 /**
@@ -567,6 +569,41 @@ function effectProject(): string
     writeTilesetTestPng($root . '/assets/Graphics/Effects/dusk-slash.png', 32, 16);
 
     return $root;
+}
+
+/** The path of an effect's timeline under a project's assets/Animations. */
+function effectTimelinePath(string $root, string $id): string
+{
+    return $root . '/assets/Animations/' . $id . '/' . $id . '.timeline.php';
+}
+
+/** The terminal editor's Cutscenes screen on one effect of the project, at the record's own rows. */
+function openEffectEditor(string $root, string $id): Editor
+{
+    $editor = cutscenesEditor($root, 160, 50);
+    callEditorMethod($editor, 'switchCutsceneType', CutsceneType::EFFECT);
+    callEditorMethod($editor, 'selectCutsceneById', $id);
+    setEditorProperty($editor, 'databaseCommandFramePath', []);
+
+    return $editor;
+}
+
+/**
+ * The graphical editor's session on one effect of the project, with its track rows: the session, the
+ * effect's index, a row by its field, and an edit of a row by its field.
+ *
+ * @return array{0: EditorSession, 1: int, 2: Closure(string): array<string, mixed>, 3: Closure(string, string): array<string, mixed>}
+ */
+function openEffectTrackSession(string $root, string $id): array
+{
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, $id);
+    $row = static fn(string $field): array => array_find($session->readDatabaseRecord('cutscenes/effect', $index, ['tracks'])['rows'],
+        static fn(array $entry): bool => ($entry['key']['field'] ?? null) === $field)
+        ?? throw new RuntimeException("No row {$field}.");
+    $apply = static fn(string $field, string $value): array => $session->applyDatabaseRecord('cutscenes/effect', $index, $row($field)['key'], $value);
+
+    return [$session, $index, $row, $apply];
 }
 
 /** The harbour cinematic of {@see cutsceneProject()}, as the Engine reads it. */
