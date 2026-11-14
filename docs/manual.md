@@ -878,12 +878,15 @@ each toned, mirrored, turned, faded or colour-treated variant of it the frame
 draws, and a frame whose images exceed the Engine's budget ends the capture
 with the Engine's account of them. A video encoder reads the frames in order,
 for example `ffmpeg -framerate 30 -i frame-%06d.png review.mp4`. The capture
-starts from the preview's own empty campaign unless it is given a save
-(`campaignSave`, an absolute path): the scene then plays in that save's
+plays in the campaign a new game starts with (the project's starting party,
+inventory and funds, built by the Engine's new-game loader) unless it is given
+a save (`campaignSave`, an absolute path): the scene then plays in that save's
 campaign, with its party, world state and quests, on its map where it left the
 player, as a game launched from it would. The save is read through the
 Engine's save pipeline and is never written. A save the pipeline cannot decode
-is refused with the Engine's reason.
+is refused with the Engine's reason. A project a new game cannot be started in
+is captured with an empty party, and `capture.json` lists the Engine's reason
+among its diagnostics.
 
 **Pending, not implemented:** richer renderers will use a separate,
 RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.
@@ -3532,8 +3535,14 @@ transfers, battles and failures. Dialogue
 waits for you as it would for the player; a battle resolves as a victory
 on the next step (the pane says so); a transfer loads the destination map.
 The preview starts from the map event that triggers the cinematic when one
-exists, otherwise from the start map at its first open tile. It writes
-nothing: not your saves, not your files.
+exists, otherwise from the start map at its first open tile. It plays in the
+campaign a new game starts with: the project's starting party, inventory and
+funds, as the Engine builds them for New Game, so the player shows the party
+leader's art where the project says so, and conditions and lines that read
+the party find its members. A project a new game cannot be started in (system
+data that cannot be read, a starting member the project does not have) plays
+with an empty party, and the log and diagnostics give the Engine's reason. It
+writes nothing: not your saves, not your files.
 
 Missing or malformed preview maps are reported beside the controls; the stage
 remains usable on explicitly identified undefined terrain. The diagnostic

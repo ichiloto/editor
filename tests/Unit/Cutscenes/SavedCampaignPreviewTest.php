@@ -9,9 +9,6 @@ use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentMigrationResolution;
 use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
 use Ichiloto\Engine\IO\SaveManager;
-use Ichiloto\Engine\Util\Config\ConfigStore;
-use Ichiloto\Engine\Util\Stores\ActorStore;
-use Ichiloto\Engine\Util\Stores\ItemStore;
 
 /**
  * A preview started from a save plays in that save's campaign: its world
@@ -19,18 +16,6 @@ use Ichiloto\Engine\Util\Stores\ItemStore;
  * through the Engine's save pipeline and campaign session, and released when
  * the preview ends. Everything here is synthetic: a quay and one switch.
  */
-
-/**
- * The project's actors and items as the Engine holds them now, so a test can
- * tell that a preview gave back exactly what it found.
- *
- * @return array{0: object|null, 1: object|null}
- */
-function readInstalledStores(): array
-{
-    return [ConfigStore::has(ActorStore::class) ? ConfigStore::get(ActorStore::class) : null,
-        ConfigStore::has(ItemStore::class) ? ConfigStore::get(ItemStore::class) : null];
-}
 
 /** A save of the harbour with a switch set and the player on a quay cell, written by the Engine's own save pipeline. */
 function writeHarbourSave(string $root, int $x, int $y): string

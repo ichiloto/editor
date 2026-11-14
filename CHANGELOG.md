@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- A cinematic previewed or captured without a save plays in the campaign a new game starts with. The preview's field
+  had an empty party unless it was given a save, so a project that shows the party leader as the player drew the
+  plain player marker, and conditions and lines that read the party found no one. A field opened with a player and
+  no save (a cinematic preview or capture, an effect shown on the field) now starts the campaign through the
+  Engine's `GameLoader::loadNewGame()` and restores it with the Engine's `CampaignSession`, as the game does for New
+  Game: the project's starting party, inventory and funds, with the player's sprite and heading as a new game gives
+  them, standing where the preview places them. Changed with it: on such a field the Terminal player glyph is the
+  project's starting sprite where it was `@`. A project a new game cannot be started in plays with an empty party as
+  before, and the preview's log, its diagnostics and `capture.json` now give the Engine's reason.
+
 - A previewed or captured cinematic frames its cast clear of the dialogue where the game does. The Engine's dialogue
   framing ran only when a preview's presentation was attached, so the Terminal picture, the GPUI view and capture
   frames kept the camera where it was while a line was on screen, and a cast too large to fit was never reported. The
