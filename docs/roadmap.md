@@ -532,6 +532,13 @@ Done on Engine `156840cd` and `06ecb262` (12 November):
 - [x] Per-game loading and notices. The preview binds its own `GameLoader`
   and notice queue to its Game, and pages notices with the Engine's
   `NoticePageModel`.
+- [x] A new game's campaign without a save (14 November). A field opened
+  with a player and no save (`PreviewField::open()`: a cinematic preview or
+  capture, an effect on the field) plays in the campaign the Engine's
+  `GameLoader::loadNewGame()` builds, restored with the same
+  `CampaignSession`, so the player shows the party leader where the project
+  says so. A project a new game cannot be started in plays with an empty
+  party and lists the Engine's reason in the field's diagnostics.
 
 Remaining, waiting on the Engine:
 - [x] Saves and the project's migration classes (Engine `06ecb262`). The

@@ -23,8 +23,7 @@ function effectFieldProject(): string
         'tracks' => [['id' => 'motes', 'type' => 'image', 'asset' => 'Graphics/Effects/mote.png',
             'sheet' => ['columns' => 4, 'rows' => 1], 'cells' => ['width' => 1, 'height' => 1], 'depth' => 'front',
             'keyframes' => array_map(static fn(int $frame): array => ['frame' => $frame, 'sourceFrame' => $frame], range(0, 3))]]], true) . ';');
-    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn " . var_export(['startingPositions' => ['player' => [
-        'destinationMap' => 'harbour', 'spawnPoint' => ['x' => 4, 'y' => 4], 'spawnSprite' => ['^']]]], true) . ";\n");
+    writeHarbourNewGame($root, 'harbour', 4, 4, ['^']);
 
     return $root;
 }
@@ -90,7 +89,9 @@ it('keeps one isolated field open: an effect on the field ends a cinematic previ
 });
 
 it('shows an effect over undefined terrain with a diagnostic when no new game start names a map', function () {
-    $session = EditorSession::open(effectProject());
+    $root = effectProject();
+    writeHarbourNewGame($root, '', 0, 0);
+    $session = EditorSession::open($root);
 
     try {
         $answer = $session->showEffectOnField(effectIndex($session, 'ember-spark'), 0, 40, 12);

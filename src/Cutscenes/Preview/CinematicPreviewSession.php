@@ -98,7 +98,10 @@ final class CinematicPreviewSession
      * in that save's campaign ({@see PreviewField::openSavedCampaign()}): its
      * party, world state and quests, on its map, with the player where the
      * save left them; `mapId`, `x` and `y` are then the save's. A save that
-     * cannot be restored is refused with the Engine's reason.
+     * cannot be restored is refused with the Engine's reason. Without one,
+     * the scene plays in the campaign a new game starts with
+     * ({@see PreviewField::open()}), at `mapId`, `x` and `y`; a project a new
+     * game cannot be started in plays with an empty party and says why.
      *
      * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string, campaignSave?: string|null} $options
      */
@@ -160,6 +163,7 @@ final class CinematicPreviewSession
             $this->field = PreviewField::open($this->projectRoot, $mapId,
                 new Vector2(intval($this->options['x'] ?? 0), intval($this->options['y'] ?? 0)),
                 intval($this->options['width'] ?? 60), intval($this->options['height'] ?? 18), fn(): float => $this->elapsed);
+            $this->note($this->field->campaignFailure ?? 'New game campaign started.');
         }
         $this->scene = $this->field->scene;
         $this->presentation = $this->field->presentation;

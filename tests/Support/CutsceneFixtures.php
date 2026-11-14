@@ -180,9 +180,50 @@ function cutsceneProject(): string
     file_put_contents($summon . '/lantern-wisp.data.php', lanternSummonData());
     file_put_contents($summon . '/lantern-wisp.timeline.php', lanternSummonTimeline());
     writeHarbourMap($root);
+    writeHarbourNewGame($root);
     writeFireballSkill($root);
 
     return $root;
+}
+
+/**
+ * What a new game needs, so one can be started in the project as in any real
+ * project: system data naming one starting member, who begins on a cell of
+ * a map, and that member with the full stats the Engine builds a character
+ * from. Unless a test says otherwise they begin on the sample project's own
+ * map, so the harbour stays a map no save can stand on yet: a map a new game
+ * reaches has its cells guarded for existing saves when it is edited.
+ *
+ * @param string[]|string $spawnSprite The player's sprite rows, or the heading they begin facing.
+ */
+function writeHarbourNewGame(string $root, string $mapId = 'test-map', int $x = 9, int $y = 3, array|string $spawnSprite = 'South'): void
+{
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn " . var_export([
+        'title' => 'Harbour',
+        'currency' => ['amount' => 0],
+        'startingParty' => ['Kaelion'],
+        'startingPositions' => ['player' => ['destinationMap' => $mapId, 'spawnPoint' => ['x' => $x, 'y' => $y], 'spawnSprite' => $spawnSprite]],
+    ], true) . ";\n");
+    file_put_contents($root . '/assets/Data/Actors/Kaelion.php', "<?php\n\nreturn " . var_export(['class' => \Ichiloto\Engine\Entities\Character::class, 'data' => [
+        'id' => 'Kaelion', 'name' => 'Kaelion', 'description' => 'A brave and steadfast swordsman.', 'level' => 1, 'currentExp' => 0,
+        'stats' => [
+            'currentHp' => 100, 'currentMp' => 20, 'currentAp' => 10, 'totalHp' => 100, 'totalMp' => 20, 'totalAp' => 10,
+            'attack' => 8, 'defence' => 7, 'magicAttack' => 6, 'magicDefence' => 5, 'speed' => 4, 'grace' => 3, 'evasion' => 2,
+        ],
+        'images' => ['dialog' => [], 'field' => [], 'battle' => []],
+    ]], true) . ";\n");
+}
+
+/**
+ * The project's actors and items as the Engine holds them now, so a test can
+ * tell that a preview gave back exactly what it found.
+ *
+ * @return array{0: object|null, 1: object|null}
+ */
+function readInstalledStores(): array
+{
+    return [\Ichiloto\Engine\Util\Config\ConfigStore::has(\Ichiloto\Engine\Util\Stores\ActorStore::class) ? \Ichiloto\Engine\Util\Config\ConfigStore::get(\Ichiloto\Engine\Util\Stores\ActorStore::class) : null,
+        \Ichiloto\Engine\Util\Config\ConfigStore::has(\Ichiloto\Engine\Util\Stores\ItemStore::class) ? \Ichiloto\Engine\Util\Config\ConfigStore::get(\Ichiloto\Engine\Util\Stores\ItemStore::class) : null];
 }
 
 /**

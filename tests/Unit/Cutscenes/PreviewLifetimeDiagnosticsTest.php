@@ -28,9 +28,7 @@ function createPreviewContractProject(string $mapKind = 'valid', bool $effect = 
     file_put_contents(dirname($file) . '/harbour-lanterns.script.php',
         '<?php return ' . var_export([['type' => 'wait', 'seconds' => 1.0]], true) . ';');
     if ($effect) {
-        file_put_contents($root . '/assets/Data/system.php', '<?php return ' . var_export([
-            'startingPositions' => ['player' => ['destinationMap' => $mapId, 'spawnPoint' => ['x' => 2, 'y' => 3]]],
-        ], true) . ';');
+        writeHarbourNewGame($root, $mapId, 2, 3);
     }
 
     return $root;

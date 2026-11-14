@@ -41,7 +41,7 @@ final class PreviewPlayer extends Player
      * player ({@see PlayerPresentationConfig}), as the game's field builds it.
      * A preview showing a particular character in the player's place gives
      * their graphical art; the Terminal sprites stay the player's own. A
-     * preview of a restored campaign gives its party: where the project shows
+     * preview in a campaign, a save's or a new game's, gives its party: where the project shows
      * the party's leader as the player, the leader's art is the player's, as
      * in the game.
      *

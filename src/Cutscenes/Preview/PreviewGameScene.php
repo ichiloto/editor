@@ -31,9 +31,9 @@ use Ichiloto\Engine\Scenes\Game\GameScene;
 /**
  * The isolated game scene a cinematic preview plays inside.
  *
- * The scene owns a fresh `GameState` and an empty party, or the facts of a
- * campaign restored from a save ({@see PreviewCampaign}) as the game's field
- * adopts them, with the Engine's own cinematic stage, presentation and
+ * The scene owns the facts of the campaign it plays in, a save's or a new
+ * game's ({@see PreviewCampaign}), as the game's field adopts them, or a
+ * fresh `GameState` and an empty party where it has none, with the Engine's own cinematic stage, presentation and
  * controller, and an interpreter whose dialogue goes to the preview pane. The author's play settings, save slots
  * and project files are never written; transfers load the destination map's
  * tiles and NPCs from disk and carry the session across exactly as the

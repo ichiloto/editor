@@ -59,9 +59,11 @@ use Throwable;
  * installs it before a campaign: the preview's play and project settings,
  * the project's world abilities, which world conditions and power
  * showcases read, and the project's control bindings, which the control
- * hints of a dialogue or notice name. A field opened on a save ({@see openSavedCampaign()}) also
- * installs the project's actors and items and restores the save's campaign
- * for its own Game, which it releases when it is disposed.
+ * hints of a dialogue or notice name. A field with a player on it plays in
+ * a campaign, as the game's field does: a save's ({@see openSavedCampaign()})
+ * or the one a new game starts with ({@see open()}). It installs the
+ * project's actors and items for that campaign, restores it for its own
+ * Game and releases it when it is disposed.
  */
 final class PreviewField
 {
@@ -90,8 +92,10 @@ final class PreviewField
     private bool $configured = false;
     /** @var array<string, array<string, mixed>> The Engine's input bindings as the field found them. */
     private array $previousBindings = [];
-    /** The saved campaign the field plays, when it was opened on one. */
+    /** The campaign the field plays in: a save's or a new game's. */
     private ?PreviewCampaign $campaign = null;
+    /** Why a new game's campaign could not be started, when the field was opened on one and it could not. */
+    public private(set) ?string $campaignFailure = null;
     /** Every Engine configuration the field may install; each is given back as it was found. */
     private const array INSTALLED_CONFIGURATION = [ProjectConfig::class, PlaySettings::class, WorldAbilityCatalog::class,
         ActorStore::class, ItemStore::class];
@@ -114,31 +118,30 @@ final class PreviewField
     }
 
     /**
-     * Opens the field on a map, with the player standing on a cell and the
-     * camera following them. A map that cannot be loaded leaves undefined
-     * terrain and says why ({@see $mapFailure}).
+     * Opens the field on a map in the campaign a new game starts with
+     * ({@see PreviewCampaign::startNewGame()}): the project's starting party,
+     * inventory and funds, with the player standing on a cell, shown and
+     * facing as a new game shows them, and the camera following. A project a
+     * new game cannot be started in leaves the field without a campaign, an
+     * empty party on it, and says why ({@see $campaignFailure}). A map that
+     * cannot be loaded leaves undefined terrain and says why
+     * ({@see $mapFailure}).
      *
      * @param Closure(): float $readTime The owner's clock, in seconds.
      */
     public static function open(string $projectRoot, string $mapId, Vector2 $spawn, int $width, int $height, Closure $readTime): self
     {
         $field = new self($projectRoot, $width, $height, $readTime);
-        $field->run(function () use ($field, $mapId, $spawn): void {
-            $field->scene = new PreviewGameScene(new PreviewSceneManager(), $field->screenWidth, $field->screenHeight, $mapId);
-            $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
-            $camera = $field->scene->previewCamera();
-            $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight, $field->projectRoot . '/assets');
-            $field->scene->getPreviewGame()->notices->presentOn($field->presentation);
-            $field->presentTerminal();
-            $player = new PreviewPlayer($field->scene, $spawn);
-            $field->scene->installPlayer($player);
-            try {
-                $field->scene->previewMap->loadForPreview($mapId);
-            } catch (Throwable) {
-                // The map manager owns the undefined terrain and its diagnostic.
-            }
-            $camera->attach($player);
-        });
+        try {
+            $field->run(function () use ($field, $mapId, $spawn): void {
+                $manager = new PreviewSceneManager();
+                $field->startNewGame($manager);
+                $field->stage($manager, $mapId, $spawn);
+            });
+        } catch (Throwable $failure) {
+            $field->dispose();
+            throw $failure;
+        }
 
         return $field;
     }
@@ -158,29 +161,11 @@ final class PreviewField
         $field = new self($projectRoot, $width, $height, $readTime);
         try {
             $field->run(function () use ($field, $savePath): void {
-                ConfigStore::put(ActorStore::class, new ActorStore());
-                ConfigStore::put(ItemStore::class, new ItemStore());
+                $field->installProjectStores();
                 $manager = new PreviewSceneManager();
-                $game = $manager->game instanceof PreviewGame ? $manager->game
-                    : throw new \LogicException('The preview scene manager lost its preview game.');
-                $field->campaign = PreviewCampaign::restoreFromSave($game, $field->projectRoot, $savePath);
+                $field->campaign = PreviewCampaign::restoreFromSave(self::requirePreviewGame($manager), $field->projectRoot, $savePath);
                 $config = $field->campaign->config;
-                $field->scene = new PreviewGameScene($manager, $field->screenWidth, $field->screenHeight, $config->mapId,
-                    $field->campaign->session);
-                $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
-                $camera = $field->scene->previewCamera();
-                $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight, $field->projectRoot . '/assets');
-                $field->scene->getPreviewGame()->notices->presentOn($field->presentation);
-                $field->presentTerminal();
-                $player = new PreviewPlayer($field->scene, new Vector2($config->playerPosition->x, $config->playerPosition->y),
-                    $config->playerSprite, $config->playerHeading, party: $config->party);
-                $field->scene->installPlayer($player);
-                try {
-                    $field->scene->previewMap->loadForPreview($config->mapId);
-                } catch (Throwable) {
-                    // The map manager owns the undefined terrain and its diagnostic.
-                }
-                $camera->attach($player);
+                $field->stage($manager, $config->mapId, new Vector2($config->playerPosition->x, $config->playerPosition->y));
             });
         } catch (Throwable $failure) {
             $field->dispose();
@@ -190,10 +175,65 @@ final class PreviewField
         return $field;
     }
 
-    /** The map the field's saved campaign was saved on; null for a field opened without one. */
+    /**
+     * Starts a new game's campaign for the field's Game. A project a new game
+     * cannot be started in keeps the actors and items the field found
+     * installed and has no campaign; the Engine's reason is kept.
+     */
+    private function startNewGame(PreviewSceneManager $manager): void
+    {
+        try {
+            $this->installProjectStores();
+            $this->campaign = PreviewCampaign::startNewGame(self::requirePreviewGame($manager), $this->projectRoot);
+        } catch (Throwable $failure) {
+            $this->giveBackConfiguration([ActorStore::class, ItemStore::class]);
+            $this->campaignFailure = 'A new game could not be started, so the field has no party: ' . $failure->getMessage();
+        }
+    }
+
+    /** Installs the project's actors and items, read from its files, as the game does before a campaign. */
+    private function installProjectStores(): void
+    {
+        ConfigStore::put(ActorStore::class, new ActorStore());
+        ConfigStore::put(ItemStore::class, new ItemStore());
+    }
+
+    private static function requirePreviewGame(PreviewSceneManager $manager): PreviewGame
+    {
+        return $manager->game instanceof PreviewGame ? $manager->game
+            : throw new \LogicException('The preview scene manager lost its preview game.');
+    }
+
+    /**
+     * Builds the field's scene on a map in the field's campaign, with the
+     * player on a cell and the camera following them. In a campaign the
+     * player has its sprite, heading and party, as the game's field gives
+     * them; without one they are the plain marker of an empty party.
+     */
+    private function stage(PreviewSceneManager $manager, string $mapId, Vector2 $position): void
+    {
+        $config = $this->campaign?->config;
+        $this->scene = new PreviewGameScene($manager, $this->screenWidth, $this->screenHeight, $mapId, $this->campaign?->session);
+        $this->scene->installFieldEffects(EffectPresentation::TERMINAL);
+        $camera = $this->scene->previewCamera();
+        $this->presentation = new PreviewPresentation($this->screenWidth, $this->screenHeight, $this->projectRoot . '/assets');
+        $this->scene->getPreviewGame()->notices->presentOn($this->presentation);
+        $this->presentTerminal();
+        $player = $config === null ? new PreviewPlayer($this->scene, $position)
+            : new PreviewPlayer($this->scene, $position, $config->playerSprite, $config->playerHeading, party: $config->party);
+        $this->scene->installPlayer($player);
+        try {
+            $this->scene->previewMap->loadForPreview($mapId);
+        } catch (Throwable) {
+            // The map manager owns the undefined terrain and its diagnostic.
+        }
+        $camera->attach($player);
+    }
+
+    /** The map the field's saved campaign was saved on; null for a field opened without a save. */
     public function getCampaignMapId(): ?string
     {
-        return $this->campaign?->config->mapId;
+        return $this->campaign?->savedMapId;
     }
 
     /**
@@ -511,12 +551,14 @@ final class PreviewField
     }
 
     /**
-     * @return list<string> Why the current field has no usable map, project configuration it could not read, and
-     *     the casts a cinematic could not frame clear of its dialogue ({@see PreviewGameScene::getDialogueFramingDiagnostics()}).
+     * @return list<string> Why the current field has no usable map, project configuration it could not read, why
+     *     it has no new game's campaign, and the casts a cinematic could not frame clear of its dialogue
+     *     ({@see PreviewGameScene::getDialogueFramingDiagnostics()}).
      */
     public function getDiagnostics(): array
     {
-        return [...$this->configurationDiagnostics, ...$this->scene->previewMap->getDiagnostics(),
+        return [...$this->configurationDiagnostics, ...($this->campaignFailure === null ? [] : [$this->campaignFailure]),
+            ...$this->scene->previewMap->getDiagnostics(),
             ...$this->scene->getDialogueFramingDiagnostics()];
     }
 
@@ -582,16 +624,26 @@ final class PreviewField
             return;
         }
 
-        foreach (self::INSTALLED_CONFIGURATION as $class) {
+        $this->giveBackConfiguration(self::INSTALLED_CONFIGURATION);
+        InputManager::setBindings($this->previousBindings);
+
+        $this->configured = false;
+    }
+
+    /**
+     * Puts Engine configuration back as the field found it: what was installed before, or nothing.
+     *
+     * @param list<class-string<ConfigInterface>> $classes
+     */
+    private function giveBackConfiguration(array $classes): void
+    {
+        foreach ($classes as $class) {
             if (isset($this->previousConfigs[$class])) {
                 ConfigStore::put($class, $this->previousConfigs[$class]);
             } else {
                 ConfigStore::remove($class);
             }
         }
-        InputManager::setBindings($this->previousBindings);
-
-        $this->configured = false;
     }
 
     /**
