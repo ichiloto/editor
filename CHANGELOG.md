@@ -58,11 +58,11 @@
   span. `cutscenes.timeline` gives the tip as `groundSpanTip` with the row key that edits it. A file that declares a
   ground span saves byte for byte while untouched, and other edits keep it, with undo and redo. Each save compiles
   through the Engine, whose refusal is reported in its words with nothing written. The Terminal editor has no rows for
-  the tip, the lifetime or the capture frame and leaves them as written. `cutscenes.effectBattlePreview` composes the
-  span only for a request whose `textureStrip` is `true`; any other request carries the Engine's diagnostic. The CPU
-  still raster draws the Engine's composed strip texel for texel on six synthetic cases (east and west rays, two crops
-  that are not square, both mirrors, arena clipping), kept as `tests/Fixtures/GroundSpanStrip` for the native renderer
-  to be held to.
+  the tip, the lifetime or the capture frame and leaves them as written, as a summon's rows leave a summon timeline's
+  ground span. `cutscenes.effectBattlePreview` composes the span only for a request whose `textureStrip` is `true`;
+  any other request carries the Engine's diagnostic. The CPU still raster draws the Engine's composed strip texel for
+  texel on six synthetic cases (east and west rays, two crops that are not square, both mirrors, arena clipping), kept
+  as `tests/Fixtures/GroundSpanStrip` for the native renderer to be held to.
 
 - **Draw Image** on a staged actor (Engine 52d4507c, `stagedActorGraphicalVisibility`): the graphical editor's
   `stage_actor` commands and staged cast members can withhold the actor's image while its Terminal glyph, placement,

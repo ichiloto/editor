@@ -743,7 +743,7 @@ return [
         // The lane: its rear on the caster's ground, its tip on the farthest target's.
         ['id' => 'lane-art', 'type' => 'image', 'asset' => 'Graphics/Effects/ground-lance.png',
          'anchor' => 'target-group', 'attachment' => 'ground', 'anchorLifetime' => 'target-capture', 'fit' => 'contain',
-         'pivot' => ['x' => 0.875, 'y' => 0.5],   'groundSpan' => ['tip' => ['x' => 0.125, 'y' => 0.5]], /* measured on the sheet */
+         'pivot' => ['x' => 0.8828125, 'y' => 0.53125],   'groundSpan' => ['tip' => ['x' => 0.1328125, 'y' => 0.46875]], /* measured on the sheet */
          'depth' => 'behind',
          'keyframes' => [['frame' => 3, 'duration' => 8]]],
       ],
@@ -753,13 +753,28 @@ return [
 PHP_SOURCE;
 }
 
-/** The effect battle preview project, its unarmed attack playing Ground Lance on its targets. */
+/** The colour of a texel of Ground Lance's 64 by 16 image: its column in red and its row in green, every texel opaque. */
+function getGroundLanceTexel(int $x, int $y): array
+{
+    return [20 + 3 * $x, 30 + 13 * $y, 90];
+}
+
+/**
+ * The effect battle preview project, its unarmed attack playing Ground Lance on its targets. The image's rear
+ * (the pivot) is the centre of its texel (56, 8) and its tip the centre of its texel (8, 7).
+ */
 function groundLanceProject(): string
 {
     $root = effectBattlePreviewProject();
     mkdir($root . '/assets/Animations/ground-lance', 0o777, true);
     file_put_contents(effectTimelinePath($root, 'ground-lance'), groundLanceTimeline());
-    writeTilesetTestPng($root . '/assets/Graphics/Effects/ground-lance.png', 64, 16);
+    $image = imagecreatetruecolor(64, 16);
+    for ($y = 0; $y < 16; $y++) {
+        for ($x = 0; $x < 64; $x++) {
+            imagesetpixel($image, $x, $y, (int) imagecolorallocate($image, ...getGroundLanceTexel($x, $y)));
+        }
+    }
+    imagepng($image, $root . '/assets/Graphics/Effects/ground-lance.png');
     file_put_contents($root . '/assets/Data/animations.php', "<?php\n\nreturn " . var_export([
         ['id' => 1, 'name' => 'Ground Lance', 'roles' => ['attack', 'attack-unarmed'], 'targetEffect' => 'ground-lance'],
     ], true) . ";\n");

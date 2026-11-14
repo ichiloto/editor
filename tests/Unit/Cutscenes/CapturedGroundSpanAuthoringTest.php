@@ -3,10 +3,12 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Review\CanvasStillRaster;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
+use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasTextureStrip;
 
 /**
@@ -45,13 +47,14 @@ it('opens a declared ground span with the rows that edit it, and saves it untouc
     [$session, $index, $row, , $find] = openGroundSpanSession($root, 'ground-lance');
     $art = $session->describeCutsceneTimeline('cutscenes/effect', $index)['tracks'][0]['art'];
 
-    expect($row('track0GroundSpantip'))->toMatchArray(['label' => 'Track 1 Ground Span Tip (empty: no ground span)', 'value' => '0.125, 0.5'])
-        ->and($row('track0AnchorLifetime'))->toMatchArray(['value' => 'target-capture', 'options' => ['', 'effect-start', 'target-capture']])
+    expect($row('track0GroundSpantip'))->toMatchArray(['label' => 'Track 1 Ground Span Tip (empty: no ground span)', 'value' => '0.1328125, 0.46875'])
+        ->and($row('track0AnchorLifetime')['value'])->toBe('target-capture')
+        ->and($row('track0AnchorLifetime')['options'])->toContain('', 'effect-start', 'target-capture')->not->toContain('follow')
         ->and($find('targetCaptureFrame', []))->toMatchArray(['label' => 'Target Capture Frame', 'value' => '2'])
         // The span over the targets conflicts with a ground span, so the track that has one is not offered it.
         ->and($find('track0Span', ['tracks']))->toBeNull()
         // The image-cell picker's art names the tip beside the pivot, each with the row key that edits it.
-        ->and($art)->toMatchArray(['pivot' => '0.875, 0.5', 'groundSpanTip' => '0.125, 0.5', 'groundSpanTipKey' => $row('track0GroundSpantip')['key']])
+        ->and($art)->toMatchArray(['pivot' => '0.8828125, 0.53125', 'groundSpanTip' => '0.1328125, 0.46875', 'groundSpanTipKey' => $row('track0GroundSpantip')['key']])
         ->and($session->listUnsavedChanges())->toBe([])
         ->and($session->saveAll()['failures'])->toBe([])
         ->and(file_get_contents($path))->toBe(groundLanceTimeline());
@@ -65,7 +68,7 @@ it('leaves a ground span as written in the Terminal editor, which has no row for
     $asset->hydrate();
 
     expect($asset->readOnlyReason())->toBeNull()
-        ->and($asset->partner()['presentations']['graphical']['tracks'][0]['groundSpan'])->toBe(['tip' => ['x' => 0.125, 'y' => 0.5]])
+        ->and($asset->partner()['presentations']['graphical']['tracks'][0]['groundSpan'])->toBe(['tip' => ['x' => 0.1328125, 'y' => 0.46875]])
         ->and($asset->partner()['presentations']['graphical']['targetCaptureFrame'])->toBe(2);
 
     // The terminal sequence, then the graphical one: edits beside the span, in the rows the Terminal editor has.
@@ -83,14 +86,14 @@ it('leaves a ground span as written in the Terminal editor, which has no row for
         ->and(file_get_contents($path))->toBe(str_replace(["'lengthFrames' => 4", "'restFrame' => 3", "'id' => 'lane-art'"],
             ["'lengthFrames' => 5", "'restFrame' => 4", "'id' => 'lane-light'"], groundLanceTimeline()))
         ->and($asset->compileEffect(EffectPresentation::GRAPHICAL, true)->playbackSegments[0]['drawCommands'][0]['payload']['groundSpan'])
-        ->toBe(['tip' => ['x' => 0.125, 'y' => 0.5]]);
+        ->toBe(['tip' => ['x' => 0.1328125, 'y' => 0.46875]]);
 })->skip(fn (): bool => ! hasEngineGroundSpan(), ENGINE_GROUND_SPAN_MISSING);
 
 it('moves the tip and edits beside it touching only what changed, and undo and redo restore the bytes', function () {
     $root = groundLanceProject();
     $path = effectTimelinePath($root, 'ground-lance');
     [$session, , $row, $apply, , $setRecord] = openGroundSpanSession($root, 'ground-lance');
-    $edited = str_replace(["['tip' => ['x' => 0.125, 'y' => 0.5]]", "'pivot' => ['x' => 0.875, 'y' => 0.5]", "'targetCaptureFrame' => 2", "'duration' => 8"],
+    $edited = str_replace(["['tip' => ['x' => 0.1328125, 'y' => 0.46875]]", "'pivot' => ['x' => 0.8828125, 'y' => 0.53125]", "'targetCaptureFrame' => 2", "'duration' => 8"],
         ["['tip' => ['x' => 0.25, 'y' => 0.375]]", "'pivot' => ['x' => 0.9375, 'y' => 0.5]", "'targetCaptureFrame' => 3", "'duration' => 7"], groundLanceTimeline());
 
     expect($apply('track0GroundSpantip', '0.25, 0.375')['changed'])->toBeTrue()
@@ -105,7 +108,7 @@ it('moves the tip and edits beside it touching only what changed, and undo and r
     foreach (range(1, 4) as $ignored) {
         $session->undo();
     }
-    expect($row('track0GroundSpantip')['value'])->toBe('0.125, 0.5')
+    expect($row('track0GroundSpantip')['value'])->toBe('0.1328125, 0.46875')
         ->and($session->saveAll()['failures'])->toBe([])
         ->and(file_get_contents($path))->toBe(groundLanceTimeline());
 
@@ -121,7 +124,7 @@ it('refuses a tip that is not a point of the image, changing nothing', function 
     [$session, , $row, $apply] = openGroundSpanSession($root, 'ground-lance');
 
     expect(fn() => $apply('track0GroundSpantip', $tip))->toThrow(SessionRefusal::class, 'two numbers from 0 to 1')
-        ->and($row('track0GroundSpantip')['value'])->toBe('0.125, 0.5')
+        ->and($row('track0GroundSpantip')['value'])->toBe('0.1328125, 0.46875')
         ->and($session->listUnsavedChanges())->toBe([]);
 })->with(['1.5, 0.5', '0.5', 'left, middle', '-0.1, 0.5'])->skip(fn (): bool => ! hasEngineGroundSpan(), ENGINE_GROUND_SPAN_MISSING);
 
@@ -134,7 +137,7 @@ it('turns the ground span off by clearing its tip and on again by naming one, th
     $apply('track0GroundSpantip', '');
     expect($session->saveAll()['failures'])->toBe([])
         ->and($track())->not->toHaveKey('groundSpan')
-        ->and($track()['pivot'])->toBe(['x' => 0.875, 'y' => 0.5])
+        ->and($track()['pivot'])->toBe(['x' => 0.8828125, 'y' => 0.53125])
         ->and(file_get_contents($path))->not->toContain('groundSpan')
         ->toContain('// The lane: its rear on the caster\'s ground, its tip on the farthest target\'s.', '/* measured on the sheet */',
             "'targetCaptureFrame' => 2, // the targets and the caster's ground are held from here")
@@ -219,7 +222,7 @@ it('authors a ground span on a plain image track through the shared rows, the En
         ->and(file_get_contents($path))->toBe($written);
 })->skip(fn (): bool => ! hasEngineGroundSpan(), ENGINE_GROUND_SPAN_MISSING);
 
-it('previews the ground span as the Engine composes it, only for a canvas that draws texture strips', function (bool $reducedMotion) {
+it('previews the ground span as the Engine composes it, only for a canvas that draws texture strips, and draws a still of it', function (bool $reducedMotion) {
     $root = groundLanceProject();
     $session = EditorSession::open($root);
     $index = findEffectIndex($session, 'ground-lance');
@@ -252,13 +255,55 @@ it('previews the ground span as the Engine composes it, only for a canvas that d
     [$rearU, $rearV] = $strip->getSourcePoint($rear->x - $composite['destination']['x'], $rear->y - $composite['destination']['y']);
     [$tipU, $tipV] = $strip->getSourcePoint($tip->x - $composite['destination']['x'], $tip->y - $composite['destination']['y']);
 
-    expect([$rearU, $rearV])->toEqualWithDelta([0.875, 0.5], 1e-9)
-        ->and([$tipU, $tipV])->toEqualWithDelta([0.125, 0.5], 1e-9)
+    expect([$rearU, $rearV])->toEqualWithDelta([0.8828125, 0.53125], 1e-9)
+        ->and([$tipU, $tipV])->toEqualWithDelta([0.1328125, 0.46875], 1e-9)
         // One uniform scale over the whole 64 by 16 image, on two straight knots.
         ->and($operation['sourceRect'])->toBe(['x' => 0, 'y' => 0, 'width' => 64, 'height' => 16])
         ->and($strip->length / 64)->toEqualWithDelta($strip->height / 16, 1e-9)
-        ->and($strip->length / 64)->toEqualWithDelta(hypot($tip->x - $rear->x, $tip->y - $rear->y) / (0.75 * 64), 1e-9)
-        ->and($strip->knots)->toBe([['u' => 0.0, 'offset' => 0.0], ['u' => 1.0, 'offset' => 0.0]])
+        // The rear is the centre of texel (56, 8) and the tip of texel (8, 7): 48 texels along and one across.
+        ->and($strip->length / 64)->toEqualWithDelta(hypot($tip->x - $rear->x, $tip->y - $rear->y) / hypot(48, 1), 1e-9)
+        ->and($strip->knots)->toBe([['u' => 0.0, 'offset' => 0.0], ['u' => 1.0, 'offset' => 0.0]]);
+
+    // A still of the same frame: the CPU raster draws the rear's texel on the caster's ground and the tip's on the target's.
+    $raster = new CanvasStillRaster($root . '/assets');
+    $still = $raster->rasterize($command->getFrameAtIndex($with['frame'], $reducedMotion, textureStrip: true)->canvas);
+    $pixelAt = static function (Vector2 $ground) use ($still): array {
+        $pixel = imagecolorat($still, (int) floor($ground->x), (int) floor($ground->y));
+
+        return [($pixel >> 16) & 255, ($pixel >> 8) & 255, $pixel & 255];
+    };
+    expect($pixelAt($rear))->toBe(getGroundLanceTexel(56, 8))
+        ->and($pixelAt($tip))->toBe(getGroundLanceTexel(8, 7))
+        ->and($raster->diagnostics)->toBe([])
         ->and($session->listUnsavedChanges())->toBe([])
         ->and(file_get_contents(effectTimelinePath($root, 'ground-lance')))->toBe(groundLanceTimeline());
 })->with([false, true])->skip(fn (): bool => ! hasEngineGroundSpan(), ENGINE_GROUND_SPAN_MISSING);
+
+it('keeps a summon timeline\'s ground span as written through edits beside it, with no row of its own', function () {
+    $root = summonBattlePreviewProject();
+    $path = $root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php';
+    $source = str_replace(["  'restFrame' => 12,", "'anchor' => 'target', 'attachment' => 'ground', 'pivot' => ['x' => 0.5, 'y' => 1],"], [
+        "  'restFrame' => 12,\n  'targetCaptureFrame' => 0, // held from the first frame",
+        "'anchor' => 'target-group', 'attachment' => 'ground', 'anchorLifetime' => 'target-capture', 'fit' => 'contain',\n"
+        . "      'pivot' => ['x' => 0.875, 'y' => 0.5],  'groundSpan' => ['tip' => ['x' => 0.125, 'y' => 0.5]], /* rear to tip */",
+    ], (string) file_get_contents($path));
+    file_put_contents($path, $source);
+    $session = EditorSession::open($root);
+    $rows = static fn(): array => $session->readDatabaseRecord('cutscenes/summon', 0, ['tracks'])['rows'];
+    $row = static fn(string $field): ?array => array_find($rows(), static fn(array $entry): bool => ($entry['key']['field'] ?? null) === $field);
+    $art = array_find(array_keys($rows()), static fn(int $at): bool => ($rows()[$at]['value'] ?? null) === 'wisp-art');
+    $track = intval(preg_replace('/\D/', '', strval($rows()[$art]['key']['field'])));
+
+    // A summon's image rows are a summon's: the span has none, and the file says what it said.
+    expect($row("track{$track}GroundSpantip"))->toBeNull()
+        ->and($session->listUnsavedChanges())->toBe([])
+        ->and($session->saveAll()['failures'])->toBe([])
+        ->and(file_get_contents($path))->toBe($source);
+
+    $session->applyDatabaseRecord('cutscenes/summon', 0, $row("track{$track}Id")['key'], 'wisp-lane');
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and(file_get_contents($path))->toBe(str_replace("'id' => 'wisp-art'", "'id' => 'wisp-lane'", $source));
+    $session->undo();
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and(file_get_contents($path))->toBe($source);
+})->skip(fn (): bool => ! hasEngineGroundSpan(), ENGINE_GROUND_SPAN_MISSING);

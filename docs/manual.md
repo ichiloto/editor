@@ -3812,7 +3812,9 @@ a track that also has cells, a facing, another fit, another lifetime or no
 pivot. A timeline that declares a ground span opens with it and saves byte for
 byte while untouched; an edit to another field keeps the span, the comments and
 the layout of the file. The Terminal editor has no row for the tip, the
-lifetime or the capture frame and leaves all three as written. The GUI's
+lifetime or the capture frame and leaves all three as written. A summon's
+image rows have none for a ground span either; a summon timeline that declares
+one keeps it as written through edits beside it. The GUI's
 battle preview draws the span where its canvas draws texture strips: the editor
 session composes it only for a `cutscenes.effectBattlePreview` request whose
 `textureStrip` is `true`; any other request draws no span and carries the
