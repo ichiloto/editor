@@ -124,9 +124,12 @@ it('creates a framing command in a cinematic\'s own script, requiring bound keys
     expect($row('command5Commands'))->toMatchArray(['name' => 'Framing Commands', 'value' => '0', 'frame' => ['commands', 5, 'commands']])
         ->and($row('command5SubjectList'))->toMatchArray(['name' => 'Required Subjects', 'value' => '0']);
 
-    // A new subject is the player, directly. Clearing its kind selects one of the cinematic's bound keys instead.
-    $session->addDatabaseItem(FRAMING_CINEMATICS, 0, $row('command5SubjectList')['key'], true);
-    $session->addDatabaseItem(FRAMING_CINEMATICS, 0, $row('command5SubjectList')['key'], true);
+    // A new subject is the player, directly: added from the list's heading, or beneath the command from any of its
+    // rows. Clearing its kind selects one of the cinematic's bound keys instead.
+    expect($row('command5SubjectList'))->toMatchArray(['item' => true, 'itemNoun' => 'required subject'])
+        ->and($row('command5Type'))->toMatchArray(['childNoun' => 'required subject']);
+    $session->addDatabaseItem(FRAMING_CINEMATICS, 0, $row('command5SubjectList')['key']);
+    $session->addDatabaseItem(FRAMING_CINEMATICS, 0, $row('command5Type')['key'], true);
     expect($row('command5Subject0Kind'))->toMatchArray(['value' => 'player', 'options' => ['', 'player', 'npc', 'staged_actor']]);
     $set('command5Subject1Kind', '');
     expect($row('command5Subject1Kind')['value'])->toBe('(a bound framing subject)')
@@ -146,7 +149,7 @@ it('creates a framing command in a cinematic\'s own script, requiring bound keys
     $session->addDatabaseItem(FRAMING_CINEMATICS, 0, ['frame' => $body]);
     $session->addDatabaseItem(FRAMING_CINEMATICS, 0, ['frame' => $body]);
     $set('command1Type', 'framing', $body);
-    $session->addDatabaseItem(FRAMING_CINEMATICS, 0, $row('command1SubjectList', $body)['key'], true);
+    $session->addDatabaseItem(FRAMING_CINEMATICS, 0, $row('command1SubjectList', $body)['key']);
     $session->addDatabaseItem(FRAMING_CINEMATICS, 0, ['frame' => [...$body, 1, 'commands']]);
     $session->saveDatabase(FRAMING_CINEMATICS);
     $edited = (string) file_get_contents($scriptPath);
@@ -241,7 +244,7 @@ it('offers a reusable event script direct subjects alone, its own staged actors 
     setRecordRow($session, FRAMING_SCRIPTS, $index, 'command4Operation', 'detach', $body);
     $session->addDatabaseItem(FRAMING_SCRIPTS, $index, ['frame' => $body]);
     setRecordRow($session, FRAMING_SCRIPTS, $index, 'command5Type', 'framing', $body);
-    $session->addDatabaseItem(FRAMING_SCRIPTS, $index, getRecordRow($session, FRAMING_SCRIPTS, $index, 'command5SubjectList', $body)['key'], true);
+    $session->addDatabaseItem(FRAMING_SCRIPTS, $index, getRecordRow($session, FRAMING_SCRIPTS, $index, 'command5SubjectList', $body)['key']);
     setRecordRow($session, FRAMING_SCRIPTS, $index, 'command5Subject0Kind', 'staged_actor', $body);
     setRecordRow($session, FRAMING_SCRIPTS, $index, 'command5Subject0Id', 'helper', $body);
     $session->addDatabaseItem(FRAMING_SCRIPTS, $index, ['frame' => [...$body, 5, 'commands']]);
@@ -361,7 +364,7 @@ it('has the Engine judge a framing command a reusable event script adds or chang
     // A new phase with a subject and no body yet.
     $session->addDatabaseItem(FRAMING_SCRIPTS, $index, ['frame' => $then]);
     setRecordRow($session, FRAMING_SCRIPTS, $index, 'command3Type', 'framing', $then);
-    $session->addDatabaseItem(FRAMING_SCRIPTS, $index, getRecordRow($session, FRAMING_SCRIPTS, $index, 'command3SubjectList', $then)['key'], true);
+    $session->addDatabaseItem(FRAMING_SCRIPTS, $index, getRecordRow($session, FRAMING_SCRIPTS, $index, 'command3SubjectList', $then)['key']);
     expect(fn() => $session->saveDatabase(FRAMING_SCRIPTS))
         ->toThrow(InvalidArgumentException::class, 'Event script rescue has a framing command requiring player · 0 commands that the Engine refuses:')
         ->and(fn() => $session->saveDatabase(FRAMING_SCRIPTS))->toThrow(InvalidArgumentException::class, 'Framing needs required subjects and a non-empty command body.')

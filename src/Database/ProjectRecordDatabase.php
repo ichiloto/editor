@@ -3541,7 +3541,9 @@ final class ProjectRecordDatabase
 
         $nested = $this->frameNestedContext($recordIndex, $framePath, $fieldId);
 
-        if ($nested !== null && $nested['nestedIndex'] !== null) {
+        // A nested entry's row, or the heading of a headed nested list (a framing phase's required subjects),
+        // where an entry is added at the list's end.
+        if ($nested !== null && ($nested['nestedIndex'] !== null || $nested['list']->heading !== '')) {
             return new RecordItem(RecordItem::NESTED, $framePath, $entryIndex, $nested['nestedIndex'], $nested['list']->singular);
         }
 
