@@ -266,6 +266,58 @@ it('frames a resized preview as one opened at that size, against the dialogue bo
     }
 });
 
+/**
+ * The rows of the Terminal picture a window's borders and sides stand on:
+ * every row holding the window's left edge at its column.
+ *
+ * @return list<int>
+ */
+function findFramingWindowRows(CinematicPreviewSession $preview, int $column): array
+{
+    $rows = [];
+    foreach ($preview->frame() as $row => $text) {
+        $edge = mb_substr(TerminalText::stripAnsi($text), $column, 2);
+        if ($edge === '+-' || $edge === '| ') {
+            $rows[] = $row;
+        }
+    }
+
+    return $rows;
+}
+
+it('draws the Terminal dialogue window in the footprint its line declares, where the game places it', function () {
+    $preview = startFramingPreview(createFramingProject(), 'terminal', 32, createFramingDefinition(35, [
+        ['type' => 'text', 'name' => 'Friend', 'text' => 'A line held on screen.'],
+        ['type' => 'text', 'name' => '', 'text' => 'Nobody says this one.'],
+    ]));
+    $readLine = static fn(): object => array_find(readFramingField($preview)->presentation->getActivePresentations(),
+        static fn(object $owner): bool => $owner instanceof DialoguePresentationProviderInterface)
+        ?? throw new RuntimeException('No dialogue line is on screen.');
+
+    try {
+        // A spoken line stands at the bottom of the screen, its speaker in the top border.
+        stepToFramingLine($preview);
+        $bounds = $readLine()->getPresentationBounds();
+        $picture = array_map(TerminalText::stripAnsi(...), $preview->frame());
+        expect($bounds->getY() + $bounds->getHeight())->toBe(30)
+            ->and(findFramingWindowRows($preview, $bounds->getX()))->toBe(range($bounds->getY(), $bounds->getY() + $bounds->getHeight() - 1))
+            ->and(mb_substr($picture[$bounds->getY()], $bounds->getX(), $bounds->getWidth()))->toStartWith('+-Friend-')->toEndWith('-+')
+            ->and(mb_substr($picture[$bounds->getY() + 1], $bounds->getX(), $bounds->getWidth()))->toStartWith('| A line held on screen.')->toEndWith(' |')
+            ->and(mb_substr($picture[$bounds->getY() + $bounds->getHeight() - 1], $bounds->getX(), $bounds->getWidth()))->toEndWith('▼-+');
+
+        // A line nobody speaks stands at the top, as the game's narration does.
+        $preview->confirm();
+        stepToFramingLine($preview);
+        $bounds = $readLine()->getPresentationBounds();
+        $picture = array_map(TerminalText::stripAnsi(...), $preview->frame());
+        expect($bounds->getY())->toBe(0)
+            ->and(findFramingWindowRows($preview, $bounds->getX()))->toBe(range(0, $bounds->getHeight() - 1))
+            ->and(mb_substr($picture[1], $bounds->getX(), $bounds->getWidth()))->toStartWith('| Nobody says this one.');
+    } finally {
+        $preview->dispose();
+    }
+});
+
 it('reports a cast that cannot be framed in the Engine\'s words with the scene time of each line, and keeps the report after the scene ends', function (string $picture) {
     $root = createFramingProject();
     $preview = startFramingPreview($root, $picture, 5, createFramingDefinition(36));

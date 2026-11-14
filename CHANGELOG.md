@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- The Terminal preview draws a dialogue line's window in the footprint the line declares, where the game places it:
+  five rows, the speaker in its top border and the page in its three rows, at the bottom of the screen for a spoken
+  line and at the top for a line nobody speaks. The preview drew its own taller box (a speaker row and a marker row
+  inside it) one row above the bottom of the screen whoever spoke, so the box in the Terminal picture was not the
+  footprint the Engine frames a cinematic's cast clear of, and narration showed at the bottom. Changed with it: the
+  speaker is in the border where it was a row of the box, and the mark that the line waits is in the bottom border.
+
 - A cinematic previewed or captured without a save plays in the campaign a new game starts with. The preview's field
   had an empty party unless it was given a save, so a project that shows the party leader as the player drew the
   plain player marker, and conditions and lines that read the party found no one. A field opened with a player and

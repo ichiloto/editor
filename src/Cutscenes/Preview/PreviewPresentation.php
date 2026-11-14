@@ -137,8 +137,11 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
         if ($this->isComplete()) {
             return;
         }
-        $owner = $this->dialogue ?? $this->choice;
-        PresentationLayerPolicy::ui($owner, fn() => $this->drawBox());
+        if ($this->dialogue !== null) {
+            PresentationLayerPolicy::ui($this->dialogue, fn() => $this->drawDialogue($this->dialogue));
+        } elseif ($this->choice !== null) {
+            PresentationLayerPolicy::ui($this->choice, fn() => $this->drawChoice($this->choice));
+        }
     }
 
     public function isComplete(): bool
@@ -268,42 +271,56 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
         return true;
     }
 
-    /** The Terminal window: the dialogue's page or the choice, bordered, where the game places it. */
-    private function drawBox(): void
+    /**
+     * The Terminal dialogue window, in the footprint its owner declares
+     * ({@see PreviewDialogueOwner::getPresentationBounds()}), which the
+     * Engine frames a cinematic's cast clear of: the speaker in its top
+     * border and the page in its fixed rows, as the game's window has them,
+     * with the mark that it waits in its bottom border.
+     */
+    private function drawDialogue(PreviewDialogueOwner $dialogue): void
+    {
+        $bounds = $dialogue->getPresentationBounds();
+        $width = $bounds->getWidth();
+        $inner = max(0, $width - 4);
+        $speaker = TerminalText::truncateToWidth($dialogue->pagination->speaker, max(0, $width - 3));
+        $rows = ['+-' . $speaker . str_repeat('-', max(0, $width - 3 - TerminalText::displayWidth($speaker))) . '+'];
+        $lines = explode("\n", $dialogue->getPageText());
+        for ($row = 0; $row < $bounds->getHeight() - 2; $row++) {
+            $rows[] = '| ' . TerminalText::padRight($lines[$row] ?? '', $inner) . ' |';
+        }
+        $rows[] = '+' . str_repeat('-', $inner) . '▼-+';
+        $this->writeWindow($rows, $bounds->getX(), $bounds->getY());
+    }
+
+    /** The Terminal choice window: its title, prompt and options, bordered, in the footprint the choice declares. */
+    private function drawChoice(PreviewChoiceOwner $choice): void
     {
         $boxWidth = $this->getBoxWidth();
         $inner = $boxWidth - 4;
         $border = '+' . str_repeat('-', $boxWidth - 2) . '+';
         $rows = [$border];
-
-        if ($this->dialogue !== null) {
-            $speaker = $this->dialogue->pagination->speaker;
-            if ($speaker !== '') {
-                $rows[] = '| ' . TerminalText::padRight($speaker . ':', $inner) . ' |';
-            }
-            foreach (explode("\n", $this->dialogue->getPageText()) as $line) {
-                foreach (TerminalText::wrapToWidth($line, $inner) as $wrapped) {
-                    $rows[] = '| ' . TerminalText::padRight($wrapped, $inner) . ' |';
-                }
-            }
-            $rows[] = '| ' . TerminalText::padRight('', $inner - 1) . '▼ |';
-        } elseif ($this->choice !== null) {
-            if ($this->choice->title !== '') {
-                $rows[] = '| ' . TerminalText::padRight($this->choice->title . ':', $inner) . ' |';
-            }
-            foreach (TerminalText::wrapToWidth($this->choice->prompt, $inner) as $line) {
-                $rows[] = '| ' . TerminalText::padRight($line, $inner) . ' |';
-            }
-            foreach ($this->choice->options as $index => $option) {
-                $marker = $index === $this->choice->highlighted ? '>' : ' ';
-                $rows[] = '| ' . TerminalText::padRight($marker . ' ' . $option, $inner) . ' |';
-            }
+        if ($choice->title !== '') {
+            $rows[] = '| ' . TerminalText::padRight($choice->title . ':', $inner) . ' |';
         }
-
+        foreach (TerminalText::wrapToWidth($choice->prompt, $inner) as $line) {
+            $rows[] = '| ' . TerminalText::padRight($line, $inner) . ' |';
+        }
+        foreach ($choice->options as $index => $option) {
+            $marker = $index === $choice->highlighted ? '>' : ' ';
+            $rows[] = '| ' . TerminalText::padRight($marker . ' ' . $option, $inner) . ' |';
+        }
         $rows[] = $border;
-        // A screen window, as the game's text box is: on the text screen, not clipped to the field camera.
-        $x = max(0, intdiv($this->screenWidth - $boxWidth, 2));
-        $y = max(0, $this->screenHeight - count($rows) - 1);
+        $this->writeWindow($rows, max(0, intdiv($this->screenWidth - $boxWidth, 2)), max(0, $this->screenHeight - count($rows) - 1));
+    }
+
+    /**
+     * Writes a window's rows on the text screen, as the game's windows are: not clipped to the field camera.
+     *
+     * @param list<string> $rows
+     */
+    private function writeWindow(array $rows, int $x, int $y): void
+    {
         foreach (array_slice($rows, 0, $this->screenHeight) as $index => $row) {
             Console::write(TerminalText::truncateToWidth($row, $this->screenWidth - $x), $x, min($y + $index, $this->screenHeight - 1));
         }

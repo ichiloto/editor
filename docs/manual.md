@@ -3532,7 +3532,9 @@ doing, the checkpoints recorded, the music the engine is playing (and
 whether it is the field's own track, restored), who owns field input,
 whether a skip would be accepted and why not, and the log of launches,
 transfers, battles and failures. Dialogue
-waits for you as it would for the player; a battle resolves as a victory
+waits for you as it would for the player, in a window that stands where the
+game's stands: at the bottom of the screen with the speaker in its top
+border, or at the top for a line nobody speaks. A battle resolves as a victory
 on the next step (the pane says so); a transfer loads the destination map.
 The preview starts from the map event that triggers the cinematic when one
 exists, otherwise from the start map at its first open tile. It plays in the
