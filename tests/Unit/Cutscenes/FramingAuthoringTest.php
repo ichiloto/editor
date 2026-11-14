@@ -491,4 +491,23 @@ it('offers the Terminal Database a reusable event script\'s own staged actors an
         ->and($records->describeEnclosingFrame([0, 'then', 1, 'commands']))->toBe(['frame' => [0, 'then'], 'landing' => 'command1'])
         ->and(array_column($records->getFrameSettingsFields($index, [0, 'then', 1, 'commands']), 'field'))
         ->toContain('command1Id', 'command1Sprite', 'command2Subject');
+
+    // In the branch's arm: Shift+O on the phase's Required Subjects adds a subject, Enter on its Commands row
+    // opens its body, and Esc lands back on the phase.
+    $select = static function (string $field) use ($editor): void {
+        $position = array_search($field, array_map(static fn(array $row): string => (string) ($row['field'] ?? ''), callEditorMethod($editor, 'getDatabaseSettingsFields')), true);
+        setEditorProperty($editor, 'databaseSelectedSettingIndex', is_int($position) ? $position : throw new RuntimeException('No row ' . $field));
+    };
+    setEditorProperty($editor, 'databaseFocus', 'database_settings');
+    setEditorProperty($editor, 'databaseCommandFramePath', [0, 'then']);
+    $select('command1SubjectList');
+    pressKeys($editor, 'O');
+    expect($records->getRecordByIndex($index)->getSubList('commands')[0]['then'][1]['subjects'])
+        ->toBe([['kind' => 'staged_actor', 'id' => 'crate'], ['kind' => 'player']]);
+    $select('command1Commands');
+    pressKeys($editor, "\n");
+    expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([0, 'then', 1, 'commands']);
+    pressKeys($editor, "\033");
+    expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([0, 'then'])
+        ->and(callEditorMethod($editor, 'getDatabaseSettingsFields')[getEditorProperty($editor, 'databaseSelectedSettingIndex')]['field'])->toBe('command1Type');
 });
