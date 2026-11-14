@@ -32,6 +32,11 @@
 
 ### Added
 
+- **Draw Image** on a staged actor (Engine 52d4507c, `stagedActorGraphicalVisibility`): the graphical editor's
+  `stage_actor` commands and staged cast members can withhold the actor's image while its Terminal glyph, placement,
+  collision and bound subject stay. A new visual stores only `false`; a replacement reads `(keep current)` and stores
+  `true` or `false` when chosen. The Editor now builds against Engine `52d4507c`.
+
 - Reduced-motion samples and motion scopes (Engine e1438b34): the graphical editor's effect and summon rows author a
   sequence's `reducedMotionSamples` (each sample's frame, duration and source frame) and each track's `motion` (`all`,
   `normal` or `reduced`). A sample that clears the picture reads `(clears the picture)`; that text or an empty value

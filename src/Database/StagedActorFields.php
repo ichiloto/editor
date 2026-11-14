@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Field\CharacterSheetPreview;
 use Ichiloto\Editor\Field\FieldSpriteFields;
+use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicStageManager;
 
@@ -64,7 +65,7 @@ final class StagedActorFields
     {
         if (isset($entry['appearance'])) {
             // The worn NPC look owns the sheet; such an actor never binds a real subject.
-            return [RecordField::boolean('replace', 'Replace Existing Visual')];
+            return [RecordField::boolean('replace', 'Replace Existing Visual'), self::getGraphicalVisibilityField($entry)];
         }
         $contract = CinematicCommandSchema::export();
         $fields = [
@@ -78,7 +79,24 @@ final class StagedActorFields
         if (($entry['subject']['kind'] ?? null) === 'world_object') {
             $fields[] = RecordField::reference('subject.id', 'Bound World Object', 'map_world_objects');
         }
-        return [...FieldSpriteFields::getFields($entry, pickSheetIndex: false), ...$fields];
+        return [...FieldSpriteFields::getFields($entry, pickSheetIndex: false), ...$fields, self::getGraphicalVisibilityField($entry)];
+    }
+
+    /**
+     * Whether the actor's graphical art draws, as the Engine's cinematic schema exports the choice
+     * (`stagedActorGraphicalVisibility`): its field and default are the Engine's. `false` withholds the image while
+     * the Terminal glyph, placement, collision and subject leases stay as they are. A new visual draws its image
+     * unless told otherwise, so only `false` is stored for it. A replacement keeps what the visual it replaces had,
+     * so it stores either value, or neither to keep the current one.
+     */
+    public static function getGraphicalVisibilityField(array $entry): RecordField
+    {
+        $visibility = CinematicCommandSchema::export()['stagedActorGraphicalVisibility'];
+        $replaces = ($entry['replace'] ?? false) === true;
+
+        return new RecordField($visibility['field'], 'Draw Image', InputControlType::BOOLEAN,
+            $replaces ? ['', 'false', 'true'] : ['false', 'true'], removeWhenEmpty: true,
+            displayDefault: $replaces ? '(keep current)' : var_export($visibility['default'], true));
     }
 
     public static function getSuppressionList(array $entry): ?RecordSubList
@@ -193,6 +211,12 @@ final class StagedActorFields
         }
         if (! self::isStagedActorEntry($entry)) {
             return $entry;
+        }
+        // The Engine's default for a new visual is its absence; a replacement's absence keeps the current value.
+        $visibility = CinematicCommandSchema::export()['stagedActorGraphicalVisibility'];
+        if (in_array($field, [$visibility['field'], 'replace'], true) && ($entry['replace'] ?? false) !== true
+            && ($entry[$visibility['field']] ?? null) === $visibility['default']) {
+            unset($entry[$visibility['field']]);
         }
         if ($field === 'subject.kind') {
             $kind = $entry['subject']['kind'] ?? null;
