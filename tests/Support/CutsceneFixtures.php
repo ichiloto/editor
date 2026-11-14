@@ -712,3 +712,123 @@ function getHarbourPaths(string $root): array
 
     return [$directory . 'harbour-lanterns.data.php', $directory . 'harbour-lanterns.script.php'];
 }
+
+/**
+ * A script for the harbour cinematic that frames two phases, built the way authors build long scenes: a helper
+ * closure that returns a command, a list built in a loop and spread into a block, and comments between them.
+ */
+function framedHarbourScript(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+// Framed by hand.
+$line = static fn(string $text): array => ['type' => 'narration', 'text' => $text, 'seconds' => 0.2];
+$drift = [];
+foreach (['boat-east', 'boat-west'] as $boat) {
+  $drift[] = ['type' => 'move_route', 'subject' => 'staged_actor', 'actorId' => $boat, 'secondsPerStep' => 0.1, 'steps' => [['direction' => 'right', 'count' => 2]]];
+}
+
+return [
+  ['type' => 'camera', 'operation' => 'detach'],
+  ['type' => 'framing', 'subjects' => ['keeper', ['kind' => 'staged_actor', 'id' => 'boat-east']], 'commands' => [
+    // The keeper watches.
+    $line('The keeper watched the first boat.'),
+    ...$drift,
+    ['type' => 'framing', 'subjects' => ['lead'], 'commands' => [
+      ['type' => 'wait', 'seconds' => 0.2],
+    ]],
+  ]],
+  ['type' => 'checkpoint', 'name' => 'boats-crossed'],
+];
+PHP_SOURCE;
+}
+
+/**
+ * The harbour cinematic binding two framing subjects, `lead` (the player) and `keeper` (the quay's NPC), with
+ * {@see framedHarbourScript()} as its script unless it is given another.
+ *
+ * @return array{string, string, string} The project root, the data path and the script path.
+ */
+function framedHarbourProject(?string $script = null): array
+{
+    $root = cutsceneProject();
+    [$dataPath, $scriptPath] = getHarbourPaths($root);
+    file_put_contents($dataPath, str_replace("'presentation' => ['initial' => 'hidden'],",
+        "'presentation' => ['initial' => 'hidden', 'framing' => ['subjects' => [\n"
+        . "    // Who a phase keeps in view.\n"
+        . "    'lead' => ['kind' => 'player'],\n"
+        . "    'keeper' => ['kind' => 'npc', 'id' => 'keeper'],\n"
+        . "  ]]],", harbourCinematicData()));
+    file_put_contents($scriptPath, $script ?? framedHarbourScript());
+
+    return [$root, $dataPath, $scriptPath];
+}
+
+/**
+ * A reusable event script that stages its own actors and frames a phase on one of them inside a branch arm, built
+ * with a helper closure and a looped list, as {@see framedHarbourScript()} is.
+ */
+function framedRescueScript(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+$stage = static fn(string $id, int $x): array => ['type' => 'stage_actor', 'id' => $id, 'sprite' => ['#'], 'x' => $x, 'y' => 3];
+$walk = [];
+for ($step = 0; $step < 2; $step++) {
+  $walk[] = ['type' => 'move_route', 'subject' => 'player', 'secondsPerStep' => 0.1, 'steps' => [['direction' => 'left']]];
+}
+
+return [
+  [
+    'type' => 'branch',
+    'conditions' => [['type' => 'event', 'name' => 'rescued', 'negate' => true]],
+    'then' => [
+      $stage('crate', 3),
+      ['type' => 'framing', 'subjects' => [['kind' => 'staged_actor', 'id' => 'crate']], 'commands' => [
+        // Said over the crate.
+        ['type' => 'narration', 'text' => 'The crate shifts.', 'seconds' => 1],
+        $stage('helper', 5),
+        ...$walk,
+      ]],
+      ['type' => 'remove_actor', 'actorId' => 'crate'],
+    ],
+    'else' => [],
+  ],
+];
+PHP_SOURCE;
+}
+
+/**
+ * A project whose harbour cinematic, which cannot be skipped, runs the `rescue` reusable event script
+ * ({@see framedRescueScript()}, unless it is given another) right after it detaches the camera.
+ *
+ * @return array{string, string} The project root and the event script's path.
+ */
+function framedRescueProject(?string $script = null): array
+{
+    $root = cutsceneProject();
+    $path = $root . '/assets/Events/rescue.php';
+    file_put_contents($path, $script ?? framedRescueScript());
+    [$dataPath, $scriptPath] = getHarbourPaths($root);
+    // Authored skipping cannot prove a reusable script safe, so the Engine runs a cinematic that calls one to the end.
+    file_put_contents($dataPath, str_replace("'skip' => ['policy' => 'authored'],", "'skip' => ['policy' => 'forbidden'],", harbourCinematicData()));
+    file_put_contents($scriptPath, str_replace("['type' => 'camera', 'operation' => 'detach'],",
+        "['type' => 'camera', 'operation' => 'detach'],\n  ['type' => 'common_event', 'id' => 'rescue'],", harbourCinematicScript()));
+
+    return [$root, $path];
+}
+
+/** A record row by its field id, in a frame of the record. */
+function getRecordRow(EditorSession $session, string $category, int $index, string $field, array $frame = []): array
+{
+    return array_find($session->readDatabaseRecord($category, $index, $frame)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === $field)
+        ?? throw new RuntimeException(sprintf('Missing %s row %s.', $category, $field));
+}
+
+function setRecordRow(EditorSession $session, string $category, int $index, string $field, string $value, array $frame = []): array
+{
+    return $session->applyDatabaseRecord($category, $index, getRecordRow($session, $category, $index, $field, $frame)['key'], $value);
+}

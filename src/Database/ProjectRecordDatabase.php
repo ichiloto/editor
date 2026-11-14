@@ -1937,6 +1937,7 @@ final class ProjectRecordDatabase
                 if ($this->schema->listPayloadKey !== null) { $original = [$this->schema->listPayloadKey => $original]; }
                 InnPresentationFields::assertChangedCommandsValid($original, $record->toArray(), $this->authoringReferences);
                 MovementRouteFields::assertChangedCommandsValid($original, $record->toArray());
+                FramingFields::assertChangedCommandsValid($original, $record->toArray(), $record->recordId);
             }
         }
 
@@ -4420,6 +4421,11 @@ final class ProjectRecordDatabase
             return $root->armCommandList;
         }
 
+        if ($root?->isCommandList === true) {
+            // A script's own blocks hold the script's commands (a reusable script's sequence or framing phase).
+            return $root;
+        }
+
         // Descended from the sub-list into a command arm: commands from here
         // down. The catalog's shared command list is what every arm holds.
         return RecordSchemaCatalog::eventCommandList('commands', $this->graphical);
@@ -4449,7 +4455,9 @@ final class ProjectRecordDatabase
 
         $chunk = $count === 1 && is_string($framePath[0])
             ? 1
-            : ((is_string($framePath[$count - 3] ?? null) && is_int($framePath[$count - 2] ?? null) && is_string($framePath[$count - 1] ?? null) && is_int($framePath[$count - 4] ?? null)) ? 4 : 2);
+            // A block's own commands inside an arm ([i, 'then', j, 'commands']) close back to that arm, not past it.
+            : ((is_string($framePath[$count - 3] ?? null) && is_int($framePath[$count - 2] ?? null) && is_string($framePath[$count - 1] ?? null) && is_int($framePath[$count - 4] ?? null)
+                && ! in_array($framePath[$count - 3], self::listEntryArms(), true)) ? 4 : 2);
         $enclosing = array_slice($framePath, 0, max(0, $count - $chunk));
         $enclosingList = $enclosing !== [] && is_string($enclosing[0]) ? ($this->schema->commandLists[$enclosing[0]] ?? null) : null;
         $landing = $chunk === 1
@@ -4836,14 +4844,18 @@ final class ProjectRecordDatabase
      * Script`), commands as choices and branches.
      *
      * @param array<int, int|string> $framePath The frame.
+     * @param int|null $recordIndex The record the frame is in, whose blocks are then named for what they are (a
+     *   framing phase's commands, a sequence's); a block of a record not given is a `Block`.
      * @return string The trail.
      */
-    public function describeFramePath(array $framePath): string
+    public function describeFramePath(array $framePath, ?int $recordIndex = null): string
     {
         [$rootKey, $relative] = $this->splitFramePath($framePath);
+        $record = $recordIndex === null ? null : $this->getRecordByIndex($recordIndex);
+        $commands = $record === null || $rootKey === null ? null : $record->getSubList($rootKey);
 
         if ($rootKey !== null && array_key_exists($rootKey, $this->schema->commandLists)) {
-            return self::describeFrameFrom($relative, ucfirst($rootKey), null);
+            return self::describeFrameFrom($relative, ucfirst($rootKey), null, $commands);
         }
 
         if ($rootKey !== null && $this->isSecondarySubList($rootKey)) {
@@ -4856,7 +4868,8 @@ final class ProjectRecordDatabase
         $subList = $this->schema->subList;
         $firstLevel = $subList !== null && $subList->prefix !== 'command' ? ucfirst($subList->singular) : null;
 
-        return self::describeFrameFrom($relative, $firstLevel === null || $subList === null ? 'Commands' : ucfirst($subList->key), $firstLevel);
+        return self::describeFrameFrom($relative, $firstLevel === null || $subList === null ? 'Commands' : ucfirst($subList->key), $firstLevel,
+            $firstLevel === null ? $commands : null);
     }
 
     /**
@@ -4866,9 +4879,11 @@ final class ProjectRecordDatabase
      * @param string $root What the root list is called.
      * @param string|null $firstLevelSingular What a first-level entry is called
      *   when it is not a command (a dialogue variant), or null.
+     * @param array<int, mixed>|null $commands The root list's commands, when the record is known: a block that
+     *   runs its `commands` in order is then named by its command's type.
      * @return string The trail.
      */
-    private static function describeFrameFrom(array $framePath, string $root, ?string $firstLevelSingular): string
+    private static function describeFrameFrom(array $framePath, string $root, ?string $firstLevelSingular, ?array $commands = null): string
     {
         if ($framePath === []) {
             return $root;
@@ -4880,7 +4895,8 @@ final class ProjectRecordDatabase
         while ($position < count($framePath)) {
             $entryNumber = intval($framePath[$position]) + 1;
 
-            if (self::isNestedArmPath($framePath, $position)) {
+            // An arm the entry itself holds (a branch's then, a block's commands) is one step, whatever follows it.
+            if (self::isNestedArmPath($framePath, $position) && ! in_array($framePath[$position + 1], self::listEntryArms(), true)) {
                 $listKey = strval($framePath[$position + 1]);
                 [$owner, $member] = match ($listKey) {
                     'options' => ['Choice', 'Option'],
@@ -4891,9 +4907,11 @@ final class ProjectRecordDatabase
                 $position += 4;
             } else {
                 $arm = strval($framePath[$position + 1] ?? '');
+                $block = $commands === null ? null : (self::frameListFrom($commands, array_slice($framePath, 0, $position))[intval($framePath[$position])] ?? null);
                 $noun = match (true) {
                     $position === 0 && $firstLevelSingular !== null => $firstLevelSingular,
-                    $arm === 'commands' => 'Sequence',
+                    // A sequence and a framing phase both run their `commands`; the command says which it is.
+                    $arm === 'commands' => is_array($block) && is_string($block['type'] ?? null) ? ucfirst(str_replace('_', ' ', $block['type'])) : 'Block',
                     $arm === 'cancel' => 'Choice',
                     $arm === StorybookPlaybackFields::getFinishField() => 'Storybook',
                     default => 'Branch',
@@ -4904,6 +4922,19 @@ final class ProjectRecordDatabase
         }
 
         return implode(' › ', $parts);
+    }
+
+    /**
+     * The fields a command holds a command list of its own under: a branch's arms, a choice's cancel arm, a
+     * storybook's finish, and the commands the Engine's blocks run in order.
+     *
+     * @return list<string>
+     */
+    private static function listEntryArms(): array
+    {
+        return array_values(array_unique(array_filter(['then', 'else', 'cancel', StorybookPlaybackFields::getFinishField(),
+            ...array_merge(...array_map(\Ichiloto\Editor\Events\CommandMapContext::getBodyKeys(...),
+                \Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema::BLOCK_TYPES))])));
     }
 
     /**

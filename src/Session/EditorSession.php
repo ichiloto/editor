@@ -4368,6 +4368,12 @@ final class EditorSession
         }
         // A cinematic names its own maps; the map selected beside it is not where its commands run.
         $catalog = new ReferenceCatalog($this->workspace, $mapId === null || $cutscene?->type === CutsceneType::CINEMATIC ? null : $this->requireMap($mapId), $cutscene);
+        if (($record['category'] ?? null) === 'common_events') {
+            // A reusable event script names the staged actors it stages and those of the cinematics that run it.
+            $script = $this->requireRecordDatabase('common_events')->getRecordByIndex((int) ($record['index'] ?? -1))
+                ?? throw new SessionRefusal(sprintf('There is no event script %s.', strval($record['index'] ?? '')));
+            $catalog = $catalog->createScriptContext($script->recordId);
+        }
         if ($category === 'world_object_tile_layers') {
             if ($mapId === null || !is_string($record['id'] ?? null)) { throw new SessionRefusal('A covered tile-layer picker needs its map-local object owner.'); }
             $map = $this->requireMap($mapId);
@@ -5236,7 +5242,7 @@ final class EditorSession
             'category' => $category,
             'index' => $index,
             'frame' => $frame,
-            'frameLabel' => $database->describeFrame($frame),
+            'frameLabel' => $database->describeFrame($frame, $index),
             'editable' => $database->isEditable(),
             'readOnly' => $database->getReadOnlyReason(),
             // What an entry of the list an add with no row goes to is called:
@@ -6305,7 +6311,7 @@ final class EditorSession
             'revision' => $this->getMapRevision($map),
             'index' => $index,
             'frame' => $frame,
-            'frameLabel' => $frame === [] ? null : $inspector->records()->describeFramePath($frame),
+            'frameLabel' => $frame === [] ? null : $inspector->records()->describeFramePath($frame, $index),
             'npc' => [
                 'index' => $index,
                 'id' => $npc->getId(),

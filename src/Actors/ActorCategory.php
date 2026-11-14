@@ -76,7 +76,7 @@ final readonly class ActorCategory implements DatabaseCategory
         return $this->authoring->describeFields($this->workspace, $this->requireActor($index));
     }
 
-    public function describeFrame(array $frame): ?string
+    public function describeFrame(array $frame, ?int $index = null): ?string
     {
         return null;
     }

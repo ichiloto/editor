@@ -9,6 +9,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\ConversationFields;
+use Ichiloto\Editor\Database\FramingFields;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
@@ -16,6 +17,7 @@ use Ichiloto\Editor\Database\StorybookPlaybackFields;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicFramingDefinition;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Throwable;
@@ -201,6 +203,8 @@ trait CutsceneValidation
         $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'map' => ScriptMapState::startOn($startMap !== '' ? $startMap : null, $npcIds), 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => [],
             // Declared once in the definition, so every command of the cinematic may select any of them.
             'conversationGroups' => ConversationFields::listGroups($data),
+            // The subjects the cinematic binds, which a framing phase it reaches may select by key.
+            'framing' => new CinematicFramingDefinition(FramingFields::readDefinition($data)),
             'attachmentsByMap' => $this->readAttachmentsByMap($workspace), 'graphicalMaps' => $this->listGraphicalMaps($workspace)];
         foreach ((array) ($data['cast'] ?? []) as $entry) {
             if (is_array($entry) && is_array($entry['at'] ?? null)) {
@@ -383,6 +387,10 @@ trait CutsceneValidation
                 $issues = [...$issues, ...$this->checkCinematicSubject($command, $where, $context)];
             }
 
+            if ($type === FramingFields::getCommandType()) {
+                $issues = [...$issues, ...$this->checkFramingSubjects($command, $where, $context)];
+            }
+
             if ($type === 'common_event') {
                 $issues = [
                     ...$issues,
@@ -398,8 +406,8 @@ trait CutsceneValidation
 
             $issues = [...$issues, ...$this->checkConditions((array) ($command['conditions'] ?? []), $where, $known)];
 
-            if ($type === 'sequence') {
-                $issues = [...$issues, ...$this->walkCinematicCommands((array) ($command['commands'] ?? []), $where, $known, $context, $commonEventStack)];
+            foreach (CommandMapContext::getBodies($command) as $body) {
+                $issues = [...$issues, ...$this->walkCinematicCommands($body['commands'], $where, $known, $context, $commonEventStack)];
             }
 
             if ($type === 'parallel') {
@@ -555,6 +563,37 @@ trait CutsceneValidation
         }
 
         return [];
+    }
+
+    /**
+     * Checks the subjects a framing phase requires, as the cinematic reaches it: the Engine resolves its bound
+     * keys against the cinematic's own bindings, and each subject is then one the scene can reach at that point,
+     * a staged actor in the cast or staged by then, an NPC on the map the cinematic is on.
+     *
+     * @param array<string, mixed> $command
+     * @param array{castIds: string[], map: ScriptMapState, attachmentsByMap: array<string, array<string, list<string>>>, framing?: CinematicFramingDefinition} $context
+     * @return Issue[]
+     */
+    protected function checkFramingSubjects(array $command, string $where, array $context): array
+    {
+        $selection = $command[FramingFields::getSelectionField()] ?? null;
+        if (! is_array($selection) || ! isset($context['framing'])) {
+            // The Engine's script validator has already refused a command that selects nothing.
+            return [];
+        }
+        try {
+            $references = $context['framing']->getSubjectReferences($selection);
+        } catch (\InvalidArgumentException $refusal) {
+            return [Issue::error($where, sprintf('A %s command requiring %s: %s', FramingFields::getCommandType(),
+                FramingFields::describeSelection($command), $refusal->getMessage()),
+                'Choose subjects the cinematic binds under Framing Subjects, or the player, an NPC or a staged actor directly, each once.')];
+        }
+        $issues = [];
+        foreach ($references as $reference) {
+            $issues = [...$issues, ...$this->checkCinematicSubject(['subject' => $reference], $where, $context)];
+        }
+
+        return $issues;
     }
 
     /**

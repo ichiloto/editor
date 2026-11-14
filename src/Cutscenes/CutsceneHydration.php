@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes;
 
+use Ichiloto\Editor\Database\FramingFields;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
@@ -31,7 +32,8 @@ final class CutsceneHydration
 {
     /**
      * Hydrates a cinematic through the engine, throwing the engine's own
-     * reason when it refuses.
+     * reason when it refuses: its definition and command tree, and the
+     * subjects each framing phase of its own script selects.
      *
      * @param array<string, mixed> $data The data file's array.
      * @param array<int|string, mixed> $script The script file's array.
@@ -40,7 +42,14 @@ final class CutsceneHydration
     {
         return self::inProject(
             $projectRoot,
-            static fn(): CinematicDefinition => CinematicDefinition::fromArrays($data, $script),
+            static function () use ($data, $script): CinematicDefinition {
+                $definition = CinematicDefinition::fromArrays($data, $script);
+                // The Engine resolves a framing phase's subjects against the cinematic's bindings when the phase
+                // runs; it does so here for every phase of the cinematic's own script.
+                FramingFields::assertSelectionsResolve($definition->id, FramingFields::readDefinition($data), $definition->commands);
+
+                return $definition;
+            },
         );
     }
 

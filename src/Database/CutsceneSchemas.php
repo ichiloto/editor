@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
+use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Timelines\BattleMotionAnchor;
 use Ichiloto\Engine\Animations\Timelines\BattleMotionSpace;
@@ -141,11 +142,11 @@ final class CutsceneSchemas
             ],
             subList: self::castList($graphical),
             commandLists: [
-                CutsceneAsset::COMMANDS_KEY => self::cinematicCommandList(CutsceneAsset::COMMANDS_KEY, $graphical, conversation: true),
+                CutsceneAsset::COMMANDS_KEY => self::cinematicCommandList(CutsceneAsset::COMMANDS_KEY, $graphical, ownScript: true),
                 self::FINALIZER_KEY => self::finalizerCommandList(),
             ],
-            // The conversation's speakers, addressees and phase groups, beside the cast.
-            subLists: ConversationFields::getLists(),
+            // The conversation's speakers, addressees and phase groups and the framing subjects, beside the cast.
+            subLists: [...ConversationFields::getLists(), ...FramingFields::getLists()],
         );
     }
 
@@ -528,11 +529,12 @@ final class CutsceneSchemas
      * the interpreter understands, each with its fields, nested blocks as
      * frames, and routes, lanes and camera points as nested lists.
      *
-     * @param bool $conversation Whether the list is a cinematic's own script, whose text lines select the speakers
-     *   and addressees its conversation binds; a reusable script cannot know which cinematic runs it.
+     * @param bool $ownScript Whether the list is a cinematic's own script, whose text lines select the speakers and
+     *   addressees its conversation binds and whose framing phases select the subjects it binds; a reusable script
+     *   cannot know which cinematic runs it.
      */
     public static function cinematicCommandList(string $key, bool $graphical = false, array $blank = ['type' => 'wait', 'seconds' => 0.5],
-        bool $conversation = false): RecordSubList
+        bool $ownScript = false): RecordSubList
     {
         return new RecordSubList(
             key: $key,
@@ -542,20 +544,23 @@ final class CutsceneSchemas
                 new RecordField('type', 'Type', options: [...CinematicCommandSchema::COMMAND_TYPES, ...RecordSchemaCatalog::getRegisteredCommandTypes()]),
             ],
             blank: $blank,
-            variants: self::cinematicCommandVariants($graphical, $conversation),
+            variants: self::cinematicCommandVariants($graphical, $ownScript),
             variantKey: 'type',
             nestedLists: [
                 'move_route' => static fn(array $entry): ?RecordSubList => MovementRouteFields::getPointList($entry, cinematic: true, graphical: $graphical),
                 'parallel' => self::laneList(),
+                FramingFields::getCommandType() => FramingFields::getSelectionList($ownScript),
                 'camera' => static fn(array $entry): ?RecordSubList => strtolower(strval($entry['operation'] ?? '')) === 'route' ? self::cameraPointList($graphical) : null,
                 ...RecordSchemaCatalog::getRegisteredCommandLists($graphical),
                 ...($graphical ? ['stage_actor' => StagedActorFields::getSuppressionList(...)] : []),
             ],
             variantArms: [
-                'sequence' => ['commands' => 'Sequence'],
+                ...self::getBlockArms(),
                 'choice' => ['cancel' => 'Cancel'],
                 ...StorybookPlaybackFields::getCommandArms(),
             ],
+            // A block of this script holds this script's commands: a reusable script's blocks its staging vocabulary.
+            isCommandList: true,
             exclusiveFields: [['effect', 'animation'], ['effect', 'id'], ['effect', 'secondsPerFrame']],
             prepareEdit: static function (array $entry, string $field) use ($graphical): array {
                 $entry = InnPresentationFields::prepareEdit($entry, $field);
@@ -566,6 +571,24 @@ final class CutsceneSchemas
                 return MovementRouteFields::prepareEdit($entry, $field);
             },
         );
+    }
+
+    /**
+     * The command lists the Engine's blocks run in order, as arms opened as frames: a `sequence`'s and a `framing`
+     * phase's commands, by the Engine's nested block shapes ({@see CommandMapContext::getBodyKeys()}).
+     *
+     * @return array<string, array<string, string>> Block type => (body key => label).
+     */
+    private static function getBlockArms(): array
+    {
+        $arms = [];
+        foreach (CinematicCommandSchema::BLOCK_TYPES as $type) {
+            foreach (CommandMapContext::getBodyKeys($type) as $key) {
+                $arms[$type][$key] = ucfirst($type);
+            }
+        }
+
+        return $arms;
     }
 
     /**
@@ -617,10 +640,10 @@ final class CutsceneSchemas
      *
      * @return array<string, RecordField[]|\Closure(array<string, mixed>): RecordField[]>
      */
-    public static function cinematicCommandVariants(bool $graphical = false, bool $conversation = false): array
+    public static function cinematicCommandVariants(bool $graphical = false, bool $ownScript = false): array
     {
         $base = RecordSchemaCatalog::eventCommandVariants($graphical);
-        if ($conversation) {
+        if ($ownScript) {
             $base['text'] = [...$base['text'], ...ConversationFields::getLineFields()];
         }
         $subject = static fn(string $prefix, string $label, bool $screen = false, array $entry = []): array => [
@@ -657,6 +680,8 @@ final class CutsceneSchemas
             \Ichiloto\Engine\Field\MapDoorReference::COMMAND => RecordSchemaCatalog::getDoorTransferFields(),
             'sequence' => [],
             'parallel' => [],
+            // A framing phase is its required subjects, a nested list, and its body, a frame.
+            FramingFields::getCommandType() => [],
             'common_event' => [RecordField::reference('id', 'Common Event', 'common_events')],
             'checkpoint' => [new RecordField('name', 'Checkpoint', reference: 'cinematic_checkpoints')],
             'camera' => static fn(array $entry): array => [

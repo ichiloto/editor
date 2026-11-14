@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Events\CommandTree;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicConversation;
 
@@ -40,9 +41,6 @@ final class ConversationFields
     public const string SPEAKER_PREFIX = 'conversationSpeaker';
     public const string ADDRESSEE_PREFIX = 'conversationAddressee';
     public const string GROUP_PREFIX = 'conversationGroup';
-
-    /** The reference category each subject kind's id is picked from; the player names none. */
-    private const array SUBJECT_REFERENCES = ['npc' => ['map_npcs', 'NPC'], 'staged_actor' => ['cinematic_cast', 'Staged Actor']];
 
     private function __construct()
     {
@@ -134,8 +132,9 @@ final class ConversationFields
             heading: 'Conversation Speakers',
             removeWhenEmpty: true,
             keyField: 'key',
-            prepareEdit: static fn(array $entry, string $field): array => self::prepareSpeakerEdit($entry, $field),
-            getFields: static fn(array $entry): array => self::getSpeakerFields($entry),
+            prepareEdit: static fn(array $entry, string $field): array => SubjectBindingFields::prepareEdit($entry, $field),
+            // A speaker's key, the kind of subject it binds, and that subject's id where the kind names one.
+            getFields: static fn(array $entry): array => SubjectBindingFields::getFields($entry, 'Speaker Key', CinematicConversation::SUBJECT_KINDS),
             remapKeyReferences: static fn(array $payload, string $old, ?string $new): array => self::remapSpeaker($payload, $old, $new),
         );
     }
@@ -182,36 +181,6 @@ final class ConversationFields
             keyField: 'id',
             remapKeyReferences: static fn(array $payload, string $old, ?string $new): array => self::remapGroup($payload, $old, $new),
         );
-    }
-
-    /**
-     * A speaker's key, the kind of subject it binds, and that subject's id
-     * where the kind names one.
-     *
-     * @return list<RecordField>
-     */
-    private static function getSpeakerFields(array $entry): array
-    {
-        $fields = [
-            new RecordField('key', 'Speaker Key'),
-            new RecordField('kind', 'Subject', options: CinematicConversation::SUBJECT_KINDS),
-        ];
-        $reference = self::SUBJECT_REFERENCES[strval($entry['kind'] ?? '')] ?? null;
-        if ($reference !== null) {
-            $fields[] = RecordField::reference('id', $reference[1], $reference[0]);
-        }
-
-        return $fields;
-    }
-
-    /** A new subject kind keeps no id the old kind named. */
-    private static function prepareSpeakerEdit(array $entry, string $field): array
-    {
-        if ($field === 'kind' && ! isset(self::SUBJECT_REFERENCES[strval($entry['kind'] ?? '')])) {
-            unset($entry['id']);
-        }
-
-        return $entry;
     }
 
     /**
@@ -356,7 +325,7 @@ final class ConversationFields
     public static function listLineSelections(array $commands): array
     {
         $found = [];
-        self::walkCommands($commands, static function (array $command) use (&$found): array {
+        CommandTree::rewrite($commands, static function (array $command) use (&$found): array {
             if (($command['type'] ?? null) === 'text') {
                 foreach (['speaker', 'addressee'] as $field) {
                     if (is_string($command[$field] ?? null)) {
@@ -381,7 +350,7 @@ final class ConversationFields
     /** @param list<string> $uses */
     private static function renameLineSpeakers(array $commands, string $old, ?string $new, string $list, array &$uses): array
     {
-        return self::walkCommands($commands, static function (array $command) use ($old, $new, $list, &$uses): array {
+        return CommandTree::rewrite($commands, static function (array $command) use ($old, $new, $list, &$uses): array {
             if (($command['type'] ?? null) !== 'text') {
                 return $command;
             }
@@ -400,41 +369,13 @@ final class ConversationFields
     {
         $command = CinematicCommandSchema::export()['conversationFacing']['groupSelection'];
 
-        return self::walkCommands($commands, static function (array $entry) use ($old, $new, $list, $command, &$uses): array {
+        return CommandTree::rewrite($commands, static function (array $entry) use ($old, $new, $list, $command, &$uses): array {
             if (($entry['type'] ?? null) === $command['command'] && ($entry[$command['referenceField']] ?? null) === $old) {
                 $uses[] = sprintf('a %s command in %s', $command['command'], $list);
                 $entry[$command['referenceField']] = $new;
             }
             return $entry;
         });
-    }
-
-    /**
-     * Visits every command of a command tree, nested blocks, lanes, arms and
-     * options included, rewriting each with what the visitor returns.
-     *
-     * @param array<int|string, mixed> $commands
-     * @param \Closure(array<string, mixed>): array<string, mixed> $visit
-     * @return array<int|string, mixed>
-     */
-    private static function walkCommands(array $commands, \Closure $visit): array
-    {
-        foreach ($commands as $index => $command) {
-            if (! is_array($command)) {
-                continue;
-            }
-            if (is_string($command['type'] ?? null)) {
-                $command = $visit($command);
-            }
-            foreach ($command as $key => $value) {
-                if (is_array($value)) {
-                    $command[$key] = self::walkCommands($value, $visit);
-                }
-            }
-            $commands[$index] = $command;
-        }
-
-        return $commands;
     }
 
     /** The payload with its conversation replaced. */

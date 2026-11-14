@@ -114,7 +114,7 @@ trait CutsceneOutlinePane
             $this->selectCutsceneSettingsRowFor($row);
         }
 
-        $this->setStatus($records->describeFramePath($this->databaseCommandFramePath) . '.', StatusLevel::INFO);
+        $this->setStatus($records->describeFramePath($this->databaseCommandFramePath, $this->getSelectedRecordIndex()) . '.', StatusLevel::INFO);
         $this->renderCutscenesArea();
     }
 
@@ -389,7 +389,7 @@ trait CutsceneOutlinePane
         $target = CutsceneOutline::nestingTarget($previous, $previousPath);
 
         if ($target === null) {
-            $this->setStatus(sprintf('%s is not a block; only sequence, parallel, branch and choice take nested commands.', strval($previous['type'] ?? 'That')), StatusLevel::INFO);
+            $this->setStatus(sprintf('%s is not a block; only sequence, framing, parallel, branch and choice take nested commands.', strval($previous['type'] ?? 'That')), StatusLevel::INFO);
 
             return;
         }
