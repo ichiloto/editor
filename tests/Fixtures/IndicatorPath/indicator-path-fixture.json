@@ -1,0 +1,1305 @@
+{
+    "contract": "canvas_indicator_image_path",
+    "requiredCapabilities": [
+        "graphical_canvas",
+        "canvas_groups",
+        "canvas_group_color",
+        "canvas_region_budget",
+        "canvas_indicator_image_path"
+    ],
+    "assetRoot": "/Users/andrewmasiye/Development/php/games/engines/ichiloto/2.0/engine/tests/Fixtures/Renderer",
+    "reviewAssetSha256": {
+        "test-sprite.png": "faeeef926fda792ceb2ae960fbc01fe61d9bc5633093e3da1fab9d71505db642"
+    },
+    "cases": [
+        {
+            "id": "image-leaf-interleaving",
+            "canvas": {
+                "width": 32,
+                "height": 32,
+                "groups": [
+                    {
+                        "id": "body-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 120,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [
+                                {
+                                    "id": "body",
+                                    "asset": "test-sprite.png",
+                                    "destination": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "layer": 120
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "id": "outline-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 200,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [],
+                            "indicators": [
+                                {
+                                    "id": "outline",
+                                    "imageId": "body",
+                                    "kind": "outline",
+                                    "bounds": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "strokeWidth": 1,
+                                    "color": {
+                                        "kind": "rgb",
+                                        "r": 220,
+                                        "g": 180,
+                                        "b": 40
+                                    },
+                                    "layer": 200,
+                                    "imagePath": [
+                                        "body-group",
+                                        "body"
+                                    ]
+                                }
+                            ],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    }
+                ],
+                "images": [
+                    {
+                        "id": "effect",
+                        "asset": "test-sprite.png",
+                        "destination": {
+                            "x": 4,
+                            "y": 4,
+                            "width": 8,
+                            "height": 8
+                        },
+                        "layer": 180
+                    }
+                ],
+                "indicators": [],
+                "textLayers": []
+            },
+            "enginePreparedSourceCount": 1,
+            "enginePreparedRegionCount": 2
+        },
+        {
+            "id": "composite-leaf-interleaving",
+            "canvas": {
+                "width": 32,
+                "height": 32,
+                "groups": [
+                    {
+                        "id": "body-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 120,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [],
+                            "indicators": [],
+                            "textLayers": [],
+                            "composites": [
+                                {
+                                    "id": "body",
+                                    "width": 8,
+                                    "height": 8,
+                                    "destination": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "layer": 120,
+                                    "operations": [
+                                        {
+                                            "type": "fill",
+                                            "opacity": 1,
+                                            "blend": "source_over",
+                                            "masks": [],
+                                            "destination": {
+                                                "x": 0,
+                                                "y": 0,
+                                                "width": 8,
+                                                "height": 8
+                                            },
+                                            "brush": {
+                                                "type": "solid",
+                                                "color": {
+                                                    "kind": "rgb",
+                                                    "r": 40,
+                                                    "g": 70,
+                                                    "b": 100
+                                                }
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "id": "outline-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 200,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [],
+                            "indicators": [
+                                {
+                                    "id": "outline",
+                                    "imageId": "body",
+                                    "kind": "outline",
+                                    "bounds": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "strokeWidth": 1,
+                                    "color": {
+                                        "kind": "rgb",
+                                        "r": 220,
+                                        "g": 180,
+                                        "b": 40
+                                    },
+                                    "layer": 200,
+                                    "imagePath": [
+                                        "body-group",
+                                        "body"
+                                    ]
+                                }
+                            ],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    }
+                ],
+                "images": [
+                    {
+                        "id": "effect",
+                        "asset": "test-sprite.png",
+                        "destination": {
+                            "x": 4,
+                            "y": 4,
+                            "width": 8,
+                            "height": 8
+                        },
+                        "layer": 180
+                    }
+                ],
+                "indicators": [],
+                "textLayers": []
+            },
+            "enginePreparedSourceCount": 1,
+            "enginePreparedRegionCount": 2
+        },
+        {
+            "id": "wrapped-clipped-prefix",
+            "canvas": {
+                "width": 32,
+                "height": 32,
+                "groups": [
+                    {
+                        "id": "review-field",
+                        "origin": {
+                            "x": -2.5,
+                            "y": 1.25
+                        },
+                        "layer": 9,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "groups": [
+                                {
+                                    "id": "body-group",
+                                    "origin": {
+                                        "x": 0,
+                                        "y": 0
+                                    },
+                                    "layer": 120,
+                                    "canvas": {
+                                        "width": 32,
+                                        "height": 32,
+                                        "images": [
+                                            {
+                                                "id": "body",
+                                                "asset": "test-sprite.png",
+                                                "destination": {
+                                                    "x": 4,
+                                                    "y": 4,
+                                                    "width": 8,
+                                                    "height": 8
+                                                },
+                                                "layer": 120
+                                            }
+                                        ],
+                                        "indicators": [],
+                                        "textLayers": []
+                                    },
+                                    "colorTransform": {
+                                        "matrix": [
+                                            [
+                                                -1,
+                                                0,
+                                                0
+                                            ],
+                                            [
+                                                0,
+                                                -1,
+                                                0
+                                            ],
+                                            [
+                                                0,
+                                                0,
+                                                -1
+                                            ]
+                                        ],
+                                        "offset": [
+                                            1,
+                                            1,
+                                            1
+                                        ]
+                                    }
+                                },
+                                {
+                                    "id": "outline-group",
+                                    "origin": {
+                                        "x": 0,
+                                        "y": 0
+                                    },
+                                    "layer": 200,
+                                    "canvas": {
+                                        "width": 32,
+                                        "height": 32,
+                                        "images": [],
+                                        "indicators": [
+                                            {
+                                                "id": "outline",
+                                                "imageId": "body",
+                                                "kind": "outline",
+                                                "bounds": {
+                                                    "x": 4,
+                                                    "y": 4,
+                                                    "width": 8,
+                                                    "height": 8
+                                                },
+                                                "strokeWidth": 1,
+                                                "color": {
+                                                    "kind": "rgb",
+                                                    "r": 220,
+                                                    "g": 180,
+                                                    "b": 40
+                                                },
+                                                "layer": 200,
+                                                "imagePath": [
+                                                    "review-field",
+                                                    "body-group",
+                                                    "body"
+                                                ]
+                                            }
+                                        ],
+                                        "textLayers": []
+                                    },
+                                    "colorTransform": {
+                                        "matrix": [
+                                            [
+                                                -1,
+                                                0,
+                                                0
+                                            ],
+                                            [
+                                                0,
+                                                -1,
+                                                0
+                                            ],
+                                            [
+                                                0,
+                                                0,
+                                                -1
+                                            ]
+                                        ],
+                                        "offset": [
+                                            1,
+                                            1,
+                                            1
+                                        ]
+                                    }
+                                }
+                            ],
+                            "images": [
+                                {
+                                    "id": "effect",
+                                    "asset": "test-sprite.png",
+                                    "destination": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "layer": 180
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "clipRect": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 28,
+                            "height": 28
+                        }
+                    }
+                ],
+                "images": [],
+                "indicators": [],
+                "textLayers": []
+            },
+            "enginePreparedSourceCount": 1,
+            "enginePreparedRegionCount": 2
+        },
+        {
+            "id": "shared-treatment-variants",
+            "canvas": {
+                "width": 32,
+                "height": 32,
+                "groups": [
+                    {
+                        "id": "body-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 120,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [
+                                {
+                                    "id": "body",
+                                    "asset": "test-sprite.png",
+                                    "destination": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "layer": 120
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "id": "second-body",
+                        "origin": {
+                            "x": 12,
+                            "y": 0
+                        },
+                        "layer": 120,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [
+                                {
+                                    "id": "body",
+                                    "asset": "test-sprite.png",
+                                    "destination": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "layer": 120
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "id": "outline-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 200,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [],
+                            "indicators": [
+                                {
+                                    "id": "outline",
+                                    "imageId": "body",
+                                    "kind": "outline",
+                                    "bounds": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "strokeWidth": 1,
+                                    "color": {
+                                        "kind": "rgb",
+                                        "r": 220,
+                                        "g": 180,
+                                        "b": 40
+                                    },
+                                    "layer": 200,
+                                    "imagePath": [
+                                        "body-group",
+                                        "body"
+                                    ]
+                                }
+                            ],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "id": "second-outline",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 200,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [],
+                            "indicators": [
+                                {
+                                    "id": "second-outline",
+                                    "imageId": "body",
+                                    "kind": "underline",
+                                    "bounds": {
+                                        "x": 16,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "strokeWidth": 1,
+                                    "color": {
+                                        "kind": "rgb",
+                                        "r": 220,
+                                        "g": 180,
+                                        "b": 40
+                                    },
+                                    "layer": 200,
+                                    "imagePath": [
+                                        "second-body",
+                                        "body"
+                                    ]
+                                }
+                            ],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    }
+                ],
+                "images": [],
+                "indicators": [],
+                "textLayers": []
+            },
+            "enginePreparedSourceCount": 1,
+            "enginePreparedRegionCount": 2
+        }
+    ],
+    "negativeCases": [
+        {
+            "id": "missing-group",
+            "canvas": {
+                "width": 32,
+                "height": 32,
+                "groups": [
+                    {
+                        "id": "outline-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 200,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [],
+                            "indicators": [
+                                {
+                                    "id": "outline",
+                                    "imageId": "body",
+                                    "kind": "outline",
+                                    "bounds": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "strokeWidth": 1,
+                                    "color": {
+                                        "kind": "rgb",
+                                        "r": 220,
+                                        "g": 180,
+                                        "b": 40
+                                    },
+                                    "layer": 200,
+                                    "imagePath": [
+                                        "body-group",
+                                        "body"
+                                    ]
+                                }
+                            ],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    }
+                ],
+                "images": [
+                    {
+                        "id": "effect",
+                        "asset": "test-sprite.png",
+                        "destination": {
+                            "x": 4,
+                            "y": 4,
+                            "width": 8,
+                            "height": 8
+                        },
+                        "layer": 180
+                    }
+                ],
+                "indicators": [],
+                "textLayers": []
+            }
+        },
+        {
+            "id": "leaf-id-mismatch",
+            "canvas": {
+                "width": 32,
+                "height": 32,
+                "groups": [
+                    {
+                        "id": "body-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 120,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [
+                                {
+                                    "id": "body",
+                                    "asset": "test-sprite.png",
+                                    "destination": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "layer": 120
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "id": "outline-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 200,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [],
+                            "indicators": [
+                                {
+                                    "id": "outline",
+                                    "imageId": "body",
+                                    "kind": "outline",
+                                    "bounds": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "strokeWidth": 1,
+                                    "color": {
+                                        "kind": "rgb",
+                                        "r": 220,
+                                        "g": 180,
+                                        "b": 40
+                                    },
+                                    "layer": 200,
+                                    "imagePath": [
+                                        "body-group",
+                                        "missing"
+                                    ]
+                                }
+                            ],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    }
+                ],
+                "images": [
+                    {
+                        "id": "effect",
+                        "asset": "test-sprite.png",
+                        "destination": {
+                            "x": 4,
+                            "y": 4,
+                            "width": 8,
+                            "height": 8
+                        },
+                        "layer": 180
+                    }
+                ],
+                "indicators": [],
+                "textLayers": []
+            }
+        },
+        {
+            "id": "duplicate-sibling-group",
+            "canvas": {
+                "width": 32,
+                "height": 32,
+                "groups": [
+                    {
+                        "id": "body-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 120,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [
+                                {
+                                    "id": "body",
+                                    "asset": "test-sprite.png",
+                                    "destination": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "layer": 120
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "id": "outline-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 200,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [],
+                            "indicators": [
+                                {
+                                    "id": "outline",
+                                    "imageId": "body",
+                                    "kind": "outline",
+                                    "bounds": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "strokeWidth": 1,
+                                    "color": {
+                                        "kind": "rgb",
+                                        "r": 220,
+                                        "g": 180,
+                                        "b": 40
+                                    },
+                                    "layer": 200,
+                                    "imagePath": [
+                                        "body-group",
+                                        "body"
+                                    ]
+                                }
+                            ],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "id": "body-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 120,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [
+                                {
+                                    "id": "body",
+                                    "asset": "test-sprite.png",
+                                    "destination": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "layer": 120
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    }
+                ],
+                "images": [
+                    {
+                        "id": "effect",
+                        "asset": "test-sprite.png",
+                        "destination": {
+                            "x": 4,
+                            "y": 4,
+                            "width": 8,
+                            "height": 8
+                        },
+                        "layer": 180
+                    }
+                ],
+                "indicators": [],
+                "textLayers": []
+            }
+        },
+        {
+            "id": "ninth-group-path",
+            "canvas": {
+                "width": 32,
+                "height": 32,
+                "groups": [
+                    {
+                        "id": "body-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 120,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [
+                                {
+                                    "id": "body",
+                                    "asset": "test-sprite.png",
+                                    "destination": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "layer": 120
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "id": "outline-group",
+                        "origin": {
+                            "x": 0,
+                            "y": 0
+                        },
+                        "layer": 200,
+                        "canvas": {
+                            "width": 32,
+                            "height": 32,
+                            "images": [],
+                            "indicators": [
+                                {
+                                    "id": "outline",
+                                    "imageId": "body",
+                                    "kind": "outline",
+                                    "bounds": {
+                                        "x": 4,
+                                        "y": 4,
+                                        "width": 8,
+                                        "height": 8
+                                    },
+                                    "strokeWidth": 1,
+                                    "color": {
+                                        "kind": "rgb",
+                                        "r": 220,
+                                        "g": 180,
+                                        "b": 40
+                                    },
+                                    "layer": 200,
+                                    "imagePath": [
+                                        "body",
+                                        "body",
+                                        "body",
+                                        "body",
+                                        "body",
+                                        "body",
+                                        "body",
+                                        "body",
+                                        "body",
+                                        "body"
+                                    ]
+                                }
+                            ],
+                            "textLayers": []
+                        },
+                        "colorTransform": {
+                            "matrix": [
+                                [
+                                    -1,
+                                    0,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    -1,
+                                    0
+                                ],
+                                [
+                                    0,
+                                    0,
+                                    -1
+                                ]
+                            ],
+                            "offset": [
+                                1,
+                                1,
+                                1
+                            ]
+                        }
+                    }
+                ],
+                "images": [
+                    {
+                        "id": "effect",
+                        "asset": "test-sprite.png",
+                        "destination": {
+                            "x": 4,
+                            "y": 4,
+                            "width": 8,
+                            "height": 8
+                        },
+                        "layer": 180
+                    }
+                ],
+                "indicators": [],
+                "textLayers": []
+            }
+        }
+    ],
+    "expectations": [
+        "Image and indicator retain imageId association across treatment groups.",
+        "Body then untreated effect then outline; no atomic regrouping of body and outline.",
+        "Indicator stroke receives its own containing group transform; alpha is retained.",
+        "Qualified references are root-owned and add no drawing or prepared region.",
+        "Root prefix changes only the identities it actually names; wrapping prepends its group.",
+        "Equal effective treatments share variants in sibling groups; changed placement requires no rebuild.",
+        "Missing capability or any invalid reference refuses the complete candidate before transmission."
+    ],
+    "limits": {
+        "pathIdsMin": 2,
+        "pathIdsMax": 9,
+        "groupInstances": 128,
+        "groupDepth": 8
+    },
+    "qualification": "Actual Engine model/serialization/resource preflight only; no native/CPU raster pixels or launch."
+}

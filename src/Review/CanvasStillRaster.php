@@ -56,7 +56,10 @@ final class CanvasStillRaster
     /**
      * The renderer features the raster draws, as a graphical renderer negotiates them. The region budget is the
      * terms its images are admitted and held on ({@see prepareCanvases()}); the Engine composes a group's colour
-     * treatment only for a renderer that names it beside the treatment.
+     * treatment only for a renderer that names it beside the treatment. An indicator may name the image or
+     * composite it marks by a path of groups from its still's root canvas: the Engine follows every path when the
+     * still's canvases are admitted and refuses the still whole when one leads nowhere, and the indicator is
+     * drawn where its own bounds put it, in the colour treatment of the group it is in.
      */
     public const array CAPABILITIES = [
         RendererSessionConfig::GRAPHICAL_CANVAS, RendererSessionConfig::CANVAS_REGION_BUDGET,
@@ -65,7 +68,7 @@ final class CanvasStillRaster
         RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
         RendererSessionConfig::CANVAS_IMAGE_ROTATION, RendererSessionConfig::CANVAS_TEXTURE_STRIP,
         RendererSessionConfig::CANVAS_IMAGE_BOTTOM_FADE, RendererSessionConfig::CANVAS_GROUPS,
-        RendererSessionConfig::CANVAS_GROUP_COLOR,
+        RendererSessionConfig::CANVAS_GROUP_COLOR, RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH,
     ];
 
     /** Fonts tried, in order, when none is given: the graphical renderer's own text font first. */

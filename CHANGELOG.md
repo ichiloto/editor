@@ -49,6 +49,19 @@
 
 ### Added
 
+- Qualified indicator paths (Engine candidate `engine/field-colour-ownership` over 52d4507c, `canvas_indicator_image_path`):
+  map stills, canvas stills and cinematic capture frames draw a canvas whose indicator names the image or composite it
+  marks by `imagePath`, a path of group ids read from the root canvas of its frame. The three still rasters name the
+  capability beside canvas groups. The Engine follows every path when a still's canvases are admitted, each root on its
+  own, and a path that leads nowhere refuses the whole still in the Engine's words before anything is drawn. The path
+  moves nothing: the indicator is drawn on its own bounds, clipped with its canvas and in the colour treatment of the
+  group it is in, so a body in one treated group, an untreated effect over it and the body's outline in a second group
+  keep their layers. `cutscenes.effectBattlePreview` takes an optional `indicatorImagePath` flag: the frame is composed
+  with `canvas_indicator_image_path` negotiated when it is `true`. No battle preview frame carries a path yet. The
+  Engine's fixture frames, the CPU still raster's pictures of them and the sprite they are drawn from are kept as
+  `tests/Fixtures/IndicatorPath` for the native renderer to be compared with. Nothing in the editors authors or stores
+  an indicator; the Engine composes them.
+
 - **Draw Image** on a staged actor (Engine 52d4507c, `stagedActorGraphicalVisibility`): the graphical editor's
   `stage_actor` commands and staged cast members can withhold the actor's image while its Terminal glyph, placement,
   collision and bound subject stay. A new visual stores only `false`; a replacement reads `(keep current)` and stores

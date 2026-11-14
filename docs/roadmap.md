@@ -519,6 +519,18 @@ advertises `canvas_group_color` to the Engine for that frame only when the flag
 is `true`. Remaining: the Engine binds no field colour timeline yet, so no
 battle preview frame carries a treatment, and there is nothing to author.
 
+Qualified indicator paths (Engine candidate `engine/field-colour-ownership`
+over 52d4507c, `canvas_indicator_image_path`): the still rasters name the
+capability and draw an indicator whose `imagePath` leads through groups of its
+frame's root canvas, on its own bounds and in its own group's colour
+treatment; the Engine's preflight follows every path and refuses a still whose
+path leads nowhere. `cutscenes.effectBattlePreview` takes an optional
+`indicatorImagePath` flag and advertises the capability to the Engine for that
+frame only when the flag is `true`. Remaining: the Engine's field partitioning
+composes no path yet, so no preview, still or capture of a project carries
+one; the rasters are held to the Engine's fixture frames
+(`tests/Fixtures/IndicatorPath`).
+
 Done on Engine `156840cd` and `06ecb262` (12 November):
 - [x] Campaign restoration for previews. A preview or capture given a save
   (`campaignSave`) plays in that save's campaign:

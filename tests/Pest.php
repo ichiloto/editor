@@ -414,6 +414,7 @@ require_once __DIR__ . '/Support/BattleEntryFixtures.php';
 require_once __DIR__ . '/Support/MapMetadataFixtures.php';
 
 require_once __DIR__ . '/Support/BattleFormationFixtures.php';
+require_once __DIR__ . '/Support/IndicatorPathFixtures.php';
 
 require_once __DIR__ . '/Support/DialogueFixtures.php';
 

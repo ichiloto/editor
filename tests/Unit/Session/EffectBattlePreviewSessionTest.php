@@ -653,3 +653,55 @@ it('reads the group colour request from the host route beside the other drawing 
             ->toBe([$plain['result']['frame'], $plain['result']['lane'], $plain['result']['totalFrames']]);
     }
 });
+
+it('advertises qualified indicator paths to the Engine only for a frame whose request asks for them', function () {
+    $every = ['imageRotation' => true, 'regionBudget' => true, 'canvasGroups' => true, 'clipOpacity' => true, 'groupColor' => true];
+
+    expect(EffectBattlePreview::listNegotiatedCapabilities(indicatorImagePath: true))->toBe([RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH])
+        ->and(EffectBattlePreview::listNegotiatedCapabilities(...$every))->not->toContain(RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH)
+        // Asked for beside the others, it joins them and removes none.
+        ->and(array_values(array_diff(EffectBattlePreview::listNegotiatedCapabilities(...$every, indicatorImagePath: true),
+            EffectBattlePreview::listNegotiatedCapabilities(...$every))))->toBe([RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH])
+        ->and(array_diff(EffectBattlePreview::listNegotiatedCapabilities(...$every), EffectBattlePreview::listNegotiatedCapabilities(...$every, indicatorImagePath: true)))
+        ->toBe([]);
+})->skip(fn (): bool => ! hasEngineIndicatorPath(), ENGINE_INDICATOR_PATH_MISSING);
+
+it('composes a frame asked for with qualified indicator paths in a session that has them, and every other frame as before', function () {
+    $session = EditorSession::open(effectBattlePreviewProject());
+    $index = findEffectIndex($session, 'dusk-slash');
+    $frame = $session->readEffectBattlePreview($index, 0, authoredFrame: 1)['frame'];
+    // The Engine's own command preview behind the session's, composed in a renderer session of exactly these capabilities.
+    $preview = new ReflectionProperty($session, 'effectBattlePreviews')->getValue($session)[EffectPresentation::GRAPHICAL->value]['preview'];
+    $command = new ReflectionProperty($preview, 'preview')->getValue($preview);
+    $compose = static fn(array $negotiated): array => $negotiated === [] ? $command->getFrameAtIndex($frame, false)->toArray()
+        : PresentationSession::runForSession(static fn(string $capability): bool => in_array($capability, $negotiated, true),
+            static fn(): array => $command->getFrameAtIndex($frame, false)->toArray());
+    $groups = [RendererSessionConfig::CANVAS_GROUPS];
+
+    $asked = $session->readEffectBattlePreview($index, $frame, canvasGroups: true, indicatorImagePath: true);
+    $alone = $session->readEffectBattlePreview($index, $frame, indicatorImagePath: true);
+    $without = $session->readEffectBattlePreview($index, $frame, canvasGroups: true);
+
+    expect(array_intersect_key($asked, $compose($groups)))->toBe($compose([...$groups, RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH]))
+        ->and(array_intersect_key($alone, $compose([])))->toBe($compose([RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH]))
+        ->and(array_intersect_key($without, $compose($groups)))->toBe($compose($groups));
+})->skip(fn (): bool => ! hasEngineIndicatorPath(), ENGINE_INDICATOR_PATH_MISSING);
+
+it('reads the indicator path request from the host route beside the other drawing features', function () {
+    $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
+    $request = static fn(string $method, array $params = []): array => $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params]));
+    $request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => effectBattlePreviewProject()]);
+    $index = array_find_key($request('database.records', ['category' => 'cutscenes/effect'])['result']['records'],
+        static fn(mixed $label): bool => str_contains(strval($label), 'dusk-slash'));
+    $preview = static fn(array $features): array => $request('cutscenes.effectBattlePreview',
+        ['index' => $index, 'frame' => 0, 'authoredFrame' => 1, 'presentation' => 'graphical', ...$features]);
+    $plain = $preview([]);
+
+    // The flag is optional and a boolean: a frame comes back whether it is true, false, left out or anything else.
+    foreach ([['indicatorImagePath' => true, 'canvasGroups' => true], ['indicatorImagePath' => true], ['indicatorImagePath' => false], ['indicatorImagePath' => 'yes']] as $features) {
+        $frame = $preview($features);
+        expect($frame)->not->toHaveKey('error')
+            ->and([$frame['result']['frame'], $frame['result']['lane'], $frame['result']['totalFrames']])
+            ->toBe([$plain['result']['frame'], $plain['result']['lane'], $plain['result']['totalFrames']]);
+    }
+})->skip(fn (): bool => ! hasEngineIndicatorPath(), ENGINE_INDICATOR_PATH_MISSING);

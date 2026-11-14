@@ -47,6 +47,7 @@ final class FieldStillRaster
         RendererSessionConfig::TILE_SHADOWS, RendererSessionConfig::WORLD_CANVAS, RendererSessionConfig::GRAPHICAL_CANVAS,
         RendererSessionConfig::CANVAS_CLIP_OPACITY, RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
         RendererSessionConfig::CANVAS_GROUPS, RendererSessionConfig::CANVAS_GROUP_COLOR, RendererSessionConfig::CANVAS_REGION_BUDGET,
+        RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH,
     ];
 
     /** The most pixels one native-size image holds; a larger view is drawn scaled down, a block of cells at a time. */
