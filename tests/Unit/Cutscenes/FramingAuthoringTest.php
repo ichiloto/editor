@@ -416,6 +416,21 @@ it('shows the framing subjects under their own heading in the Terminal Cutscenes
         ->and(array_map(static fn(array $field): string => (string) ($field['field'] ?? ''), array_slice($fields, (int) $heading + 1, (int) $script - (int) $heading - 1)))
         ->toBe(['framingSubjectList', 'framingSubject0Key', 'framingSubject0Kind', 'framingSubject1Key', 'framingSubject1Kind', 'framingSubject1Id']);
 
+    // Shift+O on the list's heading binds another subject, at its head; Delete on one of its rows removes it. The
+    // cast keeps its two members.
+    addCutsceneAfter($editor, 'framingSubjectList');
+    expect(array_keys($asset->data()['presentation']['framing']['subjects']))->toBe(['subject', 'lead', 'keeper'])
+        ->and(callEditorMethod($editor, 'getDatabaseSettingsFields')[getEditorProperty($editor, 'databaseSelectedSettingIndex')]['field'])->toBe('framingSubject0Key');
+    selectCutsceneField($editor, 'framingSubject0Kind');
+    callEditorMethod($editor, 'removeCutsceneSubItem', false);
+    expect(array_keys($asset->data()['presentation']['framing']['subjects']))->toBe(['lead', 'keeper'])
+        ->and($asset->data()['cast'])->toHaveCount(2);
+    // A subject a phase still selects stays, and the pane says why.
+    selectCutsceneField($editor, 'framingSubject0Key');
+    callEditorMethod($editor, 'removeCutsceneSubItem', false);
+    expect(array_keys($asset->data()['presentation']['framing']['subjects']))->toBe(['lead', 'keeper'])
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('still selected by a framing command');
+
     // The script, the phase's body, and the nested phase's body are frames inside one another.
     openCutsceneFrame($editor, 'commandListCommands');
     expect(cutsceneFieldIds($editor))->toContain('command1Commands', 'command1SubjectList', 'command1Subject0Key', 'command1Subject1Id');

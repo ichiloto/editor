@@ -15,6 +15,7 @@ use Ichiloto\Editor\Database\FramingFields;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\EditorWindow;
 use Ichiloto\Editor\History\GenericCommand;
@@ -1395,9 +1396,10 @@ trait CutscenesWorkspace
     }
 
     /**
-     * Adds what the cursor's context calls for: a cast member, a command
-     * after the cursor's command in the open frame, a lane, a route step,
-     * a keyframe, a cue.
+     * Adds what the cursor's context calls for: a cast member, an entry of
+     * a list beside the cast (a conversation speaker, a framing subject), a
+     * command after the cursor's command in the open frame, a lane, a route
+     * step, a keyframe, a cue.
      */
     private function addCutsceneSubItem(): void
     {
@@ -1452,6 +1454,17 @@ trait CutscenesWorkspace
                 return;
             }
 
+            $listed = $records->locateItem($index, [], $selectedId);
+
+            if ($listed?->listKey !== null && in_array($listed->kind, [RecordItem::LIST, RecordItem::ENTRY], true)) {
+                // A list beside the cast (a conversation's speakers, the framing subjects): first in the list from
+                // its heading, after the entry under the cursor from one of its rows.
+                $at = $records->addSubItem($index, at: $listed->entryIndex + 1, listKey: $listed->listKey);
+                $added = $at === null ? null : ['listed', $records->schema->findInlineSubList($listed->listKey)?->prefix ?? '', $at];
+
+                return;
+            }
+
             $nested = $records->nestedSubListContext($index, $selectedId);
 
             if ($nested !== null) {
@@ -1483,6 +1496,7 @@ trait CutscenesWorkspace
             $matches = match ($added[0]) {
                 'command' => preg_match('/^[a-z]+' . $added[1] . 'Type$/', $id) === 1,
                 'entry' => preg_match('/^cast' . $added[1] . '[A-Z]/', $id) === 1,
+                'listed' => preg_match('/^' . preg_quote($added[1], '/') . $added[2] . '[A-Z]/', $id) === 1,
                 'option' => preg_match('/^[a-z]+' . $added[1] . 'Option' . $added[2] . 'Text$/', $id) === 1,
                 'nested' => preg_match('/^[a-z]+' . $added[1] . '[A-Z][a-z]+' . $added[2] . '[A-Z]/', $id) === 1,
                 default => false,
@@ -1507,7 +1521,8 @@ trait CutscenesWorkspace
     /**
      * Removes what the cursor points at, or the last entry of the cursor's
      * list: a command from the open frame, an option with its arm, a lane, a
-     * step, a keyframe, a cue, a cast member.
+     * step, a keyframe, a cue, a cast member, an entry of a list beside the
+     * cast.
      */
     private function removeCutsceneSubItem(bool $last): void
     {
@@ -1552,6 +1567,20 @@ trait CutscenesWorkspace
 
                 if ($at !== null && $at >= 0) {
                     $removed = $records->removeFrameCommand($index, $framePath, $at) !== null;
+                }
+
+                return;
+            }
+
+            $listed = $records->locateItem($index, [], $selectedId);
+
+            if ($listed?->listKey !== null) {
+                // A list beside the cast: the entry under the cursor, or the list's last.
+                $at = $last ? $records->countSubItems($index, $listed->listKey) - 1
+                    : ($listed->kind === RecordItem::ENTRY ? $listed->entryIndex : null);
+
+                if ($at !== null && $at >= 0) {
+                    $removed = $records->removeSubItem($index, $at, $listed->listKey) !== null;
                 }
 
                 return;
