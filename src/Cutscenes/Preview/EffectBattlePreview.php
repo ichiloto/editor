@@ -8,6 +8,7 @@ use Ichiloto\Engine\Animations\ActionAnimationResolver;
 use Ichiloto\Engine\Animations\AnimationLibrary;
 use Ichiloto\Engine\Animations\SourceEffectAnchor;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Animations\Timelines\EffectGroundSpan;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Battle\Actions\CrisisSkillBattleAction;
 use Ichiloto\Engine\Battle\BattleCommandCatalog;
@@ -43,6 +44,18 @@ final class EffectBattlePreview
 {
     /** The command's length, in command frames at {@see BattleCommandTimeline::FPS}. */
     public int $totalFrames { get => $this->preview->totalFrames; }
+
+    /**
+     * Whether the command draws a captured ground span: a drawing of its timeline carries the Engine's field
+     * for one ({@see EffectGroundSpan::exportContract()}).
+     */
+    private bool $drawsGroundSpan {
+        get => array_any($this->plan->timeline->playbackSegments, static fn(array $segment): bool => array_any($segment['drawCommands'] ?? [],
+            static fn(array $command): bool => isset($command['payload'][EffectGroundSpan::exportContract()['field']])));
+    }
+
+    /** @var array<int, list<string>> The Engine's ground span placement diagnostics, with motion (0) and reduced (1). */
+    private array $groundSpanDiagnostics = [];
 
     /**
      * @param string $lane `source` or `target`: where the effect plays in the action shown.
@@ -250,20 +263,48 @@ final class EffectBattlePreview
      * authored whole-field motion leaves the battlefield still; without
      * both image rotation and clipped images an authored battler motion
      * leaves its battler where it stands. Either way the frame carries the
-     * Engine's diagnostic.
+     * Engine's diagnostic. Composites are composed unless the caller says its
+     * canvas draws none, as the Engine's own preview composes them unless
+     * told otherwise; a captured ground span needs them and texture strips
+     * both, and without either the frame carries the Engine's diagnostic and
+     * no span.
+     *
+     * A command that draws a captured ground span also carries, first and on
+     * every frame, what the Engine says of the span's placement for the troop
+     * and targets previewed ({@see findGroundSpanDiagnostics()}), so a
+     * placement the Engine cannot span is told before the frame that would
+     * draw it. Each diagnostic is given once.
      *
      * @return array<string, mixed>
      * @throws InvalidArgumentException When the frame is outside the command.
      */
     public function readFrame(int $frame, bool $reducedMotion, bool $imageRotation = false, bool $coverageDabs = false,
         bool $textureStrip = false, bool $regionBudget = false, bool $canvasGroups = false, bool $clipOpacity = false,
-        bool $groupColor = false): array
+        bool $groupColor = false, bool $compositing = true): array
     {
-        $read = fn(): array => $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation, $coverageDabs, $textureStrip)->toArray();
+        $read = fn(): array => $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation, $coverageDabs, $textureStrip, $compositing)->toArray();
         $negotiated = self::listNegotiatedCapabilities($imageRotation, $regionBudget, $canvasGroups, $clipOpacity, $groupColor);
-
-        return $negotiated === [] ? $read()
+        $composed = $negotiated === [] ? $read()
             : PresentationSession::runForSession(static fn(string $capability): bool => in_array($capability, $negotiated, true), $read);
+
+        return [...$composed, 'diagnostics' => array_values(array_unique([...$this->findGroundSpanDiagnostics($reducedMotion), ...$composed['diagnostics']]))];
+    }
+
+    /**
+     * What the Engine says of a captured ground span's placement for the troop and targets this preview plays
+     * against, at the capture the effect authors, with motion or reduced: the Engine's own inspection
+     * ({@see BattleCommandPreview::getGroundSpanDiagnostics()}), which draws nothing and resolves nothing. Empty
+     * when the placement can be spanned, and for a command that draws no ground span or plays in the Terminal.
+     *
+     * @return list<string> The Engine's diagnostics, in its words.
+     */
+    public function findGroundSpanDiagnostics(bool $reducedMotion): array
+    {
+        if ($this->graphical === null || ! $this->drawsGroundSpan) {
+            return [];
+        }
+
+        return $this->groundSpanDiagnostics[(int) $reducedMotion] ??= $this->preview->getGroundSpanDiagnostics($reducedMotion);
     }
 
     /**

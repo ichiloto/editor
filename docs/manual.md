@@ -3790,35 +3790,57 @@ and one that cannot reach them without a fallback as an error. A missing pose
 point or unreadable artwork is reported apart, with the Engine's reason.
 
 A battle image can lie along the ground from the caster to the selected
-targets: the Engine's captured ground span. In the GUI, an image track anchored
-to `target-group` with the `ground` attachment has a **Ground Anchor
-Lifetime** row offering `effect-start` and `target-capture`; the empty choice
-leaves the key out. With `contain` fit and the `target-capture` lifetime the
-track has a **Ground Span Tip** row: a point of the image, `x, y` from 0 to 1.
-The track's **Pivot** is the image's rear. The Engine fits the whole image, at
-one scale and one turn, with its rear on the caster's captured ground and its
-tip on the ground of the farthest selected target. A point in the row turns the
-span on; emptying the row removes `groundSpan` from the file whole and leaves
-the rest of the track as written. A point outside 0 to 1, or half of one, is
-refused and nothing changes. The record's **Target Capture Frame** row sets the
-frame the grounds are captured on: frame 0 is a frame of its own, and an empty
-row leaves the key out. **Span Selected Targets** is offered only on a track
-without a ground span. `cutscenes.timeline` gives the tip as `groundSpanTip`
-beside the pivot, with the row key that edits it, while the track's rows offer
-it. On save the Engine judges the span and its refusal is reported in the
-Engine's words, with nothing written: a lifetime without a capture frame, a tip
-equal to the pivot, a keyframe before the capture frame or with a position, and
-a track that also has cells, a facing, another fit, another lifetime or no
-pivot. A timeline that declares a ground span opens with it and saves byte for
-byte while untouched; an edit to another field keeps the span, the comments and
-the layout of the file. The Terminal editor has no row for the tip, the
-lifetime or the capture frame and leaves all three as written. A summon's
-image rows have none for a ground span either; a summon timeline that declares
-one keeps it as written through edits beside it. The GUI's
-battle preview draws the span where its canvas draws texture strips: the editor
-session composes it only for a `cutscenes.effectBattlePreview` request whose
-`textureStrip` is `true`; any other request draws no span and carries the
-Engine's diagnostic that the renderer lacks texture-strip support.
+targets: the Engine's captured ground span. The Editor reads the span's field
+names, the track values it requires, the fields it conflicts with and its
+orientations from the Engine's own export, so its rows follow the Engine's.
+In the GUI, an image track anchored to `target-group` with the `ground`
+attachment has a **Ground Anchor Lifetime** row offering `effect-start` and
+`target-capture`; the empty choice leaves the key out. A track with every
+value the Engine requires (`target-group`, `ground`, `target-capture` and
+`contain` fit) has a **Ground Span Tip** row: a point of the image, `x, y`
+from 0 to 1. The track's **Pivot** is the image's rear. The Engine fits the
+whole image, at one scale and one turn, with its rear on the caster's captured
+ground and its tip on the ground of the farthest selected target. A point in
+the row turns the span on; emptying the row removes `groundSpan` from the file
+whole, its orientation included, and leaves the rest of the track as written.
+A point outside 0 to 1, or half of one, is refused and nothing changes. A
+track with a span has a **Ground Span Orientation** row, chosen among the
+Engine's orientations: `rigid` turns the image as it is drawn, so an image
+cast toward the other side is turned right over; `upright` lets the Engine
+mirror the image left to right where that leaves its top higher, so one image
+serves a cast from either side. The empty choice leaves the key out and the
+row reads the Engine's default, `rigid`. The record's **Target Capture Frame**
+row sets the frame the grounds are captured on: frame 0 is a frame of its own,
+and an empty row leaves the key out. A track with a span is offered no row for
+a field the Engine refuses beside one (among them the cell size, **Span
+Selected Targets**, **Facing** and **Faces Toward**); a row for one stays only
+while the track still holds that field, so it can be cleared, and comes back
+when the span is turned off.
+`cutscenes.timeline` gives the tip as `groundSpanTip` and the orientation as
+`groundSpanOrientation`, with its choices, beside the pivot, each with the row
+key that edits it, while the track's rows offer them. On save the Engine
+judges the span and its refusal is reported in the Engine's words, with
+nothing written: each conflicting field by name, a required value that is
+missing, a missing capture frame or pivot, a tip equal to the pivot, an
+orientation the Engine does not have, and a keyframe before the capture frame
+or with a position. A timeline that declares a ground span opens with it and
+saves byte for byte while untouched; an edit to another field keeps the span,
+the comments and the layout of the file. The Terminal editor has no row for
+the tip, the orientation, the lifetime or the capture frame, keeps every row
+it has and leaves all four as written. A summon's image rows have none for a
+ground span either; a summon timeline that declares one keeps it as written
+through edits beside it. The GUI's battle preview draws the span where its
+canvas draws texture strips and composites: the editor session composes it
+only for a `cutscenes.effectBattlePreview` request whose `textureStrip` is
+`true` and whose `compositing` is not `false` (composites are composed unless
+the request declines them); any other request draws no span and carries the
+Engine's diagnostic that the renderer lacks them. Every frame of a preview
+whose command draws a ground span also carries, once, what the Engine's own
+inspection says of the troop and targets previewed against, such as two
+selected targets equally far on opposite sides of the caster, so it is told
+before the frame that would draw the span. An upright span that neither mirror
+holds top side up along the previewed ground is refused by the Engine on the
+frame that would draw it, in its words, and nothing is drawn in its place.
 
 A battle effect may hold a `field-motion` track, which moves the whole
 battlefield in the graphical battle. In the GUI it is one of the track types.

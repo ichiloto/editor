@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Review\CanvasStillRaster;
+use Ichiloto\Engine\Animations\Timelines\EffectGroundSpan;
+use Ichiloto\Engine\Animations\Timelines\EffectGroundSpanOrientation;
 use Ichiloto\Engine\Battle\Presentation\BattleCanvasLayout;
 use Ichiloto\Engine\Battle\Presentation\BattleEffectAnchorSnapshot;
 use Ichiloto\Engine\Battle\Presentation\BattleEffectTargetGroup;
@@ -20,18 +22,12 @@ use Ichiloto\Engine\Rendering\Presentation\SpriteSourceRect;
  * The captured ground span as each of its consumers draws it, on synthetic input: the Engine composes each
  * case's texture strip from captured grounds, the Editor's CPU raster draws it, and the picture is kept beside
  * the canvas as the fixture the native renderer is held to (`fixtures/ground-span-strip` in the renderer holds
- * the same two files). Nothing here is a game's art or a battle's layout.
+ * the same files). The first fixture holds spans that name no orientation; the second, spans the Engine holds
+ * upright, and one it refuses. Nothing here is a game's art or a battle's layout.
  */
 const GROUND_SPAN_STRIP_ATLAS = 'ground-span-strip-fixture.png';
-
-/** Why a ground span test is skipped: the Engine installed with the Editor predates the contract. */
-const ENGINE_GROUND_SPAN_MISSING = 'The Engine in use has no captured ground span; set ICHILOTO_ENGINE_SRC to one that has.';
-
-/** Whether the Engine in use composes captured ground spans. */
-function hasEngineGroundSpan(): bool
-{
-    return class_exists(GraphicalBattleGroundSpan::class);
-}
+const GROUND_SPAN_STRIP_FIXTURE = 'ground-span-strip-fixture.json';
+const GROUND_SPAN_UPRIGHT_FIXTURE = 'ground-span-upright-fixture.json';
 
 /** The atlas's size and the colour of every texel outside its crops, which no strip may sample. */
 const GROUND_SPAN_STRIP_ATLAS_SIZE = [32, 16];
@@ -44,7 +40,7 @@ const GROUND_SPAN_STRIP_TALL = ['x' => 24, 'y' => 3, 'width' => 4, 'height' => 1
 /** The smallest battle canvas the Engine lays out, one logical pixel to a UI cell, with room below it. */
 const GROUND_SPAN_STRIP_ARENA = [BattleScreen::WIDTH + 1, BattleScreen::HEIGHT + 12];
 
-/** Where the fixture's two files are kept. */
+/** Where the fixtures' files are kept. */
 function getGroundSpanStripFixtureDirectory(): string
 {
     return dirname(__DIR__) . '/Fixtures/GroundSpanStrip';
@@ -83,6 +79,39 @@ function listGroundSpanStripCases(): array
         // Three targets and both mirrors, the rear and tip between texel centres: the farthest ground X at the group's depth.
         ['id' => 'group-both-mirrors', 'crop' => $wide, 'pivot' => ['x' => 0.9, 'y' => 0.6], 'tip' => ['x' => 0.2, 'y' => 0.3],
             'flipX' => true, 'flipY' => true, 'caster' => [90.5, 20.125], 'targets' => [[60.25, 36.5], [48.75, 30.25], [55.0, 28.0]]],
+    ];
+}
+
+/**
+ * The upright cases: the Engine's `upright` orientation on the first fixture's art and grounds, so each side a
+ * cast can come from has its picture, and an image no mirror holds upright along its ray.
+ *
+ * @return list<array<string, mixed>> As {@see listGroundSpanStripCases()}, each with its orientation.
+ */
+function listGroundSpanUprightCases(): array
+{
+    $upright = EffectGroundSpanOrientation::UPRIGHT->value;
+    $wide = ['crop' => GROUND_SPAN_STRIP_WIDE, 'pivot' => ['x' => 14.5 / 16, 'y' => 2.5 / 4], 'tip' => ['x' => 2.5 / 16, 'y' => 1.5 / 4], 'orientation' => $upright];
+    $tall = ['crop' => GROUND_SPAN_STRIP_TALL, 'pivot' => ['x' => 1.5 / 4, 'y' => 8.5 / 10], 'tip' => ['x' => 2.5 / 4, 'y' => 1.5 / 10], 'orientation' => $upright];
+
+    return [
+        // The first fixture's west ray: the image is upright as drawn, and upright leaves it so.
+        ['id' => 'upright-west-ray', ...$wide, 'flipX' => false, 'flipY' => false, 'caster' => [64.375, 30.625], 'targets' => [[33.25, 26.875]]],
+        // Its east ray, with no mirror authored: upright mirrors the image where rigid turned it over.
+        ['id' => 'upright-east-ray', ...$wide, 'flipX' => false, 'flipY' => false, 'caster' => [17.625, 31.25], 'targets' => [[49.5, 25.125]]],
+        // An authored mirror cast west would be turned over; upright takes the mirror back off.
+        ['id' => 'upright-west-ray-authored-mirror', ...$wide, 'flipX' => true, 'flipY' => false, 'caster' => [64.375, 30.625], 'targets' => [[33.25, 26.875]]],
+        // An authored mirror top to bottom is the author's and stays, on either choice of the other mirror.
+        ['id' => 'upright-east-ray-flipped-down', ...$wide, 'flipX' => false, 'flipY' => true, 'caster' => [17.625, 31.25], 'targets' => [[49.5, 25.125]]],
+        // A tall image on a steep ray: the mirror that leaves its top higher is the one taken.
+        ['id' => 'upright-steep-tall-crop', ...$tall, 'flipX' => false, 'flipY' => false, 'caster' => [60.5, 44.75], 'targets' => [[38.875, 20.25]]],
+        // A target straight above the caster: the image stands on its end, its top a little above its bottom. (The
+        // odd sixteenths keep every pixel centre off a texel edge, which a rise in quarters puts some exactly on.)
+        ['id' => 'upright-vertical-ray', ...$wide, 'flipX' => false, 'flipY' => false, 'caster' => [70.5, 40.25], 'targets' => [[70.5, 12.8125]]],
+        // The same ray with the image's rear and tip level in its cell: on its end exactly, neither mirror has its
+        // top above its bottom, and the Engine refuses to draw it.
+        ['id' => 'upright-vertical-ray-level-image', ...$wide, 'tip' => ['x' => 2.5 / 16, 'y' => 2.5 / 4], 'flipX' => false, 'flipY' => false,
+            'caster' => [70.5, 40.25], 'targets' => [[70.5, 12.8125]]],
     ];
 }
 
@@ -128,9 +157,10 @@ function captureGroundSpanStripCase(array $case): BattleEffectAnchorSnapshot
 function composeGroundSpanStripCase(array $case): PresentationCanvas
 {
     [$width, $height] = GROUND_SPAN_STRIP_ARENA;
+    $span = [EffectGroundSpan::TIP_FIELD => $case['tip'], ...(isset($case['orientation']) ? [EffectGroundSpan::ORIENTATION_FIELD => $case['orientation']] : [])];
     $composite = GraphicalBattleGroundSpan::compose('ground-span', GROUND_SPAN_STRIP_ATLAS, new SpriteSourceRect(...$case['crop']),
         captureGroundSpanStripCase($case), new BattleCanvasLayout($width, $height, 1, 1),
-        ['groundSpan' => ['tip' => $case['tip']], 'pivot' => $case['pivot'], 'flipX' => $case['flipX'], 'flipY' => $case['flipY'], 'depth' => 'behind']);
+        [EffectGroundSpan::FIELD => $span, 'pivot' => $case['pivot'], 'flipX' => $case['flipX'], 'flipY' => $case['flipY'], 'depth' => 'behind']);
     if (! $composite instanceof CanvasComposite) {
         throw new LogicException(sprintf('Ground span case %s lies outside the arena.', $case['id']));
     }
@@ -172,31 +202,44 @@ function rasterizeGroundSpanStripComposite(PresentationCanvas $canvas, string $a
 }
 
 /**
- * The fixture: every case's inputs, the canvas the Engine composes from them, what the contract places where
+ * A fixture: every case's inputs, the canvas the Engine composes from them, what the contract places where
  * (the captured grounds and the texels of the image's rear and tip), and the CPU raster's picture of the composite.
+ * A case the Engine refuses to compose holds the Engine's refusal in place of a canvas and a picture.
  *
+ * @param list<array<string, mixed>> $cases The cases, as {@see listGroundSpanStripCases()} gives them.
  * @return array{version: int, asset: string, cases: list<array<string, mixed>>}
  */
-function buildGroundSpanStripFixture(string $assetRoot): array
+function buildGroundSpanStripFixture(string $assetRoot, array $cases): array
 {
-    $cases = [];
-    foreach (listGroundSpanStripCases() as $case) {
+    $built = [];
+    foreach ($cases as $case) {
         $snapshot = captureGroundSpanStripCase($case);
-        $canvas = composeGroundSpanStripCase($case);
         $caster = $snapshot->getCasterGround();
         $target = $snapshot->getGroundSpanEndpoint();
-        $cases[] = [
+        $entry = [
             'id' => $case['id'],
             'contract' => [
-                'crop' => $case['crop'], 'pivot' => $case['pivot'], 'tip' => $case['tip'], 'flipX' => $case['flipX'], 'flipY' => $case['flipY'],
+                'crop' => $case['crop'], 'pivot' => $case['pivot'], 'tip' => $case['tip'],
+                ...(isset($case['orientation']) ? ['orientation' => $case['orientation']] : []),
+                'flipX' => $case['flipX'], 'flipY' => $case['flipY'],
                 'casterGround' => [$caster->x, $caster->y], 'targetGround' => [$target->x, $target->y],
             ],
-            'canvas' => $canvas->toArray(),
-            'expectedRgbaHexRows' => rasterizeGroundSpanStripComposite($canvas, $assetRoot),
         ];
+        try {
+            $canvas = composeGroundSpanStripCase($case);
+            $built[] = [...$entry, 'canvas' => $canvas->toArray(), 'expectedRgbaHexRows' => rasterizeGroundSpanStripComposite($canvas, $assetRoot)];
+        } catch (InvalidArgumentException $refusal) {
+            $built[] = [...$entry, 'refusal' => $refusal->getMessage()];
+        }
     }
 
-    return ['version' => 1, 'asset' => GROUND_SPAN_STRIP_ATLAS, 'cases' => $cases];
+    return ['version' => 1, 'asset' => GROUND_SPAN_STRIP_ATLAS, 'cases' => $built];
+}
+
+/** Each fixture file's cases, by the file. */
+function listGroundSpanStripFixtures(): array
+{
+    return [GROUND_SPAN_STRIP_FIXTURE => listGroundSpanStripCases(), GROUND_SPAN_UPRIGHT_FIXTURE => listGroundSpanUprightCases()];
 }
 
 /** The fixture as its file holds it. */
@@ -206,15 +249,20 @@ function encodeGroundSpanStripFixture(array $fixture): string
 }
 
 /**
- * Writes the fixture's two files afresh: the atlas, then the cases drawn from it. For when the Engine's
- * composition or the raster's picture is changed on purpose; the renderer's copy is then replaced with these.
+ * Writes the fixtures afresh: each file's cases, drawn from the atlas, which is written only where there is none
+ * so the file the renderer's hashes name stays the file. For when the Engine's composition or the raster's
+ * picture is changed on purpose; the renderer's copies are then replaced with these.
  */
-function writeGroundSpanStripFixture(): void
+function writeGroundSpanStripFixtures(): void
 {
     $directory = getGroundSpanStripFixtureDirectory();
     if (! is_dir($directory)) {
         mkdir($directory, 0o777, true);
     }
-    imagepng(createGroundSpanStripAtlas(), $directory . '/' . GROUND_SPAN_STRIP_ATLAS);
-    file_put_contents($directory . '/ground-span-strip-fixture.json', encodeGroundSpanStripFixture(buildGroundSpanStripFixture($directory)));
+    if (! is_file($directory . '/' . GROUND_SPAN_STRIP_ATLAS)) {
+        imagepng(createGroundSpanStripAtlas(), $directory . '/' . GROUND_SPAN_STRIP_ATLAS);
+    }
+    foreach (listGroundSpanStripFixtures() as $file => $cases) {
+        file_put_contents($directory . '/' . $file, encodeGroundSpanStripFixture(buildGroundSpanStripFixture($directory, $cases)));
+    }
 }

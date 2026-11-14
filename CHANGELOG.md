@@ -49,20 +49,27 @@
 
 ### Added
 
-- Captured ground span (Engine candidate `engine/captured-ground-span` over 52d4507c, `groundSpan`): the graphical
+- Captured ground span (Engine candidate `engine/captured-ground-span-r2` over 52d4507c, `groundSpan`): the graphical
   editor's effect rows author a battle image fitted whole from the caster's captured ground to the farthest selected
-  target's. A `target-group` ground image with `contain` fit and the `target-capture` **Ground Anchor Lifetime**, which
-  that row now offers beside `effect-start`, has a **Ground Span Tip** row, a point of the image from 0 to 1; a point
-  turns the span on and an empty row removes `groundSpan` whole. The record has a **Target Capture Frame** row, where
-  frame 0 is a frame and an empty row leaves the key out. **Span Selected Targets** is offered only without a ground
-  span. `cutscenes.timeline` gives the tip as `groundSpanTip` with the row key that edits it. A file that declares a
-  ground span saves byte for byte while untouched, and other edits keep it, with undo and redo. Each save compiles
-  through the Engine, whose refusal is reported in its words with nothing written. The Terminal editor has no rows for
-  the tip, the lifetime or the capture frame and leaves them as written, as a summon's rows leave a summon timeline's
-  ground span. `cutscenes.effectBattlePreview` composes the span only for a request whose `textureStrip` is `true`;
-  any other request carries the Engine's diagnostic. The CPU still raster draws the Engine's composed strip texel for
-  texel on six synthetic cases (east and west rays, two crops that are not square, both mirrors, arena clipping), kept
-  as `tests/Fixtures/GroundSpanStrip` for the native renderer to be held to.
+  target's, by the field names, required track values, conflicting fields and orientations the Engine exports
+  (`EffectGroundSpan::exportContract()`). A track with the values the Engine requires has a **Ground Span Tip** row,
+  a point of the image from 0 to 1: a point turns the span on, and an empty row removes `groundSpan` whole. A track
+  with a span has a **Ground Span Orientation** row among the Engine's (`rigid`, `upright`); the empty choice leaves
+  the key out. **Ground Anchor Lifetime** now offers `target-capture` beside `effect-start`, and the record has a
+  **Target Capture Frame** row, where frame 0 is a frame and an empty row leaves the key out. A track with a span is
+  offered no row for a field the Engine refuses beside one, unless the track still holds it. `cutscenes.timeline`
+  gives the tip and the orientation with the row keys that edit them. A file that declares a ground span saves byte
+  for byte while untouched, and other edits keep it, with undo and redo. Each save compiles through the Engine, whose
+  refusal is reported in its words with nothing written. The Terminal editor has no rows for the tip, the
+  orientation, the lifetime or the capture frame and leaves them as written, as a summon's rows leave a summon
+  timeline's ground span. `cutscenes.effectBattlePreview` composes the span only for a request whose `textureStrip`
+  is `true` and whose new optional `compositing` is not `false`; any other request carries the Engine's diagnostic.
+  A preview whose command draws a ground span carries the Engine's inspection of the troop and targets previewed
+  against (`getGroundSpanDiagnostics`) on every frame. The CPU still raster draws the Engine's composed strip texel
+  for texel on twelve synthetic cases, kept as `tests/Fixtures/GroundSpanStrip` for the native renderer to be held
+  to: six that name no orientation (east and west rays, two crops that are not square, both mirrors, arena clipping)
+  and six upright (casts from either side, authored mirrors, a steep and a vertical ray), beside one upright span
+  the Engine refuses. The Editor now needs an Engine with this contract.
 
 - **Draw Image** on a staged actor (Engine 52d4507c, `stagedActorGraphicalVisibility`): the graphical editor's
   `stage_actor` commands and staged cast members can withhold the actor's image while its Terminal glyph, placement,

@@ -3294,7 +3294,7 @@ final class ProjectRecordDatabase
         }
 
         foreach ($subList->fieldsFor($entries[$entryIndex]) as $field) {
-            if (self::fieldToken($field->key) !== $token || $field->isReadOnly) {
+            if (self::getFieldToken($field->key) !== $token || $field->isReadOnly) {
                 continue;
             }
 
@@ -3391,7 +3391,7 @@ final class ProjectRecordDatabase
         }
 
         foreach ($nestedList->fieldsFor($nestedEntries[$nestedIndex]) as $field) {
-            if (self::fieldToken($field->key) !== $fieldToken || $field->isReadOnly) {
+            if (self::getFieldToken($field->key) !== $fieldToken || $field->isReadOnly) {
                 continue;
             }
 
@@ -5057,7 +5057,7 @@ final class ProjectRecordDatabase
     private function writeEntryFieldToken(ProjectRecord $record, RecordSubList $subList, array $entry, string $token, string $rawValue, array $ownerPath = []): ?array
     {
         foreach ($subList->fieldsFor($entry) as $field) {
-            if (self::fieldToken($field->key) !== $token || $field->isReadOnly) {
+            if (self::getFieldToken($field->key) !== $token || $field->isReadOnly) {
                 continue;
             }
 
@@ -5164,7 +5164,7 @@ final class ProjectRecordDatabase
      */
     public static function subFieldId(string $prefix, int $entryIndex, string $key): string
     {
-        return $prefix . $entryIndex . self::fieldToken($key);
+        return $prefix . $entryIndex . self::getFieldToken($key);
     }
 
     /** Returns the flattened id for a nested sub-list field. */
@@ -5179,11 +5179,13 @@ final class ProjectRecordDatabase
             . $entryIndex
             . ucfirst($nestedPrefix)
             . $nestedIndex
-            . self::fieldToken($key);
+            . self::getFieldToken($key);
     }
 
     /**
-     * Sanitizes a field key into an unambiguous identifier token.
+     * Sanitizes a field key into an unambiguous identifier token: what a
+     * list entry's row id ends in (`track0` + `GroundSpantip`), for anything
+     * that finds a row by the field it edits.
      *
      * The token always starts with a letter, so the entry index preceding it
      * can never be mis-parsed.
@@ -5191,7 +5193,7 @@ final class ProjectRecordDatabase
      * @param string $key The field key.
      * @return string
      */
-    private static function fieldToken(string $key): string
+    public static function getFieldToken(string $key): string
     {
         return (string) preg_replace('/[^A-Za-z0-9]/', '', ucfirst($key));
     }
@@ -5199,7 +5201,7 @@ final class ProjectRecordDatabase
     /** Declared fields take precedence over the encoded nested-list shape, even with digits in their names. */
     private static function hasEntryFieldToken(RecordSubList $list, array $entry, string $token): bool
     {
-        return array_any($list->fieldsFor($entry), static fn(RecordField $field): bool => self::fieldToken($field->key) === $token);
+        return array_any($list->fieldsFor($entry), static fn(RecordField $field): bool => self::getFieldToken($field->key) === $token);
     }
 
     /**
