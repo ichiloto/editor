@@ -3461,6 +3461,17 @@ takeover, or completing that binding on a lifted actor, is refused before
 anything changes, and validation reports an unknown plane or a lifted takeover
 already in a script.
 
+**Draw Image** (`graphicalVisible`), on a `stage_actor` command and a staged
+cast member in the graphical editor, withholds the actor's image while its
+Terminal glyph, placement, collision and bound subject stay as they are; the
+field and its default are the Engine's. A new visual draws its image, so only
+`false` is stored and choosing `true` removes the key. A visual that replaces
+an existing one (**Replace Existing Visual**) keeps the image setting of the
+visual it replaces: the field then reads `(keep current)`, stores `true` or
+`false` when chosen, and clears to keep the current setting again. **Visible**
+set to `false` hides both presentations whatever Draw Image says. The Terminal
+editor does not offer the field and keeps the key through its own edits.
+
 Every other type from the Common Events table is available too, with the
 same rows. `Shift+O` adds: on a route, lane or point row, another step, lane
 or point; on a command that has none of those yet, its first; otherwise the

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
@@ -631,4 +632,42 @@ function previewFrameGenerations(array $messages): array
 {
     return array_values(array_filter(array_map(static fn(array $message): ?int => $message['type'] === 'frame'
         ? ($message['payload']['generation'] ?? null) : null, $messages), static fn(?int $generation): bool => $generation !== null));
+}
+
+/** A row of the harbour cinematic's record, or of its command list when the field names a command. */
+function getCinematicRow(EditorSession $session, string $field): array
+{
+    // Script commands are rows of the command list's frame; cast members are rows of the record.
+    $frame = str_starts_with($field, 'command') ? [CutsceneAsset::COMMANDS_KEY] : [];
+
+    return array_find($session->readDatabaseRecord('cutscenes/cinematic', 0, $frame)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? '') === $field)
+        ?? throw new RuntimeException('Missing cinematic row ' . $field);
+}
+
+function setCinematicRow(EditorSession $session, string $field, string $value): array
+{
+    return $session->applyDatabaseRecord('cutscenes/cinematic', 0, getCinematicRow($session, $field)['key'], $value);
+}
+
+/** The harbour cinematic, its title card replaced by a command, on a map with one world object. */
+function createHarbourCommandProject(array $command): string
+{
+    $root = cutsceneProject();
+    file_put_contents($root . '/assets/Cutscenes/Cinematics/harbour-lanterns/harbour-lanterns.script.php', str_replace(
+        "['type' => 'title_card', 'title' => 'HARBOUR LANTERNS', 'seconds' => 0.2],", var_export($command, true) . ',', harbourCinematicScript()));
+    $mapPath = $root . '/assets/Maps/harbour/harbour.data.php';
+    $map = require $mapPath;
+    $map['worldObjects'] = [['id' => 'beacon', 'anchor' => ['x' => 6, 'y' => 3], 'pivot' => ['x' => 0.5, 'y' => 1.0], 'sprites2d' => null]];
+    file_put_contents($mapPath, "<?php\nreturn " . var_export($map, true) . ";\n");
+
+    return $root;
+}
+
+/** @return array{string, string} The harbour cinematic's data file and script file. */
+function getHarbourPaths(string $root): array
+{
+    $directory = $root . '/assets/Cutscenes/Cinematics/harbour-lanterns/';
+
+    return [$directory . 'harbour-lanterns.data.php', $directory . 'harbour-lanterns.script.php'];
 }
