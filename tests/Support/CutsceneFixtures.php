@@ -668,6 +668,45 @@ function previewWindowReady(): string
     ]]);
 }
 
+/**
+ * Exchanges with the editor window until the frame the preview has begun is
+ * whole, as a window receives it across its ticks. The Engine's retained
+ * upload yields on its own time budget, so one exchange may carry only the
+ * first packets of a frame, or none of them yet; the preview says whether a
+ * delivery is pending, and each later exchange carries no events and gives
+ * the upload its next turn. An exchange with nothing to send is returned as
+ * it is.
+ *
+ * @param object $preview A preview session or field: it exchanges a scene and answers hasPendingSceneDelivery().
+ * @param list<string> $events The window's answers for the first exchange.
+ * @return list<array{type: string, payload: array<string, mixed>}> Every message sent, in order.
+ * @throws RuntimeException When the frame is still not whole after the bound of exchanges.
+ */
+function exchangePreviewSceneUntilPresented(object $preview, array $events, ?string $sessionId, int $maxExchanges = 64): array
+{
+    $messages = $preview->exchangeScene($events, $sessionId);
+    for ($exchanges = 1; $preview->hasPendingSceneDelivery() || isPreviewFrameUnfinished($messages); $exchanges++) {
+        if ($exchanges >= $maxExchanges) {
+            throw new RuntimeException(sprintf('The preview frame was not whole within %d exchanges.', $maxExchanges));
+        }
+        array_push($messages, ...$preview->exchangeScene([], $sessionId));
+    }
+
+    return $messages;
+}
+
+/**
+ * Whether the last frame packet sent belongs to a frame that has not been presented yet.
+ *
+ * @param list<array{type: string, payload: array<string, mixed>}> $messages
+ */
+function isPreviewFrameUnfinished(array $messages): bool
+{
+    $last = array_find(array_reverse($messages), static fn(array $message): bool => $message['type'] === 'frame');
+
+    return $last !== null && ($last['payload']['present'] ?? false) !== true;
+}
+
 /** @param list<array{type: string, payload: array<string, mixed>}> $messages */
 function previewFrameGenerations(array $messages): array
 {

@@ -115,7 +115,7 @@ function drawFramingPicture(CinematicPreviewSession $preview, string $picture, a
     if ($picture === 'capture') {
         return $preview->composeFrame()->viewport?->worldOriginY ?? throw new RuntimeException('The captured frame has no field viewport.');
     }
-    foreach ($preview->exchangeScene([$window['answer'] ?? previewWindowReady()], $preview->getSceneSessionId()) as $message) {
+    foreach (exchangePreviewSceneUntilPresented($preview, [$window['answer'] ?? previewWindowReady()], $preview->getSceneSessionId()) as $message) {
         if ($message['type'] !== 'frame') {
             continue;
         }

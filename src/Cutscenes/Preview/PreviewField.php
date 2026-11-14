@@ -543,6 +543,16 @@ final class PreviewField
         return $messages;
     }
 
+    /**
+     * Whether the Engine still has something of the scene to send the
+     * attached graphical view ({@see PreviewSceneHost::hasPendingDelivery()});
+     * the next exchange continues it. False with no view attached.
+     */
+    public function hasPendingSceneDelivery(): bool
+    {
+        return $this->sceneHost?->hasPendingDelivery() ?? false;
+    }
+
     /** The graphical view's grid: the field's screen in the game's graphical text cells. */
     public function getSceneGrid(): RendererGridConfig
     {
