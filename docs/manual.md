@@ -3131,7 +3131,10 @@ offset, and choosing another object or subject clears the attachment.
 Validation reports a visual whose attachment the resource no longer declares.
 
 A common event (a reusable event script) is edited with the full cinematic
-command vocabulary, staging included, since cinematic sessions call it. Its
+command vocabulary, staging included, since cinematic sessions call it. The
+commands inside its blocks (a sequence, a branch arm, a `framing` body) are
+edited with that vocabulary too. Its staged-actor choices are the actors the
+script stages itself and those of the cinematics that run it. Its
 map-local choices (world objects, their attachments) are on the map its callers
 run it on: a map whose events or NPCs call it, a cinematic's Start Map, or the
 map a calling script runs on. When its callers run it on several maps, or none
@@ -3376,7 +3379,7 @@ The record pane groups the engine's cinematic definition: **Identity** (id,
 name, description, version), **Staging** (start map, initial presentation,
 reduced-motion policy), **Script** (the command list, opened as a frame),
 **Skip** (policy, checkpoints, the finalizer as a frame), **Metadata**
-(authoring), **Conversation** and **Cast**. Cast rows are `player`, `party_actor`, `npc` (a
+(authoring), **Conversation**, **Framing** and **Cast**. Cast rows are `player`, `party_actor`, `npc` (a
 stable map-local id on the start map) or `staged_actor` with every engine
 field: id, sprite or asset, x and y, facing, visible, collision, Draw Plane
 and directional sprites. `Shift+O` on a cast row adds a member; `Delete` removes
@@ -3415,6 +3418,42 @@ an unbound speaker, a speaker whose NPC is on no map the cinematic runs on
 or whose staged actor the cast does not declare, and a line selecting a
 speaker or addressee the conversation does not bind.
 
+**Framing** authors the subjects a scene's phases keep in view
+(`presentation.framing.subjects`, the Engine's `framingRequirements`
+contract). While a `framing` command's body runs, the Engine frames the
+subjects that command requires clear of the dialogue, in place of the whole
+cast.
+
+- `Framing Subjects` binds each stable `Subject Key` to a `Subject`: the
+  `player`, an `npc` picked among the NPCs of the start map and the maps the
+  cinematic transfers to, or a `staged_actor` picked from the cast and the
+  actors that its commands, and the Common Events it runs, stage.
+- A `framing` command lists its `Required Subjects` and holds its `Commands`,
+  a frame like a sequence's. In a cinematic's own script a subject's
+  `Subject` row reads `(a bound framing subject)`, with a `Bound Subject`
+  picked among the keys the cinematic binds, or names the `player`, an `npc`
+  or a `staged_actor` directly. A new subject is the player.
+- A reusable Common Event cannot know which cinematic runs it, so its
+  `framing` commands offer the direct subjects alone. A key such a script
+  already selects is listed read-only and kept as written; choosing a kind
+  for it turns it into a direct subject.
+
+`Shift+O` on the `Framing Subjects` heading binds a subject at the head of
+the list. Renaming a subject key renames it in every `framing` command of the
+cinematic's script that selects it; removing a key a command still selects is
+refused and says where. The Engine judges the framing when the cinematic is
+saved, before anything is written: a phase with no subject or no command, a
+key the cinematic does not bind, one subject selected twice in a phase, and a
+subject that is not the player, an NPC or a staged actor are refused in the
+Engine's words. A Common Event's added or changed `framing` commands are
+judged the same way when the script is saved. Validation resolves each phase
+where a cinematic reaches it, in its own script or a Common Event it runs, and
+reports a key that cinematic does not bind, a staged actor nothing has staged
+by then and an NPC that is not on the map the scene is on. The preview plays a
+phase as the game does, marks the command its body is on in the Command Tree,
+and lists a phase whose required subjects cannot be framed together among its
+diagnostics.
+
 #### The command tree
 
 The script is a nested tree. Open `Commands` (or `Finalizer`) from its row,
@@ -3422,11 +3461,12 @@ or press `Enter` on any row of the Command Tree, and the record pane shows
 that list as a frame: each command contributes a `Command N Type` row plus
 the rows its type uses, nested blocks appear as rows that open their own
 frames, and the pane title is the trail back out (`Commands › Parallel 3 ›
-Lane 2`). `Esc` pops exactly one frame.
+Lane 2`, `Commands › Framing 2 › Commands`). `Esc` pops exactly one frame.
 
 | Type | Fields |
 | --- | --- |
 | `sequence` | Commands (a frame) |
+| `framing` | Required Subjects (each a bound framing subject, or the player, an NPC or a staged actor), Commands (a frame) |
 | `parallel` | Lanes, each a stable id with its own Commands frame; the block completes when every lane has |
 | `branch` | Conditions, Then, Else (frames) |
 | `choice` | Prompt, Title, Options (each with a Commands frame), Cancel (frame) |
@@ -3478,7 +3518,9 @@ editor does not offer the field and keeps the key through its own edits.
 Every other type from the Common Events table is available too, with the
 same rows. `Shift+O` adds: on a route, lane or point row, another step, lane
 or point; on a command that has none of those yet, its first; otherwise the
-next command. `Shift+X` removes the last entry, `Delete` the selected one.
+next command. On a `framing` command's `Required Subjects` row or one of its
+subjects it adds a subject, and on the command's other rows the next command.
+`Shift+X` removes the last entry, `Delete` the selected one.
 
 The Command Tree is a projection of the same tree. Its rows fold (`Space`,
 `-`, `+`), open a frame (`Enter`), and move the command under the cursor:
