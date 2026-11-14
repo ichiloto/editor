@@ -4280,9 +4280,9 @@ class ProjectValidator
 
       $issues = [...$issues, ...$this->checkConditions((array) ($command['conditions'] ?? []), $where, $known)];
 
-      if ($type === 'sequence') {
+      foreach (CommandMapContext::getBodies($command) as $body) {
         $issues = [...$issues, ...$this->walkEventCommands(
-          (array) ($command['commands'] ?? []),
+          $body['commands'],
           $where,
           $known,
           $context,
