@@ -6,10 +6,16 @@ use Ichiloto\Editor\Cutscenes\CutsceneLaneOverview;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneOutline;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\FramingFields;
+use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
+use Ichiloto\Engine\Events\Interpreter\EventCommandRequirements;
+use Ichiloto\Engine\Events\Interpreter\EventExecutionScope;
+use Ichiloto\Engine\Events\Interpreter\EventScriptContext;
 
 /**
  * A cinematic's required-subject framing, as the Engine's
@@ -50,7 +56,31 @@ it('reads the field, the command and the subject kinds it authors from the Engin
         ->and(FramingFields::getCommandType())->toBe($contract['command'])
         ->and([FramingFields::getSelectionField(), ...CinematicCommandSchema::export()['nestedBlockShapes'][$contract['command']]])
         ->toEqualCanonicalizing($contract['commandFields'])
-        ->and(CinematicCommandSchema::export()['blockTypes'])->toContain($contract['command']);
+        ->and(CinematicCommandSchema::export()['blockTypes'])->toContain($contract['command'])
+        ->and(FramingFields::getBodyLane())->toBe($contract['bodyLane']);
+
+    // Each kind's id row is the field its reference source declares; a kind that declares none has no id row.
+    $subjects = FramingFields::getLists()[0];
+    foreach ($contract['referenceSources'] as $kind => $source) {
+        $keys = array_column($subjects->fieldsFor(['key' => 'subject', 'kind' => $kind]), 'key');
+        expect($keys)->toBe(['key', 'kind', ...($source['idField'] === null ? [] : [$source['idField']])]);
+    }
+    expect(array_find($subjects->fieldsFor(['key' => 'subject', 'kind' => 'player']), static fn($field): bool => $field->key === 'kind')->options)
+        ->toBe(array_keys($contract['referenceSources']));
+});
+
+it('offers the framing command where the Engine says it can run: a cinematic\'s script and a reusable script, never a field or battle script', function (): void {
+    $offers = static fn(RecordSubList $list): array => $list->fields[0]->options;
+
+    expect($offers(CutsceneSchemas::cinematics()->commandLists['commands']))->toContain('framing')
+        ->and($offers(RecordSchemaCatalog::forKey('common_events')->subList))->toContain('framing')
+        // A map event's or an NPC's script runs on the field, where nothing can be framed.
+        ->and($offers(RecordSchemaCatalog::eventCommandList('script')))->not->toContain('framing')->toContain('camera', 'sequence')
+        ->and($offers(RecordSchemaCatalog::eventCommandList('commands', scope: EventExecutionScope::BATTLE)))->not->toContain('framing');
+    foreach (CinematicCommandSchema::COMMAND_TYPES as $type) {
+        expect(in_array($type, $offers(RecordSchemaCatalog::forKey('common_events')->subList), true))
+            ->toBe(EventCommandRequirements::isAvailable($type, EventScriptContext::REUSABLE));
+    }
 });
 
 it('binds framing subjects under stable keys, each picked where every subject is, with undo and redo byte for byte', function (): void {
@@ -287,9 +317,17 @@ it('keeps a bound key a reusable event script already selects as written, and tu
         ->toMatchArray(['value' => '(a bound framing subject)', 'options' => ['player', 'npc', 'staged_actor']])
         ->and(fn() => $session->applyDatabaseRecord(FRAMING_SCRIPTS, $index, $key['key'], 'keeper'))->toThrow(SessionRefusal::class, 'cannot be edited here');
 
+    // A phase changed while it still selects the key is the Engine's to refuse: a reusable script inherits no
+    // caller's bound keys.
+    setRecordRow($session, FRAMING_SCRIPTS, $index, 'command0Text', 'The crate tips.', [0, 'then', 1, 'commands']);
+    expect(fn() => $session->saveDatabase(FRAMING_SCRIPTS))
+        ->toThrow(InvalidArgumentException::class, 'common_event:rescue[1]: The framing subject key is not bound in this cinematic.')
+        ->and(file_get_contents($path))->toContain("'subjects' => ['lead']", 'The crate shifts.');
+
     setRecordRow($session, FRAMING_SCRIPTS, $index, 'command1Subject0Kind', 'player', $then);
     $session->saveDatabase(FRAMING_SCRIPTS);
-    expect((require $path)[0]['then'][1]['subjects'])->toBe([['kind' => 'player']]);
+    expect((require $path)[0]['then'][1]['subjects'])->toBe([['kind' => 'player']])
+        ->and((require $path)[0]['then'][1]['commands'][0]['text'])->toBe('The crate tips.');
 });
 
 /** The harbour cinematic's and the rescue script's issues, as `where: message`. */
@@ -343,7 +381,7 @@ it('refuses saving drafts the rows leave the Engine to complete: a phase emptied
     // A subject turned into an NPC waits for the NPC to be picked.
     setRecordRow($session, FRAMING_CINEMATICS, 0, 'framingSubject0Kind', 'npc');
     expect(fn() => $session->saveDatabase(FRAMING_CINEMATICS))
-        ->toThrow(RuntimeException::class, 'npc subject requires an id.')
+        ->toThrow(RuntimeException::class, 'Framing subject: npc subject requires an id.')
         ->and([file_get_contents($dataPath), file_get_contents($scriptPath)])->toBe($before);
     setRecordRow($session, FRAMING_CINEMATICS, 0, 'framingSubject0Id', 'keeper');
 
@@ -351,7 +389,7 @@ it('refuses saving drafts the rows leave the Engine to complete: a phase emptied
     setRecordRow($session, FRAMING_CINEMATICS, 0, 'command1Subject1Kind', '', ['commands']);
     setRecordRow($session, FRAMING_CINEMATICS, 0, 'command1Subject1Key', 'lead', ['commands']);
     expect(fn() => $session->saveDatabase(FRAMING_CINEMATICS))
-        ->toThrow(RuntimeException::class, 'requiring keeper, lead · 4 commands that the Engine refuses: A framing phase selects each field identity once.')
+        ->toThrow(RuntimeException::class, 'harbour-lanterns:script[2]: A framing phase selects each field identity once.')
         ->and([file_get_contents($dataPath), file_get_contents($scriptPath)])->toBe($before);
 });
 
@@ -378,14 +416,19 @@ it('has the Engine judge a framing command a reusable event script adds or chang
 });
 
 it('reports subjects a framing phase cannot reach where the cinematic runs it, a reusable script\'s phases included', function (): void {
-    // The script requires a key its caller does not bind, an actor nothing stages and an NPC of another map.
+    // A cinematic that runs a reusable script whose phase selects its own staged actor directly has nothing to report.
+    [$root] = framedRescueProject();
+    expect(listFramingIssues($root))->toBe([]);
+
+    // The script selects a key, an actor nothing stages and an NPC of another map.
     [$root] = framedRescueProject(str_replace(
         "'subjects' => [['kind' => 'staged_actor', 'id' => 'crate']]",
         "'subjects' => ['lead', ['kind' => 'staged_actor', 'id' => 'crate']]",
         framedRescueScript(),
     ) );
-    expect(implode("\n", listFramingIssues($root)))->toContain(
-        'cinematic harbour-lanterns common event rescue: A framing command requiring lead, staged actor crate · 4 commands: The framing subject key is not bound in this cinematic.');
+    // The Engine judges the scripts a cinematic runs: a reusable script inherits none of its caller's bound keys.
+    expect(listFramingIssues($root))->toContain(
+        'cinematic harbour-lanterns: harbour-lanterns:script[3]/common_event:rescue[1]/branch:then[2]: The framing subject key is not bound in this cinematic.');
 
     [$root] = framedRescueProject(str_replace(
         "'subjects' => [['kind' => 'staged_actor', 'id' => 'crate']]",
@@ -397,7 +440,7 @@ it('reports subjects a framing phase cannot reach where the cinematic runs it, a
         'cinematic harbour-lanterns common event rescue: It addresses NPC "stranger", which is not on harbour.',
     );
 
-    // A bound key is checked where a phase selects it: the keeper is not on the map the scene has moved to.
+    // A bound key is checked where a phase selects it: the porter is on no map the scene is on.
     [$root, $dataPath] = framedHarbourProject();
     expect(listFramingIssues($root))->toBe([]);
     file_put_contents($dataPath, str_replace("'id' => 'keeper'],", "'id' => 'porter'],", (string) file_get_contents($dataPath)));
@@ -513,4 +556,40 @@ it('offers the Terminal Database a reusable event script\'s own staged actors an
     pressKeys($editor, "\033");
     expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([0, 'then'])
         ->and(callEditorMethod($editor, 'getDatabaseSettingsFields')[getEditorProperty($editor, 'databaseSelectedSettingIndex')]['field'])->toBe('command1Type');
+});
+
+it('reports a framing phase a field script would reach, and a key a reusable script nothing runs selects, in the Engine\'s words', function (): void {
+    // The keeper's own script runs on the field: a phase there, and one in a reusable script it calls, cannot run.
+    [$root] = framedRescueProject();
+    $mapPath = $root . '/assets/Maps/harbour/harbour.data.php';
+    $map = require $mapPath;
+    $map['npcs'][0]['script'] = [
+        ['type' => 'common_event', 'id' => 'rescue'],
+        ['type' => 'framing', 'subjects' => [['kind' => 'player']], 'commands' => [['type' => 'wait', 'seconds' => 1]]],
+    ];
+    file_put_contents($mapPath, "<?php\n\nreturn " . var_export($map, true) . ";\n");
+    $issues = array_values(array_map(static fn($issue): string => $issue->where . ': ' . $issue->message,
+        array_filter(validateProject($root), static fn($issue): bool => str_contains($issue->message, 'requires an active field cinematic'))));
+
+    expect($issues)->toBe(['harbour NPC Keeper: script[1]/common_event:rescue[1]/branch:then[2]: "framing" requires an active field cinematic.']);
+
+    // Without the call, the phase in the keeper's own script is the first the Engine meets.
+    $map['npcs'][0]['script'] = [$map['npcs'][0]['script'][1]];
+    file_put_contents($mapPath, "<?php\n\nreturn " . var_export($map, true) . ";\n");
+    expect(implode("\n", array_map(static fn($issue): string => $issue->where . ': ' . $issue->message, validateProject($root))))
+        ->toContain('harbour NPC Keeper: script[1]: "framing" requires an active field cinematic.');
+
+    // The same judgement covers every command of a field script: a battle command cannot run there either.
+    $map['npcs'][0]['script'] = [['type' => 'concede']];
+    file_put_contents($mapPath, "<?php\n\nreturn " . var_export($map, true) . ";\n");
+    expect(implode("\n", array_map(static fn($issue): string => $issue->where . ': ' . $issue->message, validateProject($root))))
+        ->toContain('harbour NPC Keeper: script[1]: "concede" cannot run in field scripts.');
+
+    // A reusable script nothing runs is judged awaiting its caller: its phases select subjects directly.
+    $root = cutsceneProject();
+    file_put_contents($root . '/assets/Events/lonely.php', "<?php\n\nreturn [\n  ['type' => 'framing', 'subjects' => ['lead'], 'commands' => [['type' => 'wait', 'seconds' => 1]]],\n];\n");
+    expect(implode("\n", array_map(static fn($issue): string => $issue->where . ': ' . $issue->message, validateProject($root))))
+        ->toContain('event script lonely: script[1]: The framing subject key is not bound in this cinematic.');
+    file_put_contents($root . '/assets/Events/lonely.php', "<?php\n\nreturn [\n  ['type' => 'framing', 'subjects' => [['kind' => 'player']], 'commands' => [['type' => 'wait', 'seconds' => 1]]],\n];\n");
+    expect(array_filter(validateProject($root), static fn($issue): bool => str_starts_with($issue->where, 'event script lonely')))->toBe([]);
 });

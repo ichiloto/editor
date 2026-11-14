@@ -936,9 +936,9 @@ final class CinematicPreviewSession
      * whose parent stays yielded on it), and a parent frame that finished
      * its list is discarded entirely, in which case the block was that
      * list's last command. A framing phase's body is a lane of its own, named
-     * by the phase's command path and the command's type alone
-     * (`root/dawn[3]/framing/framing[1]`): the phase's frame stays on the
-     * `framing` command, as a parallel command's does.
+     * by the phase's command path and the suffix and frame label the Engine
+     * exports for it (`root/dawn[3]/framing/framing[1]`): the phase's frame
+     * stays on the `framing` command, as a parallel command's does.
      */
     public function keyForEnginePath(string $path): ?string
     {
@@ -961,14 +961,16 @@ final class CinematicPreviewSession
         $command = null;
         $count = count($segments);
 
-        $framing = FramingFields::getCommandType();
-        // Whether the walk has just entered a framing phase's body, whose own frame the Engine labels with the phase's type.
+        // How the Engine names a framing phase's body lane: the suffix after the phase's command path, and the
+        // label of that lane's own frame.
+        ['pathSuffix' => $bodyLane, 'rootFrame' => $bodyFrame] = FramingFields::getBodyLane();
+        // Whether the walk has just entered a framing phase's body, whose own frame follows.
         $enteredBody = false;
 
         foreach ($segments as $position => $segment) {
-            if ($segment === $framing) {
+            if ($segment === $bodyLane) {
                 // Into the body lane of the framing command the walk is on; its frames follow.
-                $bodyKey = CommandMapContext::getBodyKeys($framing)[0] ?? null;
+                $bodyKey = CommandMapContext::getBodyKeys(FramingFields::getCommandType())[0] ?? null;
 
                 if ($command === null || $bodyKey === null) {
                     return $key;
@@ -989,7 +991,7 @@ final class CinematicPreviewSession
             [, $label, $argument] = $match;
             $next = $segments[$position + 1] ?? null;
             // A lane waiting on a parallel block or a framing phase stays on that command.
-            $nextIsParallel = $next !== null && (str_starts_with($next, 'parallel[') || $next === $framing);
+            $nextIsParallel = $next !== null && (str_starts_with($next, 'parallel[') || $next === $bodyLane);
 
             if ($label === 'parallel') {
                 // Into a lane of the parallel command the walk is on.
@@ -1013,7 +1015,7 @@ final class CinematicPreviewSession
             $oneBased = (int) $argument;
             $suffix = match (true) {
                 // The body's own frame holds the body's commands; a body that finished its list starts at a block's frame.
-                $enteredBody && $label === $framing => null,
+                $enteredBody && $label === $bodyFrame => null,
                 // A sequence's frame is labelled with its type and holds the commands the block runs.
                 CommandMapContext::getBodyKeys($label) !== [] => CommandMapContext::getBodyKeys($label)[0],
                 $label === 'branch:then' => 'then',

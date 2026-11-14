@@ -50,6 +50,7 @@ use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
 use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Field\NpcPlacementSet;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicFramingDefinition;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicStageManager;
 use Ichiloto\Engine\Field\SkitSpeaker;
@@ -58,7 +59,9 @@ use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
+use Ichiloto\Engine\Events\Interpreter\EventCommandRequirements;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
+use Ichiloto\Engine\Events\Interpreter\EventScriptContext;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
 use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
@@ -4087,8 +4090,9 @@ class ProjectValidator
 
       foreach (is_array($pages) ? $pages : [] as $page => $entry) {
         if (is_array($entry) && is_array($entry['commands'] ?? null)) {
+          // The Engine's battle page reader judges where a page's commands run.
           $issues = [...$issues, ...$this->checkCommands($entry['commands'],
-            sprintf('troop %s event page %d', $name, intval($page) + 1), $known)];
+            sprintf('troop %s event page %d', $name, intval($page) + 1), $known, scriptContext: null)];
         }
       }
     }
@@ -4134,6 +4138,8 @@ class ProjectValidator
         $where,
         $known,
         commonEventStack: $scriptId !== '' ? [$scriptId] : [],
+        // Nothing runs it yet: it is judged as a reusable script awaiting its caller.
+        scriptContext: EventScriptContext::REUSABLE,
       )];
     }
 
@@ -4146,6 +4152,8 @@ class ProjectValidator
    * @param array<int, mixed> $commands The commands.
    * @param string $where Where they live.
    * @param array<string, string[]> $known What the project defines.
+   * @param EventScriptContext|null $scriptContext Where the Engine runs the script: a map's events and NPCs run
+   *   theirs on the field. Null where another Engine reader judges the context (a troop's battle pages).
    * @return Issue[] The issues found.
    */
   protected function checkCommands(
@@ -4156,11 +4164,44 @@ class ProjectValidator
     ?string $mapId = null,
     array $npcIdsByMap = [],
     array $commonEventStack = [],
+    ?EventScriptContext $scriptContext = EventScriptContext::FIELD,
   ): array
   {
     $context = ['map' => ScriptMapState::startOn($mapId, $npcIds), 'npcIdsByMap' => $npcIdsByMap];
 
-    return $this->walkEventCommands($commands, $where, $known, $context, $commonEventStack);
+    return [
+      ...($scriptContext === null ? [] : $this->checkScriptContext($commands, $scriptContext, $where)),
+      ...$this->walkEventCommands($commands, $where, $known, $context, $commonEventStack),
+    ];
+  }
+
+  /**
+   * Has the Engine judge where a script's commands may run
+   * ({@see EventCommandRequirements}): the script itself and, through the
+   * project's reusable event scripts, every script it calls, in the context
+   * its caller gives them. A command that needs an active cinematic (a
+   * framing phase) is refused in a field script and in the scripts a field
+   * script runs, and a reusable script's framing phases select subjects
+   * directly, never a caller's bound keys.
+   *
+   * @param array<int, mixed> $commands The script's commands.
+   * @param CinematicFramingDefinition|null $framing The subjects a cinematic binds, for its own script.
+   * @param string $path What the Engine's command path starts from.
+   * @return Issue[] The Engine's refusal, with its command path.
+   */
+  protected function checkScriptContext(array $commands, EventScriptContext $scriptContext, string $where,
+    ?CinematicFramingDefinition $framing = null, string $path = 'script'): array
+  {
+    try {
+      // A script that does not exist has no commands to judge; the reference check reports it.
+      EventCommandRequirements::validate($commands, $scriptContext,
+        fn(string $id): array => array_values($this->commonEventScripts[$id] ?? []), $framing, $path);
+    } catch (InvalidArgumentException $refusal) {
+      return [Issue::error($where, $refusal->getMessage(),
+        'The Engine refuses this script where it runs; the message names the command path, through the reusable event scripts it calls.')];
+    }
+
+    return [];
   }
 
   /**

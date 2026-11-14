@@ -132,9 +132,11 @@ final class ConversationFields
             heading: 'Conversation Speakers',
             removeWhenEmpty: true,
             keyField: 'key',
-            prepareEdit: static fn(array $entry, string $field): array => SubjectBindingFields::prepareEdit($entry, $field),
+            prepareEdit: static fn(array $entry, string $field): array => SubjectBindingFields::prepareEdit($entry, $field,
+                SubjectBindingFields::describeSources(CinematicConversation::SUBJECT_KINDS)),
             // A speaker's key, the kind of subject it binds, and that subject's id where the kind names one.
-            getFields: static fn(array $entry): array => SubjectBindingFields::getFields($entry, 'Speaker Key', CinematicConversation::SUBJECT_KINDS),
+            getFields: static fn(array $entry): array => SubjectBindingFields::getFields($entry, 'Speaker Key',
+                SubjectBindingFields::describeSources(CinematicConversation::SUBJECT_KINDS)),
             remapKeyReferences: static fn(array $payload, string $old, ?string $new): array => self::remapSpeaker($payload, $old, $new),
         );
     }

@@ -501,7 +501,7 @@ it('fails a framing phase that requires a subject the scene does not hold, point
         expect($preview->runToCompletion(5.0))->toBeTrue()
             ->and($preview->status())->toBe(CinematicPreviewSession::STATUS_FAILED)
             ->and($preview->failure())->toMatchArray(['key' => 'commands.1'])
-            ->and($preview->failure()['message'])->toContain('(type "framing")');
+            ->and($preview->failure()['message'])->toContain('(type "framing")', 'Required framing subject: The selected field subject npc:nobody is not present.');
     } finally {
         $preview->dispose();
     }

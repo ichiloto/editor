@@ -8,9 +8,10 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\CommandTree;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
-use Ichiloto\Engine\Cutscenes\Cinematics\CinematicFramingDefinition;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicFramingSubjectKind;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
+use Ichiloto\Engine\Events\Interpreter\EventCommandRequirements;
+use Ichiloto\Engine\Events\Interpreter\EventScriptContext;
 use InvalidArgumentException;
 use LogicException;
 
@@ -21,15 +22,18 @@ use LogicException;
  * command that names the subjects the camera keeps clear of the text while
  * its body runs, in place of the whole cast.
  *
- * The Engine owns the definition field, the command, its fields and the
- * subject kinds; this reads them from the export. A phase's subject is one
- * of the cinematic's bound keys, offered in a cinematic's own script, or a
- * direct reference to the player, an NPC or a staged actor, which is all a
- * reusable script offers: it cannot know which cinematic runs it. The
- * Engine's `CinematicFramingDefinition` and `CinematicScriptValidator` judge
- * what is authored where it is saved; this class supplies the rows, where
- * each choice comes from, and keeps a cinematic's phases in step when a
- * bound key changes.
+ * The Engine owns the definition field, the command, its fields, the
+ * subject kinds with the field each kind's id is stored in
+ * (`referenceSources`) and where the command can run; this reads them from
+ * the export and picks each id where the Editor's subject references pick
+ * one. A phase's subject is one of the cinematic's bound keys, offered in a
+ * cinematic's own script, or a direct reference to the player, an NPC or a
+ * staged actor, which is all a reusable script offers: it cannot know which
+ * cinematic runs it, and the Engine refuses a bound key there. The Engine's
+ * `CinematicDefinition` judges a cinematic's framing when it is hydrated and
+ * its `EventCommandRequirements` a reusable script's; this class supplies
+ * the rows, where each choice comes from, and keeps a cinematic's phases in
+ * step when a bound key changes.
  *
  * @package Ichiloto\Editor\Database
  */
@@ -73,6 +77,32 @@ final class FramingFields
 
         return count($fields) === 1 ? $fields[0]
             : throw new LogicException('The Engine\'s framing command declares no single subject selection field.');
+    }
+
+    /**
+     * The path of the lane a phase's body runs on, as the Engine's runtime names it: the suffix it adds to the
+     * phase's command path, and the label of that lane's own frame.
+     *
+     * @return array{pathSuffix: string, rootFrame: string}
+     */
+    public static function getBodyLane(): array
+    {
+        $lane = self::readContract()['bodyLane'] ?? null;
+
+        return is_array($lane) && is_string($lane['pathSuffix'] ?? null) && is_string($lane['rootFrame'] ?? null) ? $lane
+            : throw new LogicException('The Engine\'s framing contract exports no body lane.');
+    }
+
+    /**
+     * The field of a subject reference that names its kind: the one reference field that is no kind's id field.
+     */
+    private static function getKindField(): string
+    {
+        $fields = array_values(array_diff(self::readContract()['referenceFields'],
+            array_filter(array_column(self::readContract()['referenceSources'], 'idField'))));
+
+        return count($fields) === 1 ? $fields[0]
+            : throw new LogicException('The Engine\'s framing references declare no single kind field.');
     }
 
     /**
@@ -124,7 +154,8 @@ final class FramingFields
      */
     public static function getLists(): array
     {
-        [$kindField, $idField] = self::readContract()['referenceFields'];
+        $kindField = self::getKindField();
+        $sources = self::readContract()['referenceSources'];
 
         return [new RecordSubList(
             key: self::getBindingsKey(),
@@ -135,9 +166,8 @@ final class FramingFields
             heading: 'Framing Subjects',
             removeWhenEmpty: true,
             keyField: self::KEY_FIELD,
-            prepareEdit: static fn(array $entry, string $field): array => SubjectBindingFields::prepareEdit($entry, $field, $kindField, $idField),
-            getFields: static fn(array $entry): array => SubjectBindingFields::getFields($entry, 'Subject Key',
-                self::readContract()['subjectKinds'], $kindField, $idField),
+            prepareEdit: static fn(array $entry, string $field): array => SubjectBindingFields::prepareEdit($entry, $field, $sources, $kindField),
+            getFields: static fn(array $entry): array => SubjectBindingFields::getFields($entry, 'Subject Key', $sources, $kindField),
             remapKeyReferences: static fn(array $payload, string $old, ?string $new): array => self::remapSubject($payload, $old, $new),
         )];
     }
@@ -154,8 +184,9 @@ final class FramingFields
      */
     public static function getSelectionList(bool $bindsKeys): RecordSubList
     {
-        [$kindField, $idField] = self::readContract()['referenceFields'];
-        $kinds = self::readContract()['subjectKinds'];
+        $kindField = self::getKindField();
+        $sources = self::readContract()['referenceSources'];
+        $kinds = array_map(strval(...), array_keys($sources));
 
         return new RecordSubList(
             key: self::getSelectionField(),
@@ -166,12 +197,12 @@ final class FramingFields
             heading: 'Required Subjects',
             scalarKey: self::KEY_FIELD,
             removeWhenEmpty: true,
-            prepareEdit: static fn(array $entry, string $field): array => self::prepareSelectionEdit($entry, $field, $kindField, $idField),
-            getFields: static function (array $entry) use ($bindsKeys, $kinds, $kindField, $idField): array {
+            prepareEdit: static fn(array $entry, string $field): array => self::prepareSelectionEdit($entry, $field, $sources, $kindField),
+            getFields: static function (array $entry) use ($bindsKeys, $kinds, $kindField, $sources): array {
                 $kind = new RecordField($kindField, 'Subject', options: $bindsKeys ? ['', ...$kinds] : $kinds, removeWhenEmpty: true,
                     displayDefault: self::BOUND_LABEL);
                 if (! array_key_exists(self::KEY_FIELD, $entry)) {
-                    return SubjectBindingFields::getReferenceFields($entry, $kind, $kindField, $idField);
+                    return SubjectBindingFields::getReferenceFields($entry, $kind, $sources, $kindField);
                 }
                 $key = RecordField::reference(self::KEY_FIELD, 'Bound Subject', self::SUBJECTS);
 
@@ -188,13 +219,17 @@ final class FramingFields
      */
     public static function describeSelection(array $command): string
     {
-        [$kindField, $idField] = self::readContract()['referenceFields'];
+        $kindField = self::getKindField();
+        $sources = self::readContract()['referenceSources'];
         $subjects = $command[self::getSelectionField()] ?? null;
-        $names = array_map(static fn(mixed $subject): string => match (true) {
-            is_string($subject) => $subject,
-            is_array($subject) && isset($subject[$idField]) => sprintf('%s %s', str_replace('_', ' ', strval($subject[$kindField] ?? '?')), strval($subject[$idField])),
-            is_array($subject) => str_replace('_', ' ', strval($subject[$kindField] ?? '?')),
-            default => '?',
+        $names = array_map(static function (mixed $subject) use ($kindField, $sources): string {
+            if (! is_array($subject)) {
+                return is_string($subject) ? $subject : '?';
+            }
+            $kind = strval($subject[$kindField] ?? '?');
+            $id = $subject[$sources[$kind]['idField'] ?? ''] ?? null;
+
+            return str_replace('_', ' ', $kind) . (is_scalar($id) ? ' ' . strval($id) : '');
         }, is_array($subjects) ? array_values($subjects) : []);
         $count = array_sum(array_map(static fn(array $body): int => count($body['commands']), CommandMapContext::getBodies($command)));
 
@@ -236,39 +271,12 @@ final class FramingFields
     }
 
     /**
-     * Has the Engine resolve every `framing` command of a cinematic's own
-     * script against the subjects the cinematic binds, as the command does
-     * when it runs: a key the cinematic does not bind, or one field identity
-     * selected twice, is the Engine's refusal, with the subjects of the
-     * command it refuses.
-     *
-     * @param array<string, mixed> $framing The cinematic's framing definition; empty when it declares none.
-     * @param array<int, mixed> $commands The cinematic's own commands.
-     * @throws InvalidArgumentException With the Engine's reason.
-     */
-    public static function assertSelectionsResolve(string $cinematicId, array $framing, array $commands): void
-    {
-        $definition = new CinematicFramingDefinition($framing);
-        $field = self::getSelectionField();
-        CommandTree::rewrite($commands, static function (array $command) use ($definition, $field, $cinematicId): array {
-            if (($command['type'] ?? null) === self::getCommandType() && is_array($command[$field] ?? null)) {
-                try {
-                    $definition->getSubjectReferences($command[$field]);
-                } catch (InvalidArgumentException $refusal) {
-                    throw self::createRefusal(sprintf('Cinematic "%s"', $cinematicId), $command, $refusal);
-                }
-            }
-
-            return $command;
-        });
-    }
-
-    /**
      * Has the Engine judge every `framing` command a save adds or changes
-     * in a script outside a cinematic's own (a reusable event script), where
-     * no cinematic is hydrated: its subjects and its body, as the Engine's
-     * cinematic script validator reads them. An unchanged command is left as
-     * the file holds it.
+     * in a reusable event script, which no cinematic's hydration reads: its
+     * shape and its body through the Engine's cinematic script validator,
+     * and its subjects as a reusable script's, direct references the caller's
+     * cinematic need not bind ({@see EventCommandRequirements}). An unchanged
+     * command is left as the file holds it.
      *
      * @param array<array-key, mixed> $old The script as it was loaded.
      * @param array<array-key, mixed> $new The script as it would be saved.
@@ -289,17 +297,12 @@ final class FramingFields
             }
             try {
                 CinematicScriptValidator::validate([$command], 'common_event:' . $scriptId);
+                EventCommandRequirements::validate([$command], EventScriptContext::REUSABLE, path: 'common_event:' . $scriptId);
             } catch (InvalidArgumentException $refusal) {
-                throw self::createRefusal(sprintf('Event script %s', $scriptId), $command, $refusal);
+                throw new InvalidArgumentException(sprintf('Event script %s has a %s command requiring %s that the Engine refuses: %s', $scriptId,
+                    self::getCommandType(), self::describeSelection($command), $refusal->getMessage()), previous: $refusal);
             }
         }
-    }
-
-    /** The Engine's refusal of one `framing` command, with the script and the subjects of the command it refuses. */
-    private static function createRefusal(string $where, array $command, InvalidArgumentException $refusal): InvalidArgumentException
-    {
-        return new InvalidArgumentException(sprintf('%s has a %s command requiring %s that the Engine refuses: %s', $where,
-            self::getCommandType(), self::describeSelection($command), $refusal->getMessage()), previous: $refusal);
     }
 
     /**
@@ -308,19 +311,21 @@ final class FramingFields
      * kind, and clearing the kind makes it a bound key again, waiting for the
      * key to be picked.
      *
+     * @param array<string, array{idField: string|null, identity?: string}> $sources The Engine's reference sources.
      * @return array<string, mixed>
      */
-    private static function prepareSelectionEdit(array $entry, string $field, string $kindField, string $idField): array
+    private static function prepareSelectionEdit(array $entry, string $field, array $sources, string $kindField): array
     {
         if ($field !== $kindField) {
             return $entry;
         }
+        // A kind keeps only the id it names; no kind keeps none.
+        $entry = SubjectBindingFields::prepareEdit($entry, $field, $sources, $kindField);
         if (array_key_exists($kindField, $entry)) {
             unset($entry[self::KEY_FIELD]);
 
-            return SubjectBindingFields::prepareEdit($entry, $field, $kindField, $idField);
+            return $entry;
         }
-        unset($entry[$idField]);
 
         return $entry + [self::KEY_FIELD => ''];
     }

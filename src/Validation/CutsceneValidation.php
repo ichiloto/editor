@@ -20,6 +20,7 @@ use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicFramingDefinition;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
+use Ichiloto\Engine\Events\Interpreter\EventScriptContext;
 use Throwable;
 
 /**
@@ -214,6 +215,8 @@ trait CutsceneValidation
                 $issues = [...$issues, ...$this->checkStagedActorLook($entry, $where . ' cast', $context)];
             }
         }
+        // The Engine judges the scripts the cinematic runs in its context: hydration judged its own script.
+        $issues = [...$issues, ...$this->checkScriptContext($commands, EventScriptContext::CINEMATIC, $where, $context['framing'], $asset->id . ':script')];
         $issues = [...$issues, ...$this->walkCinematicCommands($commands, $where, $known, $context)];
         $issues = [...$issues, ...$this->walkCinematicCommands($finalizer, $where . ' finalizer', $known, $context)];
 
@@ -517,13 +520,20 @@ trait CutsceneValidation
             );
         }
 
-        return [...$issues, ...$this->walkCinematicCommands(
-            $commands,
-            $eventWhere,
-            $known,
-            $context,
-            [...$commonEventStack, $eventId],
-        )];
+        // A reusable script's phases select subjects directly: it inherits none of its caller's bound keys.
+        $bindings = $context['framing'] ?? null;
+        $context['framing'] = new CinematicFramingDefinition();
+        try {
+            return [...$issues, ...$this->walkCinematicCommands(
+                $commands,
+                $eventWhere,
+                $known,
+                $context,
+                [...$commonEventStack, $eventId],
+            )];
+        } finally {
+            $context['framing'] = $bindings;
+        }
     }
 
     /**
@@ -566,9 +576,10 @@ trait CutsceneValidation
     }
 
     /**
-     * Checks the subjects a framing phase requires, as the cinematic reaches it: the Engine resolves its bound
-     * keys against the cinematic's own bindings, and each subject is then one the scene can reach at that point,
-     * a staged actor in the cast or staged by then, an NPC on the map the cinematic is on.
+     * Checks that each subject a framing phase requires is one the scene can reach where the cinematic runs the
+     * phase: a staged actor in the cast or staged by then, an NPC on the map the cinematic is on. The Engine
+     * resolves the phase's selection, against the cinematic's bindings in its own script and as direct references
+     * in a reusable one; a selection it refuses is its own report ({@see checkScriptContext()}).
      *
      * @param array<string, mixed> $command
      * @param array{castIds: string[], map: ScriptMapState, attachmentsByMap: array<string, array<string, list<string>>>, framing?: CinematicFramingDefinition} $context
@@ -578,15 +589,12 @@ trait CutsceneValidation
     {
         $selection = $command[FramingFields::getSelectionField()] ?? null;
         if (! is_array($selection) || ! isset($context['framing'])) {
-            // The Engine's script validator has already refused a command that selects nothing.
             return [];
         }
         try {
             $references = $context['framing']->getSubjectReferences($selection);
-        } catch (\InvalidArgumentException $refusal) {
-            return [Issue::error($where, sprintf('A %s command requiring %s: %s', FramingFields::getCommandType(),
-                FramingFields::describeSelection($command), $refusal->getMessage()),
-                'Choose subjects the cinematic binds under Framing Subjects, or the player, an NPC or a staged actor directly, each once.')];
+        } catch (\InvalidArgumentException) {
+            return [];
         }
         $issues = [];
         foreach ($references as $reference) {

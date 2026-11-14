@@ -26,6 +26,8 @@ use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageFit;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Presentation\CinematicStage;
+use Ichiloto\Engine\Events\Interpreter\EventCommandRequirements;
+use Ichiloto\Engine\Events\Interpreter\EventScriptContext;
 use Ichiloto\Engine\Cutscenes\Summons\SummonEffectTiming;
 
 /**
@@ -142,7 +144,7 @@ final class CutsceneSchemas
             ],
             subList: self::castList($graphical),
             commandLists: [
-                CutsceneAsset::COMMANDS_KEY => self::cinematicCommandList(CutsceneAsset::COMMANDS_KEY, $graphical, ownScript: true),
+                CutsceneAsset::COMMANDS_KEY => self::cinematicCommandList(CutsceneAsset::COMMANDS_KEY, $graphical, context: EventScriptContext::CINEMATIC),
                 self::FINALIZER_KEY => self::finalizerCommandList(),
             ],
             // The conversation's speakers, addressees and phase groups and the framing subjects, beside the cast.
@@ -529,19 +531,26 @@ final class CutsceneSchemas
      * the interpreter understands, each with its fields, nested blocks as
      * frames, and routes, lanes and camera points as nested lists.
      *
-     * @param bool $ownScript Whether the list is a cinematic's own script, whose text lines select the speakers and
-     *   addressees its conversation binds and whose framing phases select the subjects it binds; a reusable script
-     *   cannot know which cinematic runs it.
+     * @param EventScriptContext $context Where the Engine runs the list: a cinematic's own script, whose text lines
+     *   select the speakers and addressees its conversation binds and whose framing phases select the subjects it
+     *   binds, or a reusable script awaiting its caller, which cannot know which cinematic runs it. The list offers
+     *   the built-in types the Engine says are available there ({@see EventCommandRequirements::isAvailable()}).
      */
     public static function cinematicCommandList(string $key, bool $graphical = false, array $blank = ['type' => 'wait', 'seconds' => 0.5],
-        bool $ownScript = false): RecordSubList
+        EventScriptContext $context = EventScriptContext::REUSABLE): RecordSubList
     {
+        $ownScript = $context === EventScriptContext::CINEMATIC;
+
         return new RecordSubList(
             key: $key,
             prefix: 'command',
             singular: 'command',
             fields: [
-                new RecordField('type', 'Type', options: [...CinematicCommandSchema::COMMAND_TYPES, ...RecordSchemaCatalog::getRegisteredCommandTypes()]),
+                new RecordField('type', 'Type', options: [
+                    ...array_values(array_filter(CinematicCommandSchema::COMMAND_TYPES,
+                        static fn(string $type): bool => EventCommandRequirements::isAvailable($type, $context))),
+                    ...RecordSchemaCatalog::getRegisteredCommandTypes(),
+                ]),
             ],
             blank: $blank,
             variants: self::cinematicCommandVariants($graphical, $ownScript),
