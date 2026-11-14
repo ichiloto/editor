@@ -3434,9 +3434,13 @@ cast.
   picked among the keys the cinematic binds, or names the `player`, an `npc`
   or a `staged_actor` directly. A new subject is the player.
 - A reusable Common Event cannot know which cinematic runs it, so its
-  `framing` commands offer the direct subjects alone. A key such a script
-  already selects is listed read-only and kept as written; choosing a kind
-  for it turns it into a direct subject.
+  `framing` commands offer the direct subjects alone, and the Engine refuses
+  a bound key there: a reusable script inherits none of its caller's keys. A
+  key such a script already selects is listed read-only; choosing a kind for
+  it turns it into a direct subject.
+- `framing` is offered where the Engine can run it: in a cinematic's script
+  and in a Common Event. The script of a map event or an NPC runs on the
+  field and does not list it.
 
 `Shift+O` on the `Framing Subjects` heading binds a subject at the head of
 the list. Renaming a subject key renames it in every `framing` command of the
@@ -3445,14 +3449,20 @@ refused and says where. The Engine judges the framing when the cinematic is
 saved, before anything is written: a phase with no subject or no command, a
 key the cinematic does not bind, one subject selected twice in a phase, and a
 subject that is not the player, an NPC or a staged actor are refused in the
-Engine's words. A Common Event's added or changed `framing` commands are
-judged the same way when the script is saved. Validation resolves each phase
-where a cinematic reaches it, in its own script or a Common Event it runs, and
-reports a key that cinematic does not bind, a staged actor nothing has staged
-by then and an NPC that is not on the map the scene is on. The preview plays a
-phase as the game does, marks the command its body is on in the Command Tree,
-and lists a phase whose required subjects cannot be framed together among its
-diagnostics.
+Engine's words, with the command path of the phase. When a Common Event is
+saved, the Engine judges each `framing` command the save adds or changes as a
+reusable script's: its shape and body, and its subjects, where a bound key is
+refused. Validation has the Engine judge every script where it runs, through
+the Common Events it calls: a cinematic's scripts in the cinematic, the script
+of a map event or an NPC on the field, and a Common Event nothing runs as a
+reusable script. It reports, in the Engine's words and with the command path,
+a bound key in a Common Event, a `framing` phase a field script would reach,
+and any other command that cannot run where the script does. Validation also
+checks each phase's subjects where a cinematic reaches the phase, and reports
+a staged actor nothing has staged by then and an NPC that is not on the map
+the scene is on. The preview plays a phase as the game does, marks the command
+its body is on in the Command Tree, and lists a phase whose required subjects
+cannot be framed together among its diagnostics.
 
 #### The command tree
 

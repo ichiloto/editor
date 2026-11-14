@@ -52,12 +52,15 @@
 - **Framing** for cinematics (the Engine's `framingRequirements` contract): a cinematic binds `Framing Subjects`
   under stable keys (`presentation.framing.subjects`), each the player, an NPC or a staged actor picked as
   conversation speakers are, and a `framing` command lists its `Required Subjects` and holds its body as a frame. A
-  cinematic's own script selects bound keys or direct subjects; a reusable Common Event offers direct subjects alone
-  and keeps a key it already selects as written. Renaming a key renames it in the `framing` commands that select it,
-  and removing one still selected is refused. Saving has the Engine judge the framing before anything is written,
-  including every phase's subjects against the cinematic's bindings, and a Common Event's added or changed `framing`
-  commands at that script's save. Validation checks each phase's subjects where a cinematic reaches it. The preview
-  plays a phase, marks the command its body is on, and reports required subjects that cannot be framed together.
+  cinematic's own script selects bound keys or direct subjects; a reusable Common Event offers direct subjects alone,
+  since the Engine refuses a bound key there. `framing` is offered in a cinematic's script and in a Common Event, and
+  not in the script of a map event or an NPC, which runs on the field. Renaming a key renames it in the `framing`
+  commands that select it, and removing one still selected is refused. Saving a cinematic has the Engine judge the
+  framing before anything is written, every phase's subjects against the cinematic's bindings included, and saving a
+  Common Event has it judge the `framing` commands the save adds or changes. Validation has the Engine judge every
+  script where it runs, through the Common Events it calls, and reports a bound key in a Common Event and a `framing`
+  phase a field script would reach, and checks each phase's subjects where a cinematic reaches it. The preview plays
+  a phase, marks the command its body is on, and reports required subjects that cannot be framed together.
   Edits stay in the author's source: a script built with closures and spreads keeps them, and an edit that would
   flatten them is refused. Changed with it: the commands inside a Common Event's blocks are edited with the script's
   full vocabulary, staging included, where those frames offered field event rows only; a Common Event's staged-actor
@@ -66,7 +69,8 @@
   (`Framing 2 › Commands`, `Branch 1 › Then › Framing 2 › Commands`) where it read `Sequence` for any commands frame
   and `Then 1 › Entry 2` for a block inside an arm, and `Esc` from such a block returns to the arm that holds it; in
   the Terminal Cutscenes pane `Shift+O` and `Delete` on a row of a conversation or framing list act on that list,
-  where `Shift+O` added a cast member and `Delete` removed nothing.
+  where `Shift+O` added a cast member and `Delete` removed nothing; validation reports any command the Engine cannot
+  run where a field script runs it (a battle command such as `concede` in an NPC's script), which it did not check.
 
 - **Draw Image** on a staged actor (Engine 52d4507c, `stagedActorGraphicalVisibility`): the graphical editor's
   `stage_actor` commands and staged cast members can withhold the actor's image while its Terminal glyph, placement,
