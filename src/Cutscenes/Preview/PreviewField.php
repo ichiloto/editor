@@ -41,6 +41,11 @@ use Throwable;
  * the Engine configuration it installs, the project directory every step
  * runs in, its screen and its graphical view; its clock is its owner's.
  *
+ * Before each picture the scene resolves its viewport and, in a cinematic,
+ * its dialogue framing, as the game's field does before it draws
+ * ({@see \Ichiloto\Engine\Scenes\Game\GameScene::synchronizeFieldViewport()}),
+ * so the camera stands where the game's would for the dialogue on screen.
+ *
  * It also owns what the scene presents for its whole life. A preview scene
  * has no runtime UI or renderer to report its dialogue and modals, so the
  * field declares them: its Terminal screen, with the field's own dialogue
@@ -364,6 +369,8 @@ final class PreviewField
         $grid = $this->getSceneGrid();
         $composition = null;
         $this->run(function () use ($composer, $supports, $grid, &$composition): void {
+            // As the game's field does before it draws: the viewport, and the cinematic's dialogue framing for what is on screen now.
+            $this->scene->synchronizeFieldViewport();
             $composition = $composer->composeFrame($this->scene, $grid, $supports,
                 fn(array $excluded, array $worldLayers) => Console::capturePresentation($grid->columns, $grid->rows,
                     $this->renderScene(...), $excluded, $worldLayers, $this->scene->getPresentationWorld() !== null));
@@ -457,6 +464,8 @@ final class PreviewField
     {
         $rows = [];
         $this->run(function () use (&$rows): void {
+            // As the game's field does before it draws: the viewport, and the cinematic's dialogue framing for what is on screen now.
+            $this->scene->synchronizeFieldViewport();
             // The same isolated capture the graphical view composes from, with nothing left out.
             $rows = Console::capturePresentation($this->screenWidth, $this->screenHeight, $this->renderScene(...))->rows ?? [];
         });
@@ -501,10 +510,14 @@ final class PreviewField
             RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT);
     }
 
-    /** @return list<string> Why the current field has no usable map, and project configuration it could not read. */
+    /**
+     * @return list<string> Why the current field has no usable map, project configuration it could not read, and
+     *     the casts a cinematic could not frame clear of its dialogue ({@see PreviewGameScene::getDialogueFramingDiagnostics()}).
+     */
     public function getDiagnostics(): array
     {
-        return [...$this->configurationDiagnostics, ...$this->scene->previewMap->getDiagnostics()];
+        return [...$this->configurationDiagnostics, ...$this->scene->previewMap->getDiagnostics(),
+            ...$this->scene->getDialogueFramingDiagnostics()];
     }
 
     /** Ends the editor window's graphical view of the field, if one is attached. */
@@ -547,8 +560,12 @@ final class PreviewField
         $this->screenHeight = max(8, $height);
         $this->scene->previewCamera()->resize($this->screenWidth, $this->screenHeight);
         $this->presentation->resizeScreen($this->screenWidth, $this->screenHeight);
-        // The Terminal presentation is the screen's, so it takes the new size.
-        $this->run($this->presentTerminal(...));
+        $this->run(function (): void {
+            // The Engine places its windows, a dialogue box among them, on the screen it is told of.
+            $this->installScreenSize();
+            // The Terminal presentation is the screen's, so it takes the new size.
+            $this->presentTerminal();
+        });
     }
 
     /**
@@ -608,6 +625,20 @@ final class PreviewField
         $this->presentation->render();
     }
 
+    /**
+     * Tells the Engine the size of the field's text screen, which it places
+     * its windows on: where a dialogue box stands, and so what a cinematic's
+     * cast is framed clear of.
+     */
+    private function installScreenSize(): void
+    {
+        ConfigStore::put(PlaySettings::class, new PreviewConfig([
+            'screen' => ['width' => $this->screenWidth, 'height' => $this->screenHeight],
+            'width' => $this->screenWidth,
+            'height' => $this->screenHeight,
+        ]));
+    }
+
     private function installConfiguration(): void
     {
         if ($this->configured) {
@@ -628,11 +659,7 @@ final class PreviewField
             // music off it never starts a player process for it.
             'audio' => ['music' => false, 'sfx' => false, 'voice' => false],
         ]));
-        ConfigStore::put(PlaySettings::class, new PreviewConfig([
-            'screen' => ['width' => $this->screenWidth, 'height' => $this->screenHeight],
-            'width' => $this->screenWidth,
-            'height' => $this->screenHeight,
-        ]));
+        $this->installScreenSize();
         // The project's world abilities, as the game installs them before a campaign; a source that cannot be read
         // leaves none installed and says why, so a condition or showcase that needs them reports it in its own words.
         ConfigStore::remove(WorldAbilityCatalog::class);

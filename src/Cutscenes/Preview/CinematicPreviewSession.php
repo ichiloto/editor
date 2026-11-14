@@ -771,6 +771,9 @@ final class CinematicPreviewSession
             // The engine's own audio upkeep, as a game frame runs it.
             $this->scene->getGame()->audioManager->update();
             $this->elapsed += $seconds;
+            // The game's cinematic frame then draws its field, which first resolves the viewport and the dialogue
+            // framing for where the cast now stands; the preview draws later, so the frame is resolved here.
+            $this->scene->synchronizeFieldViewport();
             // The game delivers queued notices at its frame boundary, never while dialogue holds the screen.
             $notices = $this->scene->getPreviewGame()->notices;
             if (! $this->presentation->isWaiting() && $notices->hasQueuedNotices()) {

@@ -3532,6 +3532,14 @@ the grid is unchanged; a retired view cannot supply its picture or feedback to
 the replacement. An effect without a selected start map now previews on
 diagnosed undefined terrain instead of refusing to open.
 
+While a line of dialogue is on screen the camera frames the cinematic's cast
+clear of the dialogue box where the game frames it, keeps that view between
+lines and gives it back when the cinematic ends. The Terminal picture, the GPUI
+view and a capture all show it. A cast too large to fit clear of the dialogue
+is listed with the preview's diagnostics in the Engine's words, with the scene
+time it first occurred and the time of each later line it occurred under. The
+report stays after the scene ends, and a capture writes it to `capture.json`.
+
 `Ctrl+T` plays the saved cinematic in the real game: a new game starts on
 the cinematic's origin cell, and the Engine plays the cinematic once the
 player has arrived, through the same controller a trigger would start it
