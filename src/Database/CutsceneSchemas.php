@@ -103,6 +103,13 @@ final class CutsceneSchemas
     public const array SUMMON_IMAGE_ANCHORS = ['target', 'caster', 'screen', 'stage'];
 
     /**
+     * The track key of a captured ground span, by the Engine's name for it, and the one point it holds: the
+     * point of the image that lands on the farthest selected target's ground.
+     */
+    public const string GROUND_SPAN_KEY = 'groundSpan';
+    public const string GROUND_SPAN_TIP_KEY = self::GROUND_SPAN_KEY . '.tip';
+
+    /**
      * Returns the cinematic category: one record per asset, its metadata as
      * fields, its cast as a sub-list, and its script and finalizer as
      * command lists opened as frames.
@@ -781,6 +788,10 @@ final class CutsceneSchemas
             RecordField::reference('effectTiming.cueId', 'Impact Cue', 'effect_cues', allowsNone: true, noneLabel: '(none)'),
             ...($graphical ? [
                 new RecordField('poseSyncFrame', 'Pose Sync Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
+                // Battle only: the frame the selected targets and the caster's ground are captured on, once, for
+                // the ground images that keep that placement. Frame 0 is a frame of its own, never an omission.
+                new RecordField('targetCaptureFrame', 'Target Capture Frame', InputControlType::INTEGER, removeWhenEmpty: true,
+                    displayDefault: '(omitted)'),
                 new RecordField('poseClock', 'Pose Clock',
                     options: ['', ...array_map(static fn(EffectPoseClock $clock): string => $clock->value, EffectPoseClock::cases())],
                     removeWhenEmpty: true, displayDefault: EffectPoseClock::ANNOUNCEMENT->value),
@@ -917,6 +928,10 @@ final class CutsceneSchemas
                 if ($field === 'type' && in_array($entry['type'] ?? null, self::getGraphicalTrackTypes(), true)) {
                     unset($entry['presentation']);
                 }
+                // A ground span is its tip: with the tip cleared, nothing of it is left to write.
+                if ($field === self::GROUND_SPAN_TIP_KEY && ($entry[self::GROUND_SPAN_KEY] ?? null) === []) {
+                    unset($entry[self::GROUND_SPAN_KEY]);
+                }
 
                 return $entry;
             },
@@ -927,13 +942,24 @@ final class CutsceneSchemas
     private static function targetGroupFields(array $entry): array
     {
         $groundGroup = ($entry['anchor'] ?? null) === 'target-group' && ($entry['attachment'] ?? null) === 'ground';
+        $contained = $groundGroup && ($entry['fit'] ?? null) === CanvasImageFit::CONTAIN->value;
+        $spansGround = array_key_exists(self::GROUND_SPAN_KEY, $entry);
         return [
             ...($groundGroup || array_key_exists('anchorLifetime', $entry) ? [
-                new RecordField('anchorLifetime', 'Ground Anchor Lifetime', options: ['', EffectAnchorLifetime::EFFECT_START->value],
+                // Every lifetime the Engine knows but the one a track has by naming none.
+                new RecordField('anchorLifetime', 'Ground Anchor Lifetime',
+                    options: ['', ...array_values(array_diff(array_column(EffectAnchorLifetime::cases(), 'value'), [EffectAnchorLifetime::FOLLOW->value]))],
                     removeWhenEmpty: true, displayDefault: EffectAnchorLifetime::FOLLOW->value),
             ] : []),
-            ...(array_key_exists('span', $entry) || ($groundGroup && ($entry['fit'] ?? null) === CanvasImageFit::CONTAIN->value)
+            // A captured ground span owns both ends of its image, so the span over the targets is offered without one.
+            ...(array_key_exists('span', $entry) || ($contained && ! $spansGround)
                 ? [RecordField::boolean('span', 'Span Selected Targets')] : []),
+            // A captured ground image fitted whole from the caster's ground, where its pivot (the rear) lands, to the
+            // farthest selected target's ground, where this point of it (the tip) lands. A point turns the span on;
+            // cleared, the key goes whole ({@see effectTrackList()}).
+            ...($spansGround || ($contained && ($entry['anchorLifetime'] ?? null) === EffectAnchorLifetime::TARGET_CAPTURE->value)
+                ? [new RecordField(self::GROUND_SPAN_TIP_KEY, 'Ground Span Tip (empty: no ground span)',
+                    codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true)] : []),
             ...(array_key_exists('contactRail', $entry) || ($groundGroup && ($entry['anchorLifetime'] ?? null) === EffectAnchorLifetime::EFFECT_START->value)
                 ? [
                     new RecordField('contactRail.left', 'Contact Rail Start U', InputControlType::FLOAT, removeWhenEmpty: true),

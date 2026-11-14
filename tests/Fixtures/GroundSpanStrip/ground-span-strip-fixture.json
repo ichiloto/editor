@@ -1,0 +1,703 @@
+{
+    "version": 1,
+    "asset": "ground-span-strip-fixture.png",
+    "cases": [
+        {
+            "id": "west-ray",
+            "contract": {
+                "crop": {
+                    "x": 3,
+                    "y": 2,
+                    "width": 16,
+                    "height": 4
+                },
+                "pivot": {
+                    "x": 0.90625,
+                    "y": 0.625
+                },
+                "tip": {
+                    "x": 0.15625,
+                    "y": 0.375
+                },
+                "flipX": false,
+                "flipY": false,
+                "casterGround": [
+                    64.375,
+                    30.625
+                ],
+                "targetGround": [
+                    33.25,
+                    26.875
+                ]
+            },
+            "canvas": {
+                "width": 136,
+                "height": 48,
+                "images": [],
+                "indicators": [],
+                "textLayers": [],
+                "composites": [
+                    {
+                        "id": "ground-span",
+                        "width": 43,
+                        "height": 13,
+                        "destination": {
+                            "x": 26,
+                            "y": 22,
+                            "width": 43,
+                            "height": 13
+                        },
+                        "layer": 90,
+                        "operations": [
+                            {
+                                "type": "texture_strip",
+                                "asset": "ground-span-strip-fixture.png",
+                                "sourceRect": {
+                                    "x": 3,
+                                    "y": 2,
+                                    "width": 16,
+                                    "height": 4
+                                },
+                                "geometry": {
+                                    "origin": [
+                                        0.8892241379310306,
+                                        0.7331896551724206
+                                    ],
+                                    "axis": [
+                                        0.9993243260813301,
+                                        0.03675447322565503
+                                    ],
+                                    "length": 41.655731898503475,
+                                    "height": 10.413932974625869,
+                                    "knots": [
+                                        {
+                                            "u": 0,
+                                            "offset": 0
+                                        },
+                                        {
+                                            "u": 1,
+                                            "offset": 0
+                                        }
+                                    ]
+                                },
+                                "flipX": false,
+                                "flipY": false,
+                                "opacity": 1,
+                                "blend": "source_over",
+                                "masks": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "expectedRgbaHexRows": [
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000141e3cff141e3cff1d1e3cff1d1e3cff1d1e3cff261e3cff261e3cff261e3cff2f1e3cff2f1e3cff381e3cff381e3cff381e3cff411e3cff411e3cff4a1e3cff4a1e3cff4a1e3cff531e3cff531e3cff531e3cff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000141e3cff141e3cff1d1e3cff1d1e3cff1d1e3cff261e3cff261e3cff261e3cff2f1e3cff2f1e3cff381e3cff381e3cff381e3cff411e3cff411e3cff4a1e3cff4a1e3cff4a1e3cff531e3cff531e3cff531e3cff5c1e3cff5c1e3cff651e3cff651e3cff651e3cff6e1e3cff6e1e3cff771e3cff771e3cff771e3cff801e3cff801e3cff801e3cff891e3cff891e3cff921e3cff921e3cff921e3cff9b1e3cff9b1e3cff9b1e3cff",
+                "00000000142d3cff142d3cff1d2d3cff1d2d3cff1d1e3cff261e3cff261e3cff261e3cff2f1e3cff2f1e3cff381e3cff381e3cff381e3cff411e3cff411e3cff4a1e3cff4a1e3cff4a1e3cff531e3cff531e3cff531e3cff5c1e3cff5c1e3cff651e3cff651e3cff651e3cff6e1e3cff6e1e3cff771e3cff771e3cff771e3cff801e3cff801e3cff801e3cff891e3cff891e3cff921e3cff921e3cff921e3cff9b1e3cff9b1e3cff00000000",
+                "00000000142d3cff142d3cff1d2d3cff1d2d3cff1d2d3cff262d3cff262d3cff262d3cff2f2d3cff2f2d3cff382d3cff382d3cff382d3cff412d3cff412d3cff4a2d3cff4a2d3cff4a2d3cff532d3cff532d3cff532d3cff5c2d3cff5c2d3cff652d3cff652d3cff652d3cff6e2d3cff6e2d3cff772d3cff772d3cff772d3cff801e3cff801e3cff801e3cff891e3cff891e3cff921e3cff921e3cff921e3cff9b1e3cff9b1e3cff00000000",
+                "00000000142d3cff142d3cff1d2d3cff1d2d3cff1d2d3cff262d3cff262d3cff262d3cff2f2d3cff2f2d3cff382d3cff382d3cff382d3cff412d3cff412d3cff4a2d3cff4a2d3cff4a2d3cff532d3cff532d3cff532d3cff5c2d3cff5c2d3cff652d3cff652d3cff652d3cff6e2d3cff6e2d3cff772d3cff772d3cff772d3cff802d3cff802d3cff802d3cff892d3cff892d3cff922d3cff922d3cff922d3cff9b2d3cff9b2d3cff00000000",
+                "00000000143c3cff143c3cff1d3c3cff1d3c3cff1d3c3cff263c3cff263c3cff2f3c3cff2f3c3cff2f3c3cff383c3cff383c3cff383c3cff413c3cff413c3cff4a2d3cff4a2d3cff4a2d3cff532d3cff532d3cff532d3cff5c2d3cff5c2d3cff652d3cff652d3cff652d3cff6e2d3cff6e2d3cff772d3cff772d3cff772d3cff802d3cff802d3cff802d3cff892d3cff892d3cff922d3cff922d3cff922d3cff9b2d3cff9b2d3cff00000000",
+                "00000000143c3cff143c3cff1d3c3cff1d3c3cff1d3c3cff263c3cff263c3cff2f3c3cff2f3c3cff2f3c3cff383c3cff383c3cff383c3cff413c3cff413c3cff4a3c3cff4a3c3cff4a3c3cff533c3cff533c3cff5c3c3cff5c3c3cff5c3c3cff653c3cff653c3cff653c3cff6e3c3cff6e3c3cff773c3cff773c3cff773c3cff803c3cff803c3cff803c3cff893c3cff893c3cff923c3cff923c3cff923c3cff9b3c3cff9b3c3cff00000000",
+                "00000000143c3cff143c3cff1d3c3cff1d3c3cff1d3c3cff263c3cff263c3cff2f3c3cff2f3c3cff2f3c3cff383c3cff383c3cff383c3cff413c3cff413c3cff4a3c3cff4a3c3cff4a3c3cff533c3cff533c3cff5c3c3cff5c3c3cff5c3c3cff653c3cff653c3cff653c3cff6e3c3cff6e3c3cff773c3cff773c3cff773c3cff803c3cff803c3cff893c3cff893c3cff893c3cff923c3cff923c3cff923c3cff9b3c3cff9b3c3cff00000000",
+                "00000000144b3cff144b3cff1d4b3cff1d4b3cff1d4b3cff264b3cff264b3cff2f4b3cff2f4b3cff2f4b3cff384b3cff384b3cff384b3cff414b3cff414b3cff4a4b3cff4a4b3cff4a4b3cff534b3cff534b3cff5c4b3cff5c4b3cff5c4b3cff654b3cff654b3cff654b3cff6e3c3cff6e3c3cff773c3cff773c3cff773c3cff803c3cff803c3cff893c3cff893c3cff893c3cff923c3cff923c3cff923c3cff9b3c3cff9b3c3cff00000000",
+                "00000000144b3cff144b3cff1d4b3cff1d4b3cff1d4b3cff264b3cff264b3cff2f4b3cff2f4b3cff2f4b3cff384b3cff384b3cff384b3cff414b3cff414b3cff4a4b3cff4a4b3cff4a4b3cff534b3cff534b3cff5c4b3cff5c4b3cff5c4b3cff654b3cff654b3cff654b3cff6e4b3cff6e4b3cff774b3cff774b3cff774b3cff804b3cff804b3cff894b3cff894b3cff894b3cff924b3cff924b3cff924b3cff9b4b3cff9b4b3cff00000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000002f4b3cff384b3cff384b3cff384b3cff414b3cff414b3cff4a4b3cff4a4b3cff4a4b3cff534b3cff534b3cff5c4b3cff5c4b3cff5c4b3cff654b3cff654b3cff654b3cff6e4b3cff6e4b3cff774b3cff774b3cff774b3cff804b3cff804b3cff894b3cff894b3cff894b3cff924b3cff924b3cff924b3cff9b4b3cff9b4b3cff00000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000924b3cff924b3cff924b3cff9b4b3cff9b4b3cff00000000"
+            ]
+        },
+        {
+            "id": "east-ray-mirrored",
+            "contract": {
+                "crop": {
+                    "x": 3,
+                    "y": 2,
+                    "width": 16,
+                    "height": 4
+                },
+                "pivot": {
+                    "x": 0.90625,
+                    "y": 0.625
+                },
+                "tip": {
+                    "x": 0.15625,
+                    "y": 0.375
+                },
+                "flipX": true,
+                "flipY": false,
+                "casterGround": [
+                    17.625,
+                    31.25
+                ],
+                "targetGround": [
+                    49.5,
+                    25.125
+                ]
+            },
+            "canvas": {
+                "width": 136,
+                "height": 48,
+                "images": [],
+                "indicators": [],
+                "textLayers": [],
+                "composites": [
+                    {
+                        "id": "ground-span",
+                        "width": 45,
+                        "height": 16,
+                        "destination": {
+                            "x": 12,
+                            "y": 20,
+                            "width": 45,
+                            "height": 16
+                        },
+                        "layer": 90,
+                        "operations": [
+                            {
+                                "type": "texture_strip",
+                                "asset": "ground-span-strip-fixture.png",
+                                "sourceRect": {
+                                    "x": 3,
+                                    "y": 2,
+                                    "width": 16,
+                                    "height": 4
+                                },
+                                "geometry": {
+                                    "origin": [
+                                        0.8870689655172406,
+                                        4.9801724137931025
+                                    ],
+                                    "axis": [
+                                        0.9943127830501404,
+                                        -0.10649924630289379
+                                    ],
+                                    "length": 43.12803712443793,
+                                    "height": 10.782009281109483,
+                                    "knots": [
+                                        {
+                                            "u": 0,
+                                            "offset": 0
+                                        },
+                                        {
+                                            "u": 1,
+                                            "offset": 0
+                                        }
+                                    ]
+                                },
+                                "flipX": true,
+                                "flipY": false,
+                                "opacity": 1,
+                                "blend": "source_over",
+                                "masks": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "expectedRgbaHexRows": [
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000141e3cff00000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f1e3cff2f1e3cff2f1e3cff261e3cff261e3cff1d1e3cff1d1e3cff1d1e3cff141e3cff141e3cff141e3cff00000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000531e3cff4a1e3cff4a1e3cff4a1e3cff411e3cff411e3cff381e3cff381e3cff381e3cff2f1e3cff2f1e3cff2f1e3cff261e3cff261e3cff261e3cff1d1e3cff1d1e3cff141e3cff141e3cff141e3cff00000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006e1e3cff6e1e3cff651e3cff651e3cff651e3cff5c1e3cff5c1e3cff531e3cff531e3cff531e3cff4a1e3cff4a1e3cff4a1e3cff411e3cff411e3cff411e3cff381e3cff381e3cff2f1e3cff2f1e3cff2f1e3cff261e3cff261e3cff261e3cff1d1e3cff1d2d3cff142d3cff142d3cff142d3cff00000000",
+                "0000000000000000000000000000000000000000921e3cff891e3cff891e3cff891e3cff801e3cff801e3cff801e3cff771e3cff771e3cff6e1e3cff6e1e3cff6e1e3cff651e3cff651e3cff651e3cff5c1e3cff5c1e3cff5c1e3cff531e3cff531e3cff4a1e3cff4a1e3cff4a1e3cff411e3cff411e3cff411e3cff382d3cff382d3cff2f2d3cff2f2d3cff2f2d3cff262d3cff262d3cff262d3cff1d2d3cff1d2d3cff142d3cff142d3cff142d3cff00000000",
+                "000000009b1e3cff9b1e3cff9b1e3cff921e3cff921e3cff891e3cff891e3cff891e3cff801e3cff801e3cff801e3cff771e3cff771e3cff6e1e3cff6e1e3cff6e1e3cff651e3cff651e3cff651e3cff5c1e3cff5c2d3cff5c2d3cff532d3cff532d3cff4a2d3cff4a2d3cff4a2d3cff412d3cff412d3cff412d3cff382d3cff382d3cff2f2d3cff2f2d3cff2f2d3cff262d3cff262d3cff262d3cff1d2d3cff1d2d3cff1d2d3cff142d3cff142d3cff00000000",
+                "000000009b1e3cff9b1e3cff9b1e3cff921e3cff921e3cff891e3cff891e3cff891e3cff801e3cff801e3cff801e3cff772d3cff772d3cff772d3cff6e2d3cff6e2d3cff652d3cff652d3cff652d3cff5c2d3cff5c2d3cff5c2d3cff532d3cff532d3cff4a2d3cff4a2d3cff4a2d3cff412d3cff412d3cff412d3cff382d3cff382d3cff382d3cff2f2d3cff2f2d3cff262d3cff263c3cff263c3cff1d3c3cff1d3c3cff1d3c3cff143c3cff143c3cff00000000",
+                "000000009b1e3cff9b1e3cff9b2d3cff922d3cff922d3cff922d3cff892d3cff892d3cff802d3cff802d3cff802d3cff772d3cff772d3cff772d3cff6e2d3cff6e2d3cff652d3cff652d3cff652d3cff5c2d3cff5c2d3cff5c2d3cff532d3cff532d3cff532d3cff4a2d3cff4a2d3cff413c3cff413c3cff413c3cff383c3cff383c3cff383c3cff2f3c3cff2f3c3cff263c3cff263c3cff263c3cff1d3c3cff1d3c3cff1d3c3cff143c3cff143c3cff143c3cff",
+                "000000009b2d3cff9b2d3cff9b2d3cff922d3cff922d3cff922d3cff892d3cff892d3cff802d3cff802d3cff802d3cff772d3cff772d3cff772d3cff6e2d3cff6e2d3cff6e2d3cff652d3cff653c3cff5c3c3cff5c3c3cff5c3c3cff533c3cff533c3cff533c3cff4a3c3cff4a3c3cff413c3cff413c3cff413c3cff383c3cff383c3cff383c3cff2f3c3cff2f3c3cff2f3c3cff263c3cff263c3cff1d3c3cff1d3c3cff1d3c3cff143c3cff143c3cff144b3cff",
+                "000000009b2d3cff9b2d3cff9b2d3cff922d3cff922d3cff922d3cff892d3cff892d3cff893c3cff803c3cff803c3cff773c3cff773c3cff773c3cff6e3c3cff6e3c3cff6e3c3cff653c3cff653c3cff5c3c3cff5c3c3cff5c3c3cff533c3cff533c3cff533c3cff4a3c3cff4a3c3cff413c3cff413c3cff413c3cff383c3cff383c3cff383c3cff2f3c3cff2f4b3cff2f4b3cff264b3cff264b3cff1d4b3cff1d4b3cff1d4b3cff144b3cff144b3cff144b3cff",
+                "000000009b3c3cff9b3c3cff9b3c3cff923c3cff923c3cff923c3cff893c3cff893c3cff893c3cff803c3cff803c3cff773c3cff773c3cff773c3cff6e3c3cff6e3c3cff6e3c3cff653c3cff653c3cff5c3c3cff5c3c3cff5c3c3cff533c3cff533c3cff534b3cff4a4b3cff4a4b3cff4a4b3cff414b3cff414b3cff384b3cff384b3cff384b3cff2f4b3cff2f4b3cff2f4b3cff264b3cff264b3cff1d4b3cff1d4b3cff1d4b3cff144b3cff144b3cff144b3cff",
+                "00000000000000009b3c3cff9b3c3cff923c3cff923c3cff923c3cff893c3cff893c3cff893c3cff803c3cff803c3cff773c3cff773c3cff773c3cff6e3c3cff6e4b3cff6e4b3cff654b3cff654b3cff654b3cff5c4b3cff5c4b3cff534b3cff534b3cff534b3cff4a4b3cff4a4b3cff4a4b3cff414b3cff414b3cff384b3cff384b3cff384b3cff2f4b3cff2f4b3cff2f4b3cff264b3cff264b3cff264b3cff1d4b3cff00000000000000000000000000000000",
+                "00000000000000009b3c3cff9b3c3cff923c3cff923c3cff923c3cff894b3cff894b3cff894b3cff804b3cff804b3cff804b3cff774b3cff774b3cff6e4b3cff6e4b3cff6e4b3cff654b3cff654b3cff654b3cff5c4b3cff5c4b3cff534b3cff534b3cff534b3cff4a4b3cff4a4b3cff4a4b3cff414b3cff414b3cff414b3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000009b4b3cff9b4b3cff9b4b3cff924b3cff924b3cff894b3cff894b3cff894b3cff804b3cff804b3cff804b3cff774b3cff774b3cff6e4b3cff6e4b3cff6e4b3cff654b3cff654b3cff654b3cff5c4b3cff5c4b3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000009b4b3cff9b4b3cff9b4b3cff924b3cff924b3cff894b3cff894b3cff894b3cff804b3cff804b3cff804b3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000009b4b3cff9b4b3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            ]
+        },
+        {
+            "id": "east-ray-turned",
+            "contract": {
+                "crop": {
+                    "x": 3,
+                    "y": 2,
+                    "width": 16,
+                    "height": 4
+                },
+                "pivot": {
+                    "x": 0.90625,
+                    "y": 0.625
+                },
+                "tip": {
+                    "x": 0.15625,
+                    "y": 0.375
+                },
+                "flipX": false,
+                "flipY": false,
+                "casterGround": [
+                    17.625,
+                    31.25
+                ],
+                "targetGround": [
+                    49.5,
+                    25.125
+                ]
+            },
+            "canvas": {
+                "width": 136,
+                "height": 48,
+                "images": [],
+                "indicators": [],
+                "textLayers": [],
+                "composites": [
+                    {
+                        "id": "ground-span",
+                        "width": 46,
+                        "height": 23,
+                        "destination": {
+                            "x": 12,
+                            "y": 16,
+                            "width": 46,
+                            "height": 23
+                        },
+                        "layer": 90,
+                        "operations": [
+                            {
+                                "type": "texture_strip",
+                                "asset": "ground-span-strip-fixture.png",
+                                "sourceRect": {
+                                    "x": 3,
+                                    "y": 2,
+                                    "width": 16,
+                                    "height": 4
+                                },
+                                "geometry": {
+                                    "origin": [
+                                        45.07931034482759,
+                                        11.20172413793103
+                                    ],
+                                    "axis": [
+                                        -0.962970662516556,
+                                        0.2696062001001186
+                                    ],
+                                    "length": 43.12803712443793,
+                                    "height": 10.782009281109483,
+                                    "knots": [
+                                        {
+                                            "u": 0,
+                                            "offset": 0
+                                        },
+                                        {
+                                            "u": 1,
+                                            "offset": 0
+                                        }
+                                    ]
+                                },
+                                "flipX": false,
+                                "flipY": false,
+                                "opacity": 1,
+                                "blend": "source_over",
+                                "masks": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "expectedRgbaHexRows": [
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000144b3cff144b3cff00000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000264b3cff1d4b3cff1d4b3cff1d4b3cff144b3cff144b3cff144b3cff000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f4b3cff2f4b3cff264b3cff264b3cff1d4b3cff1d4b3cff1d4b3cff144b3cff144b3cff144b3cff000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000384b3cff384b3cff384b3cff2f4b3cff2f4b3cff2f4b3cff264b3cff264b3cff264b3cff1d4b3cff1d3c3cff143c3cff143c3cff143c3cff000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004a4b3cff4a4b3cff414b3cff414b3cff384b3cff384b3cff384b3cff2f4b3cff2f4b3cff2f4b3cff263c3cff263c3cff263c3cff1d3c3cff1d3c3cff1d3c3cff143c3cff143c3cff000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000534b3cff534b3cff4a4b3cff4a4b3cff4a4b3cff414b3cff414b3cff414b3cff384b3cff384b3cff383c3cff2f3c3cff2f3c3cff263c3cff263c3cff263c3cff1d3c3cff1d3c3cff1d3c3cff143c3cff142d3cff142d3cff0000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000654b3cff5c4b3cff5c4b3cff5c4b3cff534b3cff534b3cff4a4b3cff4a4b3cff4a4b3cff414b3cff413c3cff413c3cff383c3cff383c3cff383c3cff2f3c3cff2f3c3cff2f3c3cff263c3cff263c3cff1d2d3cff1d2d3cff1d2d3cff142d3cff142d3cff142d3cff0000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006e4b3cff654b3cff654b3cff654b3cff5c4b3cff5c4b3cff5c4b3cff534b3cff534b3cff534b3cff4a3c3cff4a3c3cff4a3c3cff413c3cff413c3cff383c3cff383c3cff383c3cff2f3c3cff2f3c3cff2f2d3cff262d3cff262d3cff262d3cff1d2d3cff1d2d3cff1d2d3cff142d3cff142d3cff0000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000774b3cff774b3cff774b3cff6e4b3cff6e4b3cff6e4b3cff654b3cff654b3cff5c4b3cff5c4b3cff5c3c3cff533c3cff533c3cff533c3cff4a3c3cff4a3c3cff4a3c3cff413c3cff413c3cff413c3cff382d3cff382d3cff2f2d3cff2f2d3cff2f2d3cff262d3cff262d3cff262d3cff1d2d3cff1d2d3cff1d1e3cff141e3cff141e3cff141e3cff00000000",
+                "0000000000000000000000000000000000000000000000000000000000000000804b3cff804b3cff804b3cff774b3cff774b3cff774b3cff6e4b3cff6e4b3cff6e4b3cff654b3cff653c3cff653c3cff5c3c3cff5c3c3cff533c3cff533c3cff533c3cff4a3c3cff4a3c3cff4a3c3cff412d3cff412d3cff412d3cff382d3cff382d3cff382d3cff2f2d3cff2f2d3cff262d3cff262d3cff261e3cff1d1e3cff1d1e3cff1d1e3cff141e3cff141e3cff141e3cff00000000",
+                "00000000000000000000000000000000924b3cff924b3cff894b3cff894b3cff894b3cff804b3cff804b3cff804b3cff774b3cff774b3cff6e3c3cff6e3c3cff6e3c3cff653c3cff653c3cff653c3cff5c3c3cff5c3c3cff5c3c3cff533c3cff532d3cff532d3cff4a2d3cff4a2d3cff412d3cff412d3cff412d3cff382d3cff382d3cff382d3cff2f1e3cff2f1e3cff2f1e3cff261e3cff261e3cff261e3cff1d1e3cff1d1e3cff141e3cff141e3cff0000000000000000",
+                "000000009b4b3cff9b4b3cff924b3cff924b3cff924b3cff894b3cff894b3cff894b3cff804b3cff803c3cff803c3cff773c3cff773c3cff773c3cff6e3c3cff6e3c3cff653c3cff653c3cff653c3cff5c2d3cff5c2d3cff5c2d3cff532d3cff532d3cff532d3cff4a2d3cff4a2d3cff4a2d3cff412d3cff411e3cff381e3cff381e3cff381e3cff2f1e3cff2f1e3cff2f1e3cff261e3cff261e3cff261e3cff000000000000000000000000000000000000000000000000",
+                "000000009b4b3cff9b4b3cff9b4b3cff924b3cff924b3cff924b3cff893c3cff893c3cff803c3cff803c3cff803c3cff773c3cff773c3cff773c3cff6e3c3cff6e3c3cff6e2d3cff652d3cff652d3cff652d3cff5c2d3cff5c2d3cff532d3cff532d3cff532d3cff4a2d3cff4a1e3cff4a1e3cff411e3cff411e3cff411e3cff381e3cff381e3cff381e3cff2f1e3cff2f1e3cff000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000009b4b3cff9b4b3cff9b3c3cff923c3cff923c3cff923c3cff893c3cff893c3cff893c3cff803c3cff803c3cff773c3cff772d3cff772d3cff6e2d3cff6e2d3cff6e2d3cff652d3cff652d3cff652d3cff5c2d3cff5c2d3cff5c1e3cff531e3cff531e3cff4a1e3cff4a1e3cff4a1e3cff411e3cff411e3cff411e3cff381e3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000009b3c3cff9b3c3cff9b3c3cff923c3cff923c3cff923c3cff893c3cff893c3cff893c3cff802d3cff802d3cff802d3cff772d3cff772d3cff6e2d3cff6e2d3cff6e2d3cff652d3cff652d3cff651e3cff5c1e3cff5c1e3cff5c1e3cff531e3cff531e3cff531e3cff4a1e3cff4a1e3cff411e3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000009b3c3cff9b3c3cff9b3c3cff923c3cff922d3cff892d3cff892d3cff892d3cff802d3cff802d3cff802d3cff772d3cff772d3cff772d3cff6e1e3cff6e1e3cff6e1e3cff651e3cff651e3cff5c1e3cff5c1e3cff5c1e3cff531e3cff531e3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000009b3c3cff9b2d3cff9b2d3cff922d3cff922d3cff922d3cff892d3cff892d3cff802d3cff802d3cff802d3cff771e3cff771e3cff771e3cff6e1e3cff6e1e3cff6e1e3cff651e3cff651e3cff651e3cff5c1e3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000009b2d3cff9b2d3cff9b2d3cff922d3cff922d3cff922d3cff892d3cff891e3cff891e3cff801e3cff801e3cff801e3cff771e3cff771e3cff6e1e3cff6e1e3cff6e1e3cff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000009b2d3cff9b2d3cff921e3cff921e3cff921e3cff891e3cff891e3cff891e3cff801e3cff801e3cff801e3cff771e3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000009b1e3cff9b1e3cff9b1e3cff921e3cff921e3cff891e3cff891e3cff891e3cff801e3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000009b1e3cff9b1e3cff9b1e3cff921e3cff921e3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000009b1e3cff9b1e3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            ]
+        },
+        {
+            "id": "clipped-west-ray",
+            "contract": {
+                "crop": {
+                    "x": 3,
+                    "y": 2,
+                    "width": 16,
+                    "height": 4
+                },
+                "pivot": {
+                    "x": 0.90625,
+                    "y": 0.625
+                },
+                "tip": {
+                    "x": 0.15625,
+                    "y": 0.375
+                },
+                "flipX": false,
+                "flipY": false,
+                "casterGround": [
+                    150.5,
+                    20.25
+                ],
+                "targetGround": [
+                    104.625,
+                    14.5
+                ]
+            },
+            "canvas": {
+                "width": 136,
+                "height": 48,
+                "images": [],
+                "indicators": [],
+                "textLayers": [],
+                "composites": [
+                    {
+                        "id": "ground-span",
+                        "width": 42,
+                        "height": 19,
+                        "destination": {
+                            "x": 94,
+                            "y": 8,
+                            "width": 42,
+                            "height": 19
+                        },
+                        "layer": 90,
+                        "operations": [
+                            {
+                                "type": "texture_strip",
+                                "asset": "ground-span-strip-fixture.png",
+                                "sourceRect": {
+                                    "x": 3,
+                                    "y": 2,
+                                    "width": 16,
+                                    "height": 4
+                                },
+                                "geometry": {
+                                    "origin": [
+                                        1.2737068965517153,
+                                        0.3469827586207028
+                                    ],
+                                    "axis": [
+                                        0.9991369599783194,
+                                        0.0415371545159524
+                                    ],
+                                    "length": 61.43232890329617,
+                                    "height": 15.358082225824042,
+                                    "knots": [
+                                        {
+                                            "u": 0,
+                                            "offset": 0
+                                        },
+                                        {
+                                            "u": 1,
+                                            "offset": 0
+                                        }
+                                    ]
+                                },
+                                "flipX": false,
+                                "flipY": false,
+                                "opacity": 1,
+                                "blend": "source_over",
+                                "masks": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "expectedRgbaHexRows": [
+                "00000000141e3cff141e3cff141e3cff141e3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000141e3cff141e3cff141e3cff141e3cff1d1e3cff1d1e3cff1d1e3cff1d1e3cff261e3cff261e3cff261e3cff261e3cff2f1e3cff2f1e3cff2f1e3cff2f1e3cff381e3cff381e3cff381e3cff411e3cff411e3cff411e3cff411e3cff4a1e3cff4a1e3cff4a1e3cff4a1e3cff531e3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000141e3cff141e3cff141e3cff141e3cff1d1e3cff1d1e3cff1d1e3cff1d1e3cff261e3cff261e3cff261e3cff261e3cff2f1e3cff2f1e3cff2f1e3cff2f1e3cff381e3cff381e3cff381e3cff411e3cff411e3cff411e3cff411e3cff4a1e3cff4a1e3cff4a1e3cff4a1e3cff531e3cff531e3cff531e3cff531e3cff5c1e3cff5c1e3cff5c1e3cff5c1e3cff651e3cff651e3cff651e3cff651e3cff6e1e3cff6e1e3cff",
+                "00000000141e3cff141e3cff141e3cff141e3cff1d1e3cff1d1e3cff1d1e3cff1d1e3cff261e3cff261e3cff261e3cff261e3cff2f1e3cff2f1e3cff2f1e3cff2f1e3cff381e3cff381e3cff381e3cff411e3cff411e3cff411e3cff411e3cff4a1e3cff4a1e3cff4a1e3cff4a1e3cff531e3cff531e3cff531e3cff531e3cff5c1e3cff5c1e3cff5c1e3cff5c1e3cff651e3cff651e3cff651e3cff651e3cff6e1e3cff6e1e3cff",
+                "00000000142d3cff142d3cff142d3cff142d3cff1d2d3cff1d2d3cff1d2d3cff1d2d3cff261e3cff261e3cff261e3cff261e3cff2f1e3cff2f1e3cff2f1e3cff381e3cff381e3cff381e3cff381e3cff411e3cff411e3cff411e3cff411e3cff4a1e3cff4a1e3cff4a1e3cff4a1e3cff531e3cff531e3cff531e3cff531e3cff5c1e3cff5c1e3cff5c1e3cff5c1e3cff651e3cff651e3cff651e3cff651e3cff6e1e3cff6e1e3cff",
+                "00000000142d3cff142d3cff142d3cff142d3cff1d2d3cff1d2d3cff1d2d3cff1d2d3cff262d3cff262d3cff262d3cff262d3cff2f2d3cff2f2d3cff2f2d3cff382d3cff382d3cff382d3cff382d3cff412d3cff412d3cff412d3cff412d3cff4a2d3cff4a2d3cff4a2d3cff4a2d3cff532d3cff532d3cff532d3cff532d3cff5c2d3cff5c1e3cff5c1e3cff5c1e3cff651e3cff651e3cff651e3cff6e1e3cff6e1e3cff6e1e3cff",
+                "00000000142d3cff142d3cff142d3cff142d3cff1d2d3cff1d2d3cff1d2d3cff1d2d3cff262d3cff262d3cff262d3cff262d3cff2f2d3cff2f2d3cff2f2d3cff382d3cff382d3cff382d3cff382d3cff412d3cff412d3cff412d3cff412d3cff4a2d3cff4a2d3cff4a2d3cff4a2d3cff532d3cff532d3cff532d3cff532d3cff5c2d3cff5c2d3cff5c2d3cff5c2d3cff652d3cff652d3cff652d3cff6e2d3cff6e2d3cff6e2d3cff",
+                "00000000142d3cff142d3cff142d3cff142d3cff1d2d3cff1d2d3cff1d2d3cff1d2d3cff262d3cff262d3cff262d3cff262d3cff2f2d3cff2f2d3cff2f2d3cff382d3cff382d3cff382d3cff382d3cff412d3cff412d3cff412d3cff412d3cff4a2d3cff4a2d3cff4a2d3cff4a2d3cff532d3cff532d3cff532d3cff532d3cff5c2d3cff5c2d3cff5c2d3cff5c2d3cff652d3cff652d3cff652d3cff6e2d3cff6e2d3cff6e2d3cff",
+                "00000000143c3cff143c3cff143c3cff143c3cff1d3c3cff1d3c3cff1d3c3cff1d3c3cff263c3cff263c3cff263c3cff2f3c3cff2f2d3cff2f2d3cff2f2d3cff382d3cff382d3cff382d3cff382d3cff412d3cff412d3cff412d3cff412d3cff4a2d3cff4a2d3cff4a2d3cff4a2d3cff532d3cff532d3cff532d3cff532d3cff5c2d3cff5c2d3cff5c2d3cff5c2d3cff652d3cff652d3cff652d3cff6e2d3cff6e2d3cff6e2d3cff",
+                "00000000143c3cff143c3cff143c3cff143c3cff1d3c3cff1d3c3cff1d3c3cff1d3c3cff263c3cff263c3cff263c3cff2f3c3cff2f3c3cff2f3c3cff2f3c3cff383c3cff383c3cff383c3cff383c3cff413c3cff413c3cff413c3cff413c3cff4a3c3cff4a3c3cff4a3c3cff4a3c3cff533c3cff533c3cff533c3cff533c3cff5c3c3cff5c3c3cff5c3c3cff653c3cff653c3cff652d3cff652d3cff6e2d3cff6e2d3cff6e2d3cff",
+                "00000000143c3cff143c3cff143c3cff143c3cff1d3c3cff1d3c3cff1d3c3cff1d3c3cff263c3cff263c3cff263c3cff2f3c3cff2f3c3cff2f3c3cff2f3c3cff383c3cff383c3cff383c3cff383c3cff413c3cff413c3cff413c3cff413c3cff4a3c3cff4a3c3cff4a3c3cff4a3c3cff533c3cff533c3cff533c3cff533c3cff5c3c3cff5c3c3cff5c3c3cff653c3cff653c3cff653c3cff653c3cff6e3c3cff6e3c3cff6e3c3cff",
+                "00000000143c3cff143c3cff143c3cff143c3cff1d3c3cff1d3c3cff1d3c3cff263c3cff263c3cff263c3cff263c3cff2f3c3cff2f3c3cff2f3c3cff2f3c3cff383c3cff383c3cff383c3cff383c3cff413c3cff413c3cff413c3cff413c3cff4a3c3cff4a3c3cff4a3c3cff4a3c3cff533c3cff533c3cff533c3cff533c3cff5c3c3cff5c3c3cff5c3c3cff653c3cff653c3cff653c3cff653c3cff6e3c3cff6e3c3cff6e3c3cff",
+                "00000000144b3cff144b3cff144b3cff144b3cff1d4b3cff1d4b3cff1d4b3cff264b3cff264b3cff264b3cff264b3cff2f4b3cff2f4b3cff2f4b3cff2f4b3cff383c3cff383c3cff383c3cff383c3cff413c3cff413c3cff413c3cff413c3cff4a3c3cff4a3c3cff4a3c3cff4a3c3cff533c3cff533c3cff533c3cff533c3cff5c3c3cff5c3c3cff5c3c3cff653c3cff653c3cff653c3cff653c3cff6e3c3cff6e3c3cff6e3c3cff",
+                "00000000144b3cff144b3cff144b3cff144b3cff1d4b3cff1d4b3cff1d4b3cff264b3cff264b3cff264b3cff264b3cff2f4b3cff2f4b3cff2f4b3cff2f4b3cff384b3cff384b3cff384b3cff384b3cff414b3cff414b3cff414b3cff414b3cff4a4b3cff4a4b3cff4a4b3cff4a4b3cff534b3cff534b3cff534b3cff5c4b3cff5c4b3cff5c4b3cff5c4b3cff654b3cff654b3cff654b3cff654b3cff6e4b3cff6e3c3cff6e3c3cff",
+                "00000000144b3cff144b3cff144b3cff144b3cff1d4b3cff1d4b3cff1d4b3cff264b3cff264b3cff264b3cff264b3cff2f4b3cff2f4b3cff2f4b3cff2f4b3cff384b3cff384b3cff384b3cff384b3cff414b3cff414b3cff414b3cff414b3cff4a4b3cff4a4b3cff4a4b3cff4a4b3cff534b3cff534b3cff534b3cff5c4b3cff5c4b3cff5c4b3cff5c4b3cff654b3cff654b3cff654b3cff654b3cff6e4b3cff6e4b3cff6e4b3cff",
+                "00000000144b3cff144b3cff144b3cff1d4b3cff1d4b3cff1d4b3cff1d4b3cff264b3cff264b3cff264b3cff264b3cff2f4b3cff2f4b3cff2f4b3cff2f4b3cff384b3cff384b3cff384b3cff384b3cff414b3cff414b3cff414b3cff414b3cff4a4b3cff4a4b3cff4a4b3cff4a4b3cff534b3cff534b3cff534b3cff5c4b3cff5c4b3cff5c4b3cff5c4b3cff654b3cff654b3cff654b3cff654b3cff6e4b3cff6e4b3cff6e4b3cff",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000414b3cff414b3cff414b3cff414b3cff4a4b3cff4a4b3cff4a4b3cff4a4b3cff534b3cff534b3cff534b3cff5c4b3cff5c4b3cff5c4b3cff5c4b3cff654b3cff654b3cff654b3cff654b3cff6e4b3cff6e4b3cff6e4b3cff",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            ]
+        },
+        {
+            "id": "steep-tall-crop",
+            "contract": {
+                "crop": {
+                    "x": 24,
+                    "y": 3,
+                    "width": 4,
+                    "height": 10
+                },
+                "pivot": {
+                    "x": 0.375,
+                    "y": 0.85
+                },
+                "tip": {
+                    "x": 0.625,
+                    "y": 0.15
+                },
+                "flipX": false,
+                "flipY": true,
+                "casterGround": [
+                    60.5,
+                    44.75
+                ],
+                "targetGround": [
+                    38.875,
+                    20.25
+                ]
+            },
+            "canvas": {
+                "width": 136,
+                "height": 48,
+                "images": [],
+                "indicators": [],
+                "textLayers": [],
+                "composites": [
+                    {
+                        "id": "ground-span",
+                        "width": 42,
+                        "height": 40,
+                        "destination": {
+                            "x": 29,
+                            "y": 8,
+                            "width": 42,
+                            "height": 40
+                        },
+                        "layer": 90,
+                        "operations": [
+                            {
+                                "type": "texture_strip",
+                                "asset": "ground-span-strip-fixture.png",
+                                "sourceRect": {
+                                    "x": 24,
+                                    "y": 3,
+                                    "width": 4,
+                                    "height": 10
+                                },
+                                "geometry": {
+                                    "origin": [
+                                        41.10000000000001,
+                                        38.737500000000004
+                                    ],
+                                    "axis": [
+                                        -0.8357764076152349,
+                                        0.549069937688973
+                                    ],
+                                    "length": 18.485805365198456,
+                                    "height": 46.21451341299614,
+                                    "knots": [
+                                        {
+                                            "u": 0,
+                                            "offset": 0
+                                        },
+                                        {
+                                            "u": 1,
+                                            "offset": 0
+                                        }
+                                    ]
+                                },
+                                "flipX": false,
+                                "flipY": true,
+                                "opacity": 1,
+                                "blend": "source_over",
+                                "masks": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "expectedRgbaHexRows": [
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000141ea0ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000141ea0ff141ea0ff141ea0ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000141ea0ff141ea0ff141ea0ff141ea0ff141ea0ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000001d1ea0ff141ea0ff141ea0ff141ea0ff141ea0ff141ea0ff141ea0ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000001d1ea0ff1d1ea0ff1d1ea0ff1d1ea0ff141ea0ff141ea0ff141ea0ff141ea0ff142da0ff142da0ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000001d1ea0ff1d1ea0ff1d1ea0ff1d1ea0ff1d1ea0ff1d1ea0ff141ea0ff141ea0ff142da0ff142da0ff142da0ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000261ea0ff261ea0ff261ea0ff1d1ea0ff1d1ea0ff1d1ea0ff1d1ea0ff1d1ea0ff142da0ff142da0ff142da0ff142da0ff142da0ff142da0ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000261ea0ff261ea0ff261ea0ff261ea0ff261ea0ff261ea0ff1d1ea0ff1d1ea0ff1d1ea0ff1d2da0ff1d2da0ff142da0ff142da0ff142da0ff142da0ff142da0ff142da0ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000002f1ea0ff2f1ea0ff261ea0ff261ea0ff261ea0ff261ea0ff261ea0ff1d1ea0ff1d2da0ff1d2da0ff1d2da0ff1d2da0ff1d2da0ff142da0ff142da0ff142da0ff142da0ff143ca0ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000002f1ea0ff2f1ea0ff2f1ea0ff2f1ea0ff261ea0ff261ea0ff261ea0ff261ea0ff261ea0ff262da0ff1d2da0ff1d2da0ff1d2da0ff1d2da0ff1d2da0ff142da0ff142da0ff143ca0ff143ca0ff143ca0ff143ca0ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "2f1ea0ff2f1ea0ff2f1ea0ff2f1ea0ff2f1ea0ff2f1ea0ff261ea0ff261ea0ff262da0ff262da0ff262da0ff1d2da0ff1d2da0ff1d2da0ff1d2da0ff1d2da0ff1d2da0ff143ca0ff143ca0ff143ca0ff143ca0ff143ca0ff143ca0ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000002f1ea0ff2f1ea0ff2f1ea0ff2f1ea0ff2f1ea0ff2f1ea0ff262da0ff262da0ff262da0ff262da0ff262da0ff1d2da0ff1d2da0ff1d2da0ff1d3ca0ff1d3ca0ff1d3ca0ff143ca0ff143ca0ff143ca0ff143ca0ff143ca0ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000002f1ea0ff2f1ea0ff2f1ea0ff2f2da0ff2f2da0ff262da0ff262da0ff262da0ff262da0ff262da0ff262da0ff1d2da0ff1d3ca0ff1d3ca0ff1d3ca0ff1d3ca0ff143ca0ff143ca0ff143ca0ff143ca0ff144ba0ff144ba0ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000002f1ea0ff2f1ea0ff2f2da0ff2f2da0ff2f2da0ff2f2da0ff262da0ff262da0ff262da0ff262da0ff263ca0ff1d3ca0ff1d3ca0ff1d3ca0ff1d3ca0ff1d3ca0ff1d3ca0ff143ca0ff143ca0ff144ba0ff144ba0ff144ba0ff144ba0ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000002f2da0ff2f2da0ff2f2da0ff2f2da0ff2f2da0ff2f2da0ff262da0ff262da0ff263ca0ff263ca0ff263ca0ff1d3ca0ff1d3ca0ff1d3ca0ff1d3ca0ff1d3ca0ff1d4ba0ff144ba0ff144ba0ff144ba0ff144ba0ff144ba0ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000002f2da0ff2f2da0ff2f2da0ff2f2da0ff2f2da0ff263ca0ff263ca0ff263ca0ff263ca0ff263ca0ff263ca0ff1d3ca0ff1d3ca0ff1d3ca0ff1d4ba0ff1d4ba0ff144ba0ff144ba0ff144ba0ff144ba0ff144ba0ff144ba0ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000002f2da0ff2f2da0ff2f2da0ff2f2da0ff2f3ca0ff2f3ca0ff263ca0ff263ca0ff263ca0ff263ca0ff263ca0ff1d3ca0ff1d4ba0ff1d4ba0ff1d4ba0ff1d4ba0ff1d4ba0ff144ba0ff144ba0ff144ba0ff145aa0ff145aa0ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000002f2da0ff2f3ca0ff2f3ca0ff2f3ca0ff2f3ca0ff2f3ca0ff263ca0ff263ca0ff263ca0ff263ca0ff264ba0ff1d4ba0ff1d4ba0ff1d4ba0ff1d4ba0ff1d4ba0ff1d4ba0ff144ba0ff145aa0ff145aa0ff145aa0ff145aa0ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000002f3ca0ff2f3ca0ff2f3ca0ff2f3ca0ff2f3ca0ff263ca0ff263ca0ff264ba0ff264ba0ff264ba0ff264ba0ff1d4ba0ff1d4ba0ff1d4ba0ff1d4ba0ff1d5aa0ff145aa0ff145aa0ff145aa0ff145aa0ff145aa0ff145aa0ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000002f3ca0ff2f3ca0ff2f3ca0ff2f3ca0ff2f3ca0ff2f4ba0ff264ba0ff264ba0ff264ba0ff264ba0ff264ba0ff1d4ba0ff1d4ba0ff1d4ba0ff1d5aa0ff1d5aa0ff1d5aa0ff145aa0ff145aa0ff145aa0ff145aa0ff145aa0ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000002f3ca0ff2f3ca0ff2f3ca0ff2f4ba0ff2f4ba0ff2f4ba0ff264ba0ff264ba0ff264ba0ff264ba0ff264ba0ff1d5aa0ff1d5aa0ff1d5aa0ff1d5aa0ff1d5aa0ff1d5aa0ff145aa0ff145aa0ff145aa0ff1469a0ff1469a0ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000002f4ba0ff2f4ba0ff2f4ba0ff2f4ba0ff2f4ba0ff264ba0ff264ba0ff264ba0ff264ba0ff265aa0ff265aa0ff1d5aa0ff1d5aa0ff1d5aa0ff1d5aa0ff1d5aa0ff145aa0ff1469a0ff1469a0ff1469a0ff1469a0ff1469a0ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000002f4ba0ff2f4ba0ff2f4ba0ff2f4ba0ff2f4ba0ff2f4ba0ff264ba0ff265aa0ff265aa0ff265aa0ff265aa0ff1d5aa0ff1d5aa0ff1d5aa0ff1d5aa0ff1d5aa0ff1d69a0ff1469a0ff1469a0ff1469a0ff1469a0ff1469a0ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000002f4ba0ff2f4ba0ff2f4ba0ff2f4ba0ff2f4ba0ff2f5aa0ff265aa0ff265aa0ff265aa0ff265aa0ff265aa0ff1d5aa0ff1d5aa0ff1d69a0ff1d69a0ff1d69a0ff1d69a0ff1469a0ff1469a0ff1469a0ff1469a0ff1469a0ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000002f4ba0ff2f4ba0ff2f5aa0ff2f5aa0ff2f5aa0ff265aa0ff265aa0ff265aa0ff265aa0ff265aa0ff265aa0ff1d69a0ff1d69a0ff1d69a0ff1d69a0ff1d69a0ff1469a0ff1469a0ff1469a0ff1478a0ff1478a0ff1478a0ff00000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000002f4ba0ff2f5aa0ff2f5aa0ff2f5aa0ff2f5aa0ff2f5aa0ff265aa0ff265aa0ff265aa0ff2669a0ff2669a0ff1d69a0ff1d69a0ff1d69a0ff1d69a0ff1d69a0ff1d69a0ff1469a0ff1478a0ff1478a0ff1478a0ff1478a0ff00000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f5aa0ff2f5aa0ff2f5aa0ff2f5aa0ff2f5aa0ff265aa0ff265aa0ff2669a0ff2669a0ff2669a0ff2669a0ff1d69a0ff1d69a0ff1d69a0ff1d69a0ff1d78a0ff1d78a0ff1478a0ff1478a0ff1478a0ff1478a0ff1478a0ff000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f5aa0ff2f5aa0ff2f5aa0ff2f5aa0ff2f69a0ff2669a0ff2669a0ff2669a0ff2669a0ff2669a0ff2669a0ff1d69a0ff1d69a0ff1d78a0ff1d78a0ff1d78a0ff1478a0ff1478a0ff1478a0ff1478a0ff1478a0ff1487a0ff0000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f5aa0ff2f5aa0ff2f5aa0ff2f69a0ff2f69a0ff2f69a0ff2669a0ff2669a0ff2669a0ff2669a0ff2669a0ff1d78a0ff1d78a0ff1d78a0ff1d78a0ff1d78a0ff1d78a0ff1478a0ff1478a0ff1487a0ff1487a0ff1487a0ff0000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f69a0ff2f69a0ff2f69a0ff2f69a0ff2f69a0ff2669a0ff2669a0ff2669a0ff2678a0ff2678a0ff2678a0ff1d78a0ff1d78a0ff1d78a0ff1d78a0ff1d78a0ff1d78a0ff1487a0ff1487a0ff1487a0ff1487a0ff1487a0ff00000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f69a0ff2f69a0ff2f69a0ff2f69a0ff2f69a0ff2669a0ff2678a0ff2678a0ff2678a0ff2678a0ff2678a0ff1d78a0ff1d78a0ff1d78a0ff1d87a0ff1d87a0ff1487a0ff1487a0ff1487a0ff1487a0ff1487a0ff1487a0ff000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f69a0ff2f69a0ff2f69a0ff2f69a0ff2f78a0ff2f78a0ff2678a0ff2678a0ff2678a0ff2678a0ff2678a0ff1d78a0ff1d78a0ff1d87a0ff1d87a0ff1d87a0ff1d87a0ff1487a0ff1487a0ff1487a0ff1487a0ff1496a0ff000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f69a0ff2f69a0ff2f78a0ff2f78a0ff2f78a0ff2678a0ff2678a0ff2678a0ff2678a0ff2678a0ff2687a0ff1d87a0ff1d87a0ff1d87a0ff1d87a0ff1d87a0ff1487a0ff1487a0ff1487a0ff1496a0ff1496a0ff1496a0ff0000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f78a0ff2f78a0ff2f78a0ff2f78a0ff2f78a0ff2678a0ff2678a0ff2678a0ff2687a0ff2687a0ff2687a0ff1d87a0ff1d87a0ff1d87a0ff1d87a0ff1d87a0ff1496a0ff1496a0ff1496a0ff1496a0ff1496a0ff1496a0ff00000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f78a0ff2f78a0ff2f78a0ff2f78a0ff2f78a0ff2f78a0ff2687a0ff2687a0ff2687a0ff2687a0ff2687a0ff1d87a0ff1d87a0ff1d87a0ff1d87a0ff1d96a0ff1d96a0ff1496a0ff1496a0ff1496a0ff1496a0ff1496a0ff00000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f78a0ff2f78a0ff2f78a0ff2f78a0ff2f87a0ff2687a0ff2687a0ff2687a0ff2687a0ff2687a0ff2687a0ff1d87a0ff1d96a0ff1d96a0ff1d96a0ff1d96a0ff1496a0ff1496a0ff1496a0ff1496a0ff1496a0ff14a5a0ff000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f78a0ff2f87a0ff2f87a0ff2f87a0ff2f87a0ff2687a0ff2687a0ff2687a0ff2687a0ff2687a0ff2696a0ff1d96a0ff1d96a0ff1d96a0ff1d96a0ff1d96a0ff1496a0ff1496a0ff14a5a0ff14a5a0ff14a5a0ff14a5a0ff0000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f87a0ff2f87a0ff2f87a0ff2f87a0ff2f87a0ff2f87a0ff2687a0ff2687a0ff2696a0ff2696a0ff2696a0ff1d96a0ff1d96a0ff1d96a0ff1d96a0ff1d96a0ff1d96a0ff14a5a0ff14a5a0ff14a5a0ff14a5a0ff14a5a0ff0000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f87a0ff2f87a0ff2f87a0ff2f87a0ff2f87a0ff2687a0ff2696a0ff2696a0ff2696a0ff2696a0ff2696a0ff1d96a0ff1d96a0ff1d96a0ff1da5a0ff1da5a0ff14a5a0ff14a5a0ff14a5a0ff14a5a0ff14a5a0ff14a5a0ff00000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f87a0ff2f87a0ff2f87a0ff2f87a0ff2f96a0ff2f96a0ff2696a0ff2696a0ff2696a0ff2696a0ff2696a0ff2696a0ff1d96a0ff1da5a0ff1da5a0ff1da5a0ff1da5a0ff14a5a0ff14a5a0ff14a5a0ff14a5a0ff0000000000000000"
+            ]
+        },
+        {
+            "id": "group-both-mirrors",
+            "contract": {
+                "crop": {
+                    "x": 3,
+                    "y": 2,
+                    "width": 16,
+                    "height": 4
+                },
+                "pivot": {
+                    "x": 0.9,
+                    "y": 0.6
+                },
+                "tip": {
+                    "x": 0.2,
+                    "y": 0.3
+                },
+                "flipX": true,
+                "flipY": true,
+                "casterGround": [
+                    90.5,
+                    20.125
+                ],
+                "targetGround": [
+                    48.75,
+                    36.5
+                ]
+            },
+            "canvas": {
+                "width": 136,
+                "height": 48,
+                "images": [],
+                "indicators": [],
+                "textLayers": [],
+                "composites": [
+                    {
+                        "id": "ground-span",
+                        "width": 65,
+                        "height": 40,
+                        "destination": {
+                            "x": 35,
+                            "y": 8,
+                            "width": 65,
+                            "height": 40
+                        },
+                        "layer": 90,
+                        "operations": [
+                            {
+                                "type": "texture_strip",
+                                "asset": "ground-span-strip-fixture.png",
+                                "sourceRect": {
+                                    "x": 3,
+                                    "y": 2,
+                                    "width": 16,
+                                    "height": 4
+                                },
+                                "geometry": {
+                                    "origin": [
+                                        64.09331651954602,
+                                        14.829287515762925
+                                    ],
+                                    "axis": [
+                                        -0.8867577410172048,
+                                        0.46223447377501364
+                                    ],
+                                    "length": 63.7017502793345,
+                                    "height": 15.925437569833624,
+                                    "knots": [
+                                        {
+                                            "u": 0,
+                                            "offset": 0
+                                        },
+                                        {
+                                            "u": 1,
+                                            "offset": 0
+                                        }
+                                    ]
+                                },
+                                "flipX": true,
+                                "flipY": true,
+                                "opacity": 1,
+                                "blend": "source_over",
+                                "masks": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "expectedRgbaHexRows": [
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009b1e3cff9b1e3cff0000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009b1e3cff9b1e3cff9b1e3cff9b1e3cff9b1e3cff00000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000921e3cff921e3cff921e3cff9b1e3cff9b1e3cff9b1e3cff9b1e3cff00000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000891e3cff921e3cff921e3cff921e3cff921e3cff9b1e3cff9b1e3cff9b1e3cff9b1e3cff9b2d3cff000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000891e3cff891e3cff921e3cff921e3cff921e3cff921e3cff921e3cff9b1e3cff9b2d3cff9b2d3cff9b2d3cff000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000891e3cff891e3cff891e3cff891e3cff891e3cff921e3cff921e3cff921e3cff922d3cff9b2d3cff9b2d3cff9b2d3cff9b2d3cff9b2d3cff0000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000801e3cff801e3cff801e3cff891e3cff891e3cff891e3cff891e3cff921e3cff922d3cff922d3cff922d3cff922d3cff9b2d3cff9b2d3cff9b2d3cff9b2d3cff0000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000771e3cff801e3cff801e3cff801e3cff801e3cff891e3cff891e3cff891e3cff892d3cff892d3cff922d3cff922d3cff922d3cff922d3cff9b2d3cff9b2d3cff9b2d3cff9b3c3cff9b3c3cff00000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000771e3cff771e3cff771e3cff801e3cff801e3cff801e3cff801e3cff801e3cff892d3cff892d3cff892d3cff892d3cff922d3cff922d3cff922d3cff922d3cff922d3cff9b3c3cff9b3c3cff9b3c3cff9b3c3cff00000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006e1e3cff771e3cff771e3cff771e3cff771e3cff771e3cff801e3cff801e3cff801e3cff802d3cff892d3cff892d3cff892d3cff892d3cff892d3cff922d3cff922d3cff923c3cff923c3cff9b3c3cff9b3c3cff9b3c3cff9b3c3cff9b3c3cff000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006e1e3cff6e1e3cff6e1e3cff6e1e3cff771e3cff771e3cff771e3cff771e3cff801e3cff802d3cff802d3cff802d3cff802d3cff892d3cff892d3cff892d3cff892d3cff923c3cff923c3cff923c3cff923c3cff923c3cff9b3c3cff9b3c3cff9b3c3cff9b3c3cff000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000651e3cff651e3cff6e1e3cff6e1e3cff6e1e3cff6e1e3cff771e3cff771e3cff771e3cff772d3cff772d3cff802d3cff802d3cff802d3cff802d3cff892d3cff892d3cff893c3cff893c3cff893c3cff923c3cff923c3cff923c3cff923c3cff9b3c3cff9b3c3cff9b4b3cff9b4b3cff9b4b3cff0000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000651e3cff651e3cff651e3cff651e3cff6e1e3cff6e1e3cff6e1e3cff6e1e3cff6e1e3cff772d3cff772d3cff772d3cff772d3cff802d3cff802d3cff802d3cff802d3cff803c3cff893c3cff893c3cff893c3cff893c3cff923c3cff923c3cff923c3cff923c3cff924b3cff9b4b3cff9b4b3cff9b4b3cff9b4b3cff0000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005c1e3cff5c1e3cff651e3cff651e3cff651e3cff651e3cff651e3cff6e1e3cff6e1e3cff6e2d3cff6e2d3cff772d3cff772d3cff772d3cff772d3cff772d3cff802d3cff803c3cff803c3cff803c3cff893c3cff893c3cff893c3cff893c3cff893c3cff923c3cff924b3cff924b3cff924b3cff9b4b3cff9b4b3cff9b4b3cff9b4b3cff9b4b3cff00000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000531e3cff5c1e3cff5c1e3cff5c1e3cff5c1e3cff651e3cff651e3cff651e3cff651e3cff652d3cff6e2d3cff6e2d3cff6e2d3cff6e2d3cff772d3cff772d3cff772d3cff772d3cff803c3cff803c3cff803c3cff803c3cff803c3cff893c3cff893c3cff893c3cff894b3cff924b3cff924b3cff924b3cff924b3cff924b3cff9b4b3cff9b4b3cff9b4b3cff0000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000531e3cff531e3cff531e3cff5c1e3cff5c1e3cff5c1e3cff5c1e3cff5c1e3cff651e3cff652d3cff652d3cff652d3cff6e2d3cff6e2d3cff6e2d3cff6e2d3cff6e2d3cff772d3cff773c3cff773c3cff773c3cff803c3cff803c3cff803c3cff803c3cff893c3cff894b3cff894b3cff894b3cff894b3cff924b3cff924b3cff924b3cff924b3cff9b4b3cff00000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000531e3cff531e3cff531e3cff531e3cff531e3cff5c1e3cff5c1e3cff5c1e3cff5c2d3cff652d3cff652d3cff652d3cff652d3cff652d3cff6e2d3cff6e2d3cff6e2d3cff6e3c3cff773c3cff773c3cff773c3cff773c3cff773c3cff803c3cff803c3cff804b3cff804b3cff894b3cff894b3cff894b3cff894b3cff894b3cff924b3cff924b3cff000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004a1e3cff4a1e3cff4a1e3cff531e3cff531e3cff531e3cff531e3cff5c1e3cff5c2d3cff5c2d3cff5c2d3cff5c2d3cff652d3cff652d3cff652d3cff652d3cff6e2d3cff6e3c3cff6e3c3cff6e3c3cff6e3c3cff773c3cff773c3cff773c3cff773c3cff804b3cff804b3cff804b3cff804b3cff804b3cff894b3cff894b3cff894b3cff894b3cff0000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000411e3cff4a1e3cff4a1e3cff4a1e3cff4a1e3cff531e3cff531e3cff531e3cff532d3cff532d3cff5c2d3cff5c2d3cff5c2d3cff5c2d3cff652d3cff652d3cff652d3cff653c3cff653c3cff6e3c3cff6e3c3cff6e3c3cff6e3c3cff773c3cff773c3cff773c3cff774b3cff774b3cff804b3cff804b3cff804b3cff804b3cff894b3cff894b3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000411e3cff411e3cff411e3cff4a1e3cff4a1e3cff4a1e3cff4a1e3cff4a1e3cff532d3cff532d3cff532d3cff532d3cff5c2d3cff5c2d3cff5c2d3cff5c2d3cff5c2d3cff653c3cff653c3cff653c3cff653c3cff6e3c3cff6e3c3cff6e3c3cff6e3c3cff6e3c3cff774b3cff774b3cff774b3cff774b3cff804b3cff804b3cff804b3cff804b3cff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000381e3cff411e3cff411e3cff411e3cff411e3cff411e3cff4a1e3cff4a1e3cff4a2d3cff4a2d3cff532d3cff532d3cff532d3cff532d3cff532d3cff5c2d3cff5c2d3cff5c3c3cff5c3c3cff653c3cff653c3cff653c3cff653c3cff653c3cff6e3c3cff6e3c3cff6e4b3cff6e4b3cff774b3cff774b3cff774b3cff774b3cff774b3cff804b3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000381e3cff381e3cff381e3cff381e3cff411e3cff411e3cff411e3cff411e3cff4a1e3cff4a2d3cff4a2d3cff4a2d3cff4a2d3cff532d3cff532d3cff532d3cff532d3cff5c3c3cff5c3c3cff5c3c3cff5c3c3cff5c3c3cff653c3cff653c3cff653c3cff653c3cff6e4b3cff6e4b3cff6e4b3cff6e4b3cff6e4b3cff774b3cff774b3cff774b3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f1e3cff2f1e3cff381e3cff381e3cff381e3cff381e3cff411e3cff411e3cff411e3cff412d3cff412d3cff4a2d3cff4a2d3cff4a2d3cff4a2d3cff532d3cff532d3cff533c3cff533c3cff533c3cff5c3c3cff5c3c3cff5c3c3cff5c3c3cff653c3cff653c3cff654b3cff654b3cff654b3cff6e4b3cff6e4b3cff6e4b3cff6e4b3cff774b3cff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000002f1e3cff2f1e3cff2f1e3cff2f1e3cff381e3cff381e3cff381e3cff381e3cff381e3cff412d3cff412d3cff412d3cff412d3cff4a2d3cff4a2d3cff4a2d3cff4a2d3cff4a3c3cff533c3cff533c3cff533c3cff533c3cff5c3c3cff5c3c3cff5c3c3cff5c3c3cff5c4b3cff654b3cff654b3cff654b3cff654b3cff6e4b3cff6e4b3cff6e4b3cff6e4b3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000261e3cff261e3cff2f1e3cff2f1e3cff2f1e3cff2f1e3cff2f1e3cff381e3cff381e3cff382d3cff382d3cff412d3cff412d3cff412d3cff412d3cff412d3cff4a2d3cff4a3c3cff4a3c3cff4a3c3cff533c3cff533c3cff533c3cff533c3cff533c3cff5c3c3cff5c4b3cff5c4b3cff5c4b3cff654b3cff654b3cff654b3cff654b3cff654b3cff6e4b3cff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000261e3cff261e3cff261e3cff261e3cff261e3cff2f1e3cff2f1e3cff2f1e3cff2f1e3cff382d3cff382d3cff382d3cff382d3cff382d3cff412d3cff412d3cff412d3cff413c3cff4a3c3cff4a3c3cff4a3c3cff4a3c3cff4a3c3cff533c3cff533c3cff533c3cff534b3cff5c4b3cff5c4b3cff5c4b3cff5c4b3cff5c4b3cff654b3cff654b3cff654b3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000001d1e3cff1d1e3cff1d1e3cff261e3cff261e3cff261e3cff261e3cff2f1e3cff2f1e3cff2f2d3cff2f2d3cff2f2d3cff382d3cff382d3cff382d3cff382d3cff412d3cff412d3cff413c3cff413c3cff413c3cff4a3c3cff4a3c3cff4a3c3cff4a3c3cff533c3cff534b3cff534b3cff534b3cff534b3cff5c4b3cff5c4b3cff5c4b3cff5c4b3cff654b3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000141e3cff1d1e3cff1d1e3cff1d1e3cff1d1e3cff261e3cff261e3cff261e3cff261e3cff262d3cff2f2d3cff2f2d3cff2f2d3cff2f2d3cff382d3cff382d3cff382d3cff382d3cff383c3cff413c3cff413c3cff413c3cff413c3cff4a3c3cff4a3c3cff4a3c3cff4a4b3cff4a4b3cff534b3cff534b3cff534b3cff534b3cff5c4b3cff5c4b3cff5c4b3cff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000141e3cff141e3cff141e3cff1d1e3cff1d1e3cff1d1e3cff1d1e3cff1d1e3cff261e3cff262d3cff262d3cff262d3cff2f2d3cff2f2d3cff2f2d3cff2f2d3cff2f2d3cff382d3cff383c3cff383c3cff383c3cff413c3cff413c3cff413c3cff413c3cff413c3cff4a4b3cff4a4b3cff4a4b3cff4a4b3cff534b3cff534b3cff534b3cff534b3cff534b3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "141e3cff141e3cff141e3cff141e3cff141e3cff1d1e3cff1d1e3cff1d1e3cff1d2d3cff262d3cff262d3cff262d3cff262d3cff262d3cff2f2d3cff2f2d3cff2f2d3cff2f3c3cff383c3cff383c3cff383c3cff383c3cff383c3cff413c3cff413c3cff414b3cff414b3cff4a4b3cff4a4b3cff4a4b3cff4a4b3cff4a4b3cff534b3cff534b3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000141e3cff141e3cff141e3cff141e3cff1d1e3cff1d2d3cff1d2d3cff1d2d3cff1d2d3cff262d3cff262d3cff262d3cff262d3cff2f2d3cff2f3c3cff2f3c3cff2f3c3cff2f3c3cff383c3cff383c3cff383c3cff383c3cff414b3cff414b3cff414b3cff414b3cff414b3cff4a4b3cff4a4b3cff4a4b3cff4a4b3cff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000141e3cff141e3cff141e3cff142d3cff142d3cff1d2d3cff1d2d3cff1d2d3cff1d2d3cff262d3cff262d3cff262d3cff263c3cff263c3cff2f3c3cff2f3c3cff2f3c3cff2f3c3cff383c3cff383c3cff383c3cff384b3cff384b3cff414b3cff414b3cff414b3cff414b3cff4a4b3cff4a4b3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000142d3cff142d3cff142d3cff142d3cff1d2d3cff1d2d3cff1d2d3cff1d2d3cff1d2d3cff263c3cff263c3cff263c3cff263c3cff2f3c3cff2f3c3cff2f3c3cff2f3c3cff2f3c3cff384b3cff384b3cff384b3cff384b3cff414b3cff414b3cff414b3cff414b3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000142d3cff142d3cff142d3cff142d3cff1d2d3cff1d2d3cff1d3c3cff1d3c3cff263c3cff263c3cff263c3cff263c3cff263c3cff2f3c3cff2f3c3cff2f4b3cff2f4b3cff384b3cff384b3cff384b3cff384b3cff384b3cff414b3cff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000142d3cff142d3cff142d3cff142d3cff143c3cff1d3c3cff1d3c3cff1d3c3cff1d3c3cff263c3cff263c3cff263c3cff263c3cff264b3cff2f4b3cff2f4b3cff2f4b3cff2f4b3cff384b3cff384b3cff384b3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000142d3cff143c3cff143c3cff143c3cff1d3c3cff1d3c3cff1d3c3cff1d3c3cff1d3c3cff263c3cff264b3cff264b3cff264b3cff2f4b3cff2f4b3cff2f4b3cff2f4b3cff2f4b3cff384b3cff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000143c3cff143c3cff143c3cff143c3cff143c3cff1d3c3cff1d3c3cff1d3c3cff1d4b3cff264b3cff264b3cff264b3cff264b3cff264b3cff2f4b3cff2f4b3cff2f4b3cff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000143c3cff143c3cff143c3cff143c3cff1d3c3cff1d4b3cff1d4b3cff1d4b3cff1d4b3cff264b3cff264b3cff264b3cff264b3cff2f4b3cff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000143c3cff143c3cff143c3cff144b3cff144b3cff1d4b3cff1d4b3cff1d4b3cff1d4b3cff264b3cff264b3cff264b3cff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            ]
+        }
+    ]
+}

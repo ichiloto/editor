@@ -49,6 +49,21 @@
 
 ### Added
 
+- Captured ground span (Engine candidate `engine/captured-ground-span` over 52d4507c, `groundSpan`): the graphical
+  editor's effect rows author a battle image fitted whole from the caster's captured ground to the farthest selected
+  target's. A `target-group` ground image with `contain` fit and the `target-capture` **Ground Anchor Lifetime**, which
+  that row now offers beside `effect-start`, has a **Ground Span Tip** row, a point of the image from 0 to 1; a point
+  turns the span on and an empty row removes `groundSpan` whole. The record has a **Target Capture Frame** row, where
+  frame 0 is a frame and an empty row leaves the key out. **Span Selected Targets** is offered only without a ground
+  span. `cutscenes.timeline` gives the tip as `groundSpanTip` with the row key that edits it. A file that declares a
+  ground span saves byte for byte while untouched, and other edits keep it, with undo and redo. Each save compiles
+  through the Engine, whose refusal is reported in its words with nothing written. The Terminal editor has no rows for
+  the tip, the lifetime or the capture frame and leaves them as written. `cutscenes.effectBattlePreview` composes the
+  span only for a request whose `textureStrip` is `true`; any other request carries the Engine's diagnostic. The CPU
+  still raster draws the Engine's composed strip texel for texel on six synthetic cases (east and west rays, two crops
+  that are not square, both mirrors, arena clipping), kept as `tests/Fixtures/GroundSpanStrip` for the native renderer
+  to be held to.
+
 - **Draw Image** on a staged actor (Engine 52d4507c, `stagedActorGraphicalVisibility`): the graphical editor's
   `stage_actor` commands and staged cast members can withhold the actor's image while its Terminal glyph, placement,
   collision and bound subject stay. A new visual stores only `false`; a replacement reads `(keep current)` and stores

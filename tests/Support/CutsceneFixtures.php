@@ -712,3 +712,57 @@ function getHarbourPaths(string $root): array
 
     return [$directory . 'harbour-lanterns.data.php', $directory . 'harbour-lanterns.script.php'];
 }
+
+/**
+ * A synthetic battle effect with a captured ground span, written as an author writes one: a lane of light whose
+ * rear (the pivot) is held at the caster's ground and whose tip at the farthest selected target's.
+ */
+function groundLanceTimeline(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+// Ground Lance: a lane of light from the caster's feet to the farthest target.
+return [
+  'presentations' => [
+    'terminal' => [
+      'fps' => 12,
+      'lengthFrames' => 4,
+      'tracks' => [[
+        'id' => 'lane',
+        'type' => 'glyph',
+        'keyframes' => [['frame' => 0, 'duration' => 4, 'content' => '=', 'position' => ['x' => 0, 'y' => 0]]],
+      ]],
+    ],
+    'graphical' => [
+      'fps' => 24,
+      'lengthFrames' => 12,
+      'targetCaptureFrame' => 2, // the targets and the caster's ground are held from here
+      'restFrame' => 3,
+      'tracks' => [
+        // The lane: its rear on the caster's ground, its tip on the farthest target's.
+        ['id' => 'lane-art', 'type' => 'image', 'asset' => 'Graphics/Effects/ground-lance.png',
+         'anchor' => 'target-group', 'attachment' => 'ground', 'anchorLifetime' => 'target-capture', 'fit' => 'contain',
+         'pivot' => ['x' => 0.875, 'y' => 0.5],   'groundSpan' => ['tip' => ['x' => 0.125, 'y' => 0.5]], /* measured on the sheet */
+         'depth' => 'behind',
+         'keyframes' => [['frame' => 3, 'duration' => 8]]],
+      ],
+    ],
+  ],
+];
+PHP_SOURCE;
+}
+
+/** The effect battle preview project, its unarmed attack playing Ground Lance on its targets. */
+function groundLanceProject(): string
+{
+    $root = effectBattlePreviewProject();
+    mkdir($root . '/assets/Animations/ground-lance', 0o777, true);
+    file_put_contents(effectTimelinePath($root, 'ground-lance'), groundLanceTimeline());
+    writeTilesetTestPng($root . '/assets/Graphics/Effects/ground-lance.png', 64, 16);
+    file_put_contents($root . '/assets/Data/animations.php', "<?php\n\nreturn " . var_export([
+        ['id' => 1, 'name' => 'Ground Lance', 'roles' => ['attack', 'attack-unarmed'], 'targetEffect' => 'ground-lance'],
+    ], true) . ";\n");
+
+    return $root;
+}

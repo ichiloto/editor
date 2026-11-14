@@ -3200,13 +3200,14 @@ final class EditorSession
                 if ($match[2] === 'Motion') {
                     $tracks[(int) $match[1]]['motionKey'] = $row['key'];
                 }
-            } elseif (preg_match('/^track(\d+)(Asset|Sheetcolumns|Sheetrows|Fit|Attachment|Pivot|Anchor|Placementsubject|Placementattachment)$/', $field, $match) === 1) {
+            } elseif (preg_match('/^track(\d+)(Asset|Sheetcolumns|Sheetrows|Fit|Attachment|Pivot|GroundSpantip|Anchor|Placementsubject|Placementattachment)$/', $field, $match) === 1) {
                 // An image track's art, and the keys that edit how it fills its cells and where it sits on its
-                // anchor: a battler point, or on the stage a subject and a named point on it.
+                // anchor: a battler point, or on the stage a subject and a named point on it. A captured ground
+                // span's tip is there with its key only while the track's rows offer it.
                 $art = ['Asset' => 'asset', 'Sheetcolumns' => 'columns', 'Sheetrows' => 'rows', 'Fit' => 'fit', 'Attachment' => 'attachment', 'Pivot' => 'pivot',
-                    'Anchor' => 'anchor', 'Placementsubject' => 'subject', 'Placementattachment' => 'point'][$match[2]];
+                    'GroundSpantip' => 'groundSpanTip', 'Anchor' => 'anchor', 'Placementsubject' => 'subject', 'Placementattachment' => 'point'][$match[2]];
                 $tracks[(int) $match[1]]['art'][$art] = in_array($art, ['columns', 'rows'], true) ? max(1, (int) $row['value']) : (string) ($row['raw'] ?? $row['value']);
-                if (in_array($art, ['fit', 'attachment', 'pivot', 'subject', 'point'], true)) {
+                if (in_array($art, ['fit', 'attachment', 'pivot', 'groundSpanTip', 'subject', 'point'], true)) {
                     $tracks[(int) $match[1]]['art'][$art . 'Key'] = $row['key'];
                 }
                 if (in_array($art, ['fit', 'attachment'], true)) {

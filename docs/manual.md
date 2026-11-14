@@ -3789,6 +3789,35 @@ flight that reaches a troop's targets only through its fallback as a warning
 and one that cannot reach them without a fallback as an error. A missing pose
 point or unreadable artwork is reported apart, with the Engine's reason.
 
+A battle image can lie along the ground from the caster to the selected
+targets: the Engine's captured ground span. In the GUI, an image track anchored
+to `target-group` with the `ground` attachment has a **Ground Anchor
+Lifetime** row offering `effect-start` and `target-capture`; the empty choice
+leaves the key out. With `contain` fit and the `target-capture` lifetime the
+track has a **Ground Span Tip** row: a point of the image, `x, y` from 0 to 1.
+The track's **Pivot** is the image's rear. The Engine fits the whole image, at
+one scale and one turn, with its rear on the caster's captured ground and its
+tip on the ground of the farthest selected target. A point in the row turns the
+span on; emptying the row removes `groundSpan` from the file whole and leaves
+the rest of the track as written. A point outside 0 to 1, or half of one, is
+refused and nothing changes. The record's **Target Capture Frame** row sets the
+frame the grounds are captured on: frame 0 is a frame of its own, and an empty
+row leaves the key out. **Span Selected Targets** is offered only on a track
+without a ground span. `cutscenes.timeline` gives the tip as `groundSpanTip`
+beside the pivot, with the row key that edits it, while the track's rows offer
+it. On save the Engine judges the span and its refusal is reported in the
+Engine's words, with nothing written: a lifetime without a capture frame, a tip
+equal to the pivot, a keyframe before the capture frame or with a position, and
+a track that also has cells, a facing, another fit, another lifetime or no
+pivot. A timeline that declares a ground span opens with it and saves byte for
+byte while untouched; an edit to another field keeps the span, the comments and
+the layout of the file. The Terminal editor has no row for the tip, the
+lifetime or the capture frame and leaves all three as written. The GUI's
+battle preview draws the span where its canvas draws texture strips: the editor
+session composes it only for a `cutscenes.effectBattlePreview` request whose
+`textureStrip` is `true`; any other request draws no span and carries the
+Engine's diagnostic that the renderer lacks texture-strip support.
+
 A battle effect may hold a `field-motion` track, which moves the whole
 battlefield in the graphical battle. In the GUI it is one of the track types.
 It has no anchor; each sample gives its **Frame**, **Duration** (one frame when
