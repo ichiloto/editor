@@ -26,8 +26,8 @@ use Ichiloto\Engine\Rendering\Presentation\PresentationColor;
 const INDICATOR_PATH_FIXTURE = 'indicator-path-fixture.json';
 const INDICATOR_PATH_RASTER_FIXTURE = 'indicator-path-cpu-raster.json';
 
-/** The Engine's fixture as its owner published it. */
-const INDICATOR_PATH_FIXTURE_SHA256 = '58ad5814917c9d82e9e49eddcd81f9c15999963a71578cf83102eeed54baf784';
+/** The Engine's fixture as its owner published it (R2, `indicator-path-r2-fixture.json`, kept under the name above). */
+const INDICATOR_PATH_FIXTURE_SHA256 = 'e3fafb10dc1e4795815fc8304a84faaa7491df3aa2033d8c09095790d69e412d';
 
 /** The sprite the Engine's frames name, and the one of the frames' own 8 by 8 size drawn in its place. */
 const INDICATOR_PATH_ENGINE_SPRITE = 'test-sprite.png';

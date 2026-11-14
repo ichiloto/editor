@@ -152,20 +152,33 @@ it('shows a treated composite body through the effect\'s clear texels when the p
 
 it('places a wrapped frame at its group\'s nearest whole pixel and clips its outline with everything else', function () {
     $wire = replaceIndicatorPathSprite(findIndicatorPathWire('cases', 'wrapped-clipped-prefix'), INDICATOR_PATH_UNIT_SPRITE);
-    [$rows] = drawIndicatorPathRows(createIndicatorPathCanvas($wire));
-    // The Engine's clip shows the whole drawing; a narrower one cuts the outline where it cuts the images.
-    $wire['groups'][0]['clipRect'] = ['x' => 0, 'y' => 0, 'width' => 6, 'height' => 9];
     $clipped = createIndicatorPathCanvas($wire);
     [$cut, $diagnostics] = drawIndicatorPathRows($clipped);
+    // The same frame with no clip, to see what the Engine's 8 by 8 clip cuts.
+    unset($wire['groups'][0]['clipRect']);
+    [$rows] = drawIndicatorPathRows(createIndicatorPathCanvas($wire));
+    $background = sprintf('#%06x', INDICATOR_PATH_BACKGROUND);
+    $kept = $cutAway = 0;
+    foreach ($rows as $y => $row) {
+        for ($x = 0; $x < strlen($row) / 8; $x++) {
+            $inside = $x < 8 && $y < 8;
+            // Inside the clip the clipped frame is the whole frame; outside it nothing is painted.
+            $kept += (int) ($inside && readIndicatorPathPixel($cut, $x, $y) === readIndicatorPathPixel($rows, $x, $y));
+            $cutAway += (int) (! $inside && readIndicatorPathPixel($cut, $x, $y) === $background);
+        }
+    }
 
     // An origin of (-2.5, 1.25) is drawn at (-2, 1): a half goes upwards, as for every group.
     expect(findIndicatorPathArea($rows, INDICATOR_PATH_TREATED_OUTLINE))->toBe(['x' => 2, 'y' => 5, 'width' => 8, 'height' => 8, 'count' => 28])
         ->and(readIndicatorPathPixel($rows, 3, 6))->toBe(encodeIndicatorPathUnitTexel(1, 1))
+        ->and($clipped->groups[0]->clipRect?->toArray())->toEqual(['x' => 0, 'y' => 0, 'width' => 8, 'height' => 8])
         ->and($clipped->groups[0]->canvas->groups[1]->canvas->indicators[0]->imagePath)->toBe(['review-field', 'body-group', 'body'])
         ->and($diagnostics)->toBe([])
-        ->and(findIndicatorPathArea($cut, INDICATOR_PATH_TREATED_OUTLINE))->toBe(['x' => 2, 'y' => 5, 'width' => 4, 'height' => 4, 'count' => 7])
-        ->and(readIndicatorPathPixel($cut, 6, 6))->toBe(sprintf('#%06x', INDICATOR_PATH_BACKGROUND))
-        ->and(readIndicatorPathPixel($cut, 3, 9))->toBe(sprintf('#%06x', INDICATOR_PATH_BACKGROUND));
+        ->and([$kept, $cutAway])->toBe([64, 32 * 32 - 64])
+        // The clip keeps six pixels of the outline's top edge and two of its left edge, and the effect's texels beside them.
+        ->and(findIndicatorPathArea($cut, INDICATOR_PATH_TREATED_OUTLINE))->toBe(['x' => 2, 'y' => 5, 'width' => 6, 'height' => 3, 'count' => 8])
+        ->and(readIndicatorPathPixel($cut, 3, 6))->toBe(encodeIndicatorPathUnitTexel(1, 1))
+        ->and(readIndicatorPathPixel($cut, 7, 7))->toBe(encodeIndicatorPathUnitTexel(5, 2));
 })->skip(fn (): bool => ! hasEngineIndicatorPath(), ENGINE_INDICATOR_PATH_MISSING);
 
 it('draws two treated bodies of one treatment alike, each marked through its own group', function () {
@@ -215,6 +228,49 @@ it('refuses a path into a group its own root does not have, in every raster that
         ->toThrow(InvalidArgumentException::class, 'existing group')
         // The same roots are admitted once the group is back.
         ->and($raster->prepareCanvases([$frame, $frame]))->toBeNull();
+})->skip(fn (): bool => ! hasEngineIndicatorPath(), ENGINE_INDICATOR_PATH_MISSING);
+
+/**
+ * A scene frame holding a screen and an overlay that no constructor has admitted: what the frame raster's own
+ * stacking of the two ({@see SceneFrameRaster::rasterize()}) is given when nothing before it has refused them.
+ * The Engine's composition refuses such a pair as it is constructed, so only this reaches the raster with one.
+ */
+function createUnadmittedIndicatorPathFrame(?PresentationCanvas $canvas, ?PresentationCanvas $overlay): SceneFrameComposition
+{
+    $class = new ReflectionClass(SceneFrameComposition::class);
+    $frame = $class->newInstanceWithoutConstructor();
+    foreach (['snapshot' => null, 'sprites' => [], 'viewport' => null, 'world' => null, 'canvas' => $canvas,
+        'screenOverlay' => $overlay, 'worldCanvases' => []] as $property => $value) {
+        $class->getProperty($property)->setValue($frame, $value);
+    }
+
+    return $frame;
+}
+
+it('refuses a screen overlay whose path leads into the screen beneath it, as the Engine refuses the layers it composes', function () {
+    $frame = createIndicatorPathUnitCanvas('image-leaf-interleaving');
+    // The body's group alone is a complete layer; the outline's group alone names a group its own layer lacks.
+    $base = new PresentationCanvas(32, 32, groups: [$frame->groups[0]]);
+    $orphan = createIndicatorPathCanvas(replaceIndicatorPathSprite(findIndicatorPathWire('negativeCases', 'missing-group'), INDICATOR_PATH_UNIT_SPRITE));
+    $grid = new RendererGridConfig(4, 2, 8, 16);
+    $raster = new SceneFrameRaster(getIndicatorPathFixtureDirectory());
+    $draw = static fn(?PresentationCanvas $canvas, ?PresentationCanvas $overlay): Closure => static fn(): GdImage
+        => $raster->rasterize(createUnadmittedIndicatorPathFrame($canvas, $overlay), $grid);
+    $refusal = 'Indicator imagePath requires one existing group at each step: body-group';
+
+    // The Engine stacks an overlay on a screen with no prefix, and admits each layer on its own first: the overlay
+    // cannot borrow the screen's group. The frame the raster is given is refused as it is composed.
+    expect(fn() => PresentationCanvas::composeOverlay($base, $orphan))->toThrow(InvalidArgumentException::class, $refusal)
+        ->and(fn() => new SceneFrameComposition(null, canvas: $base, screenOverlay: $orphan))->toThrow(InvalidArgumentException::class, $refusal)
+        // The raster stacks the two the same way before it draws: whichever layer holds the group, and with no
+        // screen at all, the frame is refused in the Engine's words and nothing is drawn.
+        ->and($draw($base, $orphan))->toThrow(InvalidArgumentException::class, $refusal)
+        ->and($draw($orphan, $base))->toThrow(InvalidArgumentException::class, $refusal)
+        ->and($draw(null, $orphan))->toThrow(InvalidArgumentException::class, $refusal)
+        // The same pair assembled as one complete root is drawn, over a screen or alone.
+        ->and(imagesx($draw(new PresentationCanvas(32, 32), $frame)()))->toBe(32)
+        ->and(imagesx($raster->rasterize(new SceneFrameComposition(null, canvas: new PresentationCanvas(32, 32), screenOverlay: $frame), $grid)))->toBe(32)
+        ->and($raster->diagnostics)->toBe([]);
 })->skip(fn (): bool => ! hasEngineIndicatorPath(), ENGINE_INDICATOR_PATH_MISSING);
 
 it('draws a world canvas whose outline is marked through a path on a map still, and refuses one whose path leads nowhere', function () {

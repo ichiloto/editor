@@ -57,7 +57,9 @@
   moves nothing: the indicator is drawn on its own bounds, clipped with its canvas and in the colour treatment of the
   group it is in, so a body in one treated group, an untreated effect over it and the body's outline in a second group
   keep their layers. `cutscenes.effectBattlePreview` takes an optional `indicatorImagePath` flag: the frame is composed
-  with `canvas_indicator_image_path` negotiated when it is `true`. No battle preview frame carries a path yet. The
+  with `canvas_indicator_image_path` negotiated when it is `true`. No battle preview frame carries a path yet. A
+  screen overlay cannot borrow a group of the screen beneath it: the Engine admits each layer on its own before it
+  stacks them, and the frame raster's own stacking refuses such a frame in the Engine's words. The
   Engine's fixture frames, the CPU still raster's pictures of them and the sprite they are drawn from are kept as
   `tests/Fixtures/IndicatorPath` for the native renderer to be compared with. Nothing in the editors authors or stores
   an indicator; the Engine composes them.
