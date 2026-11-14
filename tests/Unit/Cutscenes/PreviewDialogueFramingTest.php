@@ -392,3 +392,117 @@ it('writes what the Engine reported into the capture manifest, timed by the fram
         $preview->dispose();
     }
 });
+
+/**
+ * The yard scene with two bound framing subjects, `lead` (the player) and
+ * `friend` (the staged friend), on a row of the yard.
+ *
+ * @param list<array<string, mixed>> $commands
+ */
+function createRequiredSubjectsDefinition(int $friendRow, array $commands): CinematicDefinition
+{
+    return CinematicDefinition::fromArrays([
+        'id' => 'framing-phases', 'name' => 'Framing phases', 'startMap' => 'yard',
+        'presentation' => ['initial' => 'field', 'framing' => ['subjects' => [
+            'lead' => ['kind' => 'player'], 'friend' => ['kind' => 'staged_actor', 'id' => 'friend'],
+        ]]],
+        'cast' => [['kind' => 'staged_actor', 'id' => 'friend', 'sprite' => ['F'], 'x' => 32, 'y' => $friendRow]],
+        'skip' => ['policy' => 'forbidden'], 'checkpoints' => [], 'finalizer' => [],
+    ], $commands);
+}
+
+it('plays a framing phase: frames the subjects it requires clear of its line, follows its body in the command tree, and frames the whole cast again after it', function (string $picture) {
+    $root = createFramingProject();
+    // The player and the friend stand too far apart to share the view above a line; the phase requires the friend alone.
+    $preview = startFramingPreview($root, $picture, 5, createRequiredSubjectsDefinition(36, [
+        ['type' => 'wait', 'seconds' => 0.3],
+        ['type' => 'framing', 'subjects' => ['friend'], 'commands' => [
+            ['type' => 'text', 'name' => 'Friend', 'text' => 'A line in a phase of my own.'],
+            ['type' => 'sequence', 'commands' => [['type' => 'wait', 'seconds' => 0.3]]],
+        ]],
+        ['type' => 'text', 'name' => 'Friend', 'text' => 'A line to the whole cast.'],
+    ]));
+    $scene = readFramingField($preview)->scene;
+    $window = [];
+
+    try {
+        $before = drawFramingPicture($preview, $picture, $window);
+        stepToFramingLine($preview);
+        $framed = drawFramingPicture($preview, $picture, $window);
+
+        expect($scene->cinematicController->getFramingSubjects())->toHaveCount(1)
+            ->and($scene->getDialogueFramingDiagnostic())->toBeNull()
+            ->and($scene->camera->isFramed)->toBeTrue()
+            ->and($framed)->toBeGreaterThan($before)
+            ->and(measureFramingOverlap($preview, $picture, 36, $framed))->toBeLessThanOrEqual(0)
+            ->and($preview->getDiagnostics())->toBe([])
+            // The phase's lane waits on the phase while its body's lane says the line.
+            ->and(array_column($preview->lanes(), 'key'))->toBe(['commands.1', 'commands.1.commands.0'])
+            ->and(array_column($preview->lanes(), 'command'))->toBe(['framing', 'text']);
+
+        // Its body runs on: the block after the line, inside the phase.
+        $preview->confirm();
+        $preview->step();
+        expect(array_column($preview->lanes(), 'key'))->toBe(['commands.1', 'commands.1.commands.1.commands.0'])
+            ->and($scene->cinematicController->getCurrentFramingScope())->not->toBeNull();
+
+        // The phase over, the next line requires the whole cast again, which cannot be framed.
+        stepToFramingLine($preview);
+        expect($scene->cinematicController->getCurrentFramingScope())->toBeNull()
+            ->and($scene->cinematicController->getFramingSubjects())->toHaveCount(2)
+            ->and($preview->getDiagnostics())->toBe([sprintf('%s First at %.2f s of the scene.', $scene->getDialogueFramingDiagnostic(), $preview->elapsed())])
+            ->and(array_column($preview->lanes(), 'key'))->toBe(['commands.2']);
+
+        $preview->confirm();
+        expect($preview->runToCompletion(5.0))->toBeTrue()
+            ->and($preview->status())->toBe(CinematicPreviewSession::STATUS_COMPLETED);
+    } finally {
+        $preview->dispose();
+    }
+})->with(['terminal', 'window', 'capture']);
+
+it('reports a framing phase whose required subjects cannot be framed together, in the Engine\'s words', function (string $picture) {
+    $root = createFramingProject();
+    $preview = startFramingPreview($root, $picture, 5, createRequiredSubjectsDefinition(36, [
+        ['type' => 'wait', 'seconds' => 0.3],
+        ['type' => 'framing', 'subjects' => ['lead', ['kind' => 'staged_actor', 'id' => 'friend']], 'commands' => [
+            ['type' => 'text', 'name' => 'Friend', 'text' => 'A line that requires us both.'],
+        ]],
+    ]));
+    $scene = readFramingField($preview)->scene;
+    $window = [];
+
+    try {
+        drawFramingPicture($preview, $picture, $window);
+        stepToFramingLine($preview);
+        $engine = $scene->getDialogueFramingDiagnostic();
+
+        expect($scene->cinematicController->getFramingSubjects())->toHaveCount(2)
+            ->and($engine)->not->toBeNull()
+            ->and($scene->camera->isFramed)->toBeFalse()
+            ->and($preview->getDiagnostics())->toBe([sprintf('%s First at %.2f s of the scene.', $engine, $preview->elapsed())]);
+
+        $preview->confirm();
+        expect($preview->runToCompletion(5.0))->toBeTrue()
+            ->and($preview->getDiagnostics())->toHaveCount(1);
+    } finally {
+        $preview->dispose();
+    }
+})->with(['terminal', 'window', 'capture']);
+
+it('fails a framing phase that requires a subject the scene does not hold, pointing at the phase', function () {
+    $root = createFramingProject();
+    $preview = startFramingPreview($root, 'terminal', 5, createRequiredSubjectsDefinition(36, [
+        ['type' => 'wait', 'seconds' => 0.3],
+        ['type' => 'framing', 'subjects' => [['kind' => 'npc', 'id' => 'nobody']], 'commands' => [['type' => 'wait', 'seconds' => 0.3]]],
+    ]));
+
+    try {
+        expect($preview->runToCompletion(5.0))->toBeTrue()
+            ->and($preview->status())->toBe(CinematicPreviewSession::STATUS_FAILED)
+            ->and($preview->failure())->toMatchArray(['key' => 'commands.1'])
+            ->and($preview->failure()['message'])->toContain('(type "framing")');
+    } finally {
+        $preview->dispose();
+    }
+});
