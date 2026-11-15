@@ -46,7 +46,7 @@ it('draws the map only once the window is ready, under one session for the open 
 
     expect(findCanvasMessages($first, 'frame'))->toBe([])
         ->and($first)->toMatchArray(['map' => 'test-map', 'grid' => ['columns' => 4, 'rows' => 2, 'cellWidth' => 48, 'cellHeight' => 48]]);
-    $ready = $session->exchangeAuthoringCanvas('test-map', [canvasWindowReady()], sessionId: $first['sessionId']);
+    $ready = exchangeAuthoringCanvasUntilPresented($session, 'test-map', [canvasWindowReady()], sessionId: $first['sessionId']);
 
     expect($ready['sessionId'])->toBe($first['sessionId'])
         ->and(findCanvasMessages($ready, 'frame'))->not->toBe([])
@@ -57,12 +57,12 @@ it('draws the map only once the window is ready, under one session for the open 
 it('asks the window to lay out a sign\'s label, and draws its board once the label is measured', function () {
     [, $session] = createCanvasSignProject();
     $first = $session->exchangeAuthoringCanvas('test-map', []);
-    $ready = $session->exchangeAuthoringCanvas('test-map', [canvasWindowReady()], sessionId: $first['sessionId']);
+    $ready = exchangeAuthoringCanvasUntilPresented($session, 'test-map', [canvasWindowReady()], sessionId: $first['sessionId']);
     $request = findCanvasMessages($ready, 'prepare_text')[0] ?? null;
 
     expect($request['payload']['spec']['text'] ?? null)->toBe('Inn')
         ->and(json_encode($ready['messages']))->not->toContain('world_canvas');
-    $measured = $session->exchangeAuthoringCanvas('test-map', [canvasTextPrepared($request['payload']['requestId'])], sessionId: $first['sessionId']);
+    $measured = exchangeAuthoringCanvasUntilPresented($session, 'test-map', [canvasTextPrepared($request['payload']['requestId'])], sessionId: $first['sessionId']);
 
     expect(json_encode($measured['messages']))->toContain('world-object:test-map:inn-sign')->toContain('layout-inn');
     $session->closeAuthoringCanvas('test-map');
@@ -71,16 +71,16 @@ it('asks the window to lay out a sign\'s label, and draws its board once the lab
 it('sends nothing while the map is unchanged, and the edit once it changes', function () {
     [, $session] = createCanvasSignProject();
     $first = $session->exchangeAuthoringCanvas('test-map', []);
-    $ready = $session->exchangeAuthoringCanvas('test-map', [canvasWindowReady()], sessionId: $first['sessionId']);
+    $ready = exchangeAuthoringCanvasUntilPresented($session, 'test-map', [canvasWindowReady()], sessionId: $first['sessionId']);
     $request = findCanvasMessages($ready, 'prepare_text')[0];
-    $measured = $session->exchangeAuthoringCanvas('test-map', [...acknowledgeCanvasFrames($ready),
+    $measured = exchangeAuthoringCanvasUntilPresented($session, 'test-map', [...acknowledgeCanvasFrames($ready),
         canvasTextPrepared($request['payload']['requestId'])], sessionId: $first['sessionId']);
     $settled = $session->exchangeAuthoringCanvas('test-map', acknowledgeCanvasFrames($measured), sessionId: $first['sessionId']);
 
     expect(findCanvasMessages($settled, 'frame'))->toBe([]);
     $map = $session->readMap('test-map');
     $session->paint('test-map', $map['revision'], $map['baseLayer'], [[0, 0]], '#');
-    $edited = $session->exchangeAuthoringCanvas('test-map', [], sessionId: $first['sessionId']);
+    $edited = exchangeAuthoringCanvasUntilPresented($session, 'test-map', [], sessionId: $first['sessionId']);
 
     expect(findCanvasMessages($edited, 'frame'))->toHaveCount(1)
         ->and($edited['revision'])->toBeGreaterThan($map['revision']);

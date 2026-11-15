@@ -63,7 +63,8 @@ it('gives the editor window the field with the effect\'s own graphical art', fun
     $shown = $session->showEffectOnField(effectIndex($session, 'mote'), 1, 40, 12);
 
     try {
-        $answer = $session->exchangeEffectFieldScene([previewWindowReady()], $shown['sessionId']);
+        $answer = exchangeSceneUntilPresented(static fn(array $events): array
+            => $session->exchangeEffectFieldScene($events, $shown['sessionId']), [previewWindowReady()]);
         expect($answer['grid'])->toBe(['columns' => 40, 'rows' => 12, 'cellWidth' => 10, 'cellHeight' => 20])
             ->and(json_encode($answer['messages']))->toContain('Graphics\/Effects\/mote.png');
         expect($session->closeEffectField())->toBe(['closed' => true])

@@ -20,6 +20,13 @@ it('exchanges renderer readiness and acknowledgements through the real preview r
     $exchange = 'cutscenes.' . $source . 'Scene';
     $start = $source === 'cinematic' ? 'cutscenes.cinematicPreview' : 'cutscenes.effectField';
     $detach = $source === 'cinematic' ? 'cutscenes.cinematicSceneDetach' : 'cutscenes.effectFieldClose';
+    // A newly attached window's whole first frame for an epoch, every exchange of it answered with a result.
+    $draw = static fn(string $sessionId): array => exchangeSceneUntilPresented(static function (array $events) use ($request, $exchange, $sessionId): array {
+        $reply = $request($exchange, ['sessionId' => $sessionId, 'events' => $events]);
+        expect($reply)->toHaveKey('result');
+
+        return $reply['result'];
+    }, [previewWindowReady()]);
 
     try {
         expect($request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]))->toHaveKey('result');
@@ -34,10 +41,9 @@ it('exchanges renderer readiness and acknowledgements through the real preview r
         expect($discovery['messages'])->toBe([])
             ->and($sessionId)->toBeString()->not->toBe('');
 
-        $ready = $request($exchange, ['sessionId' => $sessionId, 'events' => [previewWindowReady()]]);
-        expect($ready)->toHaveKey('result')
-            ->and($ready['result']['grid'])->toBe(['columns' => 40, 'rows' => 12, 'cellWidth' => 10, 'cellHeight' => 20]);
-        $messages = $ready['result']['messages'];
+        $ready = $draw($sessionId);
+        expect($ready['grid'])->toBe(['columns' => 40, 'rows' => 12, 'cellWidth' => 10, 'cellHeight' => 20]);
+        $messages = $ready['messages'];
         $generation = max(previewFrameGenerations($messages));
         expect(array_column($messages, 'type'))->toContain('frame');
         $ack = json_encode(['protocol' => 2, 'type' => 'frame_ack',
@@ -57,9 +63,8 @@ it('exchanges renderer readiness and acknowledgements through the real preview r
         }
         $nextSessionId = $request($exchange)['result']['sessionId'];
         expect($nextSessionId)->not->toBe($sessionId);
-        $again = $request($exchange, ['sessionId' => $nextSessionId, 'events' => [previewWindowReady()]]);
-        expect($again)->toHaveKey('result');
-        $frames = array_values(array_filter($again['result']['messages'], static fn(array $message): bool => $message['type'] === 'frame'));
+        $again = $draw($nextSessionId);
+        $frames = array_values(array_filter($again['messages'], static fn(array $message): bool => $message['type'] === 'frame'));
         expect($frames)->not->toBe([])->and($frames[0]['payload']['reset'] ?? false)->toBeTrue();
         rewind($diagnostics);
         expect(stream_get_contents($diagnostics))->toBe('')
