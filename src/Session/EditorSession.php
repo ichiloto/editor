@@ -3896,15 +3896,17 @@ final class EditorSession
      * effect is listed, so another can be chosen; a frame of the effect's own
      * timeline may be asked for instead of a command frame. Each drawing
      * feature (image rotation, coverage dabs, texture strips, the region
-     * budget, canvas groups, group colour treatments, clipped images) is
-     * composed only when the caller says its canvas draws it; canvas
-     * groups carry an authored whole-field motion, and image rotation with
-     * clipped images an authored battler motion, each otherwise left still
-     * with the Engine's diagnostic. Composites are composed unless the
-     * caller says its canvas draws none. A command that draws a captured
-     * ground span carries the Engine's diagnostics for the span's placement
-     * against the troop and targets previewed, on every frame. Nothing is
-     * resolved, spent or played aloud, and nothing is written.
+     * budget, canvas groups, group colour treatments, group scales, clipped
+     * images, qualified indicator paths) is composed only when the caller
+     * says its canvas draws it; canvas
+     * groups carry an authored whole-field motion, group scales with the
+     * region budget the scale of one, and image rotation with clipped images
+     * an authored battler motion, each otherwise left still with the
+     * Engine's diagnostic. Composites are composed unless the caller says
+     * its canvas draws none. A command that draws a captured ground span
+     * carries the Engine's diagnostics for the span's placement against the
+     * troop and targets previewed, on every frame. Nothing is resolved,
+     * spent or played aloud, and nothing is written.
      *
      * @return array<string, mixed>
      * @throws SessionRefusal When the effect does not compile, no action of the party plays it, or the battle cannot be set up.
@@ -3913,7 +3915,7 @@ final class EditorSession
         EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null, int $binding = 0,
         bool $imageRotation = false, ?int $targetIndex = null, bool $coverageDabs = false, bool $textureStrip = false,
         bool $regionBudget = false, bool $canvasGroups = false, bool $clipOpacity = false, bool $groupColor = false,
-        bool $compositing = true): array
+        bool $indicatorImagePath = false, bool $groupScale = false, bool $compositing = true): array
     {
         $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
         $effects = $this->workspace->cutscenes?->assets(CutsceneType::EFFECT) ?? [];
@@ -3937,7 +3939,7 @@ final class EditorSession
             $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame, $reducedMotion);
             $totalFrames = $preview->getTotalFrames($reducedMotion);
             $read = $preview->readFrame(max(0, min($frame, $totalFrames - 1)), $reducedMotion, $imageRotation, $coverageDabs, $textureStrip, $regionBudget,
-                $canvasGroups, $clipOpacity, $groupColor, $compositing);
+                $canvasGroups, $clipOpacity, $groupColor, $indicatorImagePath, $groupScale, $compositing);
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
         }

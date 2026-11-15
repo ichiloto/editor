@@ -353,6 +353,24 @@ Remaining for the GUI editor:
   groups. The painted result has not been checked in a window. A summon's
   battle preview takes none of these flags: the Engine refuses both tracks in
   a summon timeline.
+- The scale of a whole-field motion's sample (Engine candidate
+  `engine/canvas-group-scale-20261115`, `payload.scale`, 15 November). Done in
+  the session: the effect rows give a `field-motion` sample a **Scale** row
+  beside its offset and a `battler-motion` sample none; the value is kept and
+  edited in place in the source, cleared by emptying the row, and undone like
+  any row; the Engine alone decides which factors it takes, at the save. A
+  whole-field motion whose sample holds a scale is not turned into a battler's
+  until the scale is cleared. `cutscenes.effectBattlePreview` takes an optional
+  `groupScale` flag and composes that frame with `canvas_group_scale`
+  negotiated only when the flag is `true`; the Engine scales the group only
+  with `canvasGroups` and `regionBudget` beside it, and otherwise leaves the
+  battlefield still with its diagnostic. The outline and the Terminal preview
+  give the scale with the offset. Remaining: the graphical editor does not send
+  `groupScale` yet and its canvas does not scale a group, so its battle
+  preview shows a scaled sample still, with the Engine's diagnostic; the
+  Engine candidate also refuses an offset that leaves the battlefield
+  uncovered, so an effect authored with offsets alone now previews still with
+  that diagnostic until its samples are given a covering scale.
 
 Reduced-motion samples and motion scopes (status, 12 November 2026, Engine
 `e1438b34`): an effect's or a summon's `reducedMotionSamples` and each track's
@@ -518,6 +536,35 @@ keep their bytes.
 advertises `canvas_group_color` to the Engine for that frame only when the flag
 is `true`. Remaining: the Engine binds no field colour timeline yet, so no
 battle preview frame carries a treatment, and there is nothing to author.
+
+Qualified indicator paths (Engine candidate `engine/field-colour-ownership`
+over 52d4507c, `canvas_indicator_image_path`): the still rasters name the
+capability and draw an indicator whose `imagePath` leads through groups of its
+frame's root canvas, on its own bounds and in its own group's colour
+treatment; the Engine's preflight follows every path and refuses a still whose
+path leads nowhere. `cutscenes.effectBattlePreview` takes an optional
+`indicatorImagePath` flag and advertises the capability to the Engine for that
+frame only when the flag is `true`. Remaining: the Engine's field partitioning
+composes no path yet, so no preview, still or capture of a project carries
+one; the rasters are held to the Engine's fixture frames
+(`tests/Fixtures/IndicatorPath`).
+
+A canvas group's scale (Engine candidate `engine/canvas-group-scale-20261115`
+over 52d4507c, `canvas_group_scale`): the still rasters name the capability
+and draw a scaled group's images, composites, indicators, text cells, labels,
+clips and nested groups at the place and size the scale gives them, through
+one account of a canvas's place on the surface (`CanvasStillTransform`) whose
+arithmetic is the Engine's `CanvasGroup::projectRectangle()`. The rasters are
+held to the Engine's four port frames (`tests/Fixtures/CanvasGroupScale`).
+Remaining: the stills take each edge of a scaled drawing to its nearest whole
+pixel, so they show no partial coverage on a fractional edge; the native
+renderer's port of the scale is separate work.
+
+Masked fills in stills (15 November): the canvas still raster draws a
+composite's source-over fills through polygon, ellipse and picture-alpha masks
+(`CanvasStillMask`), so a battler's hit tint shows in stills and capture
+frames. Remaining: a composite holding an image, a stroke or a world overview
+operation, or a fill blended by `screen`, is still left out whole and named.
 
 Done on Engine `156840cd` and `06ecb262` (12 November):
 - [x] Campaign restoration for previews. A preview or capture given a save

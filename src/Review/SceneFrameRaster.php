@@ -28,7 +28,7 @@ use InvalidArgumentException;
  * the Engine composes them ({@see PresentationCanvas::composeOverlay()}):
  * dialogue, notices, cinematic covers, stages and what is lifted above the
  * cover, drawn by the canvas raster ({@see CanvasStillRaster}), which paints
- * a canvas's translated groups at their layers, each in its colour treatment.
+ * a canvas's translated and scaled groups at their layers, each in its colour treatment.
  * The frame's screen canvas and world canvases are admitted together before the frame is drawn, on the region
  * budget's terms ({@see CanvasStillRaster::prepareCanvases()}), as a graphical renderer admits the whole frame.
  *

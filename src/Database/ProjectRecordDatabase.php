@@ -5118,6 +5118,13 @@ final class ProjectRecordDatabase
      * glyph rows, a connected piece's glyph per shape) never mix. Unknown
      * keys -- neither variant's -- stay.
      *
+     * A nested list goes with the variant that read it, unless the new
+     * variant's list reads the same entries ({@see RecordSubList::sharesEntriesWith()}):
+     * a motion turned from the field's into a battler's keeps its samples.
+     * A value in those entries that only the old list reads has no place
+     * in the new one and is never dropped for the author: the change is
+     * refused until it is cleared.
+     *
      * An entry of a variant the list does not edit ({@see RecordSubList::authorsVariant()})
      * cannot change variant: nothing here knows which of its keys the old
      * variant owned, so the new one would silently re-read them as its own.
@@ -5125,7 +5132,8 @@ final class ProjectRecordDatabase
      * @param array<string, mixed> $before The entry before the change.
      * @param array<string, mixed> $after The entry with the new variant.
      * @return array<string, mixed>
-     * @throws \InvalidArgumentException When the entry is of a variant the list does not edit; nothing is changed.
+     * @throws \InvalidArgumentException When the entry is of a variant the list does not edit, or its nested
+     *     entries hold what the new variant does not read; nothing is changed.
      */
     private static function withoutStaleVariantFields(RecordSubList $subList, array $before, array $after): array
     {
@@ -5151,11 +5159,37 @@ final class ProjectRecordDatabase
         }
 
         if ($oldNested !== null && $newNested !== $oldNested) {
-            // Another list, even under the same key, holds another shape.
-            $after = self::writeNested($after, explode('.', $oldNested->key), null, pruneEmpty: true);
+            if ($newNested !== null && $newNested->sharesEntriesWith($oldNested)) {
+                self::assertNestedEntriesCarry($subList, $oldNested, $newNested, $after);
+            } else {
+                // Another list, even under the same key, holds another shape.
+                $after = self::writeNested($after, explode('.', $oldNested->key), null, pruneEmpty: true);
+            }
         }
 
         return $after;
+    }
+
+    /**
+     * Requires that an entry's nested entries hold nothing only the old variant's list reads, when the new
+     * variant's list reads the same entries and they stay.
+     *
+     * @param array<string, mixed> $entry The entry with the new variant.
+     * @throws \InvalidArgumentException Naming the first nested entry and field that cannot go with it; nothing is changed.
+     */
+    private static function assertNestedEntriesCarry(RecordSubList $subList, RecordSubList $oldNested, RecordSubList $newNested, array $entry): void
+    {
+        $unread = $oldNested->listFieldsBeyond($newNested);
+        foreach ($unread === [] ? [] : $oldNested->readEntries(self::readNested($entry, $oldNested->key)) as $index => $nestedEntry) {
+            foreach (is_array($nestedEntry) ? $unread : [] as $field) {
+                if (self::readNested($nestedEntry, $field->key) !== null) {
+                    throw new \InvalidArgumentException(sprintf(
+                        '%s %d holds a %s, which a %s of %s "%s" does not read. Clear it there first. Nothing was changed.',
+                        ucfirst($oldNested->singular), $index + 1, mb_strtolower($field->label), $subList->singular,
+                        str_replace('_', ' ', strval($subList->variantKey)), $subList->getVariant($entry)));
+                }
+            }
+        }
     }
 
     /**

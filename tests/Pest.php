@@ -415,6 +415,8 @@ require_once __DIR__ . '/Support/MapMetadataFixtures.php';
 
 require_once __DIR__ . '/Support/BattleFormationFixtures.php';
 require_once __DIR__ . '/Support/GroundSpanStripFixtures.php';
+require_once __DIR__ . '/Support/IndicatorPathFixtures.php';
+require_once __DIR__ . '/Support/CanvasGroupScaleFixtures.php';
 
 require_once __DIR__ . '/Support/DialogueFixtures.php';
 
