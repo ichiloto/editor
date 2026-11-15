@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- Stills and capture frames draw a composite's masked fills. The canvas still raster left out every composite that
+  held a fill with a mask, with "draws composites with operations this still leaves out": the ordinary hit tint on a
+  battler is one (a fill through the battler's alpha, and through its clip when the tints of a layer share a surface,
+  `command-tints-layer-…` in a recording). A source-over fill is now drawn through every mask the Engine's composite
+  contract gives it (`CanvasStillMask`): polygons of several contours, ellipses, and the alpha of a picture, whole or
+  cropped, mirrored by `flipX` and `flipY`, each inverted or not, polygons and ellipses feathered or not, up to the
+  eight a fill may have, their coverages multiplied as the graphical renderer multiplies them. A fill whose mask
+  picture cannot be read is left out and the picture named. Still left out whole and named as before: a composite
+  holding an image, a stroke or a world overview operation, or a fill blended by `screen`.
+
 - The canvas still raster holds the regions it prepares. The list of images the Engine charged was collected into a
   copy, so no region was ever kept: every drawing of an image decoded its whole picture again, for each still and
   each frame of a capture. The crops a still draws are now cut once and kept while they fit the Engine's region

@@ -44,9 +44,10 @@ use RuntimeException;
  * It reads only the canvas the Engine composed, so what it draws is what the
  * game would send a graphical renderer. It is a review picture, not the
  * renderer: glyphs come from a system font through GD, alpha has GD's 7 bits,
- * coordinates are rounded to whole pixels. Unmasked source-over fills,
- * coverage dabs and texture strips are supported. Glyph effects are drawn plain. Everything left out is named
- * once in {@see $diagnostics}.
+ * coordinates are rounded to whole pixels. A composite's source-over fills, through
+ * every mask the Engine's composite contract gives a fill ({@see CanvasStillMask}), its coverage dabs and its
+ * texture strips are drawn; a composite holding any other operation is left out whole. Glyph effects are drawn
+ * plain. Everything left out is named once in {@see $diagnostics}.
  *
  * A still's canvases are admitted together before any of them is drawn, as the Engine admits a frame's for a
  * renderer with the region budget ({@see prepareCanvases()}): an image costs the crop it is drawn from and each
@@ -370,6 +371,12 @@ final class CanvasStillRaster
         imagealphablending($image, true);
     }
 
+    /**
+     * Paints a composite: its operations in order onto a surface of its own, each blended over the ones before
+     * it, and that surface stretched to the composite's destination. A composite is drawn whole or not at all:
+     * one holding an operation the still does not draw (an image, a stroke, a world overview, or a fill blended
+     * by `screen`) is left out and named, since the operations after it would be blended against the wrong picture.
+     */
     private function drawComposite(GdImage $surface, CanvasComposite $composite, string $context): void
     {
         if (array_any($composite->operations, static function (CanvasCompositeOperation $operation): bool {
@@ -377,7 +384,7 @@ final class CanvasStillRaster
 
             return match ($data['type']) {
                 'coverage_dabs', 'texture_strip' => false,
-                'fill' => $data['masks'] !== [] || $data['blend'] !== 'source_over',
+                'fill' => $data['blend'] !== 'source_over',
                 default => true,
             };
         })) {
@@ -387,10 +394,12 @@ final class CanvasStillRaster
         $width = $composite->width;
         $height = $composite->height;
         $paint = self::createCanvas($width, $height);
+        // Each picture the composite's masks read is decoded once for the composite, however many fills it masks.
+        $maskPictures = [];
         foreach ($composite->operations as $operation) {
             $layer = self::createCanvas($width, $height);
             match ($operation->data['type']) {
-                'fill' => self::drawFill($layer, $operation->data),
+                'fill' => $this->drawFill($layer, $operation->data, $maskPictures),
                 'texture_strip' => $this->drawTextureStrip($layer, $operation),
                 'coverage_dabs' => self::drawCoverageDabs($layer, $operation->data, $width, $height),
             };
@@ -400,8 +409,26 @@ final class CanvasStillRaster
             $composite->clipRect, $composite->opacity, 1, false, false);
     }
 
-    private static function drawFill(GdImage $surface, array $operation): void
+    /**
+     * Paints a fill onto a clear surface of its composite: its brush over its destination, each pixel covered
+     * by as much of the pixel as the destination holds, by the fill's opacity, and by what the fill's masks let
+     * through at the pixel's centre ({@see CanvasStillMask}). A fill whose mask reads a picture that cannot be
+     * had is left out, and the picture is named.
+     *
+     * @param array<string, mixed> $operation The fill, as `CanvasCompositeOperation::$data` holds it.
+     * @param array<string, GdImage> $maskPictures The pictures the composite's masks have read so far, by their path.
+     */
+    private function drawFill(GdImage $surface, array $operation, array &$maskPictures): void
     {
+        $mask = null;
+        if ($operation['masks'] !== []) {
+            $mask = CanvasStillMask::prepare($operation['masks'], function (string $asset) use (&$maskPictures): ?GdImage {
+                return $maskPictures[$asset] ??= $this->readImage($asset, 'canvas mask image');
+            });
+            if ($mask === null) {
+                return;
+            }
+        }
         ['x' => $left, 'y' => $top, 'width' => $width, 'height' => $height] = $operation['destination'];
         $right = $left + $width;
         $bottom = $top + $height;
@@ -428,6 +455,9 @@ final class CanvasStillRaster
             $rowOpacity = (min($y + 1, $bottom) - max($y, $top)) * $operation['opacity'];
             for ($x = $startX; $x < $endX; $x++) {
                 $opacity = (min($x + 1, $right) - max($x, $left)) * $rowOpacity;
+                if ($mask !== null) {
+                    $opacity *= $mask->getCoverage($x + .5, $y + .5);
+                }
                 $pixel = $position === null
                     ? ((127 - (int) round(127 * $opacity)) << 24) | $solid
                     : self::getGradientPixel($stops, $position($x + .5, $y + .5), $opacity);

@@ -542,6 +542,12 @@ Remaining: the stills take each edge of a scaled drawing to its nearest whole
 pixel, so they show no partial coverage on a fractional edge; the native
 renderer's port of the scale is separate work.
 
+Masked fills in stills (15 November): the canvas still raster draws a
+composite's source-over fills through polygon, ellipse and picture-alpha masks
+(`CanvasStillMask`), so a battler's hit tint shows in stills and capture
+frames. Remaining: a composite holding an image, a stroke or a world overview
+operation, or a fill blended by `screen`, is still left out whole and named.
+
 Done on Engine `156840cd` and `06ecb262` (12 November):
 - [x] Campaign restoration for previews. A preview or capture given a save
   (`campaignSave`) plays in that save's campaign:
