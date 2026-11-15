@@ -1,0 +1,60 @@
+{
+    "canvas": {
+        "width": 8,
+        "height": 8,
+        "groups": [
+            {
+                "id": "double",
+                "origin": {
+                    "x": 0.0,
+                    "y": 0.0
+                },
+                "layer": 0,
+                "canvas": {
+                    "width": 4,
+                    "height": 4,
+                    "images": [
+                        {
+                            "id": "line",
+                            "asset": "white-line.png",
+                            "destination": {
+                                "x": 1.0,
+                                "y": 0.0,
+                                "width": 1.0,
+                                "height": 4.0
+                            },
+                            "layer": 0
+                        }
+                    ],
+                    "indicators": [],
+                    "textLayers": []
+                },
+                "scale": {
+                    "factor": 2.0,
+                    "origin": {
+                        "x": 0.0,
+                        "y": 0.0
+                    }
+                }
+            }
+        ],
+        "images": [],
+        "indicators": [],
+        "textLayers": []
+    },
+    "expected": {
+        "lineDestination": {
+            "x": 2.0,
+            "y": 0.0,
+            "width": 2.0,
+            "height": 8.0
+        },
+        "rgbaOracle": "line-2x-expected.png",
+        "opaqueColumns": [
+            2,
+            3
+        ],
+        "otherPixels": "transparent",
+        "rule": "Paint the untreated child at transformed geometry. No neutral-size child raster enlarged afterward."
+    }
+}

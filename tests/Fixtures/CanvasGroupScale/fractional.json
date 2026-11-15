@@ -1,0 +1,66 @@
+{
+    "canvas": {
+        "width": 20,
+        "height": 20,
+        "groups": [
+            {
+                "id": "fractional",
+                "origin": {
+                    "x": 1.25,
+                    "y": -2.5
+                },
+                "layer": 0,
+                "canvas": {
+                    "width": 20,
+                    "height": 20,
+                    "images": [
+                        {
+                            "id": "part",
+                            "asset": "white-line.png",
+                            "destination": {
+                                "x": 2.0,
+                                "y": 3.0,
+                                "width": 4.0,
+                                "height": 5.0
+                            },
+                            "layer": 0
+                        }
+                    ],
+                    "indicators": [],
+                    "textLayers": []
+                },
+                "clipRect": {
+                    "x": 2.0,
+                    "y": 0.0,
+                    "width": 5.0,
+                    "height": 4.0
+                },
+                "scale": {
+                    "factor": 1.5,
+                    "origin": {
+                        "x": 0.25,
+                        "y": 0.5
+                    }
+                }
+            }
+        ],
+        "images": [],
+        "indicators": [],
+        "textLayers": []
+    },
+    "expected": {
+        "destination": {
+            "x": 1.75,
+            "y": -3.0,
+            "width": 6.0,
+            "height": 7.5
+        },
+        "visibleRectangle": {
+            "x": 2.0,
+            "y": 0.0,
+            "width": 5.0,
+            "height": 4.0
+        },
+        "rule": "Keep the destination fractional; parent clip is not scaled. Geometry is the common oracle; no fractional pixel raster is claimed here."
+    }
+}

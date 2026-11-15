@@ -37,7 +37,9 @@ use RuntimeException;
  * font fitted to the layer's cell; labels show the graphical renderer's own
  * raster of them. A group paints its local canvas as one drawing at the
  * group's origin ({@see paintLocalCanvas()}), groups within it included, in
- * the group's colour treatment when it has one.
+ * the group's colour treatment when it has one. A scaled group draws everything
+ * in its canvas at the place and size the scale gives it, never at the
+ * canvas's own size to be enlarged after ({@see CanvasStillTransform}).
  *
  * It reads only the canvas the Engine composed, so what it draws is what the
  * game would send a graphical renderer. It is a review picture, not the
@@ -59,7 +61,10 @@ final class CanvasStillRaster
      * treatment only for a renderer that names it beside the treatment. An indicator may name the image or
      * composite it marks by a path of groups from its still's root canvas: the Engine follows every path when the
      * still's canvases are admitted and refuses the still whole when one leads nowhere, and the indicator is
-     * drawn where its own bounds put it, in the colour treatment of the group it is in.
+     * drawn where its own bounds put it, in the colour treatment of the group it is in. A group's scale reaches
+     * everything the group draws: images, composites, indicators, text cells and their glyphs, labels, clips and
+     * the groups within it, whose own scales multiply with it; the Engine charges the group's images in the pixels
+     * of its canvas whatever the factor.
      */
     public const array CAPABILITIES = [
         RendererSessionConfig::GRAPHICAL_CANVAS, RendererSessionConfig::CANVAS_REGION_BUDGET,
@@ -69,6 +74,7 @@ final class CanvasStillRaster
         RendererSessionConfig::CANVAS_IMAGE_ROTATION, RendererSessionConfig::CANVAS_TEXTURE_STRIP,
         RendererSessionConfig::CANVAS_IMAGE_BOTTOM_FADE, RendererSessionConfig::CANVAS_GROUPS,
         RendererSessionConfig::CANVAS_GROUP_COLOR, RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH,
+        RendererSessionConfig::CANVAS_GROUP_SCALE,
     ];
 
     /** Fonts tried, in order, when none is given: the graphical renderer's own text font first. */
@@ -100,12 +106,11 @@ final class CanvasStillRaster
     /** @var array<string, float> Font sizes fitted to each cell size. */
     private array $fontSizes = [];
     /**
-     * Where the canvas being drawn has its top-left corner on the surface, in whole pixels: the surface's own
-     * corner for a canvas drawn at its size, and left of or above it for a local canvas of which the surface
-     * holds the part that shows ({@see paintLocalCanvas()}).
+     * Where the canvas being drawn lies on the surface: on the surface's own corner at its own size for a
+     * canvas drawn whole, and for a local canvas wherever its groups' origins and scales put it, read from the
+     * corner of the surface that holds the part of it that shows ({@see paintPlacedCanvas()}).
      */
-    private int $originX = 0;
-    private int $originY = 0;
+    private CanvasStillTransform $transform;
 
     /**
      * @param array<string, string> $labelRasters Each label's raster from the graphical renderer, by layout id.
@@ -116,6 +121,7 @@ final class CanvasStillRaster
         if (! extension_loaded('gd')) {
             throw new RuntimeException('Drawing a graphical still needs the PHP gd extension.');
         }
+        $this->transform = CanvasStillTransform::createIdentity();
     }
 
     /** Whether the raster draws a renderer feature. */
@@ -180,8 +186,9 @@ final class CanvasStillRaster
     public function prepareCanvases(array $canvases): void
     {
         $images = [];
-        PresentationSession::runForSession(self::supports(...), fn(): array => PngAssetPreflight::runWithSnapshot(
-            fn(): array => CanvasImagePreflight::inspectCanvasResources($canvases, $this->assetRoot,
+        // Named by reference at every level: an arrow function would hand the collector a copy of the list.
+        $inspect = function () use ($canvases, &$images): array {
+            return CanvasImagePreflight::inspectCanvasResources($canvases, $this->assetRoot,
                 function (CanvasImage|CanvasComposite $drawing) use (&$images): bool {
                     $charged = $this->canInspect($drawing);
                     if ($charged && $drawing instanceof CanvasImage) {
@@ -190,7 +197,9 @@ final class CanvasStillRaster
                     }
 
                     return $charged;
-                })));
+                });
+        };
+        PresentationSession::runForSession(self::supports(...), static fn(): array => PngAssetPreflight::runWithSnapshot($inspect));
         $crops = [];
         foreach ($images as $image) {
             $key = self::getRegionKey($image);
@@ -269,53 +278,64 @@ final class CanvasStillRaster
 
     /**
      * Paints a local canvas as one drawing with its top-left corner at a whole pixel of the canvas being drawn:
-     * a world canvas on its field, or a group's canvas on the group's parent. The local canvas keeps its own
-     * geometry and is masked by its own rectangle, by a clip of the canvas being drawn when one is given, and
-     * by the surface, so the clips of every canvas it is nested in intersect. A corner off the surface stays
-     * there: what does not show is not drawn, and only the part that shows takes memory.
-     *
-     * A colour treatment is applied once to that flattened part, after everything in the local canvas is drawn
-     * and before the part is blended onto the canvas being drawn ({@see treatColors()}). A group within the local
-     * canvas is treated the same way when it is flattened, so its own treatment comes first and this one follows.
+     * a world canvas on its field. The local canvas keeps its own geometry and is masked by its own rectangle,
+     * by a clip of the canvas being drawn when one is given, and by the surface ({@see paintPlacedCanvas()}).
      */
     public function paintLocalCanvas(GdImage $surface, PresentationCanvas $canvas, int $left, int $top, ?CanvasRectangle $clip,
         string $context, ?CanvasColorTransform $colorTransform = null): void
     {
-        $left += $this->originX;
-        $top += $this->originY;
-        $visible = [max(0, $left), max(0, $top), min(imagesx($surface), $left + $canvas->width), min(imagesy($surface), $top + $canvas->height)];
+        $this->paintPlacedCanvas($surface, $canvas, $this->transform->place($left, $top), $clip, $context, $colorTransform);
+    }
+
+    /**
+     * Paints a group's canvas where the group's origin and scale put it ({@see CanvasStillTransform::nestGroup()}),
+     * inside the group's clip and in the group's colour treatment.
+     */
+    private function paintGroup(GdImage $surface, CanvasGroup $group, string $context): void
+    {
+        $this->paintPlacedCanvas($surface, $group->canvas, $this->transform->nestGroup($group), $group->clipRect,
+            sprintf('%s group %s', $context, $group->id), $group->colorTransform);
+    }
+
+    /**
+     * Paints a local canvas as one drawing where a place of its own puts it on the surface. The local canvas
+     * keeps its own geometry and is masked by its own rectangle as that place shows it, by a clip of the canvas
+     * being drawn when one is given, and by the surface, so the clips of every canvas it is nested in intersect.
+     * The clip is the canvas being drawn's own: it stays where that canvas has it whatever the local canvas's
+     * scale. A corner off the surface stays there: what does not show is not drawn, and only the part that
+     * shows takes memory.
+     *
+     * Everything in the local canvas is drawn into that part at the place and size it has on the surface, so
+     * a scaled canvas is never drawn at its own size and enlarged. A colour treatment is applied once to the
+     * flattened part, after everything in the local canvas is drawn and before the part is blended onto the
+     * canvas being drawn ({@see treatColors()}). A group within the local canvas is treated the same way when
+     * it is flattened, so its own treatment comes first and this one follows.
+     */
+    private function paintPlacedCanvas(GdImage $surface, PresentationCanvas $canvas, CanvasStillTransform $placed,
+        ?CanvasRectangle $clip, string $context, ?CanvasColorTransform $colorTransform): void
+    {
+        $visible = [max(0, $placed->getX(0)), max(0, $placed->getY(0)),
+            min(imagesx($surface), $placed->getX($canvas->width)), min(imagesy($surface), $placed->getY($canvas->height))];
         if ($clip !== null) {
-            $visible = [max($visible[0], $this->originX + (int) round($clip->x)), max($visible[1], $this->originY + (int) round($clip->y)),
-                min($visible[2], $this->originX + (int) round($clip->x + $clip->width)),
-                min($visible[3], $this->originY + (int) round($clip->y + $clip->height))];
+            [$clipLeft, $clipTop, $clipRight, $clipBottom] = $this->transform->getEdges($clip);
+            $visible = [max($visible[0], $clipLeft), max($visible[1], $clipTop), min($visible[2], $clipRight), min($visible[3], $clipBottom)];
         }
         [$visibleLeft, $visibleTop, $visibleRight, $visibleBottom] = $visible;
         if ($visibleRight <= $visibleLeft || $visibleBottom <= $visibleTop) {
             return;
         }
         $part = self::createCanvas($visibleRight - $visibleLeft, $visibleBottom - $visibleTop);
-        [$originX, $originY] = [$this->originX, $this->originY];
-        [$this->originX, $this->originY] = [$left - $visibleLeft, $top - $visibleTop];
+        $outer = $this->transform;
+        $this->transform = $placed->rebase($visibleLeft, $visibleTop);
         try {
             $this->drawCanvas($part, $canvas, $context);
         } finally {
-            [$this->originX, $this->originY] = [$originX, $originY];
+            $this->transform = $outer;
         }
         if ($colorTransform !== null) {
             self::treatColors($part, $colorTransform);
         }
         imagecopy($surface, $part, $visibleLeft, $visibleTop, 0, 0, $visibleRight - $visibleLeft, $visibleBottom - $visibleTop);
-    }
-
-    /**
-     * Paints a group's canvas at the group's origin, inside the group's clip and in the group's colour treatment.
-     * The origin is taken to the nearest whole pixel, a half upwards on either side of zero, so equal steps of an
-     * origin move the drawing equally.
-     */
-    private function paintGroup(GdImage $surface, CanvasGroup $group, string $context): void
-    {
-        $this->paintLocalCanvas($surface, $group->canvas, (int) floor($group->x + 0.5), (int) floor($group->y + 0.5),
-            $group->clipRect, sprintf('%s group %s', $context, $group->id), $group->colorTransform);
     }
 
     /**
@@ -650,8 +670,12 @@ final class CanvasStillRaster
         };
         $color = self::allocate($surface, TerminalPalette::resolveRgb($indicator->color, TerminalPalette::DEFAULT_FOREGROUND));
         foreach ($edges as [$x, $y, $width, $height]) {
-            imagefilledrectangle($surface, $this->originX + (int) round($x), $this->originY + (int) round($y),
-                $this->originX + (int) round($x + $width) - 1, $this->originY + (int) round($y + $height) - 1, $color);
+            [$left, $top, $right, $bottom] = [$this->transform->getX($x), $this->transform->getY($y),
+                $this->transform->getX($x + $width), $this->transform->getY($y + $height)];
+            // An edge a scale leaves thinner than half a pixel covers none.
+            if ($right > $left && $bottom > $top) {
+                imagefilledrectangle($surface, $left, $top, $right - 1, $bottom - 1, $color);
+            }
         }
     }
 
@@ -667,22 +691,33 @@ final class CanvasStillRaster
         }
         $cellWidth = $layer->grid->cellWidth;
         $cellHeight = $layer->grid->cellHeight;
-        $width = $layer->grid->columns * $cellWidth;
-        $height = $layer->grid->rows * $cellHeight;
-        $left = (int) round($layer->x);
-        $top = (int) round($layer->y);
+        // The grid's corner is taken to its pixel and the cells are laid from it, each edge at its own pixel, so
+        // neighbouring cells meet at any scale; at the canvas's own size every cell is its grid's size.
+        $left = $this->transform->getX($layer->x);
+        $top = $this->transform->getY($layer->y);
+        $width = $this->transform->getSpan($layer->grid->columns * $cellWidth);
+        $height = $this->transform->getSpan($layer->grid->rows * $cellHeight);
+        if ($width < 1 || $height < 1) {
+            return;
+        }
         $text = self::createCanvas($width, $height);
         foreach ($layer->runs as $run) {
+            $cellTop = $this->transform->getSpan($run->row * $cellHeight);
+            $cellBottom = $this->transform->getSpan(($run->row + 1) * $cellHeight);
             foreach (mb_str_split($run->text, 1, 'UTF-8') as $offset => $glyph) {
-                $cellLeft = ($run->column + $offset) * $cellWidth;
-                $cellTop = $run->row * $cellHeight;
+                $cellLeft = $this->transform->getSpan(($run->column + $offset) * $cellWidth);
+                $cellRight = $this->transform->getSpan(($run->column + $offset + 1) * $cellWidth);
+                if ($cellRight <= $cellLeft || $cellBottom <= $cellTop) {
+                    continue;
+                }
                 if ($run->background !== null) {
-                    imagefilledrectangle($text, $cellLeft, $cellTop, $cellLeft + $cellWidth - 1, $cellTop + $cellHeight - 1,
+                    imagefilledrectangle($text, $cellLeft, $cellTop, $cellRight - 1, $cellBottom - 1,
                         self::allocate($text, TerminalPalette::resolveRgb($run->background, TerminalPalette::DEFAULT_BACKGROUND)));
                 }
                 if ($glyph !== ' ') {
                     $this->drawGlyph($text, $glyph, TerminalPalette::resolveRgb($run->foreground, TerminalPalette::DEFAULT_FOREGROUND),
-                        $cellLeft, $cellTop, $cellWidth, $cellHeight);
+                        $cellLeft, $cellTop, $cellRight - $cellLeft, $cellBottom - $cellTop,
+                        $this->transform->factor * $cellWidth, $this->transform->factor * $cellHeight);
                 }
             }
         }
@@ -692,7 +727,12 @@ final class CanvasStillRaster
         $this->copyClipped($surface, $text, $left, $top, $width, $height, $layer->clipRect);
     }
 
-    private function drawGlyph(GdImage $image, string $glyph, int $rgb, int $cellLeft, int $cellTop, int $cellWidth, int $cellHeight): void
+    /**
+     * Draws a glyph centred in a cell of the surface, in the font size fitted to the cell as the canvas being
+     * drawn shows it: the grid's cell at the canvas's own size, and the scaled cell under a scale.
+     */
+    private function drawGlyph(GdImage $image, string $glyph, int $rgb, int $cellLeft, int $cellTop, int $cellWidth, int $cellHeight,
+        float $fittedWidth, float $fittedHeight): void
     {
         $font = $this->fontPath ?? self::findSystemFont();
         if ($font === null || ! is_file($font)) {
@@ -700,7 +740,7 @@ final class CanvasStillRaster
 
             return;
         }
-        $size = $this->fontSizes["{$cellWidth}x{$cellHeight}"] ??= $this->fitFont($font, $cellWidth, $cellHeight);
+        $size = $this->fontSizes["{$fittedWidth}x{$fittedHeight}"] ??= $this->fitFont($font, $fittedWidth, $fittedHeight);
         $box = imagettfbbox($size, 0, $font, $glyph);
         $reference = imagettfbbox($size, 0, $font, 'Mg');
         if ($box === false || $reference === false) {
@@ -716,7 +756,7 @@ final class CanvasStillRaster
     }
 
     /** The font size whose character advance and line fit a cell, as the renderer fits its cell font. */
-    private function fitFont(string $font, int $cellWidth, int $cellHeight): float
+    private function fitFont(string $font, float $cellWidth, float $cellHeight): float
     {
         $box = imagettfbbox(100, 0, $font, '0000000000');
         $line = imagettfbbox(100, 0, $font, 'Mg');
@@ -731,8 +771,9 @@ final class CanvasStillRaster
 
     /**
      * Draws a region of a picture into a surface as the renderer samples one:
-     * mirrored, brightened and faded, stretched to its destination, masked by
-     * its clip and by the surface.
+     * mirrored, brightened and faded, stretched to its destination where the
+     * canvas being drawn has it on the surface, masked by its clip and by the
+     * surface. The region is sampled once, straight to the size it shows at.
      *
      * @param array{int, int, int, int} $source The region's x, y, width and height in the picture.
      */
@@ -741,10 +782,9 @@ final class CanvasStillRaster
         ?CanvasImageBottomFade $bottomFade = null): void
     {
         [$sourceX, $sourceY, $sourceWidth, $sourceHeight] = $source;
-        $drawLeft = (int) round($destination->x);
-        $drawTop = (int) round($destination->y);
-        $drawWidth = max(1, (int) round($destination->x + $destination->width) - $drawLeft);
-        $drawHeight = max(1, (int) round($destination->y + $destination->height) - $drawTop);
+        [$drawLeft, $drawTop, $drawRight, $drawBottom] = $this->transform->getEdges($destination);
+        $drawWidth = max(1, $drawRight - $drawLeft);
+        $drawHeight = max(1, $drawBottom - $drawTop);
         $stretched = self::createCanvas($drawWidth, $drawHeight);
         imagealphablending($stretched, false);
         imagecopyresampled($stretched, $picture, 0, 0, $sourceX, $sourceY, $drawWidth, $drawHeight, $sourceWidth, $sourceHeight);
@@ -763,20 +803,19 @@ final class CanvasStillRaster
     }
 
     /**
-     * Copies what was drawn for a rectangle of the canvas onto the surface, where the canvas being drawn has it,
-     * masked by a clip of that canvas and by the surface.
+     * Copies what was drawn for a rectangle of the surface onto it, masked by a clip of the canvas being drawn,
+     * where that canvas has the clip on the surface, and by the surface.
      */
     private function copyClipped(GdImage $surface, GdImage $drawn, int $left, int $top, int $width, int $height, ?CanvasRectangle $clip): void
     {
-        $maskLeft = max(-$this->originX, $clip === null ? $left : max($left, (int) round($clip->x)));
-        $maskTop = max(-$this->originY, $clip === null ? $top : max($top, (int) round($clip->y)));
-        $maskRight = min(imagesx($surface) - $this->originX,
-            $clip === null ? $left + $width : min($left + $width, (int) round($clip->x + $clip->width)));
-        $maskBottom = min(imagesy($surface) - $this->originY,
-            $clip === null ? $top + $height : min($top + $height, (int) round($clip->y + $clip->height)));
+        [$clipLeft, $clipTop, $clipRight, $clipBottom] = $clip === null ? [$left, $top, $left + $width, $top + $height]
+            : $this->transform->getEdges($clip);
+        $maskLeft = max(0, $left, $clipLeft);
+        $maskTop = max(0, $top, $clipTop);
+        $maskRight = min(imagesx($surface), $left + $width, $clipRight);
+        $maskBottom = min(imagesy($surface), $top + $height, $clipBottom);
         if ($maskRight > $maskLeft && $maskBottom > $maskTop) {
-            imagecopy($surface, $drawn, $this->originX + $maskLeft, $this->originY + $maskTop, $maskLeft - $left, $maskTop - $top,
-                $maskRight - $maskLeft, $maskBottom - $maskTop);
+            imagecopy($surface, $drawn, $maskLeft, $maskTop, $maskLeft - $left, $maskTop - $top, $maskRight - $maskLeft, $maskBottom - $maskTop);
         }
     }
 

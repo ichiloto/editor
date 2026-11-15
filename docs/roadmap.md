@@ -531,6 +531,17 @@ composes no path yet, so no preview, still or capture of a project carries
 one; the rasters are held to the Engine's fixture frames
 (`tests/Fixtures/IndicatorPath`).
 
+A canvas group's scale (Engine candidate `engine/canvas-group-scale-20261115`
+over 52d4507c, `canvas_group_scale`): the still rasters name the capability
+and draw a scaled group's images, composites, indicators, text cells, labels,
+clips and nested groups at the place and size the scale gives them, through
+one account of a canvas's place on the surface (`CanvasStillTransform`) whose
+arithmetic is the Engine's `CanvasGroup::projectRectangle()`. The rasters are
+held to the Engine's four port frames (`tests/Fixtures/CanvasGroupScale`).
+Remaining: the stills take each edge of a scaled drawing to its nearest whole
+pixel, so they show no partial coverage on a fractional edge; the native
+renderer's port of the scale is separate work.
+
 Done on Engine `156840cd` and `06ecb262` (12 November):
 - [x] Campaign restoration for previews. A preview or capture given a save
   (`campaignSave`) plays in that save's campaign:

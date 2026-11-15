@@ -1,0 +1,148 @@
+{
+    "canvas": {
+        "width": 20,
+        "height": 20,
+        "groups": [
+            {
+                "id": "outer",
+                "origin": {
+                    "x": 2.0,
+                    "y": 1.0
+                },
+                "layer": 0,
+                "canvas": {
+                    "width": 8,
+                    "height": 8,
+                    "groups": [
+                        {
+                            "id": "inner",
+                            "origin": {
+                                "x": 0.25,
+                                "y": 0.5
+                            },
+                            "layer": 0,
+                            "canvas": {
+                                "width": 4,
+                                "height": 4,
+                                "images": [
+                                    {
+                                        "id": "line",
+                                        "asset": "white-line.png",
+                                        "destination": {
+                                            "x": 1.0,
+                                            "y": 0.0,
+                                            "width": 1.0,
+                                            "height": 4.0
+                                        },
+                                        "layer": 0
+                                    }
+                                ],
+                                "indicators": [],
+                                "textLayers": []
+                            },
+                            "colorTransform": {
+                                "matrix": [
+                                    [
+                                        0.0,
+                                        0.0,
+                                        0.0
+                                    ],
+                                    [
+                                        0.0,
+                                        0.0,
+                                        0.0
+                                    ],
+                                    [
+                                        0.0,
+                                        0.0,
+                                        0.0
+                                    ]
+                                ],
+                                "offset": [
+                                    0.8,
+                                    0.4,
+                                    0.0
+                                ]
+                            },
+                            "scale": {
+                                "factor": 1.5,
+                                "origin": {
+                                    "x": 0.0,
+                                    "y": 0.0
+                                }
+                            }
+                        }
+                    ],
+                    "images": [],
+                    "indicators": [],
+                    "textLayers": []
+                },
+                "clipRect": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "width": 12.0,
+                    "height": 12.0
+                },
+                "colorTransform": {
+                    "matrix": [
+                        [
+                            0.5,
+                            0.0,
+                            0.0
+                        ],
+                        [
+                            0.0,
+                            0.5,
+                            0.0
+                        ],
+                        [
+                            0.0,
+                            0.0,
+                            0.5
+                        ]
+                    ],
+                    "offset": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ]
+                },
+                "scale": {
+                    "factor": 2.0,
+                    "origin": {
+                        "x": 0.5,
+                        "y": 0.5
+                    }
+                }
+            }
+        ],
+        "images": [],
+        "indicators": [],
+        "textLayers": []
+    },
+    "expected": {
+        "destination": {
+            "x": 1.5,
+            "y": -2.0,
+            "width": 3.0,
+            "height": 12.0
+        },
+        "visibleRectangle": {
+            "x": 1.5,
+            "y": 0.0,
+            "width": 3.0,
+            "height": 10.0
+        },
+        "interiorPixel": {
+            "x": 2,
+            "y": 1,
+            "rgba": [
+                102,
+                51,
+                0,
+                255
+            ]
+        },
+        "rule": "Child flat colour, then parent dim; both scales and the final parent clip apply."
+    }
+}

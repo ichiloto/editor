@@ -28,8 +28,8 @@ use RuntimeException;
  * filling its size and a whole image contained in it; each text cell its
  * background, the field's own when it names none, and glyph; each world
  * canvas's pivot on its cell's ground anchor, drawn by the shared canvas
- * raster ({@see CanvasStillRaster}), its groups and their colour treatments
- * included, and clipped to the canvas. Glyphs are drawn in a monospaced system font fitted to the cell.
+ * raster ({@see CanvasStillRaster}), its groups, their scales and their colour
+ * treatments included, and clipped to the canvas. Glyphs are drawn in a monospaced system font fitted to the cell.
  * A still's world canvases are admitted together before the still is drawn, on the region budget's terms
  * ({@see CanvasStillRaster::prepareCanvases()}), and a still whose canvas images exceed them is refused.
  *
@@ -47,7 +47,7 @@ final class FieldStillRaster
         RendererSessionConfig::TILE_SHADOWS, RendererSessionConfig::WORLD_CANVAS, RendererSessionConfig::GRAPHICAL_CANVAS,
         RendererSessionConfig::CANVAS_CLIP_OPACITY, RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
         RendererSessionConfig::CANVAS_GROUPS, RendererSessionConfig::CANVAS_GROUP_COLOR, RendererSessionConfig::CANVAS_REGION_BUDGET,
-        RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH,
+        RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH, RendererSessionConfig::CANVAS_GROUP_SCALE,
     ];
 
     /** The most pixels one native-size image holds; a larger view is drawn scaled down, a block of cells at a time. */

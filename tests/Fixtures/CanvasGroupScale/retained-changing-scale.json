@@ -1,0 +1,354 @@
+{
+    "frames": [
+        {
+            "width": 20,
+            "height": 20,
+            "groups": [
+                {
+                    "id": "field",
+                    "origin": {
+                        "x": 0.0,
+                        "y": 0.0
+                    },
+                    "layer": 0,
+                    "canvas": {
+                        "width": 4,
+                        "height": 4,
+                        "images": [
+                            {
+                                "id": "line",
+                                "asset": "white-line.png",
+                                "destination": {
+                                    "x": 1.0,
+                                    "y": 0.0,
+                                    "width": 1.0,
+                                    "height": 4.0
+                                },
+                                "layer": 0
+                            }
+                        ],
+                        "indicators": [],
+                        "textLayers": []
+                    },
+                    "scale": {
+                        "factor": 1.25,
+                        "origin": {
+                            "x": 0.5,
+                            "y": 0.5
+                        }
+                    }
+                }
+            ],
+            "images": [
+                {
+                    "id": "hud",
+                    "asset": "white-line.png",
+                    "destination": {
+                        "x": 10.0,
+                        "y": 10.0,
+                        "width": 2.0,
+                        "height": 2.0
+                    },
+                    "layer": 100
+                }
+            ],
+            "indicators": [],
+            "textLayers": []
+        },
+        {
+            "width": 20,
+            "height": 20,
+            "groups": [
+                {
+                    "id": "field",
+                    "origin": {
+                        "x": 0.0,
+                        "y": 0.0
+                    },
+                    "layer": 0,
+                    "canvas": {
+                        "width": 4,
+                        "height": 4,
+                        "images": [
+                            {
+                                "id": "line",
+                                "asset": "white-line.png",
+                                "destination": {
+                                    "x": 1.0,
+                                    "y": 0.0,
+                                    "width": 1.0,
+                                    "height": 4.0
+                                },
+                                "layer": 0
+                            }
+                        ],
+                        "indicators": [],
+                        "textLayers": []
+                    },
+                    "scale": {
+                        "factor": 1.5,
+                        "origin": {
+                            "x": 0.5,
+                            "y": 0.5
+                        }
+                    }
+                }
+            ],
+            "images": [
+                {
+                    "id": "hud",
+                    "asset": "white-line.png",
+                    "destination": {
+                        "x": 10.0,
+                        "y": 10.0,
+                        "width": 2.0,
+                        "height": 2.0
+                    },
+                    "layer": 100
+                }
+            ],
+            "indicators": [],
+            "textLayers": []
+        },
+        {
+            "width": 20,
+            "height": 20,
+            "groups": [
+                {
+                    "id": "field",
+                    "origin": {
+                        "x": 0.0,
+                        "y": 0.0
+                    },
+                    "layer": 0,
+                    "canvas": {
+                        "width": 4,
+                        "height": 4,
+                        "images": [
+                            {
+                                "id": "line",
+                                "asset": "white-line.png",
+                                "destination": {
+                                    "x": 1.0,
+                                    "y": 0.0,
+                                    "width": 1.0,
+                                    "height": 4.0
+                                },
+                                "layer": 0
+                            }
+                        ],
+                        "indicators": [],
+                        "textLayers": []
+                    }
+                }
+            ],
+            "images": [
+                {
+                    "id": "hud",
+                    "asset": "white-line.png",
+                    "destination": {
+                        "x": 10.0,
+                        "y": 10.0,
+                        "width": 2.0,
+                        "height": 2.0
+                    },
+                    "layer": 100
+                }
+            ],
+            "indicators": [],
+            "textLayers": []
+        }
+    ],
+    "packets": [
+        {
+            "frame": 1,
+            "baseGeneration": 0,
+            "generation": 1,
+            "reset": true,
+            "present": true,
+            "operations": [
+                {
+                    "op": "put",
+                    "kind": "canvas",
+                    "id": "canvas",
+                    "value": {
+                        "id": "canvas",
+                        "width": 20,
+                        "height": 20,
+                        "order": 1023
+                    }
+                },
+                {
+                    "op": "put",
+                    "kind": "canvas_image",
+                    "id": "hud",
+                    "value": {
+                        "id": "hud",
+                        "asset": "white-line.png",
+                        "destination": {
+                            "x": 10.0,
+                            "y": 10.0,
+                            "width": 2.0,
+                            "height": 2.0
+                        },
+                        "layer": 100,
+                        "order": 1023
+                    }
+                },
+                {
+                    "op": "put",
+                    "kind": "canvas_group",
+                    "id": "field",
+                    "value": {
+                        "id": "field",
+                        "origin": {
+                            "x": 0.0,
+                            "y": 0.0
+                        },
+                        "layer": 0,
+                        "canvas": {
+                            "width": 4,
+                            "height": 4,
+                            "images": [
+                                {
+                                    "id": "line",
+                                    "asset": "white-line.png",
+                                    "destination": {
+                                        "x": 1.0,
+                                        "y": 0.0,
+                                        "width": 1.0,
+                                        "height": 4.0
+                                    },
+                                    "layer": 0
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "scale": {
+                            "factor": 1.25,
+                            "origin": {
+                                "x": 0.5,
+                                "y": 0.5
+                            }
+                        },
+                        "order": 1023
+                    }
+                }
+            ],
+            "viewport": null
+        },
+        {
+            "frame": 2,
+            "baseGeneration": 1,
+            "generation": 2,
+            "reset": false,
+            "present": true,
+            "operations": [
+                {
+                    "op": "put",
+                    "kind": "canvas_group",
+                    "id": "field",
+                    "value": {
+                        "id": "field",
+                        "origin": {
+                            "x": 0.0,
+                            "y": 0.0
+                        },
+                        "layer": 0,
+                        "canvas": {
+                            "width": 4,
+                            "height": 4,
+                            "images": [
+                                {
+                                    "id": "line",
+                                    "asset": "white-line.png",
+                                    "destination": {
+                                        "x": 1.0,
+                                        "y": 0.0,
+                                        "width": 1.0,
+                                        "height": 4.0
+                                    },
+                                    "layer": 0
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "scale": {
+                            "factor": 1.5,
+                            "origin": {
+                                "x": 0.5,
+                                "y": 0.5
+                            }
+                        },
+                        "order": 1023
+                    }
+                }
+            ]
+        },
+        {
+            "frame": 3,
+            "baseGeneration": 2,
+            "generation": 3,
+            "reset": false,
+            "present": true,
+            "operations": [
+                {
+                    "op": "put",
+                    "kind": "canvas_group",
+                    "id": "field",
+                    "value": {
+                        "id": "field",
+                        "origin": {
+                            "x": 0.0,
+                            "y": 0.0
+                        },
+                        "layer": 0,
+                        "canvas": {
+                            "width": 4,
+                            "height": 4,
+                            "images": [
+                                {
+                                    "id": "line",
+                                    "asset": "white-line.png",
+                                    "destination": {
+                                        "x": 1.0,
+                                        "y": 0.0,
+                                        "width": 1.0,
+                                        "height": 4.0
+                                    },
+                                    "layer": 0
+                                }
+                            ],
+                            "indicators": [],
+                            "textLayers": []
+                        },
+                        "order": 1023
+                    }
+                }
+            ]
+        }
+    ],
+    "expected": {
+        "childDescriptorsIdentical": true,
+        "hudDestination": {
+            "x": 10.0,
+            "y": 10.0,
+            "width": 2.0,
+            "height": 2.0
+        },
+        "secondAndThirdOperationKinds": [
+            "canvas_group"
+        ],
+        "budgetPerFrame": {
+            "sources": {
+                "white-line.png": 16
+            },
+            "regions": {
+                "white-line.png:0,0,1,4": 160
+            }
+        },
+        "rule": "Prepare by child content; factor is paint-time state. Identity omits scale. HUD remains unchanged."
+    }
+}

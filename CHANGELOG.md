@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- The canvas still raster holds the regions it prepares. The list of images the Engine charged was collected into a
+  copy, so no region was ever kept: every drawing of an image decoded its whole picture again, for each still and
+  each frame of a capture. The crops a still draws are now cut once and kept while they fit the Engine's region
+  budget, as the raster's own account of itself says. No picture changes.
+
 - The Terminal preview draws a dialogue line's window in the footprint the line declares, where the game places it:
   five rows, the speaker in its top border and the page in its three rows, at the bottom of the screen for a spoken
   line and at the top for a line nobody speaks. The preview drew its own taller box (a speaker row and a marker row
@@ -49,6 +54,19 @@
 
 ### Added
 
+- A canvas group's scale (Engine candidate `engine/canvas-group-scale-20261115` over 52d4507c, `canvas_group_scale`):
+  map stills, canvas stills and cinematic capture frames draw a group with a `scale`, a factor about a point of the
+  group's own canvas with the group's translation applied after it. The three still rasters name the capability beside
+  canvas groups and the region budget, which the Engine requires with it. Everything in the group is drawn at the
+  place and size the scale gives it, never at the canvas's own size and enlarged: images, composites, indicators and
+  their strokes, text cells and their glyphs, labels, the clips inside the group, and the groups within it, whose own
+  scales multiply. The group's clip stays where its parent has it, and a colour treatment is applied to the scaled
+  drawing as before. One account of a canvas's place on the surface (`CanvasStillTransform`) is read by every drawing;
+  where a group's corner goes and its factor are taken from the Engine's own `CanvasGroup::projectRectangle()`. A
+  group no scale reaches still moves by whole pixels, its origin taken to the nearest one. Under a scale no origin or
+  translation is rounded first: each edge of a drawing is taken to its nearest pixel once, where it is drawn, so the
+  stills show no partial coverage on a scaled edge. The Engine's four port frames, the picture they draw and the
+  picture the doubled line must be drawn as are kept unchanged as `tests/Fixtures/CanvasGroupScale`.
 - Qualified indicator paths (Engine candidate `engine/field-colour-ownership` over 52d4507c, `canvas_indicator_image_path`):
   map stills, canvas stills and cinematic capture frames draw a canvas whose indicator names the image or composite it
   marks by `imagePath`, a path of group ids read from the root canvas of its frame. The three still rasters name the
