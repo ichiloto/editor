@@ -191,6 +191,7 @@ final class CutsceneOutline
      * Returns a motion sample's offset in logical pixels as authored, fractions kept, and whether the
      * sample is disabled: the whole field's, or the offset of the battler a battler motion names. A
      * battler's offset says when its X runs toward that battler's opponents instead of across the canvas.
+     * A sample that holds a scale gives it as written; one that holds none says nothing of scale.
      *
      * @param array<string, mixed> $sample
      * @param array<string, mixed>|null $battlerMotion What names the moved battler and the offset space,
@@ -204,6 +205,7 @@ final class CutsceneOutline
         $towardOpponents = $battlerMotion !== null && ($battlerMotion['space'] ?? null) === BattleMotionSpace::OPPONENTS->value;
 
         return sprintf('%s offset %s, %s', $moved, $read('x'), $read('y')) . ($towardOpponents ? ' with x toward opponents' : '')
+            . (array_key_exists('scale', $offset) ? ' scale ' . $read('scale') : '')
             . (($sample['visible'] ?? true) === false ? ' (disabled)' : '');
     }
 

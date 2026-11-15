@@ -860,9 +860,10 @@ final class CutsceneSchemas
     public static function effectTrackList(bool $graphical = false): RecordSubList
     {
         $keyframes = self::effectKeyframeList();
-        // One list for both motion tracks, as the Engine compiles both with its one `EffectMotionSamples`:
-        // a motion turned from the field's into a battler's, or back, keeps its samples.
+        // The two motion tracks read the same held samples, the whole field's with a scale besides: a motion
+        // turned from one into the other keeps its samples, and a scale never goes to a battler with them.
         $motionSamples = self::battleMotionSamples();
+        $fieldMotionSamples = self::fieldMotionSamples($motionSamples);
         $anchors = [
             new RecordField('anchor', 'Anchor', options: ['target', 'caster', 'screen'], removeWhenEmpty: true, displayDefault: 'target'),
             new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
@@ -911,7 +912,7 @@ final class CutsceneSchemas
                 'flash' => $keyframes,
                 'shake' => $keyframes,
                 ...($graphical ? ['trail' => self::battleTrailBands(), 'tether' => self::battleTetherSamples(),
-                    self::FIELD_MOTION_TRACK => $motionSamples, self::BATTLER_MOTION_TRACK => $motionSamples] : []),
+                    self::FIELD_MOTION_TRACK => $fieldMotionSamples, self::BATTLER_MOTION_TRACK => $motionSamples] : []),
             ],
             prepareEdit: static function (array $entry, string $field): array {
                 if ($field === 'type' && in_array($entry['type'] ?? null, self::getGraphicalTrackTypes(), true)) {
@@ -1062,9 +1063,25 @@ final class CutsceneSchemas
     }
 
     /**
-     * The held samples of a motion track, the whole field's or a battler's, as the Engine's
-     * `EffectMotionSamples` reads them for both: an offset in logical pixels, fractions allowed, from a
-     * frame for a duration (one frame when omitted). A sample that is not enabled moves nothing.
+     * The held samples of a whole-field motion, as the Engine's `BattleFieldMotionTrack` reads them: a
+     * battler motion's samples ({@see battleMotionSamples()}), each with an optional `payload.scale`. The
+     * scale is the battlefield camera's: one factor for both axes about the centre of the logical field,
+     * applied before the sample's offset. A sample that names none is drawn at the field's own size, and
+     * no earlier sample's scale carries into it. The Engine alone says which factors it takes (finite,
+     * above zero, at most its `CanvasGroupScale::MAX_FACTOR`) and whether a sample's offset and scale leave
+     * the battlefield covered; the row holds what the author gives it.
+     */
+    private static function fieldMotionSamples(RecordSubList $motionSamples): RecordSubList
+    {
+        return $motionSamples->extendWith('payload.y',
+            new RecordField('payload.scale', 'Scale', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1'));
+    }
+
+    /**
+     * The held samples of a battler motion, as the Engine's `EffectMotionSamples` reads them: an offset in
+     * logical pixels, fractions allowed, from a frame for a duration (one frame when omitted). A sample
+     * that is not enabled moves nothing. A whole-field motion reads the same samples with a scale besides
+     * ({@see fieldMotionSamples()}); a battler is moved rigidly and its samples hold none.
      */
     private static function battleMotionSamples(): RecordSubList
     {

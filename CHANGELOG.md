@@ -64,6 +64,25 @@
 
 ### Added
 
+- The scale of a whole-field motion's sample (Engine candidate `engine/canvas-group-scale-20261115` over 52d4507c,
+  `payload.scale` of a `field-motion` sample): the graphical editor's effect rows give each sample of a whole-field
+  motion a **Scale** row beside its offset, the battlefield camera's one factor about the centre of the field. A
+  battler motion's samples have no such row. The two tracks no longer read one list of rows: a whole-field motion's
+  list is the battler's with the scale added, and a track turned from one type into the other still keeps its
+  samples. A sample that names no scale reads `1` and is left without the key; an authored scale is changed in place
+  in the source, a new one is written into its sample's payload, emptying the row removes the key, and each is one
+  undo step. The Engine alone decides which factors it takes (above zero, at most 8): a save it refuses writes
+  nothing. Turning a whole-field motion into a battler's is refused, and nothing changes, while one of its samples
+  holds a scale: the sample is named, and the scale is cleared by the author, never dropped for them. The outline and
+  the Terminal preview give a sample's scale with its offset (`field offset x, y scale s`), and say nothing of scale
+  for a sample that holds none. `cutscenes.effectBattlePreview` takes an optional `groupScale` flag: the frame is
+  composed with `canvas_group_scale` negotiated only when it is `true`. The Engine scales the battlefield's group only
+  for a frame that also has `canvasGroups` and `regionBudget`; otherwise the frame is the still battlefield with the
+  Engine's diagnostic that the camera is not scaled. A cinematic preview passes on what its renderer says of the
+  capability. Changed by the Engine candidate, and shown as the Engine gives it: a sample whose offset and scale
+  leave the battlefield uncovered is no longer drawn moved; the frame keeps the field at rest and carries the
+  Engine's diagnostic. The Terminal editor's forms are unchanged.
+
 - A canvas group's scale (Engine candidate `engine/canvas-group-scale-20261115` over 52d4507c, `canvas_group_scale`):
   map stills, canvas stills and cinematic capture frames draw a group with a `scale`, a factor about a point of the
   group's own canvas with the group's translation applied after it. The three still rasters name the capability beside

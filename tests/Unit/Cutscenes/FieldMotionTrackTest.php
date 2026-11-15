@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneOutline;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Cutscenes\Preview\EffectBattlePreview;
+use Ichiloto\Editor\Cutscenes\Preview\PreviewPresentationCapabilities;
 use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage;
 use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\Editor;
@@ -11,6 +13,8 @@ use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionHost;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasGroupScale;
+use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 
 /**
  * The Engine's whole-field motion track (`field-motion`) in effect timelines:
@@ -78,6 +82,47 @@ return [
 ];
 PHP_SOURCE;
 }
+
+/**
+ * Quake Strike with the camera pushed in on its two moving samples, as the Engine reads a whole-field
+ * motion's scale: enough, on each, to keep the battlefield covered at that sample's offset.
+ */
+function quakeCameraTimeline(): string
+{
+    return str_replace(
+        ["['x' => -10.25, 'y' => 3.5]], // left", "['x' => 7.0, 'y' => -2.0]],"],
+        ["['x' => -10.25, 'y' => 3.5, 'scale' => 1.025]], // left", "['x' => 7.0, 'y' => -2.0, /* in */ 'scale'  =>  1.02]],"],
+        quakeStrikeTimeline());
+}
+
+/** {@see fieldMotionProject()} with Quake Strike's camera pushed in ({@see quakeCameraTimeline()}). */
+function fieldMotionCameraProject(): string
+{
+    $root = fieldMotionProject();
+    file_put_contents(fieldMotionPath($root), quakeCameraTimeline());
+
+    return $root;
+}
+
+/** What a frame's canvas groups say of where they are: each group's origin, and its scale when it has one. */
+function readFieldMotionPlaces(array $frame): array
+{
+    return array_map(static fn(array $group): array => array_intersect_key($group, ['origin' => true, 'scale' => true]), $frame['canvas']['groups'] ?? []);
+}
+
+/** Where the Engine puts a whole-field motion's sample: its offset, and its scale about the centre of the field. */
+function describeFieldMotionPlace(array $sample): array
+{
+    return ['origin' => ['x' => $sample['payload']['x'], 'y' => $sample['payload']['y']],
+        ...(isset($sample['payload']['scale']) ? ['scale' => ['factor' => $sample['payload']['scale'], 'origin' => ['x' => 0.5, 'y' => 0.5]]] : [])];
+}
+
+/** The Engine's word for a scaled sample its renderer cannot scale, and for a sample that leaves the battlefield uncovered. */
+const FIELD_MOTION_SCALE_UNDRAWN = 'Renderer cannot scale the authored battlefield camera.';
+const FIELD_MOTION_UNCOVERED = 'Authored battlefield transform leaves the viewport uncovered; provide explicit camera scale or scene coverage.';
+
+/** Why a field scale test is skipped: the Engine installed with the Editor predates the contract. */
+const ENGINE_FIELD_MOTION_SCALE_MISSING = 'The Engine in use reads no scale in a whole-field motion; set ICHILOTO_ENGINE_SRC to one that does.';
 
 /** The track's own source text, comments and spacing included. */
 function readFieldMotionSource(string $source): string
@@ -308,6 +353,132 @@ it('authors a new field-motion track and its samples in the graphical editor, as
     ]);
 });
 
+it('gives a whole-field sample a scale row beside its offset, and a battler\'s sample none', function () {
+    $root = fieldMotionCameraProject();
+    [$session, $index, $row, $apply] = openFieldMotionSession($root);
+    $ids = static fn(string $prefix): array => array_values(array_filter(array_column(array_column(
+        $session->readDatabaseRecord('cutscenes/effect', $index, ['tracks'])['rows'], 'key'), 'field'),
+        static fn(mixed $field): bool => is_string($field) && str_starts_with($field, $prefix)));
+
+    // The scale sits with the offset it is applied before. A sample that names none reads as the field's own size.
+    expect($ids('track1Keyframe0'))->toBe(['track1Keyframe0Frame', 'track1Keyframe0Duration', 'track1Keyframe0Payloadx',
+        'track1Keyframe0Payloady', 'track1Keyframe0Payloadscale', 'track1Keyframe0Visible'])
+        ->and($row('track1Keyframe0Payloadscale'))->toMatchArray(['name' => 'Scale', 'value' => '1.025', 'kind' => 'float'])
+        ->and($row('track1Keyframe1Payloadscale')['value'])->toBe('1.02')
+        ->and($row('track1Keyframe3Payloadscale')['value'])->toBe('1');
+
+    // A battler is moved rigidly: once the scales are cleared and the motion is a battler's, its samples have no such row.
+    $apply('track1Keyframe0Payloadscale', '');
+    $apply('track1Keyframe1Payloadscale', '');
+    $apply('track1Type', 'battler-motion');
+    expect($ids('track1Keyframe0'))->toBe(['track1Keyframe0Frame', 'track1Keyframe0Duration', 'track1Keyframe0Payloadx',
+        'track1Keyframe0Payloady', 'track1Keyframe0Visible']);
+})->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
+
+it('edits, adds and clears a sample\'s scale through the shared rows, touching only that value in the source, and undoes each', function () {
+    $root = fieldMotionCameraProject();
+    $path = fieldMotionPath($root);
+    $original = quakeCameraTimeline();
+    [$session, , $row, $apply] = openFieldMotionSession($root);
+
+    // An authored scale changed: its literal alone, the spacing and the comment beside it kept.
+    $apply('track1Keyframe0Payloadscale', '1.05');
+    $apply('track1Keyframe1Payloadscale', '1.03');
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and(file_get_contents($path))->toBe(str_replace(["'scale' => 1.025", "'scale'  =>  1.02"], ["'scale' => 1.05", "'scale'  =>  1.03"], $original));
+
+    // A scale given to a sample that had none is written into that sample's payload and nowhere else.
+    $apply('track1Keyframe2Payloadscale', '1.5');
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and(file_get_contents($path))->toBe(str_replace(
+            ["'scale' => 1.025", "'scale'  =>  1.02", "'payload' => ['x' => 40, 'y' => 40]"],
+            ["'scale' => 1.05", "'scale'  =>  1.03", "'payload' => ['x' => 40, 'y' => 40, 'scale' => 1.5]"], $original))
+        ->and((require $path)['tracks'][1]['keyframes'][2]['payload'])->toBe(['x' => 40, 'y' => 40, 'scale' => 1.5]);
+
+    // Cleared, the key goes and the sample is drawn at the field's own size again: no value is written in its place.
+    $apply('track1Keyframe2Payloadscale', '');
+    expect($row('track1Keyframe2Payloadscale')['value'])->toBe('1')
+        ->and($session->saveAll()['failures'])->toBe([])
+        ->and((require $path)['tracks'][1]['keyframes'][2])->toBe(['frame' => 4, 'visible' => false, 'payload' => ['x' => 40, 'y' => 40]])
+        ->and(file_get_contents($path))->toBe(str_replace(["'scale' => 1.025", "'scale'  =>  1.02"], ["'scale' => 1.05", "'scale'  =>  1.03"], $original));
+
+    // What a sample with no scale already reads as, written back, is no edit.
+    $apply('track1Keyframe2Payloadscale', '1');
+    expect($session->saveAll()['summary'])->not->toContain('1 cutscene');
+
+    // Each edit is one step back, to the file as it was opened.
+    foreach (range(1, 4) as $step) {
+        $session->undo();
+    }
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and(file_get_contents($path))->toBe($original);
+})->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
+
+it('leaves the limits of a scale to the Engine: a factor it refuses is refused at the save and nothing is written', function (string $value) {
+    $root = fieldMotionCameraProject();
+    [$session, , $row, $apply] = openFieldMotionSession($root);
+
+    $apply('track1Keyframe0Payloadscale', $value);
+    $saved = $session->saveAll();
+
+    expect($saved['failures'])->not->toBe([])
+        ->and(file_get_contents(fieldMotionPath($root)))->toBe(quakeCameraTimeline());
+
+    // Put right, the same session saves.
+    $apply('track1Keyframe0Payloadscale', '1.25');
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and((require fieldMotionPath($root))['tracks'][1]['keyframes'][0]['payload'])->toBe(['x' => -10.25, 'y' => 3.5, 'scale' => 1.25]);
+})->with(['0', '-1.5', '8.5', 'wide'])->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
+
+it('refuses to turn a whole-field motion into a battler\'s while a sample holds a scale, and changes nothing', function () {
+    $root = fieldMotionCameraProject();
+    $path = fieldMotionPath($root);
+    [$session, , $row, $apply] = openFieldMotionSession($root);
+    $refusal = 'holds a scale, which a track of type "battler-motion" does not read. Clear it there first. Nothing was changed.';
+
+    // A battler's samples hold no scale, and a scale is never dropped for the author: the first sample holding one is named.
+    expect(fn() => $apply('track1Type', 'battler-motion'))->toThrow(SessionRefusal::class, 'Motion sample 1 ' . $refusal)
+        ->and($row('track1Type')['value'])->toBe('field-motion')
+        ->and($row('track1Keyframe0Payloadscale')['value'])->toBe('1.025')
+        ->and($session->saveAll()['summary'])->not->toContain('1 cutscene')
+        ->and(file_get_contents($path))->toBe(quakeCameraTimeline());
+
+    // With the first cleared the second is named; with both cleared the motion turns and keeps every sample.
+    $apply('track1Keyframe0Payloadscale', '');
+    expect(fn() => $apply('track1Type', 'battler-motion'))->toThrow(SessionRefusal::class, 'Motion sample 2 ' . $refusal);
+    $apply('track1Keyframe1Payloadscale', '');
+    $apply('track1Type', 'battler-motion');
+    $apply('track1Anchor', 'target');
+
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and((require $path)['tracks'][1])->toBe(['id' => 'impact-shake', 'type' => 'battler-motion', 'keyframes' => (require fieldMotionPath(fieldMotionProject()))['tracks'][1]['keyframes'], 'anchor' => 'target']);
+})->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
+
+it('reports a sample\'s scale in the outline and in the terminal preview, and says nothing of scale where none is authored', function () {
+    $root = fieldMotionCameraProject();
+    $asset = libraryOf(openFieldMotionEditor($root))->find(CutsceneType::EFFECT, 'quake-strike');
+    $graphical = new TimelinePreviewSession($asset->compileEffect(EffectPresentation::GRAPHICAL, true), null);
+    $stage = new EffectPreviewStage(EffectPresentation::GRAPHICAL, true);
+
+    expect(array_column(CutsceneOutline::of(CutsceneType::EFFECT, $asset->payload())->rows(), 'text'))->toContain(
+        'f2 +1  field offset -10.25, 3.5 scale 1.025',
+        'f3 +1  field offset 7, -2 scale 1.02',
+        'f4 +1  field offset 40, 40 (disabled)',
+        'f5 +1  field offset 0, 0',
+    )
+        // The compiled sample carries the scale the Engine read, and the preview says it as it says the offset.
+        ->and($stage->describeUndrawn($graphical->activeSegments(2)))->toBe(['field offset -10.25, 3.5 scale 1.025'])
+        ->and($stage->describeUndrawn($graphical->activeSegments(3)))->toBe(['field offset 7, -2 scale 1.02'])
+        ->and($stage->describeUndrawn($graphical->activeSegments(5)))->toBe(['field offset 0, 0'])
+        ->and(CutsceneOutline::describeMotionSample(['payload' => ['x' => 1, 'y' => 2, 'scale' => 'wide'], 'visible' => false]))->toBe('field offset 1, 2 scale ? (disabled)');
+
+    // The terminal editor still names the track and gains no sample form for it.
+    $editor = openFieldMotionEditor($root);
+    openCutsceneFrame($editor, 'commandListTracks');
+    expect(array_values(array_filter(cutsceneFieldIds($editor), static fn(string $id): bool => str_starts_with($id, 'track1'))))
+        ->toBe(['track1Id', 'track1Type', 'track1Presentation']);
+})->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
+
 it('refuses a save the Engine rejects for the track and writes nothing', function () {
     $root = fieldMotionProject();
     [$session, , , $apply] = openFieldMotionSession($root);
@@ -352,22 +523,25 @@ it('previews the effect in battle: a static battlefield with the Engine saying t
         ->and($terminal['terminalLines'])->not->toBe([]);
 });
 
-it('moves the battlefield by the authored offset, with no diagnostic, for a preview whose canvas draws canvas groups', function () {
-    $root = fieldMotionProject();
+it('moves and scales the battlefield by the authored sample, with no diagnostic, for a preview whose canvas draws scaled canvas groups', function () {
+    $root = fieldMotionCameraProject();
     [$session, $index] = openFieldMotionSession($root);
     $samples = (require fieldMotionPath($root))['tracks'][1]['keyframes'];
-    $readOrigins = static fn(array $frame): array => array_column($frame['canvas']['groups'] ?? [], 'origin');
-    $read = static fn(int $authored, bool $canvasGroups): array => $session->readEffectBattlePreview($index, 0, authoredFrame: $authored, canvasGroups: $canvasGroups);
+    $read = static fn(int $authored, bool $drawn): array => $session->readEffectBattlePreview($index, 0, authoredFrame: $authored,
+        regionBudget: $drawn, canvasGroups: $drawn, groupScale: $drawn);
 
     $still = $read($samples[0]['frame'], false);
     $moving = $read($samples[0]['frame'], true);
     $next = $read($samples[1]['frame'], true);
 
     // Everything the still battlefield draws travels in the one group, as drawn; none of it stays behind on the canvas.
+    // The group is where the sample puts it: at the sample's offset, scaled by the sample's factor about the field's centre.
     $field = array_column($still['canvas']['images'], 'id');
-    expect($readOrigins($moving))->toBe([$samples[0]['payload']])
-        ->and($readOrigins($next))->toBe([$samples[1]['payload']])
+    expect(readFieldMotionPlaces($moving))->toBe([describeFieldMotionPlace($samples[0])])
+        ->and(readFieldMotionPlaces($next))->toBe([describeFieldMotionPlace($samples[1])])
+        ->and([$samples[0]['payload']['scale'], $samples[1]['payload']['scale']])->toBe([1.025, 1.02])
         ->and($moving['diagnostics'])->toBe([])
+        ->and($next['diagnostics'])->toBe([])
         ->and($field)->not->toBe([])
         ->and(array_column($moving['canvas']['groups'][0]['canvas']['images'], 'id'))->toBe($field)
         ->and(array_intersect(array_column($moving['canvas']['images'], 'id'), $field))->toBe([])
@@ -380,7 +554,59 @@ it('moves the battlefield by the authored offset, with no diagnostic, for a prev
         ->and($still['canvas']['images'])->not->toBe([])
         ->and($still['diagnostics'])->toHaveCount(1)
         ->and($read($samples[0]['frame'], false))->toBe($still);
-});
+})->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
+
+it('says plainly when the preview\'s canvas cannot scale a group, and leaves the battlefield still', function () {
+    $root = fieldMotionCameraProject();
+    [$session, $index] = openFieldMotionSession($root);
+    $sample = (require fieldMotionPath($root))['tracks'][1]['keyframes'][0];
+    $read = static fn(bool ...$features): array => $session->readEffectBattlePreview(...[$index, 0, 'authoredFrame' => $sample['frame'], ...$features]);
+    $still = $read();
+
+    // The Engine scales a group only for a renderer that names the scale and the region budget beside canvas groups.
+    // Missing either, the frame is the still battlefield with the Engine's own word for why; nothing is drawn at a guess.
+    foreach ([['canvasGroups' => true], ['canvasGroups' => true, 'regionBudget' => true], ['canvasGroups' => true, 'groupScale' => true]] as $features) {
+        $frame = $read(...$features);
+        expect($frame['diagnostics'])->toBe([FIELD_MOTION_SCALE_UNDRAWN])
+            ->and($frame['canvas'])->not->toHaveKey('groups')
+            ->and($frame['canvas']['images'])->toBe($still['canvas']['images']);
+    }
+
+    // The flag alone asks for nothing else: without canvas groups the Engine says the motion is not applied, as for any sample.
+    expect($read(regionBudget: true, groupScale: true)['canvas'])->not->toHaveKey('groups')
+        ->and($read(regionBudget: true, groupScale: true)['diagnostics'])->toBe($still['diagnostics'])
+        ->and($still['diagnostics'])->toHaveCount(1)
+        ->and($still['diagnostics'])->not->toBe([FIELD_MOTION_SCALE_UNDRAWN])
+        ->and(readFieldMotionPlaces($read(regionBudget: true, canvasGroups: true, groupScale: true)))->toBe([describeFieldMotionPlace($sample)])
+        ->and($read(regionBudget: true, canvasGroups: true, groupScale: true)['diagnostics'])->toBe([]);
+
+    // The capability is advertised to the Engine for a frame only when its flag is given, whatever else is.
+    expect(EffectBattlePreview::listNegotiatedCapabilities(groupScale: true))->toBe([RendererSessionConfig::CANVAS_GROUP_SCALE])
+        ->and(EffectBattlePreview::listNegotiatedCapabilities(true, true, true, true, true, true))->not->toContain(RendererSessionConfig::CANVAS_GROUP_SCALE)
+        ->and(EffectBattlePreview::listNegotiatedCapabilities(regionBudget: true, canvasGroups: true, groupScale: true))->toBe([
+            RendererSessionConfig::CANVAS_REGION_BUDGET, RendererSessionConfig::CANVAS_GROUPS, RendererSessionConfig::CANVAS_GROUP_SCALE]);
+
+    // A cinematic preview passes on what its renderer says of the scale, and nothing of its own.
+    $names = static fn(array $capabilities): Closure => static fn(string $feature): bool => in_array($feature, $capabilities, true);
+    expect(new PreviewPresentationCapabilities($names([RendererSessionConfig::CANVAS_GROUP_SCALE]))->supportsFeature(RendererSessionConfig::CANVAS_GROUP_SCALE))->toBeTrue()
+        ->and(new PreviewPresentationCapabilities($names([RendererSessionConfig::CANVAS_GROUPS]))->supportsFeature(RendererSessionConfig::CANVAS_GROUP_SCALE))->toBeFalse();
+})->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
+
+it('shows the Engine\'s refusal of a sample that leaves the battlefield uncovered, with the field at rest in its group', function () {
+    // Quake Strike as first written: offsets with no scale. The Engine no longer draws a field moved off its backdrop.
+    $root = fieldMotionProject();
+    [$session, $index] = openFieldMotionSession($root);
+    $samples = (require fieldMotionPath($root))['tracks'][1]['keyframes'];
+    $read = static fn(int $authored): array => $session->readEffectBattlePreview($index, 0, authoredFrame: $authored,
+        regionBudget: true, canvasGroups: true, groupScale: true);
+
+    foreach ([$samples[0], $samples[1]] as $sample) {
+        $frame = $read($sample['frame']);
+        expect($sample['payload'])->not->toHaveKey('scale')
+            ->and($frame['diagnostics'])->toBe([FIELD_MOTION_UNCOVERED])
+            ->and(readFieldMotionPlaces($frame))->toEqual([['origin' => ['x' => 0, 'y' => 0]]]);
+    }
+})->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
 
 it('holds the battlefield in place where no enabled sample moves it, and keeps a zero sample as a motion of nothing', function () {
     $root = fieldMotionProject();
@@ -414,32 +640,41 @@ it('holds the battlefield in place where no enabled sample moves it, and keeps a
         ->and($terminal['diagnostics'])->toBe([]);
 });
 
-it('reads the canvas groups request from the host route, and composes them for that request alone', function () {
-    $root = fieldMotionProject();
+it('reads the canvas groups and group scale requests from the host route, and composes them for that request alone', function () {
+    $root = fieldMotionCameraProject();
     $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
     $request = static fn(string $method, array $params = []): array => $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params]));
     $request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
     $index = array_find_key($request('database.records', ['category' => 'cutscenes/effect'])['result']['records'],
         static fn(mixed $label): bool => str_contains(strval($label), 'quake-strike'));
-    $frame = (require fieldMotionPath($root))['tracks'][1]['keyframes'][0];
+    $sample = (require fieldMotionPath($root))['tracks'][1]['keyframes'][0];
     $preview = static fn(array $features): array => $request('cutscenes.effectBattlePreview',
-        ['index' => $index, 'frame' => 0, 'authoredFrame' => $frame['frame'], 'presentation' => 'graphical', ...$features])['result'];
+        ['index' => $index, 'frame' => 0, 'authoredFrame' => $sample['frame'], 'presentation' => 'graphical', ...$features])['result'];
+    $scaled = ['canvasGroups' => true, 'regionBudget' => true, 'groupScale' => true];
 
-    expect(array_column($preview(['canvasGroups' => true])['canvas']['groups'], 'origin'))->toBe([$frame['payload']])
-        ->and($preview(['canvasGroups' => true])['diagnostics'])->toBe([]);
+    expect(readFieldMotionPlaces($preview($scaled)))->toBe([describeFieldMotionPlace($sample)])
+        ->and($preview($scaled)['diagnostics'])->toBe([]);
 
-    // Only a true flag asks for them: left out, false or another feature's flag leaves the field still.
+    // Only a true flag asks for canvas groups: left out, false or another feature's flag leaves the field still.
     foreach ([[], ['canvasGroups' => false], ['canvasGroups' => 'yes'], ['regionBudget' => true, 'imageRotation' => true]] as $features) {
         $still = $preview($features);
         expect($still['canvas'])->not->toHaveKey('groups')
-            ->and($still['diagnostics'])->toHaveCount(1);
+            ->and($still['diagnostics'])->toHaveCount(1)
+            ->and($still['diagnostics'])->not->toBe([FIELD_MOTION_SCALE_UNDRAWN]);
     }
 
-    // Another negotiated feature beside them keeps both.
-    $both = $preview(['canvasGroups' => true, 'regionBudget' => true]);
-    expect($both['canvas']['groups'])->toHaveCount(1)
-        ->and($both['diagnostics'])->toBe([]);
-});
+    // Only a true flag asks for the scale: left out, false or anything else, the Engine says the camera is not scaled.
+    foreach ([[], ['groupScale' => false], ['groupScale' => 'yes'], ['groupScale' => 1], ['groupColor' => true]] as $features) {
+        $unscaled = $preview(['canvasGroups' => true, 'regionBudget' => true, ...$features]);
+        expect($unscaled['canvas'])->not->toHaveKey('groups')
+            ->and($unscaled['diagnostics'])->toBe([FIELD_MOTION_SCALE_UNDRAWN]);
+    }
+
+    // Another negotiated feature beside them keeps all of them.
+    $all = $preview([...$scaled, 'imageRotation' => true, 'clipOpacity' => true]);
+    expect(readFieldMotionPlaces($all))->toBe([describeFieldMotionPlace($sample)])
+        ->and($all['diagnostics'])->toBe([]);
+})->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
 
 it('leaves a summon timeline holding the track as written while the Engine refuses it', function () {
     $root = fieldMotionProject();

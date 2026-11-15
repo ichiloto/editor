@@ -3793,22 +3793,37 @@ A battle effect may hold a `field-motion` track, which moves the whole
 battlefield in the graphical battle. In the GUI it is one of the track types.
 It has no anchor; each sample gives its **Frame**, **Duration** (one frame when
 left out), **Offset X** and **Offset Y** in logical pixels,
-fractions allowed, and **Enabled** (`false` keeps the sample and moves
-nothing). On save the Engine refuses samples out of order or overlapping, a
-presentation other than `graphical`, and a looping or battle-phase timeline,
-and nothing is written. The Terminal editor names the track, lists its samples
-in the Timeline pane as `field offset x, y`, and leaves them as written; its
-preview names the offset under **Not drawn here**. The GUI's battle preview
-moves the battlefield by each enabled sample's offset where its canvas draws
-canvas groups. The editor session composes them only for a
-`cutscenes.effectBattlePreview` request whose `canvasGroups` is `true`; any
-other request draws the battlefield still on a moving frame, with the
-Engine's diagnostic that the motion is not applied.
+fractions allowed, **Scale**, and **Enabled** (`false` keeps the sample and
+moves nothing). **Scale** is the battlefield camera's: one factor about the
+centre of the field, applied before the offset. It is written as the sample's
+`payload.scale`. A sample that names none is drawn at the field's own size
+and its row reads `1`; clearing the row takes the key out of the file, and no
+earlier sample's scale carries into it. The Engine draws a moved or scaled
+field only while the backdrop still covers the whole view, so an offset
+usually needs a scale that covers it: a sample that leaves the view uncovered
+is refused in the battle and in the preview with the Engine's diagnostic, and
+the field stays at rest. On save the Engine refuses samples out of order or
+overlapping, a scale that is not above zero and at most 8, a presentation
+other than `graphical`, and a looping or battle-phase timeline, and nothing is
+written. The Terminal editor names the track, lists its samples in the
+Timeline pane as `field offset x, y`, adding `scale s` where the sample holds
+one, and leaves them as written; its preview names the offset and the scale
+under **Not drawn here**. The GUI's battle preview moves the battlefield by
+each enabled sample's offset where its canvas draws canvas groups, and scales
+it where the canvas also scales them. The editor session composes groups only
+for a `cutscenes.effectBattlePreview` request whose `canvasGroups` is `true`,
+and a scaled group only for one whose `groupScale` and `regionBudget` are
+`true` as well; any other request draws the battlefield still on that frame,
+with the Engine's diagnostic that the motion is not applied or that the camera
+is not scaled.
 
 A battle effect may also hold a `battler-motion` track, which moves one side
 of the action in the graphical battle. In the GUI it is one of the track
-types, with the same sample rows as a whole-field motion; a track turned from
-one of the two types into the other keeps its samples. **Moved Battler** is
+types, with the sample rows of a whole-field motion but its **Scale**: a
+battler is moved rigidly. A track turned from one of the two types into the
+other keeps its samples. A whole-field motion whose sample holds a scale is
+not turned into a battler's: the editor names the sample and changes nothing
+until its scale is cleared. **Moved Battler** is
 `caster` or `target` (every selected target moves). **Offset Space** is
 `canvas`, where X runs to the right of the screen, or `opponents`, where X
 runs from the moved battler toward the side it fights, so a negative X pushes

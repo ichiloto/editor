@@ -353,6 +353,24 @@ Remaining for the GUI editor:
   groups. The painted result has not been checked in a window. A summon's
   battle preview takes none of these flags: the Engine refuses both tracks in
   a summon timeline.
+- The scale of a whole-field motion's sample (Engine candidate
+  `engine/canvas-group-scale-20261115`, `payload.scale`, 15 November). Done in
+  the session: the effect rows give a `field-motion` sample a **Scale** row
+  beside its offset and a `battler-motion` sample none; the value is kept and
+  edited in place in the source, cleared by emptying the row, and undone like
+  any row; the Engine alone decides which factors it takes, at the save. A
+  whole-field motion whose sample holds a scale is not turned into a battler's
+  until the scale is cleared. `cutscenes.effectBattlePreview` takes an optional
+  `groupScale` flag and composes that frame with `canvas_group_scale`
+  negotiated only when the flag is `true`; the Engine scales the group only
+  with `canvasGroups` and `regionBudget` beside it, and otherwise leaves the
+  battlefield still with its diagnostic. The outline and the Terminal preview
+  give the scale with the offset. Remaining: the graphical editor does not send
+  `groupScale` yet and its canvas does not scale a group, so its battle
+  preview shows a scaled sample still, with the Engine's diagnostic; the
+  Engine candidate also refuses an offset that leaves the battlefield
+  uncovered, so an effect authored with offsets alone now previews still with
+  that diagnostic until its samples are given a covering scale.
 
 Reduced-motion samples and motion scopes (status, 12 November 2026, Engine
 `e1438b34`): an effect's or a summon's `reducedMotionSamples` and each track's
