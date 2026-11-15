@@ -625,6 +625,12 @@ final class CinematicPreviewSession
         return $this->field->exchangeScene($events, $sessionId);
     }
 
+    /** Whether the Engine still has something of the scene to send the graphical view ({@see PreviewField::hasPendingSceneDelivery()}). */
+    public function hasPendingSceneDelivery(): bool
+    {
+        return $this->field->hasPendingSceneDelivery();
+    }
+
     /** The graphical view's grid ({@see PreviewField::getSceneGrid()}). */
     public function getSceneGrid(): RendererGridConfig
     {

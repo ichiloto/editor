@@ -6,14 +6,15 @@ use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
 use Ichiloto\Engine\IO\Console\TerminalText;
 
-/** @param list<array{type: string, payload: array<string, mixed>}> $messages */
+/**
+ * The last frame sent, its packets joined. The messages come from {@see exchangePreviewSceneUntilPresented()}, so that frame is presented.
+ *
+ * @param list<array{type: string, payload: array<string, mixed>}> $messages
+ */
 function getNarrationPreviewFrame(array $messages): array
 {
     $frames = array_values(array_filter($messages, static fn(array $message): bool => $message['type'] === 'frame'));
     $last = $frames[array_key_last($frames)]['payload'] ?? throw new RuntimeException('No preview frame was sent.');
-    if (! $last['present']) {
-        throw new RuntimeException('The preview frame upload has not finished.');
-    }
     $operations = [];
     $reset = false;
     $viewport = [];
@@ -90,7 +91,7 @@ it('uses the themed wide dialogue reading area without controls or duplicate ASC
     try {
         $preview->step();
         expect($preview->failure())->toBeNull();
-        $first = getNarrationPreviewFrame($preview->exchangeScene([previewWindowReady()], $preview->getSceneSessionId()));
+        $first = getNarrationPreviewFrame(exchangePreviewSceneUntilPresented($preview, [previewWindowReady()], $preview->getSceneSessionId()));
         $images = getNarrationPreviewObjects($first, 'canvas_image');
         $body = array_values(array_filter($images, static fn(array $image): bool => str_contains($image['id'], 'dialogue-body')));
         expect($body)->not->toBeEmpty();
@@ -128,7 +129,7 @@ it('uses the themed wide dialogue reading area without controls or duplicate ASC
         $preview->play();
         $preview->tick(0.5);
         $preview->tick(0.5);
-        $next = getNarrationPreviewFrame($preview->exchangeScene([acknowledgeNarrationPreviewFrame($first)], $preview->getSceneSessionId()));
+        $next = getNarrationPreviewFrame(exchangePreviewSceneUntilPresented($preview, [acknowledgeNarrationPreviewFrame($first)], $preview->getSceneSessionId()));
         $after = $preview->snapshot()->values;
         expect($after['camera'])->not->toBe($before['camera'])
             ->and($after['player position'])->toBe($before['player position'])
@@ -138,7 +139,7 @@ it('uses the themed wide dialogue reading area without controls or duplicate ASC
             ->and($preview->hasActiveSession())->toBeTrue();
 
         $preview->stop();
-        $stopped = getNarrationPreviewFrame($preview->exchangeScene([acknowledgeNarrationPreviewFrame($next)], $preview->getSceneSessionId()));
+        $stopped = getNarrationPreviewFrame(exchangePreviewSceneUntilPresented($preview, [acknowledgeNarrationPreviewFrame($next)], $preview->getSceneSessionId()));
         $removed = array_column(array_filter($stopped['operations'], static fn(array $operation): bool => $operation['op'] === 'remove'), 'id');
         expect($removed)->toContain($prose['id'], ...array_column($body, 'id'))
             ->and($preview->status())->toBe(CinematicPreviewSession::STATUS_STOPPED)
@@ -156,7 +157,7 @@ it('returns to terminal narration on detach and does not retain stopped text on 
 
     try {
         $preview->step();
-        $first = getNarrationPreviewFrame($preview->exchangeScene([previewWindowReady()], $preview->getSceneSessionId()));
+        $first = getNarrationPreviewFrame(exchangePreviewSceneUntilPresented($preview, [previewWindowReady()], $preview->getSceneSessionId()));
         expect(getNarrationPreviewObjects($first, 'canvas_text'))->not->toBeEmpty();
         $preview->detachScene();
         $terminal = array_map(TerminalText::stripAnsi(...), $preview->frame());
@@ -165,7 +166,7 @@ it('returns to terminal narration on detach and does not retain stopped text on 
             ->and(implode("\n", $terminal))->toContain('Synthetic narration', 'Preview narrator', 'A separate line')
             ->and($preview->hasActiveSession())->toBeTrue();
         $preview->stop();
-        $again = getNarrationPreviewFrame($preview->exchangeScene([previewWindowReady()], $preview->getSceneSessionId()));
+        $again = getNarrationPreviewFrame(exchangePreviewSceneUntilPresented($preview, [previewWindowReady()], $preview->getSceneSessionId()));
         expect($again['reset'])->toBeTrue()
             ->and(getNarrationPreviewObjects($again, 'canvas_text'))->toBeEmpty()
             ->and(getNarrationPreviewObjects($again, 'canvas_image'))->toBeEmpty()
@@ -183,7 +184,7 @@ it('keeps terminal text without graphical theme objects when the preview window 
         $preview->step();
         $terminal = implode("\n", array_map(TerminalText::stripAnsi(...), $preview->frame()));
         expect($terminal)->toContain('Synthetic narration', 'Preview narrator', 'A separate line');
-        $frame = getNarrationPreviewFrame($preview->exchangeScene([
+        $frame = getNarrationPreviewFrame(exchangePreviewSceneUntilPresented($preview, [
             json_encode(['protocol' => 2, 'type' => 'ready', 'capabilities' => []], JSON_THROW_ON_ERROR),
         ], $preview->getSceneSessionId()));
         expect(getNarrationPreviewObjects($frame, 'canvas_text'))->toBeEmpty()
@@ -225,11 +226,11 @@ it('pages graphical dialogue on the wide text screen, not the few physical cells
 
     try {
         $preview->step();
-        $first = getNarrationPreviewFrame($preview->exchangeScene([previewWindowReady()], $preview->getSceneSessionId()));
+        $first = getNarrationPreviewFrame(exchangePreviewSceneUntilPresented($preview, [previewWindowReady()], $preview->getSceneSessionId()));
         $preview->play();
         $preview->tick(0.2);
         $preview->tick(0.1);
-        $frame = getNarrationPreviewFrame($preview->exchangeScene([acknowledgeNarrationPreviewFrame($first)], $preview->getSceneSessionId()));
+        $frame = getNarrationPreviewFrame(exchangePreviewSceneUntilPresented($preview, [acknowledgeNarrationPreviewFrame($first)], $preview->getSceneSessionId()));
         $prose = array_find(getNarrationPreviewObjects($frame, 'canvas_text'), static fn(array $layer): bool => str_ends_with($layer['id'], 'dialogue-text'));
 
         // Each authored line stays whole; only the authored line break divides them.
