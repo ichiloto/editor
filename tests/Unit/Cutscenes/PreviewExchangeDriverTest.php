@@ -3,10 +3,11 @@
 declare(strict_types=1);
 
 /**
- * The shared driver the preview tests exchange frames through: it gives a
- * frame whose upload yielded its further turns, as an editor window does
- * across its ticks, and stops at a bound. A synthetic window stands in for
- * the preview.
+ * The shared driver the tests exchange frames through, for a preview itself
+ * and for a session's answers alike: it gives a frame whose upload yielded
+ * its further turns, as an editor window does across its ticks, and stops at
+ * a bound. A synthetic window stands in for the preview, and scripted
+ * answers for a session.
  */
 
 /**
@@ -72,6 +73,37 @@ it('returns after one exchange when the frame is whole or there is nothing to se
     'a presented frame' => [[createFramePacket(1, true)]],
     'nothing to send' => [[]],
 ]);
+
+it('drives a session\'s answers by their own report, giving the last answer with every message sent', function () {
+    $answers = [
+        ['sessionId' => 'epoch', 'diagnostics' => [], 'messages' => [], 'deliveryPending' => true],
+        ['sessionId' => 'epoch', 'diagnostics' => [], 'messages' => [createFramePacket(1, false)], 'deliveryPending' => true],
+        ['sessionId' => 'epoch', 'diagnostics' => ['late'], 'messages' => [createFramePacket(1, true)], 'deliveryPending' => false],
+        ['sessionId' => 'epoch', 'diagnostics' => [], 'messages' => [createFramePacket(2, true)], 'deliveryPending' => false],
+    ];
+    $received = [];
+    $exchange = static function (array $events) use (&$answers, &$received): array {
+        $received[] = $events;
+
+        return array_shift($answers);
+    };
+
+    expect(exchangeSceneUntilPresented($exchange, ['ready']))->toBe(['sessionId' => 'epoch', 'diagnostics' => ['late'],
+        'messages' => [createFramePacket(1, false), createFramePacket(1, true)], 'deliveryPending' => false])
+        ->and($received)->toBe([['ready'], [], []]);
+});
+
+it('stops a session\'s answers at its bound while they stay pending', function () {
+    $exchanges = 0;
+    $exchange = static function (array $events) use (&$exchanges): array {
+        $exchanges++;
+
+        return ['messages' => [], 'deliveryPending' => true];
+    };
+
+    expect(fn() => exchangeSceneUntilPresented($exchange, [], 4))->toThrow(RuntimeException::class, 'not whole within 4 exchanges')
+        ->and($exchanges)->toBe(4);
+});
 
 it('stops at its bound when the frame is never whole', function (array $each, int $pendingExchanges) {
     $preview = createScriptedPreview(array_fill(0, 8, $each), $pendingExchanges);

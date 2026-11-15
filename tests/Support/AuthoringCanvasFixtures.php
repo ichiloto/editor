@@ -28,8 +28,24 @@ function acknowledgeCanvasFrames(array $answer): array
 }
 
 /**
- * A map's whole picture, as a newly opened editing canvas first draws it: the exchange's answer, with every
- * operation of the frames it sent; with `$pieceArt`, a graphical placement's art laid before it is applied.
+ * Exchanges with a map's editing canvas until the frame the Engine has begun is whole
+ * ({@see exchangeSceneUntilPresented()}), at one variant selection, preview time and laid art throughout.
+ *
+ * @param list<string> $events The window's answers for the first exchange.
+ * @param array<string, string> $variants
+ * @param array{piece: string, from: array{0: int, 1: int}, to: array{0: int, 1: int}}|null $pieceArt
+ * @return array<string, mixed> The last answer, its `messages` every message sent, in order.
+ */
+function exchangeAuthoringCanvasUntilPresented(EditorSession $session, string $mapId, array $events, array $variants = [], float $seconds = 0,
+    ?string $sessionId = null, ?array $pieceArt = null): array
+{
+    return exchangeSceneUntilPresented(static fn(array $events): array
+        => $session->exchangeAuthoringCanvas($mapId, $events, $variants, $seconds, $sessionId, $pieceArt), $events);
+}
+
+/**
+ * A map's whole picture, as a newly opened editing canvas first draws it: the last exchange's answer, with every
+ * operation of the frame it took to be whole; with `$pieceArt`, a graphical placement's art laid before it is applied.
  *
  * @param array<string, string> $variants
  * @param array{piece: string, from: array{0: int, 1: int}, to: array{0: int, 1: int}}|null $pieceArt
@@ -39,7 +55,7 @@ function drawAuthoringCanvas(EditorSession $session, string $mapId, array $varia
 {
     $session->closeAuthoringCanvas($mapId);
     $opened = $session->exchangeAuthoringCanvas($mapId, [], $variants, $seconds, pieceArt: $pieceArt);
-    $drawn = $session->exchangeAuthoringCanvas($mapId, [canvasWindowReady()], $variants, $seconds, $opened['sessionId'], $pieceArt);
+    $drawn = exchangeAuthoringCanvasUntilPresented($session, $mapId, [canvasWindowReady()], $variants, $seconds, $opened['sessionId'], $pieceArt);
     $session->closeAuthoringCanvas($mapId);
 
     return [...$drawn, 'operations' => array_merge(...array_map(static fn(array $frame): array => $frame['payload']['operations'],
