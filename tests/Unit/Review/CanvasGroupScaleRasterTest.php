@@ -93,10 +93,10 @@ function createGroupScaleLabel(CanvasRectangle $area, ?CanvasRectangle $clip = n
 }
 
 /**
- * A raster that draws canvases with a label raster of its own: a picture, kept as the graphical renderer writes a
- * label's, PNG bytes with the renderer's guard of clear pixels on every side.
+ * A picture kept as the graphical renderer writes a label's raster: PNG bytes with the renderer's guard of clear
+ * pixels on every side.
  */
-function createGroupScaleLabelRaster(GdImage $picture): CanvasStillRaster
+function encodeGroupScaleLabel(GdImage $picture): string
 {
     $guard = StillLabelPreparation::RASTER_GUARD;
     $guarded = imagecreatetruecolor(imagesx($picture) + 2 * $guard, imagesy($picture) + 2 * $guard);
@@ -107,7 +107,75 @@ function createGroupScaleLabelRaster(GdImage $picture): CanvasStillRaster
     ob_start();
     imagepng($guarded);
 
-    return new CanvasStillRaster(getCanvasGroupScaleFixtureDirectory(), labelRasters: [GROUP_SCALE_LABEL_LAYOUT => (string) ob_get_clean()]);
+    return (string) ob_get_clean();
+}
+
+/** A raster that draws canvases with a label raster of its own: a picture, kept as {@see encodeGroupScaleLabel()} keeps it. */
+function createGroupScaleLabelRaster(GdImage $picture): CanvasStillRaster
+{
+    return new CanvasStillRaster(getCanvasGroupScaleFixtureDirectory(), labelRasters: [GROUP_SCALE_LABEL_LAYOUT => encodeGroupScaleLabel($picture)]);
+}
+
+/** A surface of a size that nothing covers. */
+function createGroupScaleSurface(int $width, int $height): GdImage
+{
+    $surface = imagecreatetruecolor($width, $height);
+    imagealphablending($surface, false);
+    imagefilledrectangle($surface, 0, 0, $width - 1, $height - 1, imagecolorallocatealpha($surface, 0, 0, 0, 127));
+    imagealphablending($surface, true);
+    imagesavealpha($surface, true);
+
+    return $surface;
+}
+
+/**
+ * A word in white on nothing, drawn by a font and cut to its ink: real glyphs with soft edges, and ink in the
+ * first and last row and column of the picture.
+ */
+function drawGroupScaleWord(string $font, string $word): GdImage
+{
+    $sheet = createGroupScaleSurface(160, 48);
+    imagettftext($sheet, 14, 0, 8, 34, imagecolorallocate($sheet, 255, 255, 255), $font, $word);
+    $ink = findCanvasGroupScalePaint($sheet);
+    $picture = imagecreatetruecolor($ink['width'], $ink['height']);
+    imagealphablending($picture, false);
+    imagesavealpha($picture, true);
+    imagecopy($picture, $sheet, 0, 0, $ink['x'], $ink['y'], $ink['width'], $ink['height']);
+
+    return $picture;
+}
+
+/**
+ * What a still shows of a label alone on a clear surface: its raster, less the guard, sampled once to the pixels
+ * the rounded edges of a rectangle enclose, inside the rounded edges of a clip when one is given.
+ */
+function composeGroupScaleLabel(string $bytes, CanvasRectangle $place, ?CanvasRectangle $clip, int $width, int $height): GdImage
+{
+    $guard = StillLabelPreparation::RASTER_GUARD;
+    $raster = imagecreatefromstring($bytes);
+    [$left, $top, $right, $bottom] = roundGroupScaleEdges($place);
+    $sampled = imagecreatetruecolor($right - $left, $bottom - $top);
+    imagealphablending($sampled, false);
+    imagecopyresampled($sampled, $raster, 0, 0, $guard, $guard, $right - $left, $bottom - $top, imagesx($raster) - 2 * $guard, imagesy($raster) - 2 * $guard);
+    [$clipLeft, $clipTop, $clipRight, $clipBottom] = $clip === null ? [0, 0, $width, $height] : roundGroupScaleEdges($clip);
+    [$maskLeft, $maskTop, $maskRight, $maskBottom] = [max(0, $left, $clipLeft), max(0, $top, $clipTop), min($width, $right, $clipRight), min($height, $bottom, $clipBottom)];
+    $surface = createGroupScaleSurface($width, $height);
+    imagecopy($surface, $sampled, $maskLeft, $maskTop, $maskLeft - $left, $maskTop - $top, $maskRight - $maskLeft, $maskBottom - $maskTop);
+
+    return $surface;
+}
+
+/** How many pixels of two surfaces of one size differ in colour or coverage. */
+function countGroupScaleDifferences(GdImage $first, GdImage $second): int
+{
+    $different = 0;
+    for ($y = 0; $y < imagesy($first); $y++) {
+        for ($x = 0; $x < imagesx($first); $x++) {
+            $different += imagecolorat($first, $x, $y) === imagecolorat($second, $x, $y) ? 0 : 1;
+        }
+    }
+
+    return $different;
 }
 
 /** A picture of one opaque colour. */
@@ -329,6 +397,60 @@ it('draws a glyph in the font size of its scaled cell, inside that cell', functi
         ->and($plain['x'] >= 4 && $plain['y'] >= 6 && $plain['x'] + $plain['width'] <= 12 && $plain['y'] + $plain['height'] <= 22)->toBeTrue()
         ->and($scaled['x'] >= 4 && $scaled['y'] >= 6 && $scaled['x'] + $scaled['width'] <= 28 && $scaled['y'] + $scaled['height'] <= 54)->toBeTrue()
         ->and($scaled['height'])->toBeBetween(3 * $plain['height'] - 3, 3 * $plain['height'] + 3);
+})->skip(fn (): bool => ! hasEngineCanvasGroupScale() || CanvasStillRaster::findSystemFont() === null,
+    'Needs an Engine with canvas group scale and a monospaced system font.');
+
+it('draws a label of real glyphs in a scaled group where the scale puts its raster, at that size, inside the group\'s own unscaled clip', function () {
+    $word = drawGroupScaleWord((string) CanvasStillRaster::findSystemFont(), 'HMH');
+    $bytes = encodeGroupScaleLabel($word);
+    [$wide, $high] = [imagesx($word), imagesy($word)];
+    $soft = 0;
+    for ($y = 0; $y < $high; $y++) {
+        for ($x = 0; $x < $wide; $x++) {
+            $soft += in_array(readCanvasGroupScalePixel($word, $x, $y)[3], [0, 255], true) ? 0 : 1;
+        }
+    }
+    $area = new CanvasRectangle(5, 4, $wide, $high);
+    $child = new PresentationCanvas($wide + 10, $high + 8, labels: [createGroupScaleLabel($area)]);
+    $place = static fn(?CanvasGroupScale $scale, ?CanvasRectangle $clip = null): CanvasGroup => new CanvasGroup('sign', 6.3, 4.6, $child, clipRect: $clip, scale: $scale);
+    $draw = static fn(CanvasGroup $group): array => drawCanvasGroupScaleSurface(new PresentationCanvas(160, 80, groups: [$group]),
+        new CanvasStillRaster(getCanvasGroupScaleFixtureDirectory(), labelRasters: [GROUP_SCALE_LABEL_LAYOUT => $bytes]));
+    $extent = static fn(?array $paint): ?array => $paint === null ? null : [$paint['x'], $paint['y'], $paint['x'] + $paint['width'], $paint['y'] + $paint['height']];
+
+    // Scaled by one and a half about a point a quarter across and half down the group's canvas, from a fractional origin.
+    $scaled = $place(createGroupScale(1.5, 0.25, 0.5));
+    $projected = $scaled->projectRectangle($area);
+    $edges = roundGroupScaleEdges($projected);
+    [$surface, $diagnostics] = $draw($scaled);
+
+    // The word is a raster of glyphs, soft at its edges. Its ink reaches every side of its picture, so what the still
+    // paints of it is the whole rectangle the Engine's projection of the label rounds to: the place and the size
+    // are the scale's, and every pixel is the raster sampled once to that size.
+    expect($soft)->toBeGreaterThan(0)
+        ->and($diagnostics)->toBe([])
+        ->and($edges[0] >= 0 && $edges[1] >= 0 && $edges[2] <= 160 && $edges[3] <= 80)->toBeTrue()
+        ->and(CanvasStillTransform::createIdentity()->nestGroup($scaled)->getEdges($area))->toBe($edges)
+        ->and($extent(findCanvasGroupScalePaint($surface)))->toBe($edges)
+        ->and([$edges[2] - $edges[0], $edges[3] - $edges[1]])->not->toBe([$wide, $high])
+        ->and(countGroupScaleDifferences($surface, composeGroupScaleLabel($bytes, $projected, null, 160, 80)))->toBe(0);
+
+    // With no scale the same label is drawn at its raster's own size, from the group's whole pixel.
+    [$plain, $plainDiagnostics] = $draw($place(null));
+    expect($plainDiagnostics)->toBe([])
+        ->and($extent(findCanvasGroupScalePaint($plain)))->toBe([11, 9, 11 + $wide, 9 + $high]);
+
+    // The group's clip is its parent's: it cuts the scaled label at the clip's own pixels, a few in from the label's
+    // left and top and half-way across it, and is not moved or grown by the scale.
+    $clip = new CanvasRectangle($edges[0] + 2.3, $edges[1] + 1.2, intdiv($edges[2] - $edges[0], 2) + 0.4, $edges[3] - $edges[1]);
+    $cut = roundGroupScaleEdges($clip);
+    [$clipped, $clippedDiagnostics] = $draw($place(createGroupScale(1.5, 0.25, 0.5), $clip));
+    $painted = $extent(findCanvasGroupScalePaint($clipped));
+    expect($clippedDiagnostics)->toBe([])
+        ->and($cut[0] > $edges[0] && $cut[1] > $edges[1] && $cut[2] < $edges[2])->toBeTrue()
+        ->and($painted)->not->toBeNull()
+        ->and($painted[0] >= $cut[0] && $painted[1] >= $cut[1] && $painted[2] <= $cut[2] && $painted[3] <= min($cut[3], $edges[3]))->toBeTrue()
+        ->and(countGroupScaleDifferences($clipped, composeGroupScaleLabel($bytes, $projected, $clip, 160, 80)))->toBe(0)
+        ->and(countGroupScaleDifferences($clipped, $surface))->toBeGreaterThan(0);
 })->skip(fn (): bool => ! hasEngineCanvasGroupScale() || CanvasStillRaster::findSystemFont() === null,
     'Needs an Engine with canvas group scale and a monospaced system font.');
 
