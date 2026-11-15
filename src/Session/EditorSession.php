@@ -3634,9 +3634,15 @@ final class EditorSession
      * The answer names the current epoch and grid. Feedback for another epoch,
      * or without one, is discarded before it can reach the graphical host.
      *
+     * The Engine sends a frame over as many exchanges as its upload needs,
+     * and one exchange may carry none of it: `deliveryPending` says the
+     * Engine still has something of the scene to send
+     * ({@see CinematicPreviewSession::hasPendingSceneDelivery()}), which the
+     * next exchange continues, with or without events.
+     *
      * @param list<string> $events
      * @param string|null $sessionId The epoch the window is answering; null permits initial empty discovery.
-     * @return array{sessionId: non-empty-string, diagnostics: list<string>, grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>}
+     * @return array{sessionId: non-empty-string, diagnostics: list<string>, grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>, deliveryPending: bool}
      * @throws SessionRefusal When no cinematic is previewed or a line is not a renderer event.
      */
     public function exchangeCinematicScene(array $events, ?string $sessionId = null): array
@@ -3649,6 +3655,7 @@ final class EditorSession
                 'diagnostics' => $preview->getDiagnostics(),
                 'grid' => ['columns' => $grid->columns, 'rows' => $grid->rows, 'cellWidth' => $grid->cellWidth, 'cellHeight' => $grid->cellHeight],
                 'messages' => $preview->exchangeScene($events, $sessionId),
+                'deliveryPending' => $preview->hasPendingSceneDelivery(),
             ];
         } catch (RendererProtocolException | RendererTransportException $error) {
             throw new SessionRefusal('The graphical preview stopped: ' . $error->getMessage(), previous: $error);
@@ -3721,7 +3728,7 @@ final class EditorSession
      *
      * @param list<string> $events
      * @param string|null $sessionId The epoch the window is answering; unqualified or stale events are discarded.
-     * @return array{sessionId: non-empty-string, diagnostics: list<string>, grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>}
+     * @return array{sessionId: non-empty-string, diagnostics: list<string>, grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>, deliveryPending: bool}
      * @throws SessionRefusal When no effect is shown on the field or a line is not a renderer event.
      */
     public function exchangeEffectFieldScene(array $events, ?string $sessionId = null): array
@@ -3734,6 +3741,7 @@ final class EditorSession
                 'diagnostics' => $field->getDiagnostics(),
                 'grid' => ['columns' => $grid->columns, 'rows' => $grid->rows, 'cellWidth' => $grid->cellWidth, 'cellHeight' => $grid->cellHeight],
                 'messages' => $field->exchangeScene($events, $sessionId),
+                'deliveryPending' => $field->hasPendingSceneDelivery(),
             ];
         } catch (RendererProtocolException | RendererTransportException $error) {
             throw new SessionRefusal('The graphical preview stopped: ' . $error->getMessage(), previous: $error);
@@ -6077,6 +6085,11 @@ final class EditorSession
      * the plan placing it writes ({@see PiecePlacer::planArt()}), its glyphs and collision as they are. Art that would
      * be refused draws nothing; {@see previewPiece()} says why.
      *
+     * The Engine sends a frame over as many exchanges as its upload needs, and one exchange may carry none of it:
+     * `deliveryPending` says the Engine still has something of the map to send
+     * ({@see \Ichiloto\Editor\Field\AuthoringCanvasHost::hasPendingDelivery()}), which the next exchange continues,
+     * with or without events.
+     *
      * @param list<string> $events The window's answers, as renderer event lines.
      * @param array<string, string> $variants
      * @param array{piece: string, from: array{0: int, 1: int}, to: array{0: int, 1: int}}|null $pieceArt
@@ -6104,7 +6117,8 @@ final class EditorSession
             'assetRoot' => $map->getAssetRoot(), 'layerIds' => $map->getPresentationLayerIds(),
             'grid' => ['columns' => $host->grid->columns, 'rows' => $host->grid->rows,
                 'cellWidth' => $host->grid->cellWidth, 'cellHeight' => $host->grid->cellHeight],
-            'messages' => $messages, 'assetPaths' => $source?->assetPaths ?? [], 'diagnostics' => $source?->diagnostics ?? [],
+            'messages' => $messages, 'deliveryPending' => $host->hasPendingDelivery(),
+            'assetPaths' => $source?->assetPaths ?? [], 'diagnostics' => $source?->diagnostics ?? [],
             'graphicsIssue' => $source?->graphicsIssue];
     }
 

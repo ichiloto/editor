@@ -118,11 +118,12 @@ final class PreviewSceneHost
      * a frame whose upload it has begun (the upload yields on a time budget,
      * so one exchange may carry only part of a frame, or none of it yet), or
      * a change it is holding until the window answers. The next exchange
-     * continues it.
+     * continues it. False until the window has said what it can draw, as
+     * nothing is sent before then.
      */
     public function hasPendingDelivery(): bool
     {
-        return $this->presentation->hasPendingUpload();
+        return $this->ready && $this->presentation->hasPendingUpload();
     }
 
     /**

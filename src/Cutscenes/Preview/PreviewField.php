@@ -546,7 +546,8 @@ final class PreviewField
     /**
      * Whether the Engine still has something of the scene to send the
      * attached graphical view ({@see PreviewSceneHost::hasPendingDelivery()});
-     * the next exchange continues it. False with no view attached.
+     * the next exchange continues it. False with no view attached, or one
+     * whose window has not yet said what it can draw.
      */
     public function hasPendingSceneDelivery(): bool
     {
