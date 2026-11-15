@@ -214,6 +214,7 @@ final class ReferenceCatalog
         'cinematic_movement_routes',
         self::CINEMATIC_CONVERSATION_GROUPS,
         ConversationFields::SPEAKERS,
+        FramingFields::SUBJECTS,
         'summon_cues',
         'effect_cues',
         self::EFFECT_FLIGHT_TRACKS,
@@ -310,6 +311,8 @@ final class ReferenceCatalog
         private readonly ?ProjectMap $currentMap = null,
         private readonly ?CutsceneAsset $currentCutscene = null,
         private readonly ?array $movementCommands = null,
+        /** The reusable event script being edited, whose staged actors are its own and its calling cinematics'. */
+        private readonly ?string $currentScriptId = null,
     ) {
     }
 
@@ -448,6 +451,7 @@ final class ReferenceCatalog
             'cinematic_movement_routes' => $this->getMovementRouteIds(),
             self::CINEMATIC_CONVERSATION_GROUPS => $this->listScopedChoices(self::CINEMATIC_CONVERSATION_GROUPS) ?? [],
             ConversationFields::SPEAKERS => $this->listScopedChoices(ConversationFields::SPEAKERS) ?? [],
+            FramingFields::SUBJECTS => $this->listScopedChoices(FramingFields::SUBJECTS) ?? [],
             'summon_cues' => $this->getTimelineCueIds(CutsceneType::SUMMON),
             'effect_cues' => $this->getTimelineCueIds(CutsceneType::EFFECT),
             self::EFFECT_FLIGHT_TRACKS => $this->getEffectFlightTrackIds(),
@@ -706,20 +710,93 @@ final class ReferenceCatalog
     /**
      * Returns the ids of the current cinematic's cast members of the given
      * kinds, staged actors declared in the data file and actors staged by a
-     * `stage_actor` command alike.
+     * `stage_actor` command alike, in its own script or a reusable event
+     * script it runs. A reusable event script names the staged actors it
+     * stages itself and those of every cinematic that runs it.
      *
      * @param string[] $kinds The cast kinds to list.
      * @return string[]
      */
     private function castIds(array $kinds): array
     {
-        if ($this->currentCutscene === null || $this->currentCutscene->type !== CutsceneType::CINEMATIC) {
+        $scripts = $this->readCommonEventScripts();
+
+        if ($this->currentCutscene?->type === CutsceneType::CINEMATIC) {
+            return array_values(self::collectCastIds($this->currentCutscene, $kinds, $scripts));
+        }
+
+        if ($this->currentScriptId === null || ! in_array('staged_actor', $kinds, true)) {
             return [];
         }
 
         $ids = [];
+        $visited = [$this->currentScriptId => true];
+        self::collectStagedActorIds($scripts[$this->currentScriptId] ?? [], $ids, $scripts, $visited);
 
-        foreach ((array) ($this->currentCutscene->data()['cast'] ?? []) as $entry) {
+        foreach ($this->workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [] as $cinematic) {
+            if (! $cinematic->isDeleted() && in_array($this->currentScriptId, self::listScriptCalls($cinematic->commands(), $scripts), true)) {
+                $ids += self::collectCastIds($cinematic, ['staged_actor'], $scripts);
+            }
+        }
+
+        return array_values($ids);
+    }
+
+    /**
+     * The commands of every reusable event script, by id, unsaved edits included.
+     *
+     * @return array<string, array<int, mixed>>
+     */
+    private function readCommonEventScripts(): array
+    {
+        $scripts = [];
+        foreach ($this->workspace->getRecordDatabase('common_events')?->getRecords() ?? [] as $record) {
+            $scripts[$record->recordId] = $record->getSubList('commands');
+        }
+
+        return $scripts;
+    }
+
+    /**
+     * The reusable event scripts a command list runs, through its blocks and the scripts those run.
+     *
+     * @param array<int, mixed> $commands
+     * @param array<string, array<int, mixed>> $scripts Reusable event scripts' commands by id.
+     * @return list<string>
+     */
+    private static function listScriptCalls(array $commands, array $scripts): array
+    {
+        $calls = [];
+        $follow = static function (mixed $value) use (&$follow, &$calls, $scripts): void {
+            if (! is_array($value)) {
+                return;
+            }
+            $id = ($value['type'] ?? null) === 'common_event' && is_string($value['id'] ?? null) ? trim($value['id']) : null;
+            if ($id !== null && ! isset($calls[$id])) {
+                $calls[$id] = $id;
+                $follow($scripts[$id] ?? null);
+            }
+            foreach ($value as $child) {
+                $follow($child);
+            }
+        };
+        $follow($commands);
+
+        return array_values($calls);
+    }
+
+    /**
+     * A cinematic's cast members of the given kinds by id, with the actors its commands stage.
+     *
+     * @param string[] $kinds The cast kinds to list.
+     * @param array<string, array<int, mixed>> $scripts Reusable event scripts' commands by id.
+     * @return array<string, string>
+     */
+    private static function collectCastIds(CutsceneAsset $cinematic, array $kinds, array $scripts): array
+    {
+        $ids = [];
+
+        foreach ((array) ($cinematic->data()['cast'] ?? []) as $entry) {
             if (! is_array($entry)) {
                 continue;
             }
@@ -733,20 +810,24 @@ final class ReferenceCatalog
         }
 
         if (in_array('staged_actor', $kinds, true)) {
-            self::collectStagedActorIds($this->currentCutscene->commands(), $ids);
+            $visited = [];
+            self::collectStagedActorIds($cinematic->commands(), $ids, $scripts, $visited);
         }
 
-        return array_values($ids);
+        return $ids;
     }
 
     /**
      * Walks a command tree for `stage_actor` commands, so an actor staged
-     * mid-scene is offered to the commands after it.
+     * mid-scene is offered to the commands after it, through the reusable
+     * event scripts the tree runs.
      *
      * @param array<int, mixed> $commands
      * @param array<string, string> $ids
+     * @param array<string, array<int, mixed>> $scripts Reusable event scripts' commands by id.
+     * @param array<string, true> $visited The reusable event scripts already walked.
      */
-    private static function collectStagedActorIds(array $commands, array &$ids): void
+    private static function collectStagedActorIds(array $commands, array &$ids, array $scripts, array &$visited): void
     {
         foreach ($commands as $command) {
             if (! is_array($command)) {
@@ -762,21 +843,28 @@ final class ReferenceCatalog
                 }
             }
 
+            $script = ($command['type'] ?? '') === 'common_event' && is_string($command['id'] ?? null) ? trim($command['id']) : null;
+            if ($script !== null && isset($scripts[$script]) && ! isset($visited[$script])) {
+                $visited[$script] = true;
+                self::collectStagedActorIds($scripts[$script], $ids, $scripts, $visited);
+            }
+
             foreach (['commands', 'then', 'else', 'cancel'] as $arm) {
                 if (is_array($command[$arm] ?? null)) {
-                    self::collectStagedActorIds($command[$arm], $ids);
+                    self::collectStagedActorIds($command[$arm], $ids, $scripts, $visited);
                 }
             }
 
             $finish = StorybookPlaybackFields::getFinishCommands($command);
             if ($finish !== null) {
-                self::collectStagedActorIds($finish, $ids);
+                self::collectStagedActorIds($finish, $ids, $scripts, $visited);
             }
 
             foreach (['lanes', 'options'] as $list) {
                 foreach ((array) ($command[$list] ?? []) as $member) {
                     if (is_array($member)) {
-                        self::collectStagedActorIds(array_values((array) ($member['commands'] ?? $member['then'] ?? (array_is_list($member) ? $member : []))), $ids);
+                        self::collectStagedActorIds(array_values((array) ($member['commands'] ?? $member['then'] ?? (array_is_list($member) ? $member : []))), $ids,
+                            $scripts, $visited);
                     }
                 }
             }
@@ -954,6 +1042,7 @@ final class ReferenceCatalog
      * the map it runs on at that point). `cinematic_conversation_groups` and
      * `cinematic_conversation_speakers`: the groups the cinematic's
      * `presentation.conversation` declares and the speakers it binds.
+     * `cinematic_framing_subjects`: the framing keys the cinematic binds.
      *
      * @return list<string>|null
      */
@@ -968,6 +1057,7 @@ final class ReferenceCatalog
                 : $this->listCinematicNpcIds($cinematic),
             self::CINEMATIC_CONVERSATION_GROUPS => $cinematic === null ? null : ConversationFields::listGroups($cinematic->data()),
             ConversationFields::SPEAKERS => $cinematic === null ? null : ConversationFields::listSpeakers($cinematic->data()),
+            FramingFields::SUBJECTS => $cinematic === null ? null : FramingFields::listSubjects($cinematic->data()),
             default => null,
         };
     }
@@ -1089,13 +1179,22 @@ final class ReferenceCatalog
     {
         $maps = \Ichiloto\Editor\Events\CommonEventMaps::read($this->workspace)->findMaps($scriptId);
         $map = count($maps) === 1 ? array_find($this->workspace->maps, static fn(ProjectMap $map): bool => $map->mapId === $maps[0]) : null;
-        return new self($this->workspace, $map, null, $this->movementCommands);
+        return new self($this->workspace, $map, null, $this->movementCommands, $scriptId);
+    }
+
+    /**
+     * The same references read for a reusable event script: its staged actors are those it stages itself and
+     * those of the cinematics that run it. The map stays the one this catalogue reads.
+     */
+    public function createScriptContext(string $scriptId): self
+    {
+        return new self($this->workspace, $this->currentMap, $this->currentCutscene, $this->movementCommands, $scriptId);
     }
 
     /** A projection keeps the actual invocation as reference owner, rather than its one displayed command. */
     public function createMovementContext(array $commands): self
     {
-        return new self($this->workspace, $this->currentMap, $this->currentCutscene, $commands);
+        return new self($this->workspace, $this->currentMap, $this->currentCutscene, $commands, $this->currentScriptId);
     }
 
     /** Live invocation-local declarations; runtime checks completion, subject and one-time consumption. */

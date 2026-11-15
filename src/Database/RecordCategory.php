@@ -73,9 +73,9 @@ final readonly class RecordCategory implements DatabaseCategory
         return $this->database->getFrameSettingsFields($index, $frame);
     }
 
-    public function describeFrame(array $frame): ?string
+    public function describeFrame(array $frame, ?int $index = null): ?string
     {
-        return $frame === [] ? null : $this->database->describeFramePath($frame);
+        return $frame === [] ? null : $this->database->describeFramePath($frame, $index);
     }
 
     public function getListNoun(array $frame): ?string

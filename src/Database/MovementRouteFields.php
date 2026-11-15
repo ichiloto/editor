@@ -45,13 +45,13 @@ final class MovementRouteFields
     {
         return match ($command['type'] ?? '') {
             StorybookPlaybackFields::getCommandType() => [StorybookPlaybackFields::getFinishCommands($command) ?? []],
-            'sequence' => [(array) ($command['commands'] ?? [])],
             'branch' => [(array) ($command['then'] ?? []), (array) ($command['else'] ?? [])],
             'choice' => [...array_map(static fn(array $option): array => (array) ($option['then'] ?? []),
                 array_filter((array) ($command['options'] ?? []), is_array(...))), (array) ($command['cancel'] ?? [])],
             'parallel' => array_map(static fn(array $lane): array => array_is_list($lane) ? $lane : (array) ($lane['commands'] ?? []),
                 array_filter((array) ($command['lanes'] ?? []), is_array(...))),
-            default => [],
+            // A block that runs its commands in order: a sequence, a framing phase.
+            default => array_column(\Ichiloto\Editor\Events\CommandMapContext::getBodies($command), 'commands'),
         };
     }
 

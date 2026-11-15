@@ -310,8 +310,8 @@ final class NpcPlacementLifecycle
                 $state = $this->walkReusable(trim($command['id']), $state, $stack, $guards, $frame);
             }
 
-            if ($type === 'sequence') {
-                $state = $this->walkScript((array) ($command['commands'] ?? []), $at . '/commands', $state, $stack, $guards, $frame);
+            foreach (CommandMapContext::getBodies($command) as $body) {
+                $state = $this->walkScript($body['commands'], $at . '/' . implode('/', $body['path']), $state, $stack, $guards, $frame);
             }
 
             if ($type === 'parallel') {

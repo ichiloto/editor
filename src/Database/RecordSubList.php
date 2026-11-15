@@ -62,6 +62,9 @@ final readonly class RecordSubList
      * @param Closure(array<string, mixed>): array<string, mixed>|null $blankFor For a list beside the record's own
      * whose new entry starts from the record (an NPC's placement starts on the NPC's cell): the blank, given the
      * record; `blank` when null.
+     * @param bool $isCommandList Whether the list's entries are a script's commands, so the command arms its entries
+     * carry hold this list's own vocabulary at every depth: a reusable script's sequence holds the commands the
+     * script does.
      */
     public function __construct(
         public string $key,
@@ -89,6 +92,7 @@ final readonly class RecordSubList
         public ?string $variantDefault = null,
         public ?Closure $remapKeyReferences = null,
         public ?Closure $blankFor = null,
+        public bool $isCommandList = false,
     ) {
     }
 

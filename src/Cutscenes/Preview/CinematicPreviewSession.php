@@ -6,9 +6,12 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Engine\Audio\BackgroundMusicState;
 use Closure;
+use Ichiloto\Editor\Database\FramingFields;
+use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Engine\Battle\BattleResult;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicFramingOperation;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionLane;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionSession;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionStatus;
@@ -913,6 +916,11 @@ final class CinematicPreviewSession
         foreach ($lane->parallelGroup?->lanes() ?? [] as $child) {
             $this->collectLanes($child, $depth + 1, $lanes);
         }
+
+        if ($lane->pendingOperation instanceof CinematicFramingOperation) {
+            // A framing phase runs its body on a lane of its own while the phase's lane waits on it.
+            $this->collectLanes($lane->pendingOperation->body, $depth + 1, $lanes);
+        }
     }
 
     /**
@@ -927,7 +935,10 @@ final class CinematicPreviewSession
      * points one past the block, unless the block is a parallel command,
      * whose parent stays yielded on it), and a parent frame that finished
      * its list is discarded entirely, in which case the block was that
-     * list's last command.
+     * list's last command. A framing phase's body is a lane of its own, named
+     * by the phase's command path and the suffix and frame label the Engine
+     * exports for it (`root/dawn[3]/framing/framing[1]`): the phase's frame
+     * stays on the `framing` command, as a parallel command's does.
      */
     public function keyForEnginePath(string $path): ?string
     {
@@ -950,14 +961,37 @@ final class CinematicPreviewSession
         $command = null;
         $count = count($segments);
 
+        // How the Engine names a framing phase's body lane: the suffix after the phase's command path, and the
+        // label of that lane's own frame.
+        ['pathSuffix' => $bodyLane, 'rootFrame' => $bodyFrame] = FramingFields::getBodyLane();
+        // Whether the walk has just entered a framing phase's body, whose own frame follows.
+        $enteredBody = false;
+
         foreach ($segments as $position => $segment) {
+            if ($segment === $bodyLane) {
+                // Into the body lane of the framing command the walk is on; its frames follow.
+                $bodyKey = CommandMapContext::getBodyKeys(FramingFields::getCommandType())[0] ?? null;
+
+                if ($command === null || $bodyKey === null) {
+                    return $key;
+                }
+
+                $key .= '.' . $bodyKey;
+                $list = $this->blockList($command, $bodyKey);
+                $command = null;
+                $enteredBody = true;
+
+                continue;
+            }
+
             if (! preg_match('/^(.*)\\[([^\\]]*)\\]$/', $segment, $match)) {
                 return $key;
             }
 
             [, $label, $argument] = $match;
             $next = $segments[$position + 1] ?? null;
-            $nextIsParallel = $next !== null && str_starts_with($next, 'parallel[');
+            // A lane waiting on a parallel block or a framing phase stays on that command.
+            $nextIsParallel = $next !== null && (str_starts_with($next, 'parallel[') || $next === $bodyLane);
 
             if ($label === 'parallel') {
                 // Into a lane of the parallel command the walk is on.
@@ -980,7 +1014,10 @@ final class CinematicPreviewSession
 
             $oneBased = (int) $argument;
             $suffix = match (true) {
-                $label === 'sequence' => 'commands',
+                // The body's own frame holds the body's commands; a body that finished its list starts at a block's frame.
+                $enteredBody && $label === $bodyFrame => null,
+                // A sequence's frame is labelled with its type and holds the commands the block runs.
+                CommandMapContext::getBodyKeys($label) !== [] => CommandMapContext::getBodyKeys($label)[0],
                 $label === 'branch:then' => 'then',
                 $label === 'branch:else' => 'else',
                 $label === 'choice:cancel' => 'cancel',
@@ -988,6 +1025,8 @@ final class CinematicPreviewSession
                 str_starts_with($label, 'common_event:') => '?',
                 default => null,
             };
+
+            $enteredBody = false;
 
             if ($suffix === '?') {
                 // The commands live in another asset; stop at the caller.

@@ -313,8 +313,8 @@ final class MapLineInventory
                 $this->shiftCommand($file, $type, $command, $at, $context);
             }
 
-            if ($type === 'sequence') {
-                $context = $this->walkCommands($command['commands'] ?? [], [...$at, 'commands'], $context, $file, $stack, $concurrent);
+            foreach (CommandMapContext::getBodies($command) as $body) {
+                $context = $this->walkCommands($body['commands'], [...$at, ...$body['path']], $context, $file, $stack, $concurrent);
             }
 
             if ($type === 'parallel') {

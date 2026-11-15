@@ -11,9 +11,11 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\ConversationFields;
+use Ichiloto\Editor\Database\FramingFields;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\EditorWindow;
 use Ichiloto\Editor\History\GenericCommand;
@@ -883,6 +885,7 @@ trait CutscenesWorkspace
                 'Identity' => ['id', 'name', 'description', 'version'],
                 'Staging' => ['startMap', 'presentation.initial', 'presentation.reducedMotion'],
                 'Conversation' => [ConversationFields::INITIAL_GROUP_KEY],
+                'Framing' => [],
                 'Script' => ['commandListCommands'],
                 'Skip' => ['skip.policy', 'checkpoints', 'commandListFinalizer'],
                 'Metadata' => ['authoring'],
@@ -917,9 +920,10 @@ trait CutscenesWorkspace
             $id = (string) ($field['field'] ?? '');
             $placed = false;
 
-            if ($asset->type === CutsceneType::CINEMATIC && self::isConversationRow($id)) {
-                // The conversation's list rows join its section, in the order the lists give them.
-                $sections['Conversation'][] = $id;
+            $listSection = $asset->type === CutsceneType::CINEMATIC ? self::findListSection($id) : null;
+            if ($listSection !== null) {
+                // The conversation's and the framing's list rows join their sections, in the order the lists give them.
+                $sections[$listSection][] = $id;
             }
 
             foreach ($sections as $ids) {
@@ -1003,11 +1007,13 @@ trait CutscenesWorkspace
         return $grouped;
     }
 
-    /** Whether a cinematic row belongs to one of its conversation's lists. */
-    private static function isConversationRow(string $id): bool
+    /** The section a cinematic row of one of its conversation's or framing's lists belongs to; null for any other row. */
+    private static function findListSection(string $id): ?string
     {
-        return array_any([ConversationFields::SPEAKER_PREFIX, ConversationFields::ADDRESSEE_PREFIX, ConversationFields::GROUP_PREFIX],
-            static fn(string $prefix): bool => str_starts_with($id, $prefix));
+        return array_find_key([
+            'Conversation' => [ConversationFields::SPEAKER_PREFIX, ConversationFields::ADDRESSEE_PREFIX, ConversationFields::GROUP_PREFIX],
+            'Framing' => [FramingFields::SUBJECT_PREFIX],
+        ], static fn(array $prefixes): bool => array_any($prefixes, static fn(string $prefix): bool => str_starts_with($id, $prefix)));
     }
 
     /**
@@ -1390,9 +1396,10 @@ trait CutscenesWorkspace
     }
 
     /**
-     * Adds what the cursor's context calls for: a cast member, a command
-     * after the cursor's command in the open frame, a lane, a route step,
-     * a keyframe, a cue.
+     * Adds what the cursor's context calls for: a cast member, an entry of
+     * a list beside the cast (a conversation speaker, a framing subject), a
+     * command after the cursor's command in the open frame, a lane, a route
+     * step, a keyframe, a cue.
      */
     private function addCutsceneSubItem(): void
     {
@@ -1416,11 +1423,13 @@ trait CutscenesWorkspace
                     // on the command's own rows while it has none yet, the
                     // add is a nested entry; on a command that already has
                     // its nested entries, the add is the next command, so a
-                    // block is never the end of the road.
+                    // block is never the end of the road. A headed list (a
+                    // framing phase's required subjects) is added to from
+                    // its heading and its entries, which are its only rows.
                     $parent = $records->getFrameCommands($index, $framePath)[$nested['parentIndex']] ?? null;
                     $existing = is_array($parent) && is_array($parent[$nested['list']->key] ?? null) ? count($parent[$nested['list']->key]) : 0;
 
-                    if ($nested['nestedIndex'] !== null || $existing === 0) {
+                    if ($nested['nestedIndex'] !== null || $existing === 0 || $nested['list']->heading !== '') {
                         $added = $records->addFrameNestedItem($index, $framePath, $nested['parentIndex']);
                         $added = $added === null ? null : ['nested', $nested['parentIndex'], $added];
 
@@ -1441,6 +1450,17 @@ trait CutscenesWorkspace
                 $after = preg_match('/^' . $prefix . '(\d+)/', $selectedId, $matches) === 1 ? intval($matches[1]) : null;
                 $command = $records->addFrameCommand($index, $framePath, $after);
                 $added = $command === null ? null : ['command', $command];
+
+                return;
+            }
+
+            $listed = $records->locateItem($index, [], $selectedId);
+
+            if ($listed?->listKey !== null && in_array($listed->kind, [RecordItem::LIST, RecordItem::ENTRY], true)) {
+                // A list beside the cast (a conversation's speakers, the framing subjects): first in the list from
+                // its heading, after the entry under the cursor from one of its rows.
+                $at = $records->addSubItem($index, at: $listed->entryIndex + 1, listKey: $listed->listKey);
+                $added = $at === null ? null : ['listed', $records->schema->findInlineSubList($listed->listKey)?->prefix ?? '', $at];
 
                 return;
             }
@@ -1476,6 +1496,7 @@ trait CutscenesWorkspace
             $matches = match ($added[0]) {
                 'command' => preg_match('/^[a-z]+' . $added[1] . 'Type$/', $id) === 1,
                 'entry' => preg_match('/^cast' . $added[1] . '[A-Z]/', $id) === 1,
+                'listed' => preg_match('/^' . preg_quote($added[1], '/') . $added[2] . '[A-Z]/', $id) === 1,
                 'option' => preg_match('/^[a-z]+' . $added[1] . 'Option' . $added[2] . 'Text$/', $id) === 1,
                 'nested' => preg_match('/^[a-z]+' . $added[1] . '[A-Z][a-z]+' . $added[2] . '[A-Z]/', $id) === 1,
                 default => false,
@@ -1500,7 +1521,8 @@ trait CutscenesWorkspace
     /**
      * Removes what the cursor points at, or the last entry of the cursor's
      * list: a command from the open frame, an option with its arm, a lane, a
-     * step, a keyframe, a cue, a cast member.
+     * step, a keyframe, a cue, a cast member, an entry of a list beside the
+     * cast.
      */
     private function removeCutsceneSubItem(bool $last): void
     {
@@ -1545,6 +1567,20 @@ trait CutscenesWorkspace
 
                 if ($at !== null && $at >= 0) {
                     $removed = $records->removeFrameCommand($index, $framePath, $at) !== null;
+                }
+
+                return;
+            }
+
+            $listed = $records->locateItem($index, [], $selectedId);
+
+            if ($listed?->listKey !== null) {
+                // A list beside the cast: the entry under the cursor, or the list's last.
+                $at = $last ? $records->countSubItems($index, $listed->listKey) - 1
+                    : ($listed->kind === RecordItem::ENTRY ? $listed->entryIndex : null);
+
+                if ($at !== null && $at >= 0) {
+                    $removed = $records->removeSubItem($index, $at, $listed->listKey) !== null;
                 }
 
                 return;
@@ -2157,7 +2193,7 @@ trait CutscenesWorkspace
         $asset = $this->selectedCutscene();
         $title = $this->databaseCommandFramePath === []
             ? ($asset === null ? 'Settings' : sprintf('%s: %s', $this->cutsceneType->label(), $asset->id))
-            : ($this->cutsceneRecords()?->describeFramePath($this->databaseCommandFramePath)
+            : ($this->cutsceneRecords()?->describeFramePath($this->databaseCommandFramePath, $this->getSelectedRecordIndex())
                 ?? ProjectRecordDatabase::describeFrame($this->databaseCommandFramePath));
         $help = match (true) {
             $this->referencePicker->isOpen() => $this->fitHelp($layout['settingsWidth'], 'Enter:Choose  Type:Filter  Esc:Cancel', 'Enter:Choose  Esc:Cancel'),
