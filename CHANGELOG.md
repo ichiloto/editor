@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- A scaled canvas group inside groups that have no scale is drawn where the Engine has it. The still rasters took each
+  unscaled group's origin to a whole pixel on the way down, so a scaled group below them lost the fractions of the
+  origins around it: a group doubled at (0.4, 0.4) inside a group at (0.4, 0.4) drew its corner at pixel 0, where the
+  Engine's (0.8, 0.8) is pixel 1. `CanvasStillTransform` now carries every group's origin in full precision beside its
+  whole pixels, and a scaled group and everything in it are drawn from the full place, each edge rounded once. A still
+  no scale reaches is drawn as before, each group at its own whole pixel.
+
 - Stills and capture frames draw a composite's masked fills. The canvas still raster left out every composite that
   held a fill with a mask, with "draws composites with operations this still leaves out": the ordinary hit tint on a
   battler is one (a fill through the battler's alpha, and through its clip when the tints of a layer share a surface,

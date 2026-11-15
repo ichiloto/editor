@@ -12,25 +12,37 @@ use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
  * place that every drawing of the canvas raster reads, so an image, a composite, an indicator, a text cell, a
  * label, a clip and a nested group all land by the same arithmetic.
  *
- * A coordinate `c` of the canvas has its edge at the surface pixel `pixel + round(shift + factor * c)`. A
- * canvas no scale reaches lies on the surface's own pixels: its factor is 1, its shift is 0, and a group in it
- * moves by whole pixels, its origin taken to the nearest one, a half upwards on either side of zero, so equal
- * steps of an origin move the drawing equally and the drawings inside it keep their places beside each other.
- * A scaled group ({@see CanvasGroup::$scale}) takes its canvas off those pixels. From there on nothing is
- * taken to a whole pixel before the edge of a drawing is: the factors of nested groups multiply, their origins
- * and translations add in full precision, and each edge is rounded once, where it is drawn.
+ * A canvas's place is held twice, and its edges are read from one of the two. The first is the Engine's own:
+ * a coordinate `c` of the canvas lies at `shift + factor * c` of the outermost canvas, the factors of the
+ * groups around it multiplied and their origins and translations added in full precision, whether or not any
+ * of them is scaled ({@see CanvasGroup::projectRectangle()}). The second is in whole pixels: each group's
+ * origin taken to the nearest one, a half upwards on either side of zero, so equal steps of an origin move the
+ * drawing equally and the drawings inside it keep their places beside each other.
+ *
+ * A canvas no scale reaches lies on the surface's own pixels and is read in whole pixels: its edge is at
+ * `pixel + round(c)`. A scaled group ({@see CanvasGroup::$scale}) takes its canvas off those pixels, and it and
+ * everything in it are read from the Engine's place, at `surface + round(shift + factor * c)`: nothing on the
+ * way down to them was taken to a whole pixel, the origins of the unscaled groups around the scaled one
+ * included, and each edge is rounded once, where it is drawn ({@see getEdge()}).
  */
 final readonly class CanvasStillTransform
 {
-    private function __construct(private int $pixelX, private int $pixelY, public float $factor = 1.0,
-        private float $shiftX = 0.0, private float $shiftY = 0.0)
+    /**
+     * @param int $surfaceX The surface pixel the outermost canvas has its corner at.
+     * @param int $pixelX The surface pixel this canvas has its corner at while no scale reaches it.
+     * @param float $factor How many pixels a unit of this canvas is.
+     * @param float $shiftX Where this canvas has its corner in the outermost canvas, in full precision.
+     * @param bool $scaled Whether a scaled group holds this canvas, directly or through other groups.
+     */
+    private function __construct(private int $surfaceX, private int $surfaceY, private int $pixelX, private int $pixelY,
+        public float $factor = 1.0, private float $shiftX = 0.0, private float $shiftY = 0.0, private bool $scaled = false)
     {
     }
 
     /** A canvas drawn at its own size with its corner on the surface's. */
     public static function createIdentity(): self
     {
-        return new self(0, 0);
+        return new self(0, 0, 0, 0);
     }
 
     /**
@@ -46,33 +58,44 @@ final readonly class CanvasStillTransform
         return $this->place($unit->x, $unit->y, $unit->width);
     }
 
-    /** A canvas whose corner is at a point of the canvas this one places, drawn there larger or smaller by a factor. */
+    /**
+     * A canvas whose corner is at a point of the canvas this one places, drawn there larger or smaller by a
+     * factor. A factor of exactly one is no scale: the canvas is read as this one is.
+     */
     public function place(float $x, float $y, float $factor = 1.0): self
     {
-        if ($factor === 1.0 && $this->factor === 1.0 && $this->shiftX === 0.0 && $this->shiftY === 0.0) {
-            return new self($this->pixelX + (int) floor($x + 0.5), $this->pixelY + (int) floor($y + 0.5));
-        }
-
-        return new self($this->pixelX, $this->pixelY, $this->factor * $factor,
-            $this->shiftX + $this->factor * $x, $this->shiftY + $this->factor * $y);
+        return new self($this->surfaceX, $this->surfaceY, $this->pixelX + (int) floor($x + 0.5), $this->pixelY + (int) floor($y + 0.5),
+            $this->factor * $factor, $this->shiftX + $this->factor * $x, $this->shiftY + $this->factor * $y,
+            $this->scaled || $factor !== 1.0);
     }
 
     /** The same place read from another corner of the surface: a surface that holds the part from a pixel of this one on. */
     public function rebase(int $left, int $top): self
     {
-        return new self($this->pixelX - $left, $this->pixelY - $top, $this->factor, $this->shiftX, $this->shiftY);
+        return new self($this->surfaceX - $left, $this->surfaceY - $top, $this->pixelX - $left, $this->pixelY - $top,
+            $this->factor, $this->shiftX, $this->shiftY, $this->scaled);
     }
 
     /** The surface pixel a horizontal coordinate of the canvas has its edge at. */
     public function getX(float $x): int
     {
-        return $this->pixelX + (int) round($this->shiftX + $this->factor * $x);
+        return $this->getEdge($x, $this->pixelX, $this->surfaceX, $this->shiftX);
     }
 
     /** The surface pixel a vertical coordinate of the canvas has its edge at. */
     public function getY(float $y): int
     {
-        return $this->pixelY + (int) round($this->shiftY + $this->factor * $y);
+        return $this->getEdge($y, $this->pixelY, $this->surfaceY, $this->shiftY);
+    }
+
+    /**
+     * The surface pixel a coordinate of the canvas has its edge at along one axis: the one place a coordinate
+     * is taken to a pixel. Under a scale the Engine's place of it is rounded, whole; otherwise the coordinate
+     * is rounded from the canvas's own pixel.
+     */
+    private function getEdge(float $coordinate, int $pixel, int $surface, float $shift): int
+    {
+        return $this->scaled ? $surface + (int) round($shift + $this->factor * $coordinate) : $pixel + (int) round($coordinate);
     }
 
     /**

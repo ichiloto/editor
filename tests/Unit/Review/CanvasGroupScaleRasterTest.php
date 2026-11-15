@@ -75,6 +75,50 @@ function createGroupScale(float $factor, float $originX = 0, float $originY = 0)
     return new CanvasGroupScale($factor, new PresentationSpritePivot($originX, $originY));
 }
 
+/**
+ * Groups nested one in the next, the outermost first. Each link is a group's origin and the scale it has, a
+ * factor and the point it scales about, or null for none. Every group but the innermost holds a canvas of 24 by
+ * 24 with the next group in it; the innermost holds the leaf.
+ *
+ * @param list<array{0: float, 1: float, 2: array{0: float, 1?: float, 2?: float}|null}> $links
+ * @return list<CanvasGroup>
+ */
+function nestGroupScaleGroups(array $links, PresentationCanvas $leaf): array
+{
+    $groups = [];
+    foreach (array_reverse($links) as $depth => [$x, $y, $scale]) {
+        array_unshift($groups, new CanvasGroup('level-' . (count($links) - $depth), $x, $y,
+            $groups === [] ? $leaf : new PresentationCanvas(24, 24, groups: [$groups[0]]),
+            scale: $scale === null ? null : createGroupScale(...$scale)));
+    }
+
+    return $groups;
+}
+
+/** Where the Engine has a rectangle of the innermost group's canvas in the canvas that holds the outermost: each group's own projection, the innermost first. */
+function projectGroupScaleRectangle(array $groups, CanvasRectangle $rectangle): CanvasRectangle
+{
+    return array_reduce(array_reverse($groups), static fn(CanvasRectangle $projected, CanvasGroup $group): CanvasRectangle => $group->projectRectangle($projected), $rectangle);
+}
+
+/**
+ * The pixels a rectangle of full precision has its edges at, each taken to its nearest pixel once.
+ *
+ * @return array{0: int, 1: int, 2: int, 3: int} Left, top, right and bottom.
+ */
+function roundGroupScaleEdges(CanvasRectangle $rectangle): array
+{
+    return [(int) round($rectangle->x), (int) round($rectangle->y),
+        (int) round($rectangle->x + $rectangle->width), (int) round($rectangle->y + $rectangle->height)];
+}
+
+/** The raster's place for the innermost of nested groups, the outermost given first. */
+function placeGroupScaleGroups(array $groups): CanvasStillTransform
+{
+    return array_reduce($groups, static fn(CanvasStillTransform $placed, CanvasGroup $group): CanvasStillTransform => $placed->nestGroup($group),
+        CanvasStillTransform::createIdentity());
+}
+
 it('keeps the Engine\'s fixture unchanged, with the capability it is for and what the Engine requires beside it', function () {
     $directory = getCanvasGroupScaleFixtureDirectory();
     $manifest = readCanvasGroupScaleFixture('manifest');
@@ -287,6 +331,55 @@ it('takes a group no scale reaches to a whole pixel, and rounds nothing before t
         ->and($scaled->nestGroup(new CanvasGroup('inner', 0.3, 0, $leaf, scale: createGroupScale(1.5)))->factor)->toBe(3.0)
         // A factor of exactly one is no scale: the Engine leaves it off the wire, and the group moves by whole pixels.
         ->and($identity->nestGroup(new CanvasGroup('one', 3.5, 0, $leaf, scale: createGroupScale(1, 0.5, 0.5)))->getX(0.4))->toBe(4);
+})->skip(fn (): bool => ! hasEngineCanvasGroupScale(), ENGINE_CANVAS_GROUP_SCALE_MISSING);
+
+it('keeps the fraction of an unscaled group\'s origin for the scaled group inside it', function () {
+    $mark = new CanvasRectangle(0, 0, 1, 1);
+    $leaf = new PresentationCanvas(4, 4, composites: [createGroupScaleFill('mark', $mark, GROUP_SCALE_RED)]);
+    $inner = new CanvasGroup('inner', 0.4, 0.4, $leaf, scale: createGroupScale(2));
+    $outer = new CanvasGroup('outer', 0.4, 0.4, new PresentationCanvas(12, 12, groups: [$inner]));
+    $projected = $outer->projectRectangle($inner->projectRectangle($mark));
+    [$surface, $diagnostics] = drawCanvasGroupScaleSurface(new PresentationCanvas(20, 20, groups: [$outer]));
+
+    // The Engine has the mark at (0.8, 0.8), two units square: the outer origin's 0.4 and the inner's make most of a pixel.
+    // An outer origin taken to a whole pixel before the scale would leave the mark at the surface's corner.
+    expect($diagnostics)->toBe([])
+        ->and(roundGroupScaleEdges($projected))->toBe([1, 1, 3, 3])
+        ->and(CanvasStillTransform::createIdentity()->nestGroup($outer)->nestGroup($inner)->getEdges($mark))->toBe(roundGroupScaleEdges($projected))
+        ->and(findGroupScaleColour($surface, GROUP_SCALE_RED))->toBe(['x' => 1, 'y' => 1, 'width' => 2, 'height' => 2, 'filled' => true])
+        ->and(findCanvasGroupScalePaint($surface))->toBe(roundCanvasGroupScaleArea($projected->toArray(), 20, 20));
+})->skip(fn (): bool => ! hasEngineCanvasGroupScale(), ENGINE_CANVAS_GROUP_SCALE_MISSING);
+
+it('places a scaled group by the full origins of every group around it, however they nest', function (array $links, array $area) {
+    $mark = new CanvasRectangle(...$area);
+    $groups = nestGroupScaleGroups($links, new PresentationCanvas(4, 4, composites: [createGroupScaleFill('mark', $mark, GROUP_SCALE_RED)]));
+    $projected = projectGroupScaleRectangle($groups, $mark);
+    $expected = roundCanvasGroupScaleArea($projected->toArray(), 20, 20);
+    [$surface, $diagnostics] = drawCanvasGroupScaleSurface(new PresentationCanvas(20, 20, groups: [$groups[0]]));
+
+    // The raster's edges are the Engine's projection through every group, each edge taken to a pixel once; the still shows
+    // the mark on those pixels, less what lies off the surface.
+    expect($diagnostics)->toBe([])
+        ->and(placeGroupScaleGroups($groups)->getEdges($mark))->toBe(roundGroupScaleEdges($projected))
+        ->and($expected['width'] > 0 && $expected['height'] > 0)->toBeTrue()
+        ->and(findGroupScaleColour($surface, GROUP_SCALE_RED))->toBe($expected)
+        ->and(findCanvasGroupScalePaint($surface))->toBe($expected);
+})->with([
+    'three levels, the scale in the middle' => [[[0.4, 0.4, null], [1.3, 2.4, [1.5]], [0.3, 0.2, null]], [1, 1, 2, 1]],
+    'a negative fractional origin around the scale' => [[[-0.6, -1.4, null], [0.4, 0.3, [2]]], [0, 0, 1, 1]],
+    'a scaled group in a scaled group, both at fractional origins' => [[[2.3, 3.7, [1.5, 0.25, 0.5]], [0.45, 2.2, [2]]], [1, 1, 2, 1]],
+])->skip(fn (): bool => ! hasEngineCanvasGroupScale(), ENGINE_CANVAS_GROUP_SCALE_MISSING);
+
+it('takes each group of a still no scale reaches to its own whole pixel, where the Engine\'s sum of their origins would round on', function () {
+    $mark = new CanvasRectangle(0, 0, 1, 1);
+    $groups = nestGroupScaleGroups([[0.4, 0.4, null], [0.4, 0.4, null]], new PresentationCanvas(4, 4, composites: [createGroupScaleFill('mark', $mark, GROUP_SCALE_RED)]));
+    [$surface, $diagnostics] = drawCanvasGroupScaleSurface(new PresentationCanvas(20, 20, groups: [$groups[0]]));
+
+    // Each origin of 0.4 goes to pixel 0 and the mark stays at the corner; the two together are 0.8, which a scaled group is drawn by.
+    expect($diagnostics)->toBe([])
+        ->and(roundGroupScaleEdges(projectGroupScaleRectangle($groups, $mark)))->toBe([1, 1, 2, 2])
+        ->and(placeGroupScaleGroups($groups)->getEdges($mark))->toBe([0, 0, 1, 1])
+        ->and(findGroupScaleColour($surface, GROUP_SCALE_RED))->toBe(['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1, 'filled' => true]);
 })->skip(fn (): bool => ! hasEngineCanvasGroupScale(), ENGINE_CANVAS_GROUP_SCALE_MISSING);
 
 it('leaves the limits of a scale to the Engine, which refuses a factor that is not finite, positive and at most eight', function (float $factor) {
