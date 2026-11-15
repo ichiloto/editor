@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Review\CanvasStillRaster;
+use Ichiloto\Editor\Review\SceneFrameRaster;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasGroup;
@@ -13,6 +14,7 @@ use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Presentation\PresentationColor;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSpritePivot;
+use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 
 /**
  * A composite's fill may be drawn through masks: polygons, ellipses and the alpha of a picture, each feathered,
@@ -294,6 +296,15 @@ it('draws the Engine\'s own hit tint: a fill through a battler\'s alpha, and thr
         ->and($pixel(11, 3))->toBe([208, 73, 73])
         ->and($pixel(13, 3))->toBe([0, 0, 0])
         ->and($pixel(0, 0))->toBe([0, 0, 0]);
+});
+
+it('tells the Engine a capture frame mirrors an image-alpha mask, beside the compositing the mask is drawn by', function () {
+    // The frame raster draws a mirrored battler's tint (above), so a capture's session says so: the Engine composes
+    // one only for a session with both. The canvas raster alone negotiates no compositing, so it names neither.
+    expect(SceneFrameRaster::supports(RendererSessionConfig::CANVAS_IMAGE_ALPHA_FLIP))->toBeTrue()
+        ->and(SceneFrameRaster::supports(RendererSessionConfig::CANVAS_COMPOSITING))->toBeTrue()
+        ->and(CanvasStillRaster::supports(RendererSessionConfig::CANVAS_IMAGE_ALPHA_FLIP))->toBeFalse()
+        ->and(CanvasStillRaster::supports(RendererSessionConfig::CANVAS_COMPOSITING))->toBeFalse();
 });
 
 it('stretches a masked fill with its composite, in a scaled group as anywhere', function () {
