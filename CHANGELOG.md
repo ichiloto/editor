@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- A canvas picture too small to cover a pixel is no longer drawn as one. Removed: the still rasters forced every image,
+  composite and label to at least one pixel wide and high, so a picture whose edges came to the same pixel still
+  painted a pixel there: the 1 by 4 line in a group scaled to a tenth painted an opaque pixel at the corner, and an
+  unscaled picture 0.3 wide from 0.1 painted a column. A picture whose rounded extent is empty along either axis now
+  paints nothing, with or without a scale, as an indicator's edge and a text cell that thin already did. A picture
+  whose edges enclose one pixel is drawn on it as before.
+
 - A scaled canvas group inside groups that have no scale is drawn where the Engine has it. The still rasters took each
   unscaled group's origin to a whole pixel on the way down, so a scaled group below them lost the fractions of the
   origins around it: a group doubled at (0.4, 0.4) inside a group at (0.4, 0.4) drew its corner at pixel 0, where the

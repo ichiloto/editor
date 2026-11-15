@@ -6,6 +6,7 @@ use Ichiloto\Editor\Review\CanvasStillRaster;
 use Ichiloto\Editor\Review\CanvasStillTransform;
 use Ichiloto\Editor\Review\FieldStillRaster;
 use Ichiloto\Editor\Review\SceneFrameRaster;
+use Ichiloto\Editor\Review\StillLabelPreparation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasColorTransform;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
@@ -15,6 +16,7 @@ use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImagePreflight;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicator;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasIndicatorKind;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasLabel;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasTextLayer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
@@ -22,6 +24,9 @@ use Ichiloto\Engine\Rendering\Presentation\PresentationColor;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSession;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSpritePivot;
 use Ichiloto\Engine\Rendering\Presentation\PresentationTextRun;
+use Ichiloto\Engine\Rendering\Presentation\Text\TextBounds;
+use Ichiloto\Engine\Rendering\Presentation\Text\TextMeasurement;
+use Ichiloto\Engine\Rendering\Presentation\Text\TextMetrics;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 
@@ -73,6 +78,58 @@ function findGroupScaleColour(GdImage $image, array ...$colours): ?array
 function createGroupScale(float $factor, float $originX = 0, float $originY = 0): CanvasGroupScale
 {
     return new CanvasGroupScale($factor, new PresentationSpritePivot($originX, $originY));
+}
+
+/** The layout a synthetic label is measured as, and its raster is kept under. */
+const GROUP_SCALE_LABEL_LAYOUT = 'group-scale-label';
+
+/** A label whose paint bounds are an area of its canvas, drawn from the raster kept for {@see GROUP_SCALE_LABEL_LAYOUT}. */
+function createGroupScaleLabel(CanvasRectangle $area, ?CanvasRectangle $clip = null): CanvasLabel
+{
+    $bounds = new TextBounds(0, 0, $area->width, $area->height);
+
+    return new CanvasLabel('word', new TextMeasurement(GROUP_SCALE_LABEL_LAYOUT, new TextMetrics($area->width, $area->height, $bounds, $bounds, $bounds)),
+        $area->x, $area->y, clipRect: $clip);
+}
+
+/**
+ * A raster that draws canvases with a label raster of its own: a picture, kept as the graphical renderer writes a
+ * label's, PNG bytes with the renderer's guard of clear pixels on every side.
+ */
+function createGroupScaleLabelRaster(GdImage $picture): CanvasStillRaster
+{
+    $guard = StillLabelPreparation::RASTER_GUARD;
+    $guarded = imagecreatetruecolor(imagesx($picture) + 2 * $guard, imagesy($picture) + 2 * $guard);
+    imagealphablending($guarded, false);
+    imagesavealpha($guarded, true);
+    imagefilledrectangle($guarded, 0, 0, imagesx($guarded) - 1, imagesy($guarded) - 1, imagecolorallocatealpha($guarded, 0, 0, 0, 127));
+    imagecopy($guarded, $picture, $guard, $guard, 0, 0, imagesx($picture), imagesy($picture));
+    ob_start();
+    imagepng($guarded);
+
+    return new CanvasStillRaster(getCanvasGroupScaleFixtureDirectory(), labelRasters: [GROUP_SCALE_LABEL_LAYOUT => (string) ob_get_clean()]);
+}
+
+/** A picture of one opaque colour. */
+function createGroupScalePicture(int $width, int $height, array $rgb): GdImage
+{
+    $picture = imagecreatetruecolor($width, $height);
+    imagefilledrectangle($picture, 0, 0, $width - 1, $height - 1, imagecolorallocate($picture, ...$rgb));
+
+    return $picture;
+}
+
+/**
+ * A canvas of 40 by 40 with one white drawing over an area of it: the fixture's line as an image, a fill as a
+ * composite, or a label, whose raster {@see createGroupScaleLabelRaster()} gives.
+ */
+function createGroupScaleDrawing(string $kind, CanvasRectangle $area): PresentationCanvas
+{
+    return match ($kind) {
+        'image' => new PresentationCanvas(40, 40, [new CanvasImage('line', 'white-line.png', $area)]),
+        'composite' => new PresentationCanvas(40, 40, composites: [createGroupScaleFill('fill', $area, [255, 255, 255])]),
+        'label' => new PresentationCanvas(40, 40, labels: [createGroupScaleLabel($area)]),
+    };
 }
 
 /**
@@ -381,6 +438,62 @@ it('takes each group of a still no scale reaches to its own whole pixel, where t
         ->and(placeGroupScaleGroups($groups)->getEdges($mark))->toBe([0, 0, 1, 1])
         ->and(findGroupScaleColour($surface, GROUP_SCALE_RED))->toBe(['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1, 'filled' => true]);
 })->skip(fn (): bool => ! hasEngineCanvasGroupScale(), ENGINE_CANVAS_GROUP_SCALE_MISSING);
+
+it('paints nothing of a picture a scale leaves less than a pixel of on both axes', function () {
+    $destination = new CanvasRectangle(0, 0, 1, 4);
+    $group = new CanvasGroup('small', 0, 0, new PresentationCanvas(40, 40, [new CanvasImage('line', 'white-line.png', $destination)]),
+        scale: createGroupScale(0.1));
+    $projected = $group->projectRectangle($destination);
+    [$surface, $diagnostics] = drawCanvasGroupScaleSurface(new PresentationCanvas(8, 8, groups: [$group]));
+
+    // A tenth of the 1 by 4 line is 0.1 by 0.4 at the corner: both edges of each axis come to pixel 0, and no pixel is its.
+    expect($projected->toArray())->toBe(['x' => 0.0, 'y' => 0.0, 'width' => 0.1, 'height' => 0.4])
+        ->and(roundGroupScaleEdges($projected))->toBe([0, 0, 0, 0])
+        ->and(CanvasStillTransform::createIdentity()->nestGroup($group)->getEdges($destination))->toBe(roundGroupScaleEdges($projected))
+        ->and([imagesx($surface), imagesy($surface)])->toBe([8, 8])
+        ->and(findCanvasGroupScalePaint($surface))->toBeNull()
+        ->and($diagnostics)->toBe([]);
+})->skip(fn (): bool => ! hasEngineCanvasGroupScale(), ENGINE_CANVAS_GROUP_SCALE_MISSING);
+
+it('draws a scaled picture on the pixels its rounded edges enclose, and nothing where either axis encloses none', function (string $kind) {
+    $draw = static function (CanvasRectangle $area) use ($kind): array {
+        $group = new CanvasGroup('small', 0, 0, createGroupScaleDrawing($kind, $area), scale: createGroupScale(0.1));
+        [$surface, $diagnostics] = drawCanvasGroupScaleSurface(new PresentationCanvas(8, 8, groups: [$group]),
+            createGroupScaleLabelRaster(createGroupScalePicture(6, 6, [255, 255, 255])));
+        [$left, $top, $right, $bottom] = roundGroupScaleEdges($group->projectRectangle($area));
+
+        return [[$right - $left, $bottom - $top], [$left, $top], $surface, $diagnostics];
+    };
+
+    // Less than a pixel on both axes, and a pixel high but less than one wide: no pixel either way.
+    foreach ([new CanvasRectangle(0, 0, 1, 4), new CanvasRectangle(0, 0, 1, 12)] as $area) {
+        [$extent, , $surface, $diagnostics] = $draw($area);
+        expect(min($extent))->toBe(0)
+            ->and(findCanvasGroupScalePaint($surface))->toBeNull()
+            ->and($diagnostics)->toBe([]);
+    }
+
+    // Edges that enclose exactly one pixel draw that pixel, whole.
+    [$extent, [$left, $top], $surface, $diagnostics] = $draw(new CanvasRectangle(14, 26, 6, 12));
+    expect($extent)->toBe([1, 1])
+        ->and(findCanvasGroupScalePaint($surface))->toBe(['x' => $left, 'y' => $top, 'width' => 1, 'height' => 1, 'filled' => true])
+        ->and(readCanvasGroupScalePixel($surface, $left, $top))->toBe([255, 255, 255, 255])
+        ->and($diagnostics)->toBe([]);
+})->with(['image', 'composite', 'label'])->skip(fn (): bool => ! hasEngineCanvasGroupScale(), ENGINE_CANVAS_GROUP_SCALE_MISSING);
+
+it('draws nothing of a picture no scale reaches whose edges come to one pixel, and the picture beside it that reaches a pixel', function (string $kind) {
+    $draw = static fn(CanvasRectangle $area): array => drawCanvasGroupScaleSurface(createGroupScaleDrawing($kind, $area),
+        createGroupScaleLabelRaster(createGroupScalePicture(6, 6, [255, 255, 255])));
+
+    // 0.3 wide from 0.1: both edges at pixel 0. The same width from 0.4 has its right edge at pixel 1.
+    foreach ([[new CanvasRectangle(0.1, 0, 0.3, 4), null], [new CanvasRectangle(0.4, 0, 0.3, 4), ['x' => 0, 'y' => 0, 'width' => 1, 'height' => 4, 'filled' => true]]] as [$area, $painted]) {
+        [$left, $top, $right, $bottom] = roundGroupScaleEdges($area);
+        [$surface, $diagnostics] = $draw($area);
+        expect([$right - $left, $bottom - $top])->toBe([$painted['width'] ?? 0, 4])
+            ->and(findCanvasGroupScalePaint($surface))->toBe($painted)
+            ->and($diagnostics)->toBe([]);
+    }
+})->with(['image', 'composite', 'label']);
 
 it('leaves the limits of a scale to the Engine, which refuses a factor that is not finite, positive and at most eight', function (float $factor) {
     expect(fn() => createGroupScale($factor))->toThrow(InvalidArgumentException::class, 'Canvas group scale must be finite, positive and at most 8.');

@@ -804,6 +804,9 @@ final class CanvasStillRaster
      * mirrored, brightened and faded, stretched to its destination where the
      * canvas being drawn has it on the surface, masked by its clip and by the
      * surface. The region is sampled once, straight to the size it shows at.
+     * A destination whose edges come to the same pixel along either axis covers
+     * no pixel and nothing is drawn of it, an image, a composite and a label
+     * alike, as an indicator's edge and a text cell that thin draw nothing.
      *
      * @param array{int, int, int, int} $source The region's x, y, width and height in the picture.
      */
@@ -813,8 +816,11 @@ final class CanvasStillRaster
     {
         [$sourceX, $sourceY, $sourceWidth, $sourceHeight] = $source;
         [$drawLeft, $drawTop, $drawRight, $drawBottom] = $this->transform->getEdges($destination);
-        $drawWidth = max(1, $drawRight - $drawLeft);
-        $drawHeight = max(1, $drawBottom - $drawTop);
+        $drawWidth = $drawRight - $drawLeft;
+        $drawHeight = $drawBottom - $drawTop;
+        if ($drawWidth < 1 || $drawHeight < 1) {
+            return;
+        }
         $stretched = self::createCanvas($drawWidth, $drawHeight);
         imagealphablending($stretched, false);
         imagecopyresampled($stretched, $picture, 0, 0, $sourceX, $sourceY, $drawWidth, $drawHeight, $sourceWidth, $sourceHeight);
