@@ -3193,6 +3193,13 @@ final class EditorSession
     {
         $asset = $this->requireTimelineCutscene($category, $index);
         $tracks = $cues = [];
+        // An image track's art, by the row that edits each part of it. A captured ground span's tip and
+        // orientation are rows of the Engine's own field names, and are there only while the track's rows offer them.
+        $artRows = ['Asset' => 'asset', 'Sheetcolumns' => 'columns', 'Sheetrows' => 'rows', 'Fit' => 'fit', 'Attachment' => 'attachment', 'Pivot' => 'pivot',
+            'Anchor' => 'anchor', 'Placementsubject' => 'subject', 'Placementattachment' => 'point',
+            ProjectRecordDatabase::getFieldToken(CutsceneSchemas::getGroundSpanTipKey()) => 'groundSpanTip',
+            ProjectRecordDatabase::getFieldToken(CutsceneSchemas::getGroundSpanOrientationKey()) => 'groundSpanOrientation'];
+        $artPattern = '/^track(\d+)(' . implode('|', array_map(static fn(string $token): string => preg_quote($token, '/'), array_keys($artRows))) . ')$/';
         foreach ($this->readDatabaseRecord($category, $index, ['tracks'])['rows'] as $row) {
             $field = (string) ($row['key']['field'] ?? '');
             if (preg_match('/^track(\d+)(Id|Type|Presentation|Motion)$/', $field, $match) === 1) {
@@ -3200,16 +3207,15 @@ final class EditorSession
                 if ($match[2] === 'Motion') {
                     $tracks[(int) $match[1]]['motionKey'] = $row['key'];
                 }
-            } elseif (preg_match('/^track(\d+)(Asset|Sheetcolumns|Sheetrows|Fit|Attachment|Pivot|Anchor|Placementsubject|Placementattachment)$/', $field, $match) === 1) {
+            } elseif (preg_match($artPattern, $field, $match) === 1) {
                 // An image track's art, and the keys that edit how it fills its cells and where it sits on its
                 // anchor: a battler point, or on the stage a subject and a named point on it.
-                $art = ['Asset' => 'asset', 'Sheetcolumns' => 'columns', 'Sheetrows' => 'rows', 'Fit' => 'fit', 'Attachment' => 'attachment', 'Pivot' => 'pivot',
-                    'Anchor' => 'anchor', 'Placementsubject' => 'subject', 'Placementattachment' => 'point'][$match[2]];
+                $art = $artRows[$match[2]];
                 $tracks[(int) $match[1]]['art'][$art] = in_array($art, ['columns', 'rows'], true) ? max(1, (int) $row['value']) : (string) ($row['raw'] ?? $row['value']);
-                if (in_array($art, ['fit', 'attachment', 'pivot', 'subject', 'point'], true)) {
+                if (in_array($art, ['fit', 'attachment', 'pivot', 'groundSpanTip', 'groundSpanOrientation', 'subject', 'point'], true)) {
                     $tracks[(int) $match[1]]['art'][$art . 'Key'] = $row['key'];
                 }
-                if (in_array($art, ['fit', 'attachment'], true)) {
+                if (in_array($art, ['fit', 'attachment', 'groundSpanOrientation'], true)) {
                     $tracks[(int) $match[1]]['art'][$art . 'Options'] = array_values(array_filter($row['options'] ?? [], static fn(mixed $option): bool => $option !== ''));
                 }
             } elseif (preg_match('/^track(\d+)Keyframe(\d+)(Frame|Duration|SourceFrame)$/', $field, $match) === 1) {
@@ -3894,8 +3900,11 @@ final class EditorSession
      * composed only when the caller says its canvas draws it; canvas
      * groups carry an authored whole-field motion, and image rotation with
      * clipped images an authored battler motion, each otherwise left still
-     * with the Engine's diagnostic. Nothing is resolved, spent or played
-     * aloud, and nothing is written.
+     * with the Engine's diagnostic. Composites are composed unless the
+     * caller says its canvas draws none. A command that draws a captured
+     * ground span carries the Engine's diagnostics for the span's placement
+     * against the troop and targets previewed, on every frame. Nothing is
+     * resolved, spent or played aloud, and nothing is written.
      *
      * @return array<string, mixed>
      * @throws SessionRefusal When the effect does not compile, no action of the party plays it, or the battle cannot be set up.
@@ -3903,7 +3912,8 @@ final class EditorSession
     public function readEffectBattlePreview(int $index, int $frame, bool $reducedMotion = false,
         EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null, int $binding = 0,
         bool $imageRotation = false, ?int $targetIndex = null, bool $coverageDabs = false, bool $textureStrip = false,
-        bool $regionBudget = false, bool $canvasGroups = false, bool $clipOpacity = false, bool $groupColor = false): array
+        bool $regionBudget = false, bool $canvasGroups = false, bool $clipOpacity = false, bool $groupColor = false,
+        bool $compositing = true): array
     {
         $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
         $effects = $this->workspace->cutscenes?->assets(CutsceneType::EFFECT) ?? [];
@@ -3927,7 +3937,7 @@ final class EditorSession
             $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame, $reducedMotion);
             $totalFrames = $preview->getTotalFrames($reducedMotion);
             $read = $preview->readFrame(max(0, min($frame, $totalFrames - 1)), $reducedMotion, $imageRotation, $coverageDabs, $textureStrip, $regionBudget,
-                $canvasGroups, $clipOpacity, $groupColor);
+                $canvasGroups, $clipOpacity, $groupColor, $compositing);
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
         }

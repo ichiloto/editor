@@ -832,3 +832,72 @@ function setRecordRow(EditorSession $session, string $category, int $index, stri
 {
     return $session->applyDatabaseRecord($category, $index, getRecordRow($session, $category, $index, $field, $frame)['key'], $value);
 }
+
+/**
+ * A synthetic battle effect with a captured ground span, written as an author writes one: a lane of light whose
+ * rear (the pivot) is held at the caster's ground and whose tip at the farthest selected target's.
+ */
+function groundLanceTimeline(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+// Ground Lance: a lane of light from the caster's feet to the farthest target.
+return [
+  'presentations' => [
+    'terminal' => [
+      'fps' => 12,
+      'lengthFrames' => 4,
+      'tracks' => [[
+        'id' => 'lane',
+        'type' => 'glyph',
+        'keyframes' => [['frame' => 0, 'duration' => 4, 'content' => '=', 'position' => ['x' => 0, 'y' => 0]]],
+      ]],
+    ],
+    'graphical' => [
+      'fps' => 24,
+      'lengthFrames' => 12,
+      'targetCaptureFrame' => 2, // the targets and the caster's ground are held from here
+      'restFrame' => 3,
+      'tracks' => [
+        // The lane: its rear on the caster's ground, its tip on the farthest target's.
+        ['id' => 'lane-art', 'type' => 'image', 'asset' => 'Graphics/Effects/ground-lance.png',
+         'anchor' => 'target-group', 'attachment' => 'ground', 'anchorLifetime' => 'target-capture', 'fit' => 'contain',
+         'pivot' => ['x' => 0.8828125, 'y' => 0.53125],   'groundSpan' => ['tip' => ['x' => 0.1328125, 'y' => 0.46875]], /* measured on the sheet */
+         'depth' => 'behind',
+         'keyframes' => [['frame' => 3, 'duration' => 8]]],
+      ],
+    ],
+  ],
+];
+PHP_SOURCE;
+}
+
+/** The colour of a texel of Ground Lance's 64 by 16 image: its column in red and its row in green, every texel opaque. */
+function getGroundLanceTexel(int $x, int $y): array
+{
+    return [20 + 3 * $x, 30 + 13 * $y, 90];
+}
+
+/**
+ * The effect battle preview project, its unarmed attack playing Ground Lance on its targets. The image's rear
+ * (the pivot) is the centre of its texel (56, 8) and its tip the centre of its texel (8, 7).
+ */
+function groundLanceProject(): string
+{
+    $root = effectBattlePreviewProject();
+    mkdir($root . '/assets/Animations/ground-lance', 0o777, true);
+    file_put_contents(effectTimelinePath($root, 'ground-lance'), groundLanceTimeline());
+    $image = imagecreatetruecolor(64, 16);
+    for ($y = 0; $y < 16; $y++) {
+        for ($x = 0; $x < 64; $x++) {
+            imagesetpixel($image, $x, $y, (int) imagecolorallocate($image, ...getGroundLanceTexel($x, $y)));
+        }
+    }
+    imagepng($image, $root . '/assets/Graphics/Effects/ground-lance.png');
+    file_put_contents($root . '/assets/Data/animations.php', "<?php\n\nreturn " . var_export([
+        ['id' => 1, 'name' => 'Ground Lance', 'roles' => ['attack', 'attack-unarmed'], 'targetEffect' => 'ground-lance'],
+    ], true) . ";\n");
+
+    return $root;
+}

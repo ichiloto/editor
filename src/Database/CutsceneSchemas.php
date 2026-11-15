@@ -16,6 +16,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightContact;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
+use Ichiloto\Engine\Animations\Timelines\EffectGroundSpan;
 use Ichiloto\Engine\Animations\Timelines\EffectImpactTimingMode;
 use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
 use Ichiloto\Engine\Animations\Timelines\EffectStraightFlightFallback;
@@ -104,6 +105,25 @@ final class CutsceneSchemas
 
     /** Where a summon image track is placed: on a battler, the screen, or the graphical stage. */
     public const array SUMMON_IMAGE_ANCHORS = ['target', 'caster', 'screen', 'stage'];
+
+    /**
+     * Where a track keeps the tip of a captured ground span, the point of its image that lands on the farthest
+     * selected target's ground, by the names the Engine exports ({@see EffectGroundSpan::exportContract()}).
+     */
+    public static function getGroundSpanTipKey(): string
+    {
+        $contract = EffectGroundSpan::exportContract();
+
+        return $contract['field'] . '.' . $contract['tipField'];
+    }
+
+    /** Where a track keeps which way up a captured ground span holds its image, by the names the Engine exports. */
+    public static function getGroundSpanOrientationKey(): string
+    {
+        $contract = EffectGroundSpan::exportContract();
+
+        return $contract['field'] . '.' . $contract['orientationField'];
+    }
 
     /**
      * Returns the cinematic category: one record per asset, its metadata as
@@ -815,6 +835,10 @@ final class CutsceneSchemas
             RecordField::reference('effectTiming.cueId', 'Impact Cue', 'effect_cues', allowsNone: true, noneLabel: '(none)'),
             ...($graphical ? [
                 new RecordField('poseSyncFrame', 'Pose Sync Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
+                // Battle only: the frame the selected targets and the caster's ground are captured on, once, for
+                // the ground images that keep that placement. Frame 0 is a frame of its own, never an omission.
+                new RecordField(EffectGroundSpan::exportContract()['captureField'], 'Target Capture Frame', InputControlType::INTEGER,
+                    removeWhenEmpty: true, displayDefault: '(omitted)'),
                 new RecordField('poseClock', 'Pose Clock',
                     options: ['', ...array_map(static fn(EffectPoseClock $clock): string => $clock->value, EffectPoseClock::cases())],
                     removeWhenEmpty: true, displayDefault: EffectPoseClock::ANNOUNCEMENT->value),
@@ -923,11 +947,12 @@ final class CutsceneSchemas
             variants: [
                 'image' => static fn(array $entry): array => $graphical && self::isOnStage($entry)
                     ? self::stageImageTrackFields()
-                    : [new RecordField('anchor', 'Anchor', options: $graphical ? [...self::SUMMON_IMAGE_ANCHORS, 'target-group'] : ['target', 'caster', 'screen'],
-                        removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], $anchors[2],
+                    : self::withoutGroundSpanConflicts($graphical, $entry, [
+                        new RecordField('anchor', 'Anchor', options: $graphical ? [...self::SUMMON_IMAGE_ANCHORS, 'target-group'] : ['target', 'caster', 'screen'],
+                            removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], $anchors[2],
                         ...self::imageTrackFields(sharedWithField: true, subjectOrder: self::supportsSubjectOrder($entry)),
                         ...($graphical ? self::targetGroupFields($entry) : []),
-                        ...($graphical ? self::battleFlightFields(is_string($entry['anchor'] ?? null) ? $entry['anchor'] : 'target') : [])],
+                        ...($graphical ? self::battleFlightFields(is_string($entry['anchor'] ?? null) ? $entry['anchor'] : 'target') : [])]),
                 'glyph' => $anchors,
                 'text' => $anchors,
                 'flash' => $anchors,
@@ -951,23 +976,69 @@ final class CutsceneSchemas
                 if ($field === 'type' && in_array($entry['type'] ?? null, self::getGraphicalTrackTypes(), true)) {
                     unset($entry['presentation']);
                 }
+                // A ground span is its tip: with the tip cleared, nothing of it is left to write, its orientation included.
+                $groundSpan = EffectGroundSpan::exportContract();
+                if ($field === self::getGroundSpanTipKey() && ! array_key_exists($groundSpan['tipField'], (array) ($entry[$groundSpan['field']] ?? []))) {
+                    unset($entry[$groundSpan['field']]);
+                }
 
                 return $entry;
             },
         );
     }
 
+    /**
+     * A graphical image track's rows, less those a captured ground span leaves no place for. The Engine refuses
+     * each field it lists as conflicting on a track that has a span, since the two captured grounds own where the
+     * image goes; a row for one is offered only while the track still holds that field, so it can be cleared.
+     * The Terminal editor has no ground span rows and keeps every row it has.
+     *
+     * @param array<string, mixed> $entry The track.
+     * @param list<RecordField> $fields
+     * @return list<RecordField>
+     */
+    private static function withoutGroundSpanConflicts(bool $graphical, array $entry, array $fields): array
+    {
+        $contract = $graphical ? EffectGroundSpan::exportContract() : null;
+        if ($contract === null || ! array_key_exists($contract['field'], $entry)) {
+            return $fields;
+        }
+
+        return array_values(array_filter($fields, static function (RecordField $field) use ($contract, $entry): bool {
+            $owner = explode('.', $field->key)[0];
+
+            return ! in_array($owner, $contract['conflictingTrackFields'], true) || array_key_exists($owner, $entry);
+        }));
+    }
+
     /** @return list<RecordField> */
     private static function targetGroupFields(array $entry): array
     {
         $groundGroup = ($entry['anchor'] ?? null) === 'target-group' && ($entry['attachment'] ?? null) === 'ground';
+        $groundSpan = EffectGroundSpan::exportContract();
+        $spansGround = array_key_exists($groundSpan['field'], $entry);
+        // What the Engine requires of a track before it can hold a span, each value as the Engine exports it.
+        $takesGroundSpan = array_all($groundSpan['requiredTrackValues'], static fn(mixed $value, string $field): bool => ($entry[$field] ?? null) === $value);
         return [
             ...($groundGroup || array_key_exists('anchorLifetime', $entry) ? [
-                new RecordField('anchorLifetime', 'Ground Anchor Lifetime', options: ['', EffectAnchorLifetime::EFFECT_START->value],
+                // Every lifetime the Engine knows but the one a track has by naming none.
+                new RecordField('anchorLifetime', 'Ground Anchor Lifetime',
+                    options: ['', ...array_values(array_diff(array_column(EffectAnchorLifetime::cases(), 'value'), [EffectAnchorLifetime::FOLLOW->value]))],
                     removeWhenEmpty: true, displayDefault: EffectAnchorLifetime::FOLLOW->value),
             ] : []),
             ...(array_key_exists('span', $entry) || ($groundGroup && ($entry['fit'] ?? null) === CanvasImageFit::CONTAIN->value)
                 ? [RecordField::boolean('span', 'Span Selected Targets')] : []),
+            // A captured ground image fitted whole from the caster's ground, where its pivot (the rear) lands, to the
+            // farthest selected target's ground, where this point of it (the tip) lands. A point turns the span on;
+            // cleared, the key goes whole ({@see effectTrackList()}).
+            ...($spansGround || $takesGroundSpan
+                ? [new RecordField(self::getGroundSpanTipKey(), 'Ground Span Tip (empty: no ground span)',
+                    codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true)] : []),
+            // Which way up the span holds its image, among the Engine's orientations: the empty choice leaves the key
+            // out, and the image is then held as the Engine's default holds it.
+            ...($spansGround
+                ? [new RecordField(self::getGroundSpanOrientationKey(), 'Ground Span Orientation', options: ['', ...$groundSpan['orientations']],
+                    removeWhenEmpty: true, displayDefault: $groundSpan['defaultOrientation'])] : []),
             ...(array_key_exists('contactRail', $entry) || ($groundGroup && ($entry['anchorLifetime'] ?? null) === EffectAnchorLifetime::EFFECT_START->value)
                 ? [
                     new RecordField('contactRail.left', 'Contact Rail Start U', InputControlType::FLOAT, removeWhenEmpty: true),
