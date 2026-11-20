@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- A preview's Game owns its scene manager and one read-only save manager (the Engine's `SaveManager` with
+  `readOnly: true`). Before, the preview built its scene manager outside its Game, so an Engine lookup through the
+  Game made a second scene manager and save manager, and a saved-campaign preview read its save through a third.
+  A saved campaign now loads through the Game's own manager and the normal compatibility pipeline, and every
+  write, deletion and checkpoint import is refused as read-only. A map-only preview never reads save metadata.
+  Removed: the preview-only `PreviewSaveManager`, which accepted Autosave without writing and counted the calls,
+  and the separate save manager the saved-campaign preview built.
+
 - A canvas picture too small to cover a pixel is no longer drawn as one. Removed: the still rasters forced every image,
   composite and label to at least one pixel wide and high, so a picture whose edges came to the same pixel still
   painted a pixel there: the 1 by 4 line in a group scaled to a tenth painted an opaque pixel at the corner, and an
