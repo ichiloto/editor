@@ -6,6 +6,9 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Engine\Audio\AudioManager;
 use Ichiloto\Engine\Core\Game;
+use Ichiloto\Engine\IO\SaveCompatibility\ContentMigrationResolution;
+use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
+use Ichiloto\Engine\IO\SaveManager;
 
 /**
  * The Game a preview scene belongs to: an audio manager with no backends, a
@@ -21,12 +24,23 @@ final class PreviewGame extends Game
     /** The Engine's notice queue, delivering to the preview's screen. */
     public readonly PreviewNoticeManager $notices;
 
-    public function __construct()
+    public function __construct(string $projectRoot)
     {
+        $this->bindSaveManager(new SaveManager($this, compatibilityManifest: static fn() =>
+            SaveCompatibilityManifest::fromProjectRoot($projectRoot, migrationResolution: ContentMigrationResolution::WHEN_REQUIRED),
+            readOnly: true));
+        $this->sceneManager = new PreviewSceneManager($this);
         $this->audioManager = new PreviewAudioManager($this);
         // This Game's own queue, bound before anything acquires one, as the Engine's per-Game contract asks.
         $this->notices = new PreviewNoticeManager($this);
         $this->bindModalManager($this->notices);
+    }
+
+    public function getSceneManager(): PreviewSceneManager
+    {
+        $manager = $this->sceneManager;
+        return $manager instanceof PreviewSceneManager ? $manager
+            : throw new \LogicException('The preview Game lost its scene manager.');
     }
 
     public function __destruct()

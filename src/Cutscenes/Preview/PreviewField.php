@@ -134,9 +134,9 @@ final class PreviewField
         $field = new self($projectRoot, $width, $height, $readTime);
         try {
             $field->run(function () use ($field, $mapId, $spawn): void {
-                $manager = new PreviewSceneManager();
-                $field->startNewGame($manager);
-                $field->stage($manager, $mapId, $spawn);
+                $game = new PreviewGame($field->projectRoot);
+                $field->startNewGame($game);
+                $field->stage($game->getSceneManager(), $mapId, $spawn);
             });
         } catch (Throwable $failure) {
             $field->dispose();
@@ -162,10 +162,10 @@ final class PreviewField
         try {
             $field->run(function () use ($field, $savePath): void {
                 $field->installProjectStores();
-                $manager = new PreviewSceneManager();
-                $field->campaign = PreviewCampaign::restoreFromSave(self::requirePreviewGame($manager), $field->projectRoot, $savePath);
+                $game = new PreviewGame($field->projectRoot);
+                $field->campaign = PreviewCampaign::restoreFromSave($game, $field->projectRoot, $savePath);
                 $config = $field->campaign->config;
-                $field->stage($manager, $config->mapId, new Vector2($config->playerPosition->x, $config->playerPosition->y));
+                $field->stage($game->getSceneManager(), $config->mapId, new Vector2($config->playerPosition->x, $config->playerPosition->y));
             });
         } catch (Throwable $failure) {
             $field->dispose();
@@ -180,11 +180,11 @@ final class PreviewField
      * cannot be started in keeps the actors and items the field found
      * installed and has no campaign; the Engine's reason is kept.
      */
-    private function startNewGame(PreviewSceneManager $manager): void
+    private function startNewGame(PreviewGame $game): void
     {
         try {
             $this->installProjectStores();
-            $this->campaign = PreviewCampaign::startNewGame(self::requirePreviewGame($manager), $this->projectRoot);
+            $this->campaign = PreviewCampaign::startNewGame($game, $this->projectRoot);
         } catch (Throwable $failure) {
             $this->giveBackConfiguration([ActorStore::class, ItemStore::class]);
             $this->campaignFailure = 'A new game could not be started, so the field has no party: ' . $failure->getMessage();
@@ -196,12 +196,6 @@ final class PreviewField
     {
         ConfigStore::put(ActorStore::class, new ActorStore());
         ConfigStore::put(ItemStore::class, new ItemStore());
-    }
-
-    private static function requirePreviewGame(PreviewSceneManager $manager): PreviewGame
-    {
-        return $manager->game instanceof PreviewGame ? $manager->game
-            : throw new \LogicException('The preview scene manager lost its preview game.');
     }
 
     /**
@@ -251,7 +245,8 @@ final class PreviewField
     {
         $field = new self($projectRoot, $width, $height, $readTime);
         $field->run(function () use ($field, $map, $spawn, $heading, $appearance): void {
-            $field->scene = new PreviewGameScene(new PreviewSceneManager(), $field->screenWidth, $field->screenHeight, $map->mapId);
+            $game = new PreviewGame($field->projectRoot);
+            $field->scene = new PreviewGameScene($game->getSceneManager(), $field->screenWidth, $field->screenHeight, $map->mapId);
             $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
             $camera = $field->scene->previewCamera();
             $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight, $field->projectRoot . '/assets');

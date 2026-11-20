@@ -27,6 +27,7 @@ use Ichiloto\Engine\Progress\Knowledge\KnowledgeCatalog;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeProgressService;
 use Ichiloto\Engine\Rendering\Presentation\ScenePresentationContext;
 use Ichiloto\Engine\Scenes\Game\GameScene;
+use Ichiloto\Engine\UI\UIManager;
 
 /**
  * The isolated game scene a cinematic preview plays inside.
@@ -72,6 +73,9 @@ final class PreviewGameScene extends GameScene
         ?CampaignSession $campaign = null,
     ) {
         $this->sceneManager = $previewSceneManager;
+        // The scene's UI belongs to its Game, as every scene's does: the Engine's notice queue asks the current scene
+        // whether a dialogue holds input before it shows a notice.
+        $this->uiManager = UIManager::getInstance($previewSceneManager->game);
         // The preview's scene manager owns this one scene, so it is the current, running scene that stage
         // presentations and other scene-owned work require, as the game's field is in its scene manager.
         $previewSceneManager->currentScene = $this;
