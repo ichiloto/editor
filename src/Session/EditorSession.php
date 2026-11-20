@@ -7114,7 +7114,7 @@ final class EditorSession
         if ((ReferenceCatalog::describeMedia($kind)['kind'] ?? null) !== 'audio') {
             throw new SessionRefusal(sprintf('%s is not music or a sound effect.', $kind));
         }
-        $this->audition ??= new AudioAudition(new PreviewGame(), $this->workspace->projectRoot);
+        $this->audition ??= new AudioAudition(new PreviewGame($this->workspace->projectRoot), $this->workspace->projectRoot);
         $refusal = $this->audition->play($kind, $name);
         if ($refusal !== null) {
             throw new SessionRefusal($refusal);
