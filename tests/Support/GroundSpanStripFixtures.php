@@ -242,9 +242,23 @@ function listGroundSpanStripFixtures(): array
     return [GROUND_SPAN_STRIP_FIXTURE => listGroundSpanStripCases(), GROUND_SPAN_UPRIGHT_FIXTURE => listGroundSpanUprightCases()];
 }
 
-/** The fixture as its file holds it. */
+/**
+ * The decimal places the fixture writes every number at. The Engine composes a span's geometry with
+ * trigonometry whose last bits differ between platforms' maths libraries (about 1e-15 of a pixel), while the
+ * picture they draw is the same. Written at this precision the file is the same on every platform, and it still
+ * holds the geometry far more finely than any change to the composition worth noticing (a millionth of a pixel)
+ * or than the native renderer reads it (as 32-bit floats).
+ */
+const GROUND_SPAN_STRIP_DECIMALS = 9;
+
+/** The fixture as its file holds it: every number at {@see GROUND_SPAN_STRIP_DECIMALS} decimal places. */
 function encodeGroundSpanStripFixture(array $fixture): string
 {
+    array_walk_recursive($fixture, static function (mixed &$value): void {
+        // Adding zero writes a value that rounds to zero from either side as 0.0, never as -0.0.
+        if (is_float($value)) { $value = round($value, GROUND_SPAN_STRIP_DECIMALS) + 0.0; }
+    });
+
     return json_encode($fixture, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
 }
 
