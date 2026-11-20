@@ -109,10 +109,14 @@ it('offers the open project\'s registered commands with their declared fields', 
     $inn = registeredVariantFields('inn');
     $carriage = registeredVariantFields('hire_carriage');
 
-    // A field script offers the Engine's field commands, then the project's.
+    // A field script offers the built-in commands the Engine runs on the field, then its registered field
+    // commands, then the project's. A command that needs an active cinematic (a framing phase) is not among them.
+    $builtIn = array_values(array_filter(RecordSchemaCatalog::EVENT_COMMAND_TYPES,
+        static fn(string $type): bool => EventExecutionScope::FIELD->allowsBuiltInCommand($type)));
     $fieldCommands = array_keys(array_filter(ScriptCommandCatalog::createEngineCatalog()->definitions,
         static fn($definition): bool => $definition->runsIn(EventExecutionScope::FIELD)));
-    expect($list->fields[0]->options)->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, ...$fieldCommands, 'hire_carriage'])
+    expect($list->fields[0]->options)->toBe([...$builtIn, ...$fieldCommands, 'hire_carriage'])
+        ->and($builtIn)->toContain('camera', 'sequence')->not->toContain('framing')
         ->and(array_keys($shop))->toBe(['buyRate', 'sellRate'])
         ->and($shop['sellRate']->type)->toBe(InputControlType::FLOAT)
         ->and(array_keys($inn))->toBe(['confirmDialogue.text', 'confirmDialogue.name', 'cost', 'spawnPoint.x', 'spawnPoint.y', 'wakeFacing', 'bgm', 'presentation', 'resultVariable'])

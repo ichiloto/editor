@@ -158,3 +158,38 @@ it('names the project\'s keys in the Engine\'s bindings while a field is open, a
 
     expect(\Ichiloto\Engine\IO\InputManager::getBindings()['confirm']['keys'] ?? null)->toBe($before['confirm']['keys'] ?? null);
 });
+
+it('shares the owning preview Game scene and read-only save services', function () {
+    $root = cutsceneProject();
+    $save = writeHarbourSave($root, 3, 1);
+    $before = sourceHashTree($root);
+    $field = PreviewField::openSavedCampaign($root, $save, 40, 12, static fn(): float => 0.0);
+    try {
+        $field->run(function () use ($field, $save): void {
+            $game = $field->scene->getPreviewGame();
+            $sceneManager = $field->scene->previewSceneManager;
+            expect($game->getSceneManager())->toBe($sceneManager)
+                ->and($game->getSaveManager())->toBe($sceneManager->saveManager)
+                ->and($sceneManager->currentScene)->toBe($field->scene);
+            $saves = $game->getSaveManager();
+            expect($saves->loadSaveFile($save)->config->mapId)->toBe('harbour')
+                ->and(fn() => $saves->save($field->scene, 1))->toThrow(LogicException::class, 'read-only')
+                ->and(fn() => $saves->deleteSlot(1))->toThrow(LogicException::class, 'read-only');
+        });
+    } finally {
+        $field->dispose();
+    }
+    expect(sourceHashTree($root))->toBe($before);
+});
+
+it('opens a field before save compatibility data has been authored', function () {
+    $root = cutsceneProject();
+    unlink($root . '/assets/Data/save-compatibility.php');
+    $field = PreviewField::open($root, 'harbour', new Vector2(3, 1), 40, 12, static fn(): float => 0.0);
+    try {
+        expect($field->mapFailure)->toBeNull()
+            ->and(intval($field->scene->player?->position->x))->toBe(3);
+    } finally {
+        $field->dispose();
+    }
+});

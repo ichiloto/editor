@@ -62,6 +62,11 @@ final readonly class RecordSubList
      * @param Closure(array<string, mixed>): array<string, mixed>|null $blankFor For a list beside the record's own
      * whose new entry starts from the record (an NPC's placement starts on the NPC's cell): the blank, given the
      * record; `blank` when null.
+     * @param bool $isCommandList Whether the list's entries are a script's commands, so the command arms its entries
+     * carry hold this list's own vocabulary at every depth: a reusable script's sequence holds the commands the
+     * script does.
+     * @param RecordSubList|null $extends The list this one reads the entries of, each with more fields
+     * ({@see extendWith()}): the samples of a whole-field motion are a battler motion's with a scale.
      */
     public function __construct(
         public string $key,
@@ -89,7 +94,49 @@ final readonly class RecordSubList
         public ?string $variantDefault = null,
         public ?Closure $remapKeyReferences = null,
         public ?Closure $blankFor = null,
+        public bool $isCommandList = false,
+        public ?RecordSubList $extends = null,
     ) {
+    }
+
+    /**
+     * This list with more fields for each entry, after one of its own: a list that reads every entry this one
+     * reads and, in each, what the fields added hold. The two share their entries ({@see sharesEntriesWith()}),
+     * so an entry's owner turned from a variant with one into a variant with the other keeps them.
+     *
+     * @param string $after The key of the field of this list the added ones follow.
+     */
+    public function extendWith(string $after, RecordField ...$fields): self
+    {
+        $position = array_find_key($this->fields, static fn(RecordField $field): bool => $field->key === $after)
+            ?? throw new \InvalidArgumentException(sprintf('The %s list has no field %s to add fields after.', $this->singular, $after));
+
+        return new self(...[...get_object_vars($this), 'extends' => $this,
+            'fields' => [...array_slice($this->fields, 0, $position + 1), ...array_values($fields), ...array_slice($this->fields, $position + 1)]]);
+    }
+
+    /** Whether this list and another read the same entries: one is the other, or both extend one list. */
+    public function sharesEntriesWith(self $other): bool
+    {
+        return $this->getSharedList() === $other->getSharedList();
+    }
+
+    /**
+     * The fields this list reads in an entry that another list sharing its entries does not.
+     *
+     * @return list<RecordField>
+     */
+    public function listFieldsBeyond(self $other): array
+    {
+        $shared = array_map(static fn(RecordField $field): string => $field->key, $other->fields);
+
+        return array_values(array_filter($this->fields, static fn(RecordField $field): bool => ! in_array($field->key, $shared, true)));
+    }
+
+    /** The list this one's entries are first read by: itself, or the one it extends, however far back. */
+    private function getSharedList(): self
+    {
+        return $this->extends?->getSharedList() ?? $this;
     }
 
     /**

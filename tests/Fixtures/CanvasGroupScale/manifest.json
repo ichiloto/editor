@@ -1,0 +1,24 @@
+{
+    "capability": "canvas_group_scale",
+    "prerequisites": [
+        "graphical_canvas",
+        "canvas_groups",
+        "canvas_group_scale",
+        "canvas_region_budget"
+    ],
+    "cases": [
+        "line-2x",
+        "fractional",
+        "nested-colour",
+        "retained-changing-scale"
+    ],
+    "generatedWith": "Engine models and fake retained transport; no native or Editor raster executed",
+    "contractSources": [
+        "src/Rendering/Presentation/Canvas/CanvasGroup.php",
+        "src/Rendering/Presentation/Canvas/CanvasGroupScale.php"
+    ],
+    "sourceSnapshot": {
+        "group": "ff75a9b1880678769c14ee5149a9cac4152531a9c1a95fec19b067856df093aa",
+        "scale": "e2987f807e57fa010010f34135696369ffab1d2605bd619bd6a82e0436ecdd82"
+    }
+}

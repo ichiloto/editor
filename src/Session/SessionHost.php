@@ -688,7 +688,11 @@ final class SessionHost
                 ($params['regionBudget'] ?? false) === true,
                 ($params['canvasGroups'] ?? false) === true,
                 ($params['clipOpacity'] ?? false) === true,
-                ($params['groupColor'] ?? false) === true),
+                ($params['groupColor'] ?? false) === true,
+                ($params['indicatorImagePath'] ?? false) === true,
+                ($params['groupScale'] ?? false) === true,
+                // Composites are composed unless the canvas says it draws none, as the Engine's preview composes them.
+                ($params['compositing'] ?? true) !== false),
             'cutscenes.battlePreview' => $session->readSummonBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
                 ($params['reducedMotion'] ?? false) === true,
                 EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')

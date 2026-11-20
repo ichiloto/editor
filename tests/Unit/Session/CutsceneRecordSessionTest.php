@@ -305,7 +305,8 @@ it('draws the previewed cinematic in the window\'s graphical view through the se
     $ready = json_encode(['protocol' => 2, 'type' => 'ready', 'capabilities' => ['sprite_source_rect', 'graphical_canvas', 'canvas_overlay',
         'canvas_clip_opacity', 'frame_viewport', 'field_motion']]);
 
-    $exchange = $session->exchangeCinematicScene([$ready], $started['sessionId']);
+    $exchange = exchangeSceneUntilPresented(static fn(array $events): array
+        => $session->exchangeCinematicScene($events, $started['sessionId']), [$ready]);
     // The window builds its scene with the grid the session names: the preview's screen in the game's graphical text cells.
     expect($exchange['grid'])->toBe(['columns' => 60, 'rows' => 16, 'cellWidth' => 10, 'cellHeight' => 20]);
     $sent = $exchange['messages'];

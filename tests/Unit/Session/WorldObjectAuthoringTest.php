@@ -197,7 +197,8 @@ it('routes real RPC ownership and cinematic object selectors without a global ob
     $view = $request('worldObjects.read', ['map' => 'test-map', 'id' => 'fixture-prop'])['result'];
     expect($request('worldObjects.place', ['map' => 'test-map', 'id' => 'fixture-prop', 'revision' => $view['revision'], 'x' => 2, 'y' => 1])['result']['changed'])->toBeTrue();
     $opened = $request('canvas.exchange', ['map' => 'test-map', 'events' => []])['result'];
-    $drawn = $request('canvas.exchange', ['map' => 'test-map', 'events' => [canvasWindowReady()], 'sessionId' => $opened['sessionId']])['result'];
+    $drawn = exchangeSceneUntilPresented(static fn(array $events): array
+        => $request('canvas.exchange', ['map' => 'test-map', 'events' => $events, 'sessionId' => $opened['sessionId']])['result'], [canvasWindowReady()]);
     expect(findCanvasMessages($drawn, 'frame')[0]['payload']['reset'])->toBeTrue()
         ->and($request('canvas.exchange', ['map' => 'test-map', 'events' => [], 'seconds' => 'wrong'])['error']['kind'])->toBe('request')
         ->and($request('canvas.close', ['map' => 'test-map'])['result'])->toBe(['closed' => true]);

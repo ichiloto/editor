@@ -52,7 +52,7 @@ function auditionProject(): string
 it('finds a track by the name a field stores, as the game does, and plays it until it ends or is stopped', function () {
     $root = auditionProject();
     $player = silentAuditionPlayer(5);
-    $audition = new AudioAudition(new PreviewGame(), $root, [$player]);
+    $audition = new AudioAudition(new PreviewGame($root), $root, [$player]);
 
     expect($audition->play('bgm', 'theme'))->toBeNull()
         ->and($player->files)->toBe([$root . '/assets/Audio/BGM/theme.ogg'])
@@ -60,14 +60,15 @@ it('finds a track by the name a field stores, as the game does, and plays it unt
     $audition->stop();
     expect($audition->describePlaying())->toBeNull();
 
-    $finishing = new AudioAudition(new PreviewGame(), $root, [silentAuditionPlayer(0)]);
+    $finishing = new AudioAudition(new PreviewGame($root), $root, [silentAuditionPlayer(0)]);
     $finishing->play('bgm', 'theme');
     usleep(300_000);
     expect($finishing->describePlaying())->toBeNull();
 });
 
 it('says why a track cannot play: missing, unplayable here, or not chosen', function () {
-    $audition = new AudioAudition(new PreviewGame(), auditionProject(), [silentAuditionPlayer(5)]);
+    $root = auditionProject();
+    $audition = new AudioAudition(new PreviewGame($root), $root, [silentAuditionPlayer(5)]);
 
     expect($audition->play('bgm', 'missing'))->toBe('missing was not found in assets/Audio/BGM.')
         ->and($audition->play('sfx', 'chime'))->toBe('No audio player on this computer can play chime.wav.')

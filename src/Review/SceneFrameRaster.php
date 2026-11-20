@@ -28,7 +28,7 @@ use InvalidArgumentException;
  * the Engine composes them ({@see PresentationCanvas::composeOverlay()}):
  * dialogue, notices, cinematic covers, stages and what is lifted above the
  * cover, drawn by the canvas raster ({@see CanvasStillRaster}), which paints
- * a canvas's translated groups at their layers, each in its colour treatment.
+ * a canvas's translated and scaled groups at their layers, each in its colour treatment.
  * The frame's screen canvas and world canvases are admitted together before the frame is drawn, on the region
  * budget's terms ({@see CanvasStillRaster::prepareCanvases()}), as a graphical renderer admits the whole frame.
  *
@@ -41,9 +41,12 @@ final class SceneFrameRaster
      * The renderer features the frame raster draws, as a graphical renderer negotiates them: both rasters', and
      * canvas compositing, which the cinematic stage plane and art lifted above its cover need. The canvas raster
      * draws the fills, coverage dabs and texture strips of a composite and names any other operation it leaves out.
+     * It mirrors a fill's image-alpha mask inside its crop by the mask's `flipX` and `flipY`
+     * ({@see CanvasStillMask}), so the Engine may compose a mirrored battler's tint or flash, which it does only for
+     * a session that has both compositing and the mirrored mask.
      */
     public const array CAPABILITIES = [...FieldStillRaster::CAPABILITIES, ...CanvasStillRaster::CAPABILITIES,
-        RendererSessionConfig::CANVAS_COMPOSITING];
+        RendererSessionConfig::CANVAS_COMPOSITING, RendererSessionConfig::CANVAS_IMAGE_ALPHA_FLIP];
 
     /** @var list<string> What the frames could not draw, once each. */
     public private(set) array $diagnostics = [];

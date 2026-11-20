@@ -386,3 +386,22 @@ it('shows the conversation under its own heading in the Terminal Cutscenes pane'
             'conversationGroupList', 'conversationGroup0Speakers')
         ->and(array_slice($ids, (int) $cast))->not->toContain('conversationSpeaker0Kind');
 });
+
+it('adds and removes a conversation speaker from its own list in the Terminal Cutscenes pane, leaving the cast alone', function (): void {
+    [$root] = conversationProject();
+    $editor = cutscenesEditor($root);
+    $asset = libraryOf($editor)->find(\Ichiloto\Editor\Cutscenes\CutsceneType::CINEMATIC, 'harbour-lanterns');
+    $speakers = static fn(): array => array_keys($asset->data()['presentation']['conversation']['speakers']);
+
+    // Shift+O on the heading adds a speaker at the head of the list; on a speaker's row, one after it.
+    addCutsceneAfter($editor, ConversationFields::SPEAKER_PREFIX . 'List');
+    addCutsceneAfter($editor, 'conversationSpeaker1Kind');
+    expect($speakers())->toBe(['speaker', 'hero', 'speaker-2', 'keeper'])
+        ->and($asset->data()['cast'])->toHaveCount(2);
+
+    // Delete on a speaker's row removes that speaker.
+    selectCutsceneField($editor, 'conversationSpeaker2Key');
+    callEditorMethod($editor, 'removeCutsceneSubItem', false);
+    expect($speakers())->toBe(['speaker', 'hero', 'keeper'])
+        ->and($asset->data()['cast'])->toHaveCount(2);
+});

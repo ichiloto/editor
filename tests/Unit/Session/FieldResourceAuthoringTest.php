@@ -155,6 +155,35 @@ it('authors a resource doorway as cells relative to its anchor with their entran
         ->and((string) file_get_contents($path))->toBe($before);
 });
 
+it('authors reusable appearance regions through the graphical record and restores the original source on undo', function () {
+    [$root, $path, $session] = createFieldResourceProject();
+    $before = file_get_contents($path);
+    $heading = array_find($session->readDatabaseRecord(FieldResourceFields::CATEGORY, 0)['rows'],
+        static fn(array $row): bool => ($row['listHeading'] ?? false) === true
+            && str_starts_with((string) $row['label'], 'Appearance Regions'));
+    expect($heading)->not->toBeNull();
+    $session->addDatabaseItem(FieldResourceFields::CATEGORY, 0, $heading['key'], true);
+    expect(findResourceRow($session, 0, 'appearanceRegion0Appearance')['options'])->toBe(['ground', 'water', 'barrier', 'overhead']);
+    applyResourceRow($session, 0, 'appearanceRegion0X', '-2');
+    applyResourceRow($session, 0, 'appearanceRegion0Y', '-1');
+    applyResourceRow($session, 0, 'appearanceRegion0Width', '5');
+    applyResourceRow($session, 0, 'appearanceRegion0Appearance', 'barrier');
+    $session->saveDatabase(FieldResourceFields::CATEGORY);
+
+    $resource = FieldPresentationCatalog::load($root . '/assets')->getResource('oak');
+    expect($resource->getAppearanceInRegion(2, -1)?->value)->toBe('barrier')
+        ->and($resource->getAppearanceInRegion(3, -1))->toBeNull()
+        ->and($resource->occupancyStamp)->toBe([['x' => 0, 'y' => 0, 'type' => CollisionType::SOLID]])
+        ->and(file_get_contents($path))->toContain('// Authored cue bindings stay as written.');
+    applyResourceRow($session, 0, 'appearanceRegion0Height', '0');
+    $saved = file_get_contents($path);
+    expect(fn () => $session->saveDatabase(FieldResourceFields::CATEGORY))->toThrow(SessionRefusal::class)
+        ->and(file_get_contents($path))->toBe($saved);
+    for ($step = 0; $step < 6; $step++) { $session->undo(); }
+    $session->saveDatabase(FieldResourceFields::CATEGORY);
+    expect(file_get_contents($path))->toBe($before);
+});
+
 it('authors resource attachments as anchor-relative terminal cells and art points, which the Engine reads back', function () {
     [, $path, $session] = createFieldResourceProject();
     $heading = array_find($session->readDatabaseRecord(FieldResourceFields::CATEGORY, 0)['rows'],

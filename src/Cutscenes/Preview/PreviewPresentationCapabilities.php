@@ -7,7 +7,12 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 use Closure;
 use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 
-/** Drawing features the preview can drive from its own pausable, seekable playhead. */
+/**
+ * Drawing features the preview can drive from its own pausable, seekable playhead: every feature the preview's
+ * renderer names but one. A feature the renderer does not name is never composed for it, a canvas group's scale
+ * (`canvas_group_scale`) among them: the scale is sampled by PHP at the playhead and drawn by the renderer, so
+ * the preview passes on exactly what its renderer says of it.
+ */
 final readonly class PreviewPresentationCapabilities
 {
     /** @param Closure(string): bool $rendererSupports */

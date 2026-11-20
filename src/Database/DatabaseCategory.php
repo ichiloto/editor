@@ -50,8 +50,9 @@ interface DatabaseCategory
      * How a frame reads, or null at the record itself.
      *
      * @param list<int|string> $frame
+     * @param int|null $index The record the frame is in, whose blocks are then named for what they are.
      */
-    public function describeFrame(array $frame): ?string;
+    public function describeFrame(array $frame, ?int $index = null): ?string;
 
     /**
      * What an entry of the list an add with no row goes to is called, or

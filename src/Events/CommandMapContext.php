@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Events;
 
 use Closure;
 use Ichiloto\Editor\Database\StorybookPlaybackFields;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Field\MapDoorReference;
 
 /**
@@ -17,6 +18,10 @@ use Ichiloto\Engine\Field\MapDoorReference;
  * Both walk a command's arms the same way: every arm of a choice or branch
  * starts on the map the command runs on, not where a sibling arm ended, and
  * a command that can run none of its arms leaves the map unchanged.
+ *
+ * A block that runs one command list in order (a `sequence`, a `framing`
+ * phase) runs it on the map the block starts on and ends where that list
+ * ends; the Engine's nested block shapes say which blocks those are.
  *
  * Parallel lanes run together on the game's one current map. The Engine
  * ticks every lane in turn, and a transfer in any lane suspends the session
@@ -81,6 +86,35 @@ final class CommandMapContext
     }
 
     /**
+     * The command lists a block runs in order, as the Engine's nested block
+     * shapes ({@see CinematicCommandSchema::NESTED_BLOCK_SHAPES}) name them: a
+     * `sequence`'s and a `framing` phase's `commands`. A block whose shape
+     * is more than command lists (a parallel block's lanes) has none here,
+     * and a command's alternative arms are {@see getArms()}.
+     *
+     * @param array<string, mixed> $command The command.
+     * @return list<array{path: list<int|string>, commands: array<int, mixed>}> Each body and its path from the command.
+     */
+    public static function getBodies(array $command): array
+    {
+        return array_map(static fn(string $key): array => ['path' => [$key], 'commands' => (array) ($command[$key] ?? [])],
+            self::getBodyKeys(strval($command['type'] ?? '')));
+    }
+
+    /**
+     * The fields of a block type that each hold a command list the block
+     * runs in order; none for a type that is no such block.
+     *
+     * @return list<string>
+     */
+    public static function getBodyKeys(string $type): array
+    {
+        $shape = in_array($type, CinematicCommandSchema::BLOCK_TYPES, true) ? (CinematicCommandSchema::NESTED_BLOCK_SHAPES[$type] ?? null) : null;
+
+        return is_array($shape) && array_is_list($shape) ? array_values(array_filter($shape, is_string(...))) : [];
+    }
+
+    /**
      * The lanes of a parallel command, in order. A lane is a command list or
      * a keyed lane holding `commands`.
      *
@@ -129,9 +163,6 @@ final class CommandMapContext
             if ($destination !== null) {
                 $destinations[] = $destination;
             }
-            if ($type === 'sequence') {
-                $nested[] = [(array) ($command['commands'] ?? []), $stack];
-            }
             if ($type === 'common_event') {
                 $id = trim(strval($command['id'] ?? ''));
                 $script = in_array($id, $stack, true) ? null : $findCommonEvent($id);
@@ -139,7 +170,7 @@ final class CommandMapContext
                     $nested[] = [$script, [...$stack, $id]];
                 }
             }
-            foreach ([...self::getLanes($command), ...self::getArms($command)] as $block) {
+            foreach ([...self::getBodies($command), ...self::getLanes($command), ...self::getArms($command)] as $block) {
                 $nested[] = [$block['commands'], $stack];
             }
             foreach ($nested as [$list, $listStack]) {

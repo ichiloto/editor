@@ -4,6 +4,43 @@
 
 ### Fixed
 
+- A preview's Game owns its scene manager and one read-only save manager (the Engine's `SaveManager` with
+  `readOnly: true`). Before, the preview built its scene manager outside its Game, so an Engine lookup through the
+  Game made a second scene manager and save manager, and a saved-campaign preview read its save through a third.
+  A saved campaign now loads through the Game's own manager and the normal compatibility pipeline, and every
+  write, deletion and checkpoint import is refused as read-only. A map-only preview never reads save metadata.
+  Removed: the preview-only `PreviewSaveManager`, which accepted Autosave without writing and counted the calls,
+  and the separate save manager the saved-campaign preview built.
+
+- A canvas picture too small to cover a pixel is no longer drawn as one. Removed: the still rasters forced every image,
+  composite and label to at least one pixel wide and high, so a picture whose edges came to the same pixel still
+  painted a pixel there: the 1 by 4 line in a group scaled to a tenth painted an opaque pixel at the corner, and an
+  unscaled picture 0.3 wide from 0.1 painted a column. A picture whose rounded extent is empty along either axis now
+  paints nothing, with or without a scale, as an indicator's edge and a text cell that thin already did. A picture
+  whose edges enclose one pixel is drawn on it as before.
+
+- A scaled canvas group inside groups that have no scale is drawn where the Engine has it. The still rasters took each
+  unscaled group's origin to a whole pixel on the way down, so a scaled group below them lost the fractions of the
+  origins around it: a group doubled at (0.4, 0.4) inside a group at (0.4, 0.4) drew its corner at pixel 0, where the
+  Engine's (0.8, 0.8) is pixel 1. `CanvasStillTransform` now carries every group's origin in full precision beside its
+  whole pixels, and a scaled group and everything in it are drawn from the full place, each edge rounded once. A still
+  no scale reaches is drawn as before, each group at its own whole pixel.
+
+- Stills and capture frames draw a composite's masked fills. The canvas still raster left out every composite that
+  held a fill with a mask, with "draws composites with operations this still leaves out": the ordinary hit tint on a
+  battler is one (a fill through the battler's alpha, and through its clip when the tints of a layer share a surface,
+  `command-tints-layer-…` in a recording). A source-over fill is now drawn through every mask the Engine's composite
+  contract gives it (`CanvasStillMask`): polygons of several contours, ellipses, and the alpha of a picture, whole or
+  cropped, mirrored by `flipX` and `flipY`, each inverted or not, polygons and ellipses feathered or not, up to the
+  eight a fill may have, their coverages multiplied as the graphical renderer multiplies them. A fill whose mask
+  picture cannot be read is left out and the picture named. Still left out whole and named as before: a composite
+  holding an image, a stroke or a world overview operation, or a fill blended by `screen`.
+
+- The canvas still raster holds the regions it prepares. The list of images the Engine charged was collected into a
+  copy, so no region was ever kept: every drawing of an image decoded its whole picture again, for each still and
+  each frame of a capture. The crops a still draws are now cut once and kept while they fit the Engine's region
+  budget, as the raster's own account of itself says. No picture changes.
+
 - The Terminal preview draws a dialogue line's window in the footprint the line declares, where the game places it:
   five rows, the speaker in its top border and the page in its three rows, at the bottom of the screen for a spoken
   line and at the top for a line nobody speaks. The preview drew its own taller box (a speaker row and a marker row
@@ -48,6 +85,102 @@
   bytes, and art the Engine does not read is charged nothing and drawn or left out as before.
 
 ### Added
+
+- **Appearance Regions** for field resources (the Engine's `appearanceRegions` contract): a resource record lists
+  rectangles in anchor-relative map cells (`Offset X`, `Offset Y`, `Width`, `Height`), each with an `Appearance`
+  chosen from the Engine's tile appearances, so one resource such as a bridge can show barrier rails around a ground
+  deck. The Engine refuses an invalid catalogue (an empty, overlapping or 33rd rectangle) before the save writes, and
+  undo restores the authored source byte for byte.
+
+- **Framing** for cinematics (the Engine's `framingRequirements` contract): a cinematic binds `Framing Subjects`
+  under stable keys (`presentation.framing.subjects`), each the player, an NPC or a staged actor picked as
+  conversation speakers are, and a `framing` command lists its `Required Subjects` and holds its body as a frame. A
+  cinematic's own script selects bound keys or direct subjects; a reusable Common Event offers direct subjects alone,
+  since the Engine refuses a bound key there. `framing` is offered in a cinematic's script and in a Common Event, and
+  not in the script of a map event or an NPC, which runs on the field. Renaming a key renames it in the `framing`
+  commands that select it, and removing one still selected is refused. Saving a cinematic has the Engine judge the
+  framing before anything is written, every phase's subjects against the cinematic's bindings included, and saving a
+  Common Event has it judge the `framing` commands the save adds or changes. Validation has the Engine judge every
+  script where it runs, through the Common Events it calls, and reports a bound key in a Common Event and a `framing`
+  phase a field script would reach, and checks each phase's subjects where a cinematic reaches it. The preview plays
+  a phase, marks the command its body is on, and reports required subjects that cannot be framed together.
+  Edits stay in the author's source: a script built with closures and spreads keeps them, and an edit that would
+  flatten them is refused. Changed with it: the commands inside a Common Event's blocks are edited with the script's
+  full vocabulary, staging included, where those frames offered field event rows only; a Common Event's staged-actor
+  pickers list the actors it stages and those of the cinematics that run it, where they listed none, and a
+  cinematic's include actors staged by the Common Events it runs; a frame's title names a block by its command
+  (`Framing 2 › Commands`, `Branch 1 › Then › Framing 2 › Commands`) where it read `Sequence` for any commands frame
+  and `Then 1 › Entry 2` for a block inside an arm, and `Esc` from such a block returns to the arm that holds it; in
+  the Terminal Cutscenes pane `Shift+O` and `Delete` on a row of a conversation or framing list act on that list,
+  where `Shift+O` added a cast member and `Delete` removed nothing; validation reports any command the Engine cannot
+  run where a field script runs it (a battle command such as `concede` in an NPC's script), which it did not check.
+- Captured ground span (Engine candidate `engine/captured-ground-span-r2` over 52d4507c, `groundSpan`): the graphical
+  editor's effect rows author a battle image fitted whole from the caster's captured ground to the farthest selected
+  target's, by the field names, required track values, conflicting fields and orientations the Engine exports
+  (`EffectGroundSpan::exportContract()`). A track with the values the Engine requires has a **Ground Span Tip** row,
+  a point of the image from 0 to 1: a point turns the span on, and an empty row removes `groundSpan` whole. A track
+  with a span has a **Ground Span Orientation** row among the Engine's (`rigid`, `upright`); the empty choice leaves
+  the key out. **Ground Anchor Lifetime** now offers `target-capture` beside `effect-start`, and the record has a
+  **Target Capture Frame** row, where frame 0 is a frame and an empty row leaves the key out. A track with a span is
+  offered no row for a field the Engine refuses beside one, unless the track still holds it. `cutscenes.timeline`
+  gives the tip and the orientation with the row keys that edit them. A file that declares a ground span saves byte
+  for byte while untouched, and other edits keep it, with undo and redo. Each save compiles through the Engine, whose
+  refusal is reported in its words with nothing written. The Terminal editor has no rows for the tip, the
+  orientation, the lifetime or the capture frame and leaves them as written, as a summon's rows leave a summon
+  timeline's ground span. `cutscenes.effectBattlePreview` composes the span only for a request whose `textureStrip`
+  is `true` and whose new optional `compositing` is not `false`; any other request carries the Engine's diagnostic.
+  A preview whose command draws a ground span carries the Engine's inspection of the troop and targets previewed
+  against (`getGroundSpanDiagnostics`) on every frame. The CPU still raster draws the Engine's composed strip texel
+  for texel on twelve synthetic cases, kept as `tests/Fixtures/GroundSpanStrip` for the native renderer to be held
+  to: six that name no orientation (east and west rays, two crops that are not square, both mirrors, arena clipping)
+  and six upright (casts from either side, authored mirrors, a steep and a vertical ray), beside one upright span
+  the Engine refuses. The Editor now needs an Engine with this contract.
+- The scale of a whole-field motion's sample (Engine candidate `engine/canvas-group-scale-20261115` over 52d4507c,
+  `payload.scale` of a `field-motion` sample): the graphical editor's effect rows give each sample of a whole-field
+  motion a **Scale** row beside its offset, the battlefield camera's one factor about the centre of the field. A
+  battler motion's samples have no such row. The two tracks no longer read one list of rows: a whole-field motion's
+  list is the battler's with the scale added, and a track turned from one type into the other still keeps its
+  samples. A sample that names no scale reads `1` and is left without the key; an authored scale is changed in place
+  in the source, a new one is written into its sample's payload, emptying the row removes the key, and each is one
+  undo step. The Engine alone decides which factors it takes (above zero, at most 8): a save it refuses writes
+  nothing. Turning a whole-field motion into a battler's is refused, and nothing changes, while one of its samples
+  holds a scale: the sample is named, and the scale is cleared by the author, never dropped for them. The outline and
+  the Terminal preview give a sample's scale with its offset (`field offset x, y scale s`), and say nothing of scale
+  for a sample that holds none. `cutscenes.effectBattlePreview` takes an optional `groupScale` flag: the frame is
+  composed with `canvas_group_scale` negotiated only when it is `true`. The Engine scales the battlefield's group only
+  for a frame that also has `canvasGroups` and `regionBudget`; otherwise the frame is the still battlefield with the
+  Engine's diagnostic that the camera is not scaled. A cinematic preview passes on what its renderer says of the
+  capability. Changed by the Engine candidate, and shown as the Engine gives it: a sample whose offset and scale
+  leave the battlefield uncovered is no longer drawn moved; the frame keeps the field at rest and carries the
+  Engine's diagnostic. The Terminal editor's forms are unchanged.
+
+- A canvas group's scale (Engine candidate `engine/canvas-group-scale-20261115` over 52d4507c, `canvas_group_scale`):
+  map stills, canvas stills and cinematic capture frames draw a group with a `scale`, a factor about a point of the
+  group's own canvas with the group's translation applied after it. The three still rasters name the capability beside
+  canvas groups and the region budget, which the Engine requires with it. Everything in the group is drawn at the
+  place and size the scale gives it, never at the canvas's own size and enlarged: images, composites, indicators and
+  their strokes, text cells and their glyphs, labels, the clips inside the group, and the groups within it, whose own
+  scales multiply. The group's clip stays where its parent has it, and a colour treatment is applied to the scaled
+  drawing as before. One account of a canvas's place on the surface (`CanvasStillTransform`) is read by every drawing;
+  where a group's corner goes and its factor are taken from the Engine's own `CanvasGroup::projectRectangle()`. A
+  group no scale reaches still moves by whole pixels, its origin taken to the nearest one. Under a scale no origin or
+  translation is rounded first: each edge of a drawing is taken to its nearest pixel once, where it is drawn, so the
+  stills show no partial coverage on a scaled edge. The Engine's four port frames, the picture they draw and the
+  picture the doubled line must be drawn as are kept unchanged as `tests/Fixtures/CanvasGroupScale`.
+- Qualified indicator paths (Engine candidate `engine/field-colour-ownership` over 52d4507c, `canvas_indicator_image_path`):
+  map stills, canvas stills and cinematic capture frames draw a canvas whose indicator names the image or composite it
+  marks by `imagePath`, a path of group ids read from the root canvas of its frame. The three still rasters name the
+  capability beside canvas groups. The Engine follows every path when a still's canvases are admitted, each root on its
+  own, and a path that leads nowhere refuses the whole still in the Engine's words before anything is drawn. The path
+  moves nothing: the indicator is drawn on its own bounds, clipped with its canvas and in the colour treatment of the
+  group it is in, so a body in one treated group, an untreated effect over it and the body's outline in a second group
+  keep their layers. `cutscenes.effectBattlePreview` takes an optional `indicatorImagePath` flag: the frame is composed
+  with `canvas_indicator_image_path` negotiated when it is `true`. No battle preview frame carries a path yet. A
+  screen overlay cannot borrow a group of the screen beneath it: the Engine admits each layer on its own before it
+  stacks them, and the frame raster's own stacking refuses such a frame in the Engine's words. The
+  Engine's fixture frames, the CPU still raster's pictures of them and the sprite they are drawn from are kept as
+  `tests/Fixtures/IndicatorPath` for the native renderer to be compared with. Nothing in the editors authors or stores
+  an indicator; the Engine composes them.
 
 - **Draw Image** on a staged actor (Engine 52d4507c, `stagedActorGraphicalVisibility`): the graphical editor's
   `stage_actor` commands and staged cast members can withhold the actor's image while its Terminal glyph, placement,

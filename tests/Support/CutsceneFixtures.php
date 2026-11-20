@@ -668,6 +668,69 @@ function previewWindowReady(): string
     ]]);
 }
 
+/**
+ * Exchanges with the editor window until the frame the Engine has begun is
+ * whole, as a window receives it across its ticks. The Engine's retained
+ * upload yields on its own time budget, so one exchange may carry only the
+ * first packets of a frame, or none of them yet; each answer says whether a
+ * delivery is pending, and each later exchange carries no events and gives
+ * the upload its next turn. An exchange with nothing to send is returned as
+ * it is.
+ *
+ * Every view the Editor draws through the Engine's retained presentation is
+ * driven through here: a session's answer as it is, for a cinematic, an
+ * effect's field or a map's canvas, in process or over the session host's
+ * wire, and a preview itself through {@see exchangePreviewSceneUntilPresented()}.
+ *
+ * @param Closure(list<string>): array<string, mixed> $exchange One exchange: the window's events in, the answer out, with its `messages` and `deliveryPending`.
+ * @param list<string> $events The window's answers for the first exchange.
+ * @return array<string, mixed> The last answer, its `messages` every message sent, in order.
+ * @throws RuntimeException When the frame is still not whole after the bound of exchanges.
+ */
+function exchangeSceneUntilPresented(Closure $exchange, array $events, int $maxExchanges = 64): array
+{
+    $answer = $exchange($events);
+    $messages = $answer['messages'];
+    for ($exchanges = 1; $answer['deliveryPending'] || isPreviewFrameUnfinished($messages); $exchanges++) {
+        if ($exchanges >= $maxExchanges) {
+            throw new RuntimeException(sprintf('The preview frame was not whole within %d exchanges.', $maxExchanges));
+        }
+        $answer = $exchange([]);
+        array_push($messages, ...$answer['messages']);
+    }
+
+    return [...$answer, 'messages' => $messages];
+}
+
+/**
+ * {@see exchangeSceneUntilPresented()} for a preview session or field
+ * itself, which exchanges a scene and answers hasPendingSceneDelivery().
+ *
+ * @param object $preview A preview session or field.
+ * @param list<string> $events The window's answers for the first exchange.
+ * @return list<array{type: string, payload: array<string, mixed>}> Every message sent, in order.
+ * @throws RuntimeException When the frame is still not whole after the bound of exchanges.
+ */
+function exchangePreviewSceneUntilPresented(object $preview, array $events, ?string $sessionId, int $maxExchanges = 64): array
+{
+    return exchangeSceneUntilPresented(static fn(array $events): array => [
+        'messages' => $preview->exchangeScene($events, $sessionId),
+        'deliveryPending' => $preview->hasPendingSceneDelivery(),
+    ], $events, $maxExchanges)['messages'];
+}
+
+/**
+ * Whether the last frame packet sent belongs to a frame that has not been presented yet.
+ *
+ * @param list<array{type: string, payload: array<string, mixed>}> $messages
+ */
+function isPreviewFrameUnfinished(array $messages): bool
+{
+    $last = array_find(array_reverse($messages), static fn(array $message): bool => $message['type'] === 'frame');
+
+    return $last !== null && ($last['payload']['present'] ?? false) !== true;
+}
+
 /** @param list<array{type: string, payload: array<string, mixed>}> $messages */
 function previewFrameGenerations(array $messages): array
 {
@@ -711,4 +774,193 @@ function getHarbourPaths(string $root): array
     $directory = $root . '/assets/Cutscenes/Cinematics/harbour-lanterns/';
 
     return [$directory . 'harbour-lanterns.data.php', $directory . 'harbour-lanterns.script.php'];
+}
+
+/**
+ * A script for the harbour cinematic that frames two phases, built the way authors build long scenes: a helper
+ * closure that returns a command, a list built in a loop and spread into a block, and comments between them.
+ */
+function framedHarbourScript(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+// Framed by hand.
+$line = static fn(string $text): array => ['type' => 'narration', 'text' => $text, 'seconds' => 0.2];
+$drift = [];
+foreach (['boat-east', 'boat-west'] as $boat) {
+  $drift[] = ['type' => 'move_route', 'subject' => 'staged_actor', 'actorId' => $boat, 'secondsPerStep' => 0.1, 'steps' => [['direction' => 'right', 'count' => 2]]];
+}
+
+return [
+  ['type' => 'camera', 'operation' => 'detach'],
+  ['type' => 'framing', 'subjects' => ['keeper', ['kind' => 'staged_actor', 'id' => 'boat-east']], 'commands' => [
+    // The keeper watches.
+    $line('The keeper watched the first boat.'),
+    ...$drift,
+    ['type' => 'framing', 'subjects' => ['lead'], 'commands' => [
+      ['type' => 'wait', 'seconds' => 0.2],
+    ]],
+  ]],
+  ['type' => 'checkpoint', 'name' => 'boats-crossed'],
+];
+PHP_SOURCE;
+}
+
+/**
+ * The harbour cinematic binding two framing subjects, `lead` (the player) and `keeper` (the quay's NPC), with
+ * {@see framedHarbourScript()} as its script unless it is given another.
+ *
+ * @return array{string, string, string} The project root, the data path and the script path.
+ */
+function framedHarbourProject(?string $script = null): array
+{
+    $root = cutsceneProject();
+    [$dataPath, $scriptPath] = getHarbourPaths($root);
+    file_put_contents($dataPath, str_replace("'presentation' => ['initial' => 'hidden'],",
+        "'presentation' => ['initial' => 'hidden', 'framing' => ['subjects' => [\n"
+        . "    // Who a phase keeps in view.\n"
+        . "    'lead' => ['kind' => 'player'],\n"
+        . "    'keeper' => ['kind' => 'npc', 'id' => 'keeper'],\n"
+        . "  ]]],", harbourCinematicData()));
+    file_put_contents($scriptPath, $script ?? framedHarbourScript());
+
+    return [$root, $dataPath, $scriptPath];
+}
+
+/**
+ * A reusable event script that stages its own actors and frames a phase on one of them inside a branch arm, built
+ * with a helper closure and a looped list, as {@see framedHarbourScript()} is.
+ */
+function framedRescueScript(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+$stage = static fn(string $id, int $x): array => ['type' => 'stage_actor', 'id' => $id, 'sprite' => ['#'], 'x' => $x, 'y' => 3];
+$walk = [];
+for ($step = 0; $step < 2; $step++) {
+  $walk[] = ['type' => 'move_route', 'subject' => 'player', 'secondsPerStep' => 0.1, 'steps' => [['direction' => 'left']]];
+}
+
+return [
+  [
+    'type' => 'branch',
+    'conditions' => [['type' => 'event', 'name' => 'rescued', 'negate' => true]],
+    'then' => [
+      $stage('crate', 3),
+      ['type' => 'framing', 'subjects' => [['kind' => 'staged_actor', 'id' => 'crate']], 'commands' => [
+        // Said over the crate.
+        ['type' => 'narration', 'text' => 'The crate shifts.', 'seconds' => 1],
+        $stage('helper', 5),
+        ...$walk,
+      ]],
+      ['type' => 'remove_actor', 'actorId' => 'crate'],
+    ],
+    'else' => [],
+  ],
+];
+PHP_SOURCE;
+}
+
+/**
+ * A project whose harbour cinematic, which cannot be skipped, runs the `rescue` reusable event script
+ * ({@see framedRescueScript()}, unless it is given another) right after it detaches the camera.
+ *
+ * @return array{string, string} The project root and the event script's path.
+ */
+function framedRescueProject(?string $script = null): array
+{
+    $root = cutsceneProject();
+    $path = $root . '/assets/Events/rescue.php';
+    file_put_contents($path, $script ?? framedRescueScript());
+    [$dataPath, $scriptPath] = getHarbourPaths($root);
+    // Authored skipping cannot prove a reusable script safe, so the Engine runs a cinematic that calls one to the end.
+    file_put_contents($dataPath, str_replace("'skip' => ['policy' => 'authored'],", "'skip' => ['policy' => 'forbidden'],", harbourCinematicData()));
+    file_put_contents($scriptPath, str_replace("['type' => 'camera', 'operation' => 'detach'],",
+        "['type' => 'camera', 'operation' => 'detach'],\n  ['type' => 'common_event', 'id' => 'rescue'],", harbourCinematicScript()));
+
+    return [$root, $path];
+}
+
+/** A record row by its field id, in a frame of the record. */
+function getRecordRow(EditorSession $session, string $category, int $index, string $field, array $frame = []): array
+{
+    return array_find($session->readDatabaseRecord($category, $index, $frame)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === $field)
+        ?? throw new RuntimeException(sprintf('Missing %s row %s.', $category, $field));
+}
+
+function setRecordRow(EditorSession $session, string $category, int $index, string $field, string $value, array $frame = []): array
+{
+    return $session->applyDatabaseRecord($category, $index, getRecordRow($session, $category, $index, $field, $frame)['key'], $value);
+}
+
+/**
+ * A synthetic battle effect with a captured ground span, written as an author writes one: a lane of light whose
+ * rear (the pivot) is held at the caster's ground and whose tip at the farthest selected target's.
+ */
+function groundLanceTimeline(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+// Ground Lance: a lane of light from the caster's feet to the farthest target.
+return [
+  'presentations' => [
+    'terminal' => [
+      'fps' => 12,
+      'lengthFrames' => 4,
+      'tracks' => [[
+        'id' => 'lane',
+        'type' => 'glyph',
+        'keyframes' => [['frame' => 0, 'duration' => 4, 'content' => '=', 'position' => ['x' => 0, 'y' => 0]]],
+      ]],
+    ],
+    'graphical' => [
+      'fps' => 24,
+      'lengthFrames' => 12,
+      'targetCaptureFrame' => 2, // the targets and the caster's ground are held from here
+      'restFrame' => 3,
+      'tracks' => [
+        // The lane: its rear on the caster's ground, its tip on the farthest target's.
+        ['id' => 'lane-art', 'type' => 'image', 'asset' => 'Graphics/Effects/ground-lance.png',
+         'anchor' => 'target-group', 'attachment' => 'ground', 'anchorLifetime' => 'target-capture', 'fit' => 'contain',
+         'pivot' => ['x' => 0.8828125, 'y' => 0.53125],   'groundSpan' => ['tip' => ['x' => 0.1328125, 'y' => 0.46875]], /* measured on the sheet */
+         'depth' => 'behind',
+         'keyframes' => [['frame' => 3, 'duration' => 8]]],
+      ],
+    ],
+  ],
+];
+PHP_SOURCE;
+}
+
+/** The colour of a texel of Ground Lance's 64 by 16 image: its column in red and its row in green, every texel opaque. */
+function getGroundLanceTexel(int $x, int $y): array
+{
+    return [20 + 3 * $x, 30 + 13 * $y, 90];
+}
+
+/**
+ * The effect battle preview project, its unarmed attack playing Ground Lance on its targets. The image's rear
+ * (the pivot) is the centre of its texel (56, 8) and its tip the centre of its texel (8, 7).
+ */
+function groundLanceProject(): string
+{
+    $root = effectBattlePreviewProject();
+    mkdir($root . '/assets/Animations/ground-lance', 0o777, true);
+    file_put_contents(effectTimelinePath($root, 'ground-lance'), groundLanceTimeline());
+    $image = imagecreatetruecolor(64, 16);
+    for ($y = 0; $y < 16; $y++) {
+        for ($x = 0; $x < 64; $x++) {
+            imagesetpixel($image, $x, $y, (int) imagecolorallocate($image, ...getGroundLanceTexel($x, $y)));
+        }
+    }
+    imagepng($image, $root . '/assets/Graphics/Effects/ground-lance.png');
+    file_put_contents($root . '/assets/Data/animations.php', "<?php\n\nreturn " . var_export([
+        ['id' => 1, 'name' => 'Ground Lance', 'roles' => ['attack', 'attack-unarmed'], 'targetEffect' => 'ground-lance'],
+    ], true) . ";\n");
+
+    return $root;
 }

@@ -3131,7 +3131,10 @@ offset, and choosing another object or subject clears the attachment.
 Validation reports a visual whose attachment the resource no longer declares.
 
 A common event (a reusable event script) is edited with the full cinematic
-command vocabulary, staging included, since cinematic sessions call it. Its
+command vocabulary, staging included, since cinematic sessions call it. The
+commands inside its blocks (a sequence, a branch arm, a `framing` body) are
+edited with that vocabulary too. Its staged-actor choices are the actors the
+script stages itself and those of the cinematics that run it. Its
 map-local choices (world objects, their attachments) are on the map its callers
 run it on: a map whose events or NPCs call it, a cinematic's Start Map, or the
 map a calling script runs on. When its callers run it on several maps, or none
@@ -3376,7 +3379,7 @@ The record pane groups the engine's cinematic definition: **Identity** (id,
 name, description, version), **Staging** (start map, initial presentation,
 reduced-motion policy), **Script** (the command list, opened as a frame),
 **Skip** (policy, checkpoints, the finalizer as a frame), **Metadata**
-(authoring), **Conversation** and **Cast**. Cast rows are `player`, `party_actor`, `npc` (a
+(authoring), **Conversation**, **Framing** and **Cast**. Cast rows are `player`, `party_actor`, `npc` (a
 stable map-local id on the start map) or `staged_actor` with every engine
 field: id, sprite or asset, x and y, facing, visible, collision, Draw Plane
 and directional sprites. `Shift+O` on a cast row adds a member; `Delete` removes
@@ -3415,6 +3418,52 @@ an unbound speaker, a speaker whose NPC is on no map the cinematic runs on
 or whose staged actor the cast does not declare, and a line selecting a
 speaker or addressee the conversation does not bind.
 
+**Framing** authors the subjects a scene's phases keep in view
+(`presentation.framing.subjects`, the Engine's `framingRequirements`
+contract). While a `framing` command's body runs, the Engine frames the
+subjects that command requires clear of the dialogue, in place of the whole
+cast.
+
+- `Framing Subjects` binds each stable `Subject Key` to a `Subject`: the
+  `player`, an `npc` picked among the NPCs of the start map and the maps the
+  cinematic transfers to, or a `staged_actor` picked from the cast and the
+  actors that its commands, and the Common Events it runs, stage.
+- A `framing` command lists its `Required Subjects` and holds its `Commands`,
+  a frame like a sequence's. In a cinematic's own script a subject's
+  `Subject` row reads `(a bound framing subject)`, with a `Bound Subject`
+  picked among the keys the cinematic binds, or names the `player`, an `npc`
+  or a `staged_actor` directly. A new subject is the player.
+- A reusable Common Event cannot know which cinematic runs it, so its
+  `framing` commands offer the direct subjects alone, and the Engine refuses
+  a bound key there: a reusable script inherits none of its caller's keys. A
+  key such a script already selects is listed read-only; choosing a kind for
+  it turns it into a direct subject.
+- `framing` is offered where the Engine can run it: in a cinematic's script
+  and in a Common Event. The script of a map event or an NPC runs on the
+  field and does not list it.
+
+`Shift+O` on the `Framing Subjects` heading binds a subject at the head of
+the list. Renaming a subject key renames it in every `framing` command of the
+cinematic's script that selects it; removing a key a command still selects is
+refused and says where. The Engine judges the framing when the cinematic is
+saved, before anything is written: a phase with no subject or no command, a
+key the cinematic does not bind, one subject selected twice in a phase, and a
+subject that is not the player, an NPC or a staged actor are refused in the
+Engine's words, with the command path of the phase. When a Common Event is
+saved, the Engine judges each `framing` command the save adds or changes as a
+reusable script's: its shape and body, and its subjects, where a bound key is
+refused. Validation has the Engine judge every script where it runs, through
+the Common Events it calls: a cinematic's scripts in the cinematic, the script
+of a map event or an NPC on the field, and a Common Event nothing runs as a
+reusable script. It reports, in the Engine's words and with the command path,
+a bound key in a Common Event, a `framing` phase a field script would reach,
+and any other command that cannot run where the script does. Validation also
+checks each phase's subjects where a cinematic reaches the phase, and reports
+a staged actor nothing has staged by then and an NPC that is not on the map
+the scene is on. The preview plays a phase as the game does, marks the command
+its body is on in the Command Tree, and lists a phase whose required subjects
+cannot be framed together among its diagnostics.
+
 #### The command tree
 
 The script is a nested tree. Open `Commands` (or `Finalizer`) from its row,
@@ -3422,11 +3471,12 @@ or press `Enter` on any row of the Command Tree, and the record pane shows
 that list as a frame: each command contributes a `Command N Type` row plus
 the rows its type uses, nested blocks appear as rows that open their own
 frames, and the pane title is the trail back out (`Commands › Parallel 3 ›
-Lane 2`). `Esc` pops exactly one frame.
+Lane 2`, `Commands › Framing 2 › Commands`). `Esc` pops exactly one frame.
 
 | Type | Fields |
 | --- | --- |
 | `sequence` | Commands (a frame) |
+| `framing` | Required Subjects (each a bound framing subject, or the player, an NPC or a staged actor), Commands (a frame) |
 | `parallel` | Lanes, each a stable id with its own Commands frame; the block completes when every lane has |
 | `branch` | Conditions, Then, Else (frames) |
 | `choice` | Prompt, Title, Options (each with a Commands frame), Cancel (frame) |
@@ -3478,7 +3528,9 @@ editor does not offer the field and keeps the key through its own edits.
 Every other type from the Common Events table is available too, with the
 same rows. `Shift+O` adds: on a route, lane or point row, another step, lane
 or point; on a command that has none of those yet, its first; otherwise the
-next command. `Shift+X` removes the last entry, `Delete` the selected one.
+next command. On a `framing` command's `Required Subjects` row or one of its
+subjects it adds a subject, and on the command's other rows the next command.
+`Shift+X` removes the last entry, `Delete` the selected one.
 
 The Command Tree is a projection of the same tree. Its rows fold (`Space`,
 `-`, `+`), open a frame (`Enter`), and move the command under the cursor:
@@ -3789,26 +3841,94 @@ flight that reaches a troop's targets only through its fallback as a warning
 and one that cannot reach them without a fallback as an error. A missing pose
 point or unreadable artwork is reported apart, with the Engine's reason.
 
+A battle image can lie along the ground from the caster to the selected
+targets: the Engine's captured ground span. The Editor reads the span's field
+names, the track values it requires, the fields it conflicts with and its
+orientations from the Engine's own export, so its rows follow the Engine's.
+In the GUI, an image track anchored to `target-group` with the `ground`
+attachment has a **Ground Anchor Lifetime** row offering `effect-start` and
+`target-capture`; the empty choice leaves the key out. A track with every
+value the Engine requires (`target-group`, `ground`, `target-capture` and
+`contain` fit) has a **Ground Span Tip** row: a point of the image, `x, y`
+from 0 to 1. The track's **Pivot** is the image's rear. The Engine fits the
+whole image, at one scale and one turn, with its rear on the caster's captured
+ground and its tip on the ground of the farthest selected target. A point in
+the row turns the span on; emptying the row removes `groundSpan` from the file
+whole, its orientation included, and leaves the rest of the track as written.
+A point outside 0 to 1, or half of one, is refused and nothing changes. A
+track with a span has a **Ground Span Orientation** row, chosen among the
+Engine's orientations: `rigid` turns the image as it is drawn, so an image
+cast toward the other side is turned right over; `upright` lets the Engine
+mirror the image left to right where that leaves its top higher, so one image
+serves a cast from either side. The empty choice leaves the key out and the
+row reads the Engine's default, `rigid`. The record's **Target Capture Frame**
+row sets the frame the grounds are captured on: frame 0 is a frame of its own,
+and an empty row leaves the key out. A track with a span is offered no row for
+a field the Engine refuses beside one (among them the cell size, **Span
+Selected Targets**, **Facing** and **Faces Toward**); a row for one stays only
+while the track still holds that field, so it can be cleared, and comes back
+when the span is turned off.
+`cutscenes.timeline` gives the tip as `groundSpanTip` and the orientation as
+`groundSpanOrientation`, with its choices, beside the pivot, each with the row
+key that edits it, while the track's rows offer them. On save the Engine
+judges the span and its refusal is reported in the Engine's words, with
+nothing written: each conflicting field by name, a required value that is
+missing, a missing capture frame or pivot, a tip equal to the pivot, an
+orientation the Engine does not have, and a keyframe before the capture frame
+or with a position. A timeline that declares a ground span opens with it and
+saves byte for byte while untouched; an edit to another field keeps the span,
+the comments and the layout of the file. The Terminal editor has no row for
+the tip, the orientation, the lifetime or the capture frame, keeps every row
+it has and leaves all four as written. A summon's image rows have none for a
+ground span either; a summon timeline that declares one keeps it as written
+through edits beside it. The GUI's battle preview draws the span where its
+canvas draws texture strips and composites: the editor session composes it
+only for a `cutscenes.effectBattlePreview` request whose `textureStrip` is
+`true` and whose `compositing` is not `false` (composites are composed unless
+the request declines them); any other request draws no span and carries the
+Engine's diagnostic that the renderer lacks them. Every frame of a preview
+whose command draws a ground span also carries, once, what the Engine's own
+inspection says of the troop and targets previewed against, such as two
+selected targets equally far on opposite sides of the caster, so it is told
+before the frame that would draw the span. An upright span that neither mirror
+holds top side up along the previewed ground is refused by the Engine on the
+frame that would draw it, in its words, and nothing is drawn in its place.
+
 A battle effect may hold a `field-motion` track, which moves the whole
 battlefield in the graphical battle. In the GUI it is one of the track types.
 It has no anchor; each sample gives its **Frame**, **Duration** (one frame when
 left out), **Offset X** and **Offset Y** in logical pixels,
-fractions allowed, and **Enabled** (`false` keeps the sample and moves
-nothing). On save the Engine refuses samples out of order or overlapping, a
-presentation other than `graphical`, and a looping or battle-phase timeline,
-and nothing is written. The Terminal editor names the track, lists its samples
-in the Timeline pane as `field offset x, y`, and leaves them as written; its
-preview names the offset under **Not drawn here**. The GUI's battle preview
-moves the battlefield by each enabled sample's offset where its canvas draws
-canvas groups. The editor session composes them only for a
-`cutscenes.effectBattlePreview` request whose `canvasGroups` is `true`; any
-other request draws the battlefield still on a moving frame, with the
-Engine's diagnostic that the motion is not applied.
+fractions allowed, **Scale**, and **Enabled** (`false` keeps the sample and
+moves nothing). **Scale** is the battlefield camera's: one factor about the
+centre of the field, applied before the offset. It is written as the sample's
+`payload.scale`. A sample that names none is drawn at the field's own size
+and its row reads `1`; clearing the row takes the key out of the file, and no
+earlier sample's scale carries into it. The Engine draws a moved or scaled
+field only while the backdrop still covers the whole view, so an offset
+usually needs a scale that covers it: a sample that leaves the view uncovered
+is refused in the battle and in the preview with the Engine's diagnostic, and
+the field stays at rest. On save the Engine refuses samples out of order or
+overlapping, a scale that is not above zero and at most 8, a presentation
+other than `graphical`, and a looping or battle-phase timeline, and nothing is
+written. The Terminal editor names the track, lists its samples in the
+Timeline pane as `field offset x, y`, adding `scale s` where the sample holds
+one, and leaves them as written; its preview names the offset and the scale
+under **Not drawn here**. The GUI's battle preview moves the battlefield by
+each enabled sample's offset where its canvas draws canvas groups, and scales
+it where the canvas also scales them. The editor session composes groups only
+for a `cutscenes.effectBattlePreview` request whose `canvasGroups` is `true`,
+and a scaled group only for one whose `groupScale` and `regionBudget` are
+`true` as well; any other request draws the battlefield still on that frame,
+with the Engine's diagnostic that the motion is not applied or that the camera
+is not scaled.
 
 A battle effect may also hold a `battler-motion` track, which moves one side
 of the action in the graphical battle. In the GUI it is one of the track
-types, with the same sample rows as a whole-field motion; a track turned from
-one of the two types into the other keeps its samples. **Moved Battler** is
+types, with the sample rows of a whole-field motion but its **Scale**: a
+battler is moved rigidly. A track turned from one of the two types into the
+other keeps its samples. A whole-field motion whose sample holds a scale is
+not turned into a battler's: the editor names the sample and changes nothing
+until its scale is cleared. **Moved Battler** is
 `caster` or `target` (every selected target moves). **Offset Space** is
 `canvas`, where X runs to the right of the screen, or `opponents`, where X
 runs from the moved battler toward the side it fights, so a negative X pushes

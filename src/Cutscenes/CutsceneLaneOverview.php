@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes;
 
 use Ichiloto\Editor\Database\StorybookPlaybackFields;
+use Ichiloto\Editor\Events\CommandMapContext;
 
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Editor\Database\ProjectCatalogs;
@@ -117,6 +118,26 @@ final class CutsceneLaneOverview
     private static function walkCommand(array $command, string $key, int $depth, array &$rows, ?ProjectCatalogs $effects): array
     {
         $type = strval($command['type'] ?? '?');
+        $bodies = CommandMapContext::getBodies($command);
+
+        if ($bodies !== []) {
+            // A block that runs its commands in order (a sequence, a framing phase) lasts as long as they do.
+            $rowIndex = count($rows);
+            $rows[] = ['depth' => $depth, 'key' => $key, 'label' => $type, 'seconds' => 0.0, 'marks' => [], 'kind' => 'block'];
+            $seconds = 0.0;
+            $marks = [];
+
+            foreach ($bodies as $body) {
+                [$bodySeconds, $bodyMarks] = self::walkList($body['commands'], $key . '.' . implode('.', $body['path']), $depth + 1, $rows, $effects);
+                $seconds += $bodySeconds;
+                $marks = [...$marks, ...$bodyMarks];
+            }
+
+            $rows[$rowIndex]['seconds'] = $seconds;
+            $rows[$rowIndex]['marks'] = array_values(array_unique($marks));
+
+            return [$seconds, $rows[$rowIndex]['marks']];
+        }
 
         switch ($type) {
             case 'parallel':
@@ -144,15 +165,6 @@ final class CutsceneLaneOverview
                 $rows[$rowIndex]['marks'] = array_values(array_unique($marks));
 
                 return [$longest, $rows[$rowIndex]['marks']];
-
-            case 'sequence':
-                $rowIndex = count($rows);
-                $rows[] = ['depth' => $depth, 'key' => $key, 'label' => 'sequence', 'seconds' => 0.0, 'marks' => [], 'kind' => 'block'];
-                [$seconds, $marks] = self::walkList(is_array($command['commands'] ?? null) ? $command['commands'] : [], $key . '.commands', $depth + 1, $rows, $effects);
-                $rows[$rowIndex]['seconds'] = $seconds;
-                $rows[$rowIndex]['marks'] = $marks;
-
-                return [$seconds, $marks];
 
             case 'branch':
                 $rowIndex = count($rows);

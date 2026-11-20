@@ -1937,6 +1937,7 @@ final class ProjectRecordDatabase
                 if ($this->schema->listPayloadKey !== null) { $original = [$this->schema->listPayloadKey => $original]; }
                 InnPresentationFields::assertChangedCommandsValid($original, $record->toArray(), $this->authoringReferences);
                 MovementRouteFields::assertChangedCommandsValid($original, $record->toArray());
+                FramingFields::assertChangedCommandsValid($original, $record->toArray(), $record->recordId);
             }
         }
 
@@ -3294,7 +3295,7 @@ final class ProjectRecordDatabase
         }
 
         foreach ($subList->fieldsFor($entries[$entryIndex]) as $field) {
-            if (self::fieldToken($field->key) !== $token || $field->isReadOnly) {
+            if (self::getFieldToken($field->key) !== $token || $field->isReadOnly) {
                 continue;
             }
 
@@ -3391,7 +3392,7 @@ final class ProjectRecordDatabase
         }
 
         foreach ($nestedList->fieldsFor($nestedEntries[$nestedIndex]) as $field) {
-            if (self::fieldToken($field->key) !== $fieldToken || $field->isReadOnly) {
+            if (self::getFieldToken($field->key) !== $fieldToken || $field->isReadOnly) {
                 continue;
             }
 
@@ -3540,7 +3541,9 @@ final class ProjectRecordDatabase
 
         $nested = $this->frameNestedContext($recordIndex, $framePath, $fieldId);
 
-        if ($nested !== null && $nested['nestedIndex'] !== null) {
+        // A nested entry's row, or the heading of a headed nested list (a framing phase's required subjects),
+        // where an entry is added at the list's end.
+        if ($nested !== null && ($nested['nestedIndex'] !== null || $nested['list']->heading !== '')) {
             return new RecordItem(RecordItem::NESTED, $framePath, $entryIndex, $nested['nestedIndex'], $nested['list']->singular);
         }
 
@@ -4420,6 +4423,11 @@ final class ProjectRecordDatabase
             return $root->armCommandList;
         }
 
+        if ($root?->isCommandList === true) {
+            // A script's own blocks hold the script's commands (a reusable script's sequence or framing phase).
+            return $root;
+        }
+
         // Descended from the sub-list into a command arm: commands from here
         // down. The catalog's shared command list is what every arm holds.
         return RecordSchemaCatalog::eventCommandList('commands', $this->graphical);
@@ -4449,7 +4457,9 @@ final class ProjectRecordDatabase
 
         $chunk = $count === 1 && is_string($framePath[0])
             ? 1
-            : ((is_string($framePath[$count - 3] ?? null) && is_int($framePath[$count - 2] ?? null) && is_string($framePath[$count - 1] ?? null) && is_int($framePath[$count - 4] ?? null)) ? 4 : 2);
+            // A block's own commands inside an arm ([i, 'then', j, 'commands']) close back to that arm, not past it.
+            : ((is_string($framePath[$count - 3] ?? null) && is_int($framePath[$count - 2] ?? null) && is_string($framePath[$count - 1] ?? null) && is_int($framePath[$count - 4] ?? null)
+                && ! in_array($framePath[$count - 3], self::listEntryArms(), true)) ? 4 : 2);
         $enclosing = array_slice($framePath, 0, max(0, $count - $chunk));
         $enclosingList = $enclosing !== [] && is_string($enclosing[0]) ? ($this->schema->commandLists[$enclosing[0]] ?? null) : null;
         $landing = $chunk === 1
@@ -4836,14 +4846,18 @@ final class ProjectRecordDatabase
      * Script`), commands as choices and branches.
      *
      * @param array<int, int|string> $framePath The frame.
+     * @param int|null $recordIndex The record the frame is in, whose blocks are then named for what they are (a
+     *   framing phase's commands, a sequence's); a block of a record not given is a `Block`.
      * @return string The trail.
      */
-    public function describeFramePath(array $framePath): string
+    public function describeFramePath(array $framePath, ?int $recordIndex = null): string
     {
         [$rootKey, $relative] = $this->splitFramePath($framePath);
+        $record = $recordIndex === null ? null : $this->getRecordByIndex($recordIndex);
+        $commands = $record === null || $rootKey === null ? null : $record->getSubList($rootKey);
 
         if ($rootKey !== null && array_key_exists($rootKey, $this->schema->commandLists)) {
-            return self::describeFrameFrom($relative, ucfirst($rootKey), null);
+            return self::describeFrameFrom($relative, ucfirst($rootKey), null, $commands);
         }
 
         if ($rootKey !== null && $this->isSecondarySubList($rootKey)) {
@@ -4856,7 +4870,8 @@ final class ProjectRecordDatabase
         $subList = $this->schema->subList;
         $firstLevel = $subList !== null && $subList->prefix !== 'command' ? ucfirst($subList->singular) : null;
 
-        return self::describeFrameFrom($relative, $firstLevel === null || $subList === null ? 'Commands' : ucfirst($subList->key), $firstLevel);
+        return self::describeFrameFrom($relative, $firstLevel === null || $subList === null ? 'Commands' : ucfirst($subList->key), $firstLevel,
+            $firstLevel === null ? $commands : null);
     }
 
     /**
@@ -4866,9 +4881,11 @@ final class ProjectRecordDatabase
      * @param string $root What the root list is called.
      * @param string|null $firstLevelSingular What a first-level entry is called
      *   when it is not a command (a dialogue variant), or null.
+     * @param array<int, mixed>|null $commands The root list's commands, when the record is known: a block that
+     *   runs its `commands` in order is then named by its command's type.
      * @return string The trail.
      */
-    private static function describeFrameFrom(array $framePath, string $root, ?string $firstLevelSingular): string
+    private static function describeFrameFrom(array $framePath, string $root, ?string $firstLevelSingular, ?array $commands = null): string
     {
         if ($framePath === []) {
             return $root;
@@ -4880,7 +4897,8 @@ final class ProjectRecordDatabase
         while ($position < count($framePath)) {
             $entryNumber = intval($framePath[$position]) + 1;
 
-            if (self::isNestedArmPath($framePath, $position)) {
+            // An arm the entry itself holds (a branch's then, a block's commands) is one step, whatever follows it.
+            if (self::isNestedArmPath($framePath, $position) && ! in_array($framePath[$position + 1], self::listEntryArms(), true)) {
                 $listKey = strval($framePath[$position + 1]);
                 [$owner, $member] = match ($listKey) {
                     'options' => ['Choice', 'Option'],
@@ -4891,9 +4909,11 @@ final class ProjectRecordDatabase
                 $position += 4;
             } else {
                 $arm = strval($framePath[$position + 1] ?? '');
+                $block = $commands === null ? null : (self::frameListFrom($commands, array_slice($framePath, 0, $position))[intval($framePath[$position])] ?? null);
                 $noun = match (true) {
                     $position === 0 && $firstLevelSingular !== null => $firstLevelSingular,
-                    $arm === 'commands' => 'Sequence',
+                    // A sequence and a framing phase both run their `commands`; the command says which it is.
+                    $arm === 'commands' => is_array($block) && is_string($block['type'] ?? null) ? ucfirst(str_replace('_', ' ', $block['type'])) : 'Block',
                     $arm === 'cancel' => 'Choice',
                     $arm === StorybookPlaybackFields::getFinishField() => 'Storybook',
                     default => 'Branch',
@@ -4904,6 +4924,19 @@ final class ProjectRecordDatabase
         }
 
         return implode(' › ', $parts);
+    }
+
+    /**
+     * The fields a command holds a command list of its own under: a branch's arms, a choice's cancel arm, a
+     * storybook's finish, and the commands the Engine's blocks run in order.
+     *
+     * @return list<string>
+     */
+    private static function listEntryArms(): array
+    {
+        return array_values(array_unique(array_filter(['then', 'else', 'cancel', StorybookPlaybackFields::getFinishField(),
+            ...array_merge(...array_map(\Ichiloto\Editor\Events\CommandMapContext::getBodyKeys(...),
+                \Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema::BLOCK_TYPES))])));
     }
 
     /**
@@ -5057,7 +5090,7 @@ final class ProjectRecordDatabase
     private function writeEntryFieldToken(ProjectRecord $record, RecordSubList $subList, array $entry, string $token, string $rawValue, array $ownerPath = []): ?array
     {
         foreach ($subList->fieldsFor($entry) as $field) {
-            if (self::fieldToken($field->key) !== $token || $field->isReadOnly) {
+            if (self::getFieldToken($field->key) !== $token || $field->isReadOnly) {
                 continue;
             }
 
@@ -5085,6 +5118,13 @@ final class ProjectRecordDatabase
      * glyph rows, a connected piece's glyph per shape) never mix. Unknown
      * keys -- neither variant's -- stay.
      *
+     * A nested list goes with the variant that read it, unless the new
+     * variant's list reads the same entries ({@see RecordSubList::sharesEntriesWith()}):
+     * a motion turned from the field's into a battler's keeps its samples.
+     * A value in those entries that only the old list reads has no place
+     * in the new one and is never dropped for the author: the change is
+     * refused until it is cleared.
+     *
      * An entry of a variant the list does not edit ({@see RecordSubList::authorsVariant()})
      * cannot change variant: nothing here knows which of its keys the old
      * variant owned, so the new one would silently re-read them as its own.
@@ -5092,7 +5132,8 @@ final class ProjectRecordDatabase
      * @param array<string, mixed> $before The entry before the change.
      * @param array<string, mixed> $after The entry with the new variant.
      * @return array<string, mixed>
-     * @throws \InvalidArgumentException When the entry is of a variant the list does not edit; nothing is changed.
+     * @throws \InvalidArgumentException When the entry is of a variant the list does not edit, or its nested
+     *     entries hold what the new variant does not read; nothing is changed.
      */
     private static function withoutStaleVariantFields(RecordSubList $subList, array $before, array $after): array
     {
@@ -5118,11 +5159,37 @@ final class ProjectRecordDatabase
         }
 
         if ($oldNested !== null && $newNested !== $oldNested) {
-            // Another list, even under the same key, holds another shape.
-            $after = self::writeNested($after, explode('.', $oldNested->key), null, pruneEmpty: true);
+            if ($newNested !== null && $newNested->sharesEntriesWith($oldNested)) {
+                self::assertNestedEntriesCarry($subList, $oldNested, $newNested, $after);
+            } else {
+                // Another list, even under the same key, holds another shape.
+                $after = self::writeNested($after, explode('.', $oldNested->key), null, pruneEmpty: true);
+            }
         }
 
         return $after;
+    }
+
+    /**
+     * Requires that an entry's nested entries hold nothing only the old variant's list reads, when the new
+     * variant's list reads the same entries and they stay.
+     *
+     * @param array<string, mixed> $entry The entry with the new variant.
+     * @throws \InvalidArgumentException Naming the first nested entry and field that cannot go with it; nothing is changed.
+     */
+    private static function assertNestedEntriesCarry(RecordSubList $subList, RecordSubList $oldNested, RecordSubList $newNested, array $entry): void
+    {
+        $unread = $oldNested->listFieldsBeyond($newNested);
+        foreach ($unread === [] ? [] : $oldNested->readEntries(self::readNested($entry, $oldNested->key)) as $index => $nestedEntry) {
+            foreach (is_array($nestedEntry) ? $unread : [] as $field) {
+                if (self::readNested($nestedEntry, $field->key) !== null) {
+                    throw new \InvalidArgumentException(sprintf(
+                        '%s %d holds a %s, which a %s of %s "%s" does not read. Clear it there first. Nothing was changed.',
+                        ucfirst($oldNested->singular), $index + 1, mb_strtolower($field->label), $subList->singular,
+                        str_replace('_', ' ', strval($subList->variantKey)), $subList->getVariant($entry)));
+                }
+            }
+        }
     }
 
     /**
@@ -5164,7 +5231,7 @@ final class ProjectRecordDatabase
      */
     public static function subFieldId(string $prefix, int $entryIndex, string $key): string
     {
-        return $prefix . $entryIndex . self::fieldToken($key);
+        return $prefix . $entryIndex . self::getFieldToken($key);
     }
 
     /** Returns the flattened id for a nested sub-list field. */
@@ -5179,11 +5246,13 @@ final class ProjectRecordDatabase
             . $entryIndex
             . ucfirst($nestedPrefix)
             . $nestedIndex
-            . self::fieldToken($key);
+            . self::getFieldToken($key);
     }
 
     /**
-     * Sanitizes a field key into an unambiguous identifier token.
+     * Sanitizes a field key into an unambiguous identifier token: what a
+     * list entry's row id ends in (`track0` + `GroundSpantip`), for anything
+     * that finds a row by the field it edits.
      *
      * The token always starts with a letter, so the entry index preceding it
      * can never be mis-parsed.
@@ -5191,7 +5260,7 @@ final class ProjectRecordDatabase
      * @param string $key The field key.
      * @return string
      */
-    private static function fieldToken(string $key): string
+    public static function getFieldToken(string $key): string
     {
         return (string) preg_replace('/[^A-Za-z0-9]/', '', ucfirst($key));
     }
@@ -5199,7 +5268,7 @@ final class ProjectRecordDatabase
     /** Declared fields take precedence over the encoded nested-list shape, even with digits in their names. */
     private static function hasEntryFieldToken(RecordSubList $list, array $entry, string $token): bool
     {
-        return array_any($list->fieldsFor($entry), static fn(RecordField $field): bool => self::fieldToken($field->key) === $token);
+        return array_any($list->fieldsFor($entry), static fn(RecordField $field): bool => self::getFieldToken($field->key) === $token);
     }
 
     /**

@@ -9004,7 +9004,7 @@ final class Editor
 
         $this->databaseCommandFramePath = $framePath;
         $this->databaseSelectedSettingIndex = 0;
-        $this->setStatus($database->describeFramePath($framePath) . '.', StatusLevel::INFO);
+        $this->setStatus($database->describeFramePath($framePath, $this->activeRecordIndex()) . '.', StatusLevel::INFO);
         $this->renderDatabasePanes(['settings', 'cue']);
     }
 
@@ -9070,7 +9070,7 @@ final class Editor
             }
         }
 
-        $this->setStatus($database->describeFramePath($this->databaseCommandFramePath) . '.', StatusLevel::INFO);
+        $this->setStatus($database->describeFramePath($this->databaseCommandFramePath, $this->activeRecordIndex()) . '.', StatusLevel::INFO);
         $this->renderDatabasePanes(['settings', 'cue']);
     }
 
@@ -10955,7 +10955,8 @@ final class Editor
      * Returns the catalogue pickers choose from, reading the map the author
      * is working in -- the selected map, or the cinematic's start map while
      * the Cutscenes screen hosts the pane -- and the cinematic itself, for
-     * its cast, checkpoints and subjects.
+     * its cast, checkpoints and subjects, or the reusable event script the
+     * Database has open, for the actors it stages.
      */
     private function referenceCatalog(): ReferenceCatalog
     {
@@ -10967,7 +10968,12 @@ final class Editor
             return new ReferenceCatalog($this->workspace, $this->cutsceneReferenceMap(), $this->selectedCutscene());
         }
 
-        return new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+        $catalog = new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+        $script = $this->isDatabaseOpen && $this->getSelectedDatabaseCategoryDefinition()->key === 'common_events'
+            ? $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex()) : null;
+
+        // A reusable event script names the staged actors it stages and those of the cinematics that run it.
+        return $script === null ? $catalog : $catalog->createScriptContext($script->recordId);
     }
 
     /**
@@ -13637,7 +13643,7 @@ final class Editor
             // Inside a frame the title is the trail back out of it.
             title: $this->databaseCommandFramePath === []
                 ? 'General Settings'
-                : ($this->getSelectedRecordDatabase()?->describeFramePath($this->databaseCommandFramePath)
+                : ($this->getSelectedRecordDatabase()?->describeFramePath($this->databaseCommandFramePath, $this->getSelectedRecordIndex())
                     ?? ProjectRecordDatabase::describeFrame($this->databaseCommandFramePath)),
             help: match (true) {
                 $this->referencePicker->isOpen() => $this->fitHelp(

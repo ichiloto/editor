@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes;
 
 use Ichiloto\Editor\Database\CutsceneSchemas;
+use Ichiloto\Editor\Database\FramingFields;
 use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\Database\StorybookPlaybackFields;
+use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Engine\Animations\Timelines\BattleMotionSpace;
 use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
 
@@ -16,10 +18,10 @@ use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
  *
  * Each row knows its depth, its text, and where it lives: the frame path
  * that holds it and its index there, so the pane can open that frame and
- * put the cursor on the row's own fields. Blocks -- sequences, parallel
- * lanes, branches, choices -- have children and may be folded shut. The
- * outline is a projection of the authoritative command tree, never a
- * second copy of it.
+ * put the cursor on the row's own fields. Blocks -- sequences, framing
+ * phases, parallel lanes, branches, choices -- have children and may be
+ * folded shut. The outline is a projection of the authoritative command
+ * tree, never a second copy of it.
  *
  * A timeline's reduced-motion samples are listed after its cues, each with
  * the frame it holds or that it clears the picture. They are graphical
@@ -191,6 +193,7 @@ final class CutsceneOutline
      * Returns a motion sample's offset in logical pixels as authored, fractions kept, and whether the
      * sample is disabled: the whole field's, or the offset of the battler a battler motion names. A
      * battler's offset says when its X runs toward that battler's opponents instead of across the canvas.
+     * A sample that holds a scale gives it as written; one that holds none says nothing of scale.
      *
      * @param array<string, mixed> $sample
      * @param array<string, mixed>|null $battlerMotion What names the moved battler and the offset space,
@@ -204,6 +207,7 @@ final class CutsceneOutline
         $towardOpponents = $battlerMotion !== null && ($battlerMotion['space'] ?? null) === BattleMotionSpace::OPPONENTS->value;
 
         return sprintf('%s offset %s, %s', $moved, $read('x'), $read('y')) . ($towardOpponents ? ' with x toward opponents' : '')
+            . (array_key_exists('scale', $offset) ? ' scale ' . $read('scale') : '')
             . (($sample['visible'] ?? true) === false ? ' (disabled)' : '');
     }
 
@@ -274,9 +278,9 @@ final class CutsceneOutline
     }
 
     /**
-     * Returns the command lists a command owns: a sequence's commands, a
-     * parallel block's lanes, a branch's arms, a choice's options and
-     * cancel arm.
+     * Returns the command lists a command owns: a sequence's or a framing
+     * phase's commands, a parallel block's lanes, a branch's arms, a
+     * choice's options and cancel arm.
      *
      * @param array<string, mixed> $command
      * @return array<int, array{path: array<int, int|string>, commands: array<int, mixed>, label: string|null, key: string}>
@@ -286,8 +290,8 @@ final class CutsceneOutline
         $type = strval($command['type'] ?? '');
         $children = [];
 
-        if ($type === 'sequence') {
-            $children[] = ['path' => ['commands'], 'commands' => self::listOf($command['commands'] ?? null), 'label' => null, 'key' => 'commands'];
+        foreach (CommandMapContext::getBodies($command) as $body) {
+            $children[] = ['path' => $body['path'], 'commands' => array_values($body['commands']), 'label' => null, 'key' => implode('.', $body['path'])];
         }
 
         if ($type === 'parallel') {
@@ -468,8 +472,8 @@ final class CutsceneOutline
 
     /**
      * The child list a block command would receive a nested command into:
-     * a sequence's commands, a parallel block's last lane, a branch's then
-     * arm, a choice's first option.
+     * a sequence's or a framing phase's commands, a parallel block's last
+     * lane, a branch's then arm, a choice's first option.
      *
      * @param array<string, mixed> $command
      * @param array<int, int|string> $commandPath
@@ -484,9 +488,12 @@ final class CutsceneOutline
             return [...$commandPath, $finish];
         }
 
+        $bodies = CommandMapContext::getBodies($command);
+        if ($bodies !== []) {
+            return [...$commandPath, ...$bodies[0]['path']];
+        }
+
         switch ($type) {
-            case 'sequence':
-                return [...$commandPath, 'commands'];
             case 'branch':
                 return [...$commandPath, 'then'];
             case 'parallel':
@@ -556,6 +563,7 @@ final class CutsceneOutline
             'start_battle' => strval($command['troop'] ?? ''),
             'branch' => 'if ' . self::conditionSummary($command),
             'sequence' => sprintf('%d commands', count(self::listOf($command['commands'] ?? null))),
+            FramingFields::getCommandType() => FramingFields::describeSelection($command),
             'parallel' => sprintf('%d lanes', count(self::listOf($command['lanes'] ?? null))),
             'checkpoint' => strval($command['name'] ?? ''),
             'camera' => self::cameraSummary($command),

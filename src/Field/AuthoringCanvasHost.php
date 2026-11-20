@@ -117,6 +117,19 @@ final class AuthoringCanvasHost
         return $this->relay->collect();
     }
 
+    /**
+     * Whether the Engine still has something of the map to send the window:
+     * a frame whose upload it has begun (the upload yields on a time budget,
+     * so one exchange may carry only part of a frame, or none of it yet), or
+     * a change it is holding until the window answers. The next exchange
+     * continues it. False until the window has said what it can draw, as
+     * nothing is sent before then.
+     */
+    public function hasPendingDelivery(): bool
+    {
+        return $this->ready && $this->presentation->hasPendingUpload();
+    }
+
     /** What the last composed picture depends on and could not draw, once one has been composed. */
     public function getSource(): ?AuthoringMapSource
     {

@@ -55,9 +55,12 @@ it('forwards the graphical epoch over both wire routes and refuses retired feedb
     $index = $effect ? array_search('ember-spark', $session->listDatabaseRecords('cutscenes/effect')['records'], true) : 0;
     $start = $effect ? 'cutscenes.effectField' : 'cutscenes.cinematicPreview';
     $exchange = $effect ? 'cutscenes.effectFieldScene' : 'cutscenes.cinematicScene';
+    // A newly attached window's whole first frame, over the wire, for an epoch.
+    $draw = static fn(string $sessionId): array => exchangeSceneUntilPresented(static fn(array $events): array
+        => $request($exchange, ['sessionId' => $sessionId, 'events' => $events])['result'], [previewWindowReady()]);
     try {
         $first = $request($start, ['index' => $index, 'width' => 40, 'height' => 12])['result'];
-        $picture = $request($exchange, ['sessionId' => $first['sessionId'], 'events' => [previewWindowReady()]])['result'];
+        $picture = $draw($first['sessionId']);
         expect($picture['sessionId'])->toBe($first['sessionId'])
             ->and(previewFrameGenerations($picture['messages']))->not->toBe([]);
         if ($effect) {
@@ -69,7 +72,7 @@ it('forwards the graphical epoch over both wire routes and refuses retired feedb
         expect($current['sessionId'])->not->toBe($first['sessionId'])
             ->and($request($exchange, ['sessionId' => $first['sessionId'], 'events' => [previewWindowReady()]])['result'])
             ->toMatchArray(['sessionId' => $current['sessionId'], 'messages' => [], 'diagnostics' => []]);
-        expect(previewFrameGenerations($request($exchange, ['sessionId' => $current['sessionId'], 'events' => [previewWindowReady()]])['result']['messages']))->not->toBe([]);
+        expect(previewFrameGenerations($draw($current['sessionId'])['messages']))->not->toBe([]);
         expect($request($exchange, ['sessionId' => 42, 'events' => []])['error']['kind'])->toBe('request');
     } finally {
         $session->close();
@@ -92,7 +95,8 @@ it('describes a stable cinematic epoch without opening a graphical host and uses
         }
         expect($session->exchangeCinematicScene([]))->toMatchArray(['sessionId' => $started['sessionId'], 'diagnostics' => [], 'messages' => []])
             ->and(new ReflectionProperty($field, 'sceneHost')->getValue($field))->toBeNull();
-        $answer = $session->exchangeCinematicScene([previewWindowReady()], $started['sessionId']);
+        $answer = exchangeSceneUntilPresented(static fn(array $events): array
+            => $session->exchangeCinematicScene($events, $started['sessionId']), [previewWindowReady()]);
         expect($answer['sessionId'])->toBe($started['sessionId'])
             ->and(previewFrameGenerations($answer['messages']))->not->toBe([])
             ->and(new ReflectionProperty($field, 'sceneHost')->getValue($field)->sessionId)->toBe($started['sessionId']);
@@ -116,7 +120,8 @@ it('retires the same-grid cinematic epoch at restart before exchange and require
     $session = EditorSession::open($root);
     try {
         $started = $session->startCinematicPreview(0, 40, 12);
-        $old = $session->exchangeCinematicScene([previewWindowReady()], $started['sessionId']);
+        $old = exchangeSceneUntilPresented(static fn(array $events): array
+            => $session->exchangeCinematicScene($events, $started['sessionId']), [previewWindowReady()]);
         $generation = max(previewFrameGenerations($old['messages']));
         $session->controlCinematicPreview('play');
         $session->controlCinematicPreview('tick', 0.1);
@@ -128,7 +133,8 @@ it('retires the same-grid cinematic epoch at restart before exchange and require
         $pending = $session->exchangeCinematicScene([json_encode(['protocol' => 2, 'type' => 'frame_ack',
             'generation' => $generation, 'frame' => 1, 'presented' => true])], $started['sessionId']);
         expect($pending)->toMatchArray(['sessionId' => $restart['sessionId'], 'grid' => $old['grid'], 'messages' => []]);
-        $fresh = $session->exchangeCinematicScene([previewWindowReady()], $restart['sessionId']);
+        $fresh = exchangeSceneUntilPresented(static fn(array $events): array
+            => $session->exchangeCinematicScene($events, $restart['sessionId']), [previewWindowReady()]);
         $frames = array_values(array_filter($fresh['messages'], static fn(array $message): bool => $message['type'] === 'frame'));
         expect($fresh['sessionId'])->toBe($restart['sessionId'])->and($frames)->not->toBe([])
             ->and($frames[0]['payload']['reset'])->toBeTrue()
@@ -182,7 +188,8 @@ it('reports the detached cinematic epoch in controls before reopening the same-g
         $detached = $session->controlCinematicPreview('pause');
         expect($detached['sessionId'])->not->toBe($first['sessionId'])
             ->and($session->exchangeCinematicScene([]))->toMatchArray(['sessionId' => $detached['sessionId'], 'messages' => []])
-            ->and(previewFrameGenerations($session->exchangeCinematicScene([previewWindowReady()], $detached['sessionId'])['messages']))->not->toBe([]);
+            ->and(previewFrameGenerations(exchangeSceneUntilPresented(static fn(array $events): array
+                => $session->exchangeCinematicScene($events, $detached['sessionId']), [previewWindowReady()])['messages']))->not->toBe([]);
     } finally {
         $session->close();
     }
@@ -251,8 +258,9 @@ it('describes current map diagnostics without hiding useful cinematic or effect 
         } else {
             expect($answer['failure'])->toBeNull()->and($answer['finished'])->toBeFalse();
         }
-        $exchange = $effect ? $session->exchangeEffectFieldScene([previewWindowReady()], $answer['sessionId'])
-            : $session->exchangeCinematicScene([previewWindowReady()], $answer['sessionId']);
+        $exchange = exchangeSceneUntilPresented(static fn(array $events): array => $effect
+            ? $session->exchangeEffectFieldScene($events, $answer['sessionId'])
+            : $session->exchangeCinematicScene($events, $answer['sessionId']), [previewWindowReady()]);
         expect($exchange['sessionId'])->toBe($answer['sessionId'])
             ->and($exchange['diagnostics'])->toBe($answer['diagnostics'])
             ->and(previewFrameGenerations($exchange['messages']))->not->toBe([]);
@@ -308,9 +316,12 @@ it('discards same-grid retired and unqualified feedback before READY can reach a
     $session = EditorSession::open($root);
     $index = $effect ? array_search('ember-spark', $session->listDatabaseRecords('cutscenes/effect')['records'], true) : 0;
     $exchange = $effect ? $session->exchangeEffectFieldScene(...) : $session->exchangeCinematicScene(...);
+    // A newly attached window's whole first frame, for an epoch.
+    $draw = static fn(string $sessionId): array => exchangeSceneUntilPresented(static fn(array $events): array
+        => $exchange($events, $sessionId), [previewWindowReady()]);
     try {
         $old = $effect ? $session->showEffectOnField($index, 0, 40, 12) : $session->startCinematicPreview(0, 40, 12);
-        $oldFrame = $exchange([previewWindowReady()], $old['sessionId']);
+        $oldFrame = $draw($old['sessionId']);
         if ($effect) {
             $session->closeEffectField();
             $current = $session->showEffectOnField($index, 0, 40, 12);
@@ -336,7 +347,7 @@ it('discards same-grid retired and unqualified feedback before READY can reach a
         expect($exchange([], null))->toMatchArray(['sessionId' => $current['sessionId'], 'messages' => []]);
         $exchange([], $current['sessionId']);
         expect($exchange(['not json', ...$feedback], $old['sessionId'])['messages'])->toBe([]);
-        $fresh = $exchange([previewWindowReady()], $current['sessionId']);
+        $fresh = $draw($current['sessionId']);
         $frames = array_values(array_filter($fresh['messages'], static fn(array $message): bool => $message['type'] === 'frame'));
         expect($fresh['sessionId'])->toBe($current['sessionId'])->and($frames)->not->toBe([])
             ->and($frames[0]['payload']['generation'])->toBe(1)->and($frames[0]['payload']['reset'])->toBeTrue();
@@ -366,7 +377,8 @@ it('resizes a kept cinematic through its control description while preserving pl
                 'grid' => ['columns' => 50, 'rows' => 16, 'cellWidth' => 10, 'cellHeight' => 20],
             ]);
         expect($session->startCinematicPreview(0, 50, 16, keep: true)['sessionId'])->toBe($resized['sessionId']);
-        $fresh = $session->exchangeCinematicScene([previewWindowReady()], $resized['sessionId']);
+        $fresh = exchangeSceneUntilPresented(static fn(array $events): array
+            => $session->exchangeCinematicScene($events, $resized['sessionId']), [previewWindowReady()]);
         expect(previewFrameGenerations($fresh['messages']))->toBe([1]);
     } finally {
         $session->close();
