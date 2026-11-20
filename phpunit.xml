@@ -9,9 +9,12 @@
     </testsuite>
   </testsuites>
   <php>
-    <!-- The production-verification tests walk a full Last Legend export
-         (every map, cutscene and actor); the CLI default of 128M no longer
-         holds the whole suite. -->
-    <ini name="memory_limit" value="512M"/>
+    <!-- The whole suite runs in one process. With ICHILOTO_GAME_SRC set, the
+         production-verification tests walk a full Last Legend export (every
+         map, cutscene and actor) and large synthetic images such as a
+         4096 x 4096 sheet. Measured on 20 Nov 2026: the pinned suite peaks at
+         448 MiB allocated by PHP, and a run at 512M ran out of memory while
+         building that sheet. This value overrides `php -d memory_limit`. -->
+    <ini name="memory_limit" value="1G"/>
   </php>
 </phpunit>
