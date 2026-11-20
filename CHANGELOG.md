@@ -78,6 +78,12 @@
 
 ### Added
 
+- **Appearance Regions** for field resources (the Engine's `appearanceRegions` contract): a resource record lists
+  rectangles in anchor-relative map cells (`Offset X`, `Offset Y`, `Width`, `Height`), each with an `Appearance`
+  chosen from the Engine's tile appearances, so one resource such as a bridge can show barrier rails around a ground
+  deck. The Engine refuses an invalid catalogue (an empty, overlapping or 33rd rectangle) before the save writes, and
+  undo restores the authored source byte for byte.
+
 - **Framing** for cinematics (the Engine's `framingRequirements` contract): a cinematic binds `Framing Subjects`
   under stable keys (`presentation.framing.subjects`), each the player, an NPC or a staged actor picked as
   conversation speakers are, and a `framing` command lists its `Required Subjects` and holds its body as a frame. A

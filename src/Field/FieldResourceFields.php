@@ -45,7 +45,7 @@ final class FieldResourceFields
             makeBlank: self::makeBlank(...),
             projection: new KeyedDictionaryProjection('resources'),
             fieldsFor: self::getFields(...),
-            subLists: [self::getStampList(), self::getDoorwayList(), self::getAttachmentList()],
+            subLists: [self::getStampList(), self::getDoorwayList(), self::getAttachmentList(), self::getAppearanceRegionList()],
             saveCheck: self::checkCatalog(...),
             prepareEdit: self::checkEdit(...),
             requireUnchangedSource: true,
@@ -174,6 +174,20 @@ final class FieldResourceFields
                 new RecordField('point.x', 'Art Point X (0..1)', InputControlType::FLOAT), new RecordField('point.y', 'Art Point Y (0..1)', InputControlType::FLOAT)],
             blank: ['id' => 'attachment', 'cell' => ['x' => 0, 'y' => 0], 'point' => ['x' => .5, 'y' => .5]], heading: 'Attachments',
             removeWhenEmpty: true);
+    }
+
+    /** Rectangles describe surfaces in anchor-relative map cells. Engine validates the catalogue before save. */
+    private static function getAppearanceRegionList(): RecordSubList
+    {
+        return new RecordSubList(key: 'appearanceRegions', prefix: 'appearanceRegion', singular: 'appearance region',
+            fields: [
+                new RecordField('x', 'Offset X', InputControlType::INTEGER),
+                new RecordField('y', 'Offset Y', InputControlType::INTEGER),
+                new RecordField('width', 'Width (cells)', InputControlType::INTEGER),
+                new RecordField('height', 'Height (cells)', InputControlType::INTEGER),
+                new RecordField('appearance', 'Appearance', options: array_column(TileAppearance::cases(), 'value')),
+            ], blank: ['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1, 'appearance' => TileAppearance::GROUND->value],
+            heading: 'Appearance Regions', removeWhenEmpty: true);
     }
 
     /** A stable id is refused as it is typed, by the Engine's own rule, rather than at the save. */
