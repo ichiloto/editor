@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
-use Ichiloto\Editor\Field\PlayerPresentationFields;
-
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\PreparedSave;
 use Ichiloto\Editor\Storage\SaveSet;
@@ -1036,11 +1034,11 @@ final class ProjectRecordDatabase
             }
             $before = $record->toArray();
             $draft = clone $record;
-            if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
-                $draft->restorePayload(PlayerPresentationFields::applyField((array) $before, $fieldId, $rawValue,
-                    $this->authoringReferences?->getAssetRoot() ?? throw new \InvalidArgumentException('The player presentation has no project asset root.')));
-            } else {
+            $applied = $this->schema->applyFieldValue((array) $before, $fieldId, $rawValue, $this->authoringReferences?->getAssetRoot());
+            if ($applied === null) {
                 $draft->set($field->key, $value);
+            } else {
+                $draft->restorePayload($applied);
             }
             if ($this->schema->prepareEdit !== null) {
                 $draft->restorePayload(($this->schema->prepareEdit)((array) $draft->toArray(), $field->key, is_array($before) ? $before : (array) $before));
