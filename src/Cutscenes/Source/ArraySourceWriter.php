@@ -190,8 +190,8 @@ final class ArraySourceWriter
             return;
         }
 
-        if (is_array($new) && $this->outgrowsItsLine($node, $new, $path)) {
-            // Plain data written on one line that would grow past the width is written an entry per line instead.
+        if (is_array($new) && is_array($old) && count($new) > count($old) && $this->outgrowsItsLine($node, $new, $path)) {
+            // Adding entries can wrap an inline array. Editing existing values preserves their authored layout.
             $this->edits[] = $this->planValueReplacement($holder, $path, $this->literalFor($new, $path, true, true));
 
             return;
