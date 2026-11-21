@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Messaging\Dialogue\ChoiceKind;
 use Ichiloto\Engine\Field\MapDoorReference;
 use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
 use Ichiloto\Engine\Animations\EffectScale;
@@ -2962,6 +2963,10 @@ final class RecordSchemaCatalog
             'choice' => [
                 new RecordField('prompt', 'Prompt', removeWhenEmpty: true),
                 new RecordField('title', 'Title', removeWhenEmpty: true),
+                // Who is asking, as the Engine reads it: answers to someone are a list, the party's own decision is
+                // buttons. Left unset, the choice is a decision.
+                new RecordField('kind', 'Kind', options: ['', ...array_column(ChoiceKind::cases(), 'value')],
+                    removeWhenEmpty: true, displayDefault: '(' . ChoiceKind::DECISION->value . ')'),
                 // Options become their own rows and frames; see
                 // ProjectRecordDatabase::describeSubEntryFields.
             ],

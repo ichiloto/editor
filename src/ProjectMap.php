@@ -2115,12 +2115,9 @@ final class ProjectMap
                 continue;
             }
             $className = is_string($event['class'] ?? null) ? ltrim($event['class'], '\\') : null;
-            foreach (EventTypeCatalog::findByClass($className)?->optionalData ?? [] as $key => $absent) {
-                $value = $event['data'][$key] ?? null;
-                if (array_key_exists($key, $event['data']) && ($value === $absent
-                    || (is_string($value) && is_string($absent) && trim($value) === trim($absent)))) {
-                    unset($next['events'][$marker]['data'][$key]);
-                }
+            $type = EventTypeCatalog::findByClass($className);
+            if ($type !== null) {
+                $next['events'][$marker]['data'] = $type->withoutAbsentOptionalData($event['data']);
             }
         }
 

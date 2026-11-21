@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Events;
 
+use Ichiloto\Engine\Messaging\Dialogue\ChoiceKind;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Events\Triggers\ChestEventTrigger;
@@ -115,9 +116,12 @@ final class EventTypeCatalog
                     ],
                     // A heading the player faces on arrival, as PlayerSpriteSet reads it.
                     'spawnSprite' => [MovementHeading::SOUTH->value],
+                    // No one asks a new bed's question, so it is the party's decision (buttons); an innkeeper's
+                    // offer is authored as an answer, with the keeper as speaker.
                     'confirmDialogue' => [
                         'name' => '',
                         'text' => 'Rest here?',
+                        'kind' => ChoiceKind::DECISION->value,
                     ],
                     'cost' => 0,
                 ],
@@ -125,7 +129,7 @@ final class EventTypeCatalog
                 // InnOffer's own optional data: the rest music, else the
                 // project's sleep theme; the rest stage timeline, else
                 // config's graphics.inn.presentation.
-                optionalData: ['bgm' => '', 'presentation' => ''],
+                optionalData: ['bgm' => '', 'presentation' => '', 'confirmDialogue.kind' => ''],
             ),
             new EventTypeDefinition(
                 label: 'Chest',

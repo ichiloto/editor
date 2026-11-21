@@ -513,3 +513,27 @@ it('authors inline map command bindings through the same controls while Terminal
         ->and($reopenedMap->getEventDefinition('I'))->toBe($snapshot)
         ->and(file_get_contents($file))->toContain('// preserve inline event');
 })->with(['leader', 'party']);
+
+// Andrew, 21 November 2026: the home bed and the Waymeet field post are decisions ("Buttons"); an innkeeper's offer is
+// answered as dialogue. An inn's or bed's question carries its authored kind, offered and written only when set.
+it('offers who is asking a Sleep question, writes the kind an author picks and leaves the source as it was when cleared', function () {
+    $root = innDescriptorProject();
+    $workspace = ProjectWorkspace::fromProject($root);
+    $map = innDescriptorMap($workspace);
+    $before = sourceHashTree($root);
+    $inspector = new MapInspector(new ReferenceCatalog($workspace));
+    $kindRow = fn() => innDescriptorRow($inspector, $map, static fn(array $row): bool => ($row['path'] ?? null) === ['data', 'confirmDialogue', 'kind']);
+
+    expect($kindRow())->not->toBe([])
+        ->and($kindRow()['optional'] ?? false)->toBeTrue()
+        ->and($kindRow()['options'] ?? null)->toBe(['answer', 'decision']);
+
+    $inspector->apply($map, $kindRow(), 'decision');
+    $map->save();
+    expect(innDescriptorMap(ProjectWorkspace::fromProject($root))->getEventDefinition('S')['data']['confirmDialogue'])
+        ->toBe(['text' => 'Rest?', 'kind' => 'decision']);
+
+    $inspector->apply($map, $kindRow(), '');
+    $map->save();
+    expect(sourceHashTree($root))->toBe($before);
+});

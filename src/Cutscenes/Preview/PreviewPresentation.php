@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Closure;
 use Ichiloto\Engine\Core\Rect;
+use Ichiloto\Engine\Events\Interpreter\EventAnswerPresentationInterface;
 use Ichiloto\Engine\Events\Interpreter\EventDialoguePresentationInterface;
 use Ichiloto\Engine\IO\Console\Console;
 use Ichiloto\Engine\IO\Console\TerminalText;
@@ -15,6 +16,7 @@ use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePaginationBuilder;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\UI\Interfaces\LayeredPresentationInterface;
+use Ichiloto\Engine\UI\Modal\ModalChoiceStyle;
 use Ichiloto\Engine\UI\Modal\NoticeContent;
 
 /**
@@ -38,7 +40,7 @@ use Ichiloto\Engine\UI\Modal\NoticeContent;
  * field's camera counts physical ground cells, which are far fewer than the
  * text cells a page is laid out in.
  */
-final class PreviewPresentation implements EventDialoguePresentationInterface
+final class PreviewPresentation implements EventDialoguePresentationInterface, EventAnswerPresentationInterface
 {
     private ?PreviewDialogueOwner $dialogue = null;
     private ?PreviewChoiceOwner $choice = null;
@@ -86,14 +88,28 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
         $this->log[] = ['kind' => 'text', 'text' => $text, 'speaker' => $speaker];
     }
 
+    /** A decision of the party's own: its choices are buttons, as the game's choice window draws them. */
     public function beginChoice(string $prompt, array $options, string $title = ''): void
+    {
+        $this->placeChoices($prompt, $options, $title, ModalChoiceStyle::BUTTONS);
+    }
+
+    /** Answers to someone in a conversation: a list with the cursor, as the game's dialogue answers are drawn. */
+    public function beginAnswer(string $prompt, array $answers, string $speaker = ''): void
+    {
+        $this->placeChoices($prompt, $answers, $speaker, ModalChoiceStyle::LIST);
+    }
+
+    /** @param array<int|string, mixed> $options */
+    private function placeChoices(string $prompt, array $options, string $title, ModalChoiceStyle $style): void
     {
         $this->reset();
         $options = array_values(array_map(strval(...), $options));
         $width = $this->getBoxWidth();
         $height = count($options) + count(TerminalText::wrapToWidth($prompt, $width - 4)) + ($title === '' ? 2 : 3);
         $this->choice = new PreviewChoiceOwner($title, $prompt, $options, 0, new Rect(
-            max(0, intdiv($this->screenWidth - $width, 2)), max(0, $this->screenHeight - $height - 1), $width, $height));
+            max(0, intdiv($this->screenWidth - $width, 2)), max(0, $this->screenHeight - $height - 1), $width, $height),
+            $style);
         $this->log[] = ['kind' => 'choice', 'text' => $prompt, 'speaker' => $title];
     }
 
@@ -306,9 +322,8 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
         foreach (TerminalText::wrapToWidth($choice->prompt, $inner) as $line) {
             $rows[] = '| ' . TerminalText::padRight($line, $inner) . ' |';
         }
-        foreach ($choice->options as $index => $option) {
-            $marker = $index === $choice->highlighted ? '>' : ' ';
-            $rows[] = '| ' . TerminalText::padRight($marker . ' ' . $option, $inner) . ' |';
+        foreach ($choice->choiceStyle->renderTerminalLines($choice->options, $choice->highlighted, $inner) as $line) {
+            $rows[] = '| ' . TerminalText::padRight($line, $inner) . ' |';
         }
         $rows[] = $border;
         $this->writeWindow($rows, max(0, intdiv($this->screenWidth - $boxWidth, 2)), max(0, $this->screenHeight - count($rows) - 1));

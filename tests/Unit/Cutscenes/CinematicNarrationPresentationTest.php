@@ -245,8 +245,10 @@ it('pages graphical dialogue on the wide text screen, not the few physical cells
         $preview->confirm();
         $preview->tick(0.1);
         $terminal = implode("\n", array_map(TerminalText::stripAnsi(...), $preview->frame()));
+        // An unmarked event choice is the party's decision: buttons, as the game draws them, with no list cursor.
         expect($preview->getWaitKind())->toBe('choice')
-            ->and($terminal)->toContain('Which way now?', '> Along the river bank', 'Over the hill');
+            ->and($terminal)->toContain('Which way now?', 'Along the river bank', 'Over the hill')
+            ->and($terminal)->not->toContain('> Along the river bank');
     } finally {
         $preview->dispose();
     }
