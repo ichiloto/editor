@@ -29,6 +29,7 @@ final class PlayerPresentationFields
             projection: new WholeFileProjection(['graphicalSubject', 'sprites2d']),
             labelFor: static fn(array $row): string => 'Player Field Appearance',
             fieldsFor: self::getFields(...),
+            describeRows: self::describeFields(...),
             requireUnchangedSource: true,
         );
     }
