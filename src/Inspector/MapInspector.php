@@ -126,6 +126,12 @@ final readonly class MapInspector
         ['label' => 'Decision', 'value' => ChoiceKind::DECISION->value, 'description' => 'No one asks: the party decides, with buttons.'],
     ];
 
+    /** Where a confirmation's focus starts. Andrew, 21 November 2026: "Authored per confirmation". */
+    public const array CONFIRM_START_CHOICES = [
+        ['label' => 'Yes', 'value' => 0, 'description' => 'The focus starts on Yes, as it does when none is set.'],
+        ['label' => 'No', 'value' => 1, 'description' => 'The focus starts on No, for a question about something that cannot be undone.'],
+    ];
+
     public const array CHEST_TYPE_CHOICES = [
         ['label' => 'Common', 'value' => ChestType::COMMON->value, 'description' => 'Standard chest presentation for ordinary treasure.'],
         ['label' => 'Rare', 'value' => ChestType::RARE->value, 'description' => 'Highlights a chest that should feel less common.'],
@@ -372,6 +378,13 @@ final readonly class MapInspector
             // interface sent the value.
             throw new InspectorRefusal(sprintf('%s cannot be %s; choose one of: %s.',
                 trim((string) ($field['label'] ?? 'That row')), $rawValue, implode(', ', $choices)));
+        }
+        if ($control === null && is_array($field['choices'] ?? null) && ! $clearsOptional) {
+            // A picked row takes its choice's own value, as the choice declares it: a starting choice stays a number.
+            $picked = array_find($field['choices'], static fn(array $choice): bool => (string) $choice['value'] === $rawValue);
+            if ($picked !== null) {
+                $value = $picked['value'];
+            }
         }
 
         if (($field['mapConditions'] ?? false) === true) {
@@ -2768,12 +2781,15 @@ final readonly class MapInspector
 
             $path = array_values((array) ($field['path'] ?? []));
 
-            $choices = match ($path) {
-                ['cue', 'kind'] => self::EVENT_CUE_KIND_CHOICES,
-                ['engagement'] => self::EVENT_ENGAGEMENT_CHOICES,
-                ['data', 'chestType'] => self::CHEST_TYPE_CHOICES,
-                ['data', 'lootType'] => self::listLootTypeChoices(),
-                ['data', 'confirmDialogue', 'kind'] => self::CHOICE_KIND_CHOICES,
+            // A confirmation's kind and starting choice read alike on a bed's question and an inn command's.
+            $confirmation = array_slice($path, -2);
+            $choices = match (true) {
+                $path === ['cue', 'kind'] => self::EVENT_CUE_KIND_CHOICES,
+                $path === ['engagement'] => self::EVENT_ENGAGEMENT_CHOICES,
+                $path === ['data', 'chestType'] => self::CHEST_TYPE_CHOICES,
+                $path === ['data', 'lootType'] => self::listLootTypeChoices(),
+                $confirmation === ['confirmDialogue', 'kind'] => self::CHOICE_KIND_CHOICES,
+                $confirmation === ['confirmDialogue', 'defaultChoice'] => self::CONFIRM_START_CHOICES,
                 default => null,
             };
 

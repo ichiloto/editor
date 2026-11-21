@@ -34,7 +34,8 @@ function editRecordOnce(EditorSession $session, string $category, int $index): b
                 array_column($session->listReferences($map, $row['reference']), 'value'),
                 [$row['value']],
             ))[0] ?? null,
-            'text' => ($row['value'] ?? '') === '' ? null : $row['value'] . ' Revised',
+            // An empty text takes a first value; a written one is revised.
+            'text' => ($row['value'] ?? '') === '' ? 'Revised' : $row['value'] . ' Revised',
             'integer' => is_numeric($row['raw'] ?? null) ? (string) ((int) $row['raw'] + 1) : null,
             'float' => is_numeric($row['raw'] ?? null) ? (string) ((float) $row['raw'] + 0.5) : null,
             'boolean' => ($row['raw'] ?? $row['value']) === 'true' ? 'false' : 'true',

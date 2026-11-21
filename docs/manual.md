@@ -1744,6 +1744,7 @@ skill's effects, a quest's rewards) listed under them.
 | Skills | `assets/Data/Skills/*.php` | Editable - one data record per numbered file, attacks, abilities and spells alike, with their effects; `skills.php` loads them | Same |
 | Mastery Regions | `assets/Data/mastery.php` (`regions`) | Editable - the regions of the mastery tree every character shares, each with the nodes on its trunk | Same |
 | Mastery Branches | `assets/Data/mastery.php` (`branches`) | Editable - each region's branches (element, aspect or non-elemental) with their nodes in the order they progress | Same |
+| Mastery Held Skills | `assets/Data/mastery.php` (`held`) | Editable - the skills kept off the tree for now, each with why it is held | Same |
 | Mastery Maps | `assets/Data/Mastery/*.php` | Editable - one file per character stating their own terms for tree nodes: price, opening level, what each builds on | Same, plus a graphical page that places and links the character's nodes |
 | Items | `assets/Data/Items/*.php` | Editable - one data record per numbered file, with scope, occasion, animation and effects; `items.php` loads Items, Weapons and Armors | Same |
 | Weapons | `assets/Data/Weapons/*.php` | Editable - one data record per numbered file, with type, stats, element, affinities and equipment metadata | Same |
@@ -2088,6 +2089,14 @@ has a Summary, and a region with trunk nodes also has a Trunk Summary for
 the family those nodes form: the game's Info shows them on the
 discipline, the family and its foundation. Validation warns where one is
 missing, because Info then offers nothing there.
+
+Mastery Held Skills keeps a skill off the tree for now: a complete skill
+that no node may teach yet, with a note of why it is held. A rule that
+expects a skill on the tree passes over a held one. A new hold names the
+project's first skill that no node teaches and nothing holds, and
+validation warns until its note says why. A hold names its skill, so the
+skill cannot be deleted from under it, and retiring the skill moves or
+drops the hold like every other reference.
 
 Items, weapons and armors are one file each under `assets/Data/Items`,
 `Weapons` and `Armors`, returning `['class' => InventoryItem::class, 'data'

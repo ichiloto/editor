@@ -165,6 +165,7 @@ final class RecordSchemaCatalog
             self::skills(),
             MasteryFields::getRegionSchema(),
             MasteryFields::getBranchSchema(),
+            MasteryFields::getHeldSkillSchema(),
             MasteryFields::getMapSchema($graphical),
             self::skits(),
             self::knowledgeSubjects(),
@@ -3186,9 +3187,9 @@ final class RecordSchemaCatalog
 
     /**
      * Describes one declared field as the settings it is edited through. An
-     * optional text or reference drops out when cleared; numbers and flags
-     * keep what the author sets, since a project's handler decides what an
-     * absent one means.
+     * optional text, reference or number drops out when cleared, so the
+     * project's handler decides what its absence means; a number the author
+     * sets is kept, zero included. Flags keep what the author sets.
      *
      * @param list<ScriptCommandField> $siblings The fields declared beside it, which a placement's NPC is among.
      * @return RecordField[]
@@ -3197,8 +3198,11 @@ final class RecordSchemaCatalog
     {
         return match ($field->kind) {
             ScriptCommandFieldKind::TEXT => [new RecordField($field->key, $field->label, removeWhenEmpty: ! $field->required)],
-            ScriptCommandFieldKind::INTEGER => [new RecordField($field->key, $field->label, InputControlType::INTEGER)],
-            ScriptCommandFieldKind::NUMBER => [new RecordField($field->key, $field->label, InputControlType::FLOAT)],
+            // An absent optional number reads as blank, so a typed 0 is a value of its own, never its absence.
+            ScriptCommandFieldKind::INTEGER => [new RecordField($field->key, $field->label, InputControlType::INTEGER,
+                removeWhenEmpty: ! $field->required, displayDefault: $field->required ? null : '')],
+            ScriptCommandFieldKind::NUMBER => [new RecordField($field->key, $field->label, InputControlType::FLOAT,
+                removeWhenEmpty: ! $field->required, displayDefault: $field->required ? null : '')],
             ScriptCommandFieldKind::BOOLEAN => [RecordField::boolean($field->key, $field->label, removeWhenEmpty: false)],
             ScriptCommandFieldKind::OPTION => [new RecordField($field->key, $field->label, options: $field->options, removeWhenEmpty: ! $field->required)],
             ScriptCommandFieldKind::REFERENCE => [self::describeRegisteredReference($field, $siblings)],

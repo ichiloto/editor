@@ -33,6 +33,8 @@ final class MasteryFields
     /** The {@see ReferenceCatalog::listEntryChoices()} source of what a branch may grow within. */
     public const string WITHIN_CHOICES = 'mastery_within_branches';
     public const string BRANCHES = 'mastery_branches';
+    /** The skills the author keeps off the tree for now, each with why. */
+    public const string HELD = 'mastery_held_skills';
     public const string MAPS = 'mastery_maps';
     /** The reference source listing every tree node, by id. */
     public const string NODES = 'mastery_nodes';
@@ -115,6 +117,41 @@ final class MasteryFields
                 heading: 'Nodes',
             ),
             projection: new KeyedListProjection('branches'),
+            saveCheck: self::checkTree(...),
+        );
+    }
+
+    /**
+     * The skills the author keeps off the tree for now (`held` in `mastery.php`): no node may teach one, and its note
+     * records why it is held.
+     */
+    public static function getHeldSkillSchema(): RecordSchema
+    {
+        return new RecordSchema(
+            key: self::HELD,
+            entryNoun: 'held skill',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/' . MasteryCatalog::SETTINGS,
+            fields: [
+                new RecordField('skill', 'Skill', reference: 'skills'),
+                // Validation asks for it until it is written.
+                new RecordField('note', 'Why It Is Held', removeWhenEmpty: true),
+            ],
+            labelKey: 'skill',
+            identityKey: 'skill',
+            blank: ['skill' => ''],
+            // A new hold names the skill it was created for, or the project's first skill no node teaches and nothing
+            // holds yet; with none, there is nothing to hold.
+            makeBlank: static function (string $name, string $root): array {
+                $skills = SkillCatalog::load($root . '/assets');
+                $tree = MasteryCatalog::load($root . '/assets', $skills)->tree;
+                $free = static fn(string $skill): bool => $tree->findSkillNode($skill) === null && ! $tree->isSkillHeld($skill);
+                $names = array_map(static fn($skill): string => $skill->name, $skills->getSkills());
+                $skill = in_array($name, $names, true) && $free($name) ? $name : array_find($names, $free);
+
+                return ['skill' => $skill ?? throw new RecordRefusal('Every skill is on the mastery tree or held already.')];
+            },
+            projection: new KeyedListProjection('held'),
             saveCheck: self::checkTree(...),
         );
     }
@@ -204,14 +241,7 @@ final class MasteryFields
         } catch (InvalidArgumentException $error) {
             return sprintf('The mastery tree could not be read: %s', $error->getMessage());
         }
-        $skills = SkillCatalog::load($projectRoot . '/assets');
-        foreach ($tree->nodes as $node) {
-            if ($node->skill !== null && $skills->findSkill($node->skill) === null && $skills->findDraft($node->skill) === null) {
-                return sprintf('Mastery node %s teaches unknown skill "%s".', $node->id, $node->skill);
-            }
-        }
-
-        return null;
+        return $tree->describeUnknownSkill(SkillCatalog::load($projectRoot . '/assets'));
     }
 
     /**
