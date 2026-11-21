@@ -89,3 +89,16 @@ it('shows a message that inherits the project\'s vocabulary wording with that pr
     expect($terms->getRecordByIndex($index)?->get('default'))->toBe(EngineMessageTerms::listTerms()['exp_total']['default'])
         ->and($terms->getRecordByIndex($index)?->get('default'))->not->toBe('EXP So Far');
 });
+
+// Andrew, 21 November 2026: saving into an occupied file asks "Overwrite this save?", starting on No.
+it('offers the save overwrite question and a confirmation\'s choices, and writes the question\'s wording', function () {
+    $root = createTermsProject();
+    $workspace = ProjectWorkspace::fromProject($root);
+    $labels = $workspace->getRecordDatabase('terms')->getEntryLabels();
+
+    expect($labels)->toContain('messages.confirm.overwrite_save', 'vocab.confirm.yes', 'vocab.confirm.no');
+    [$terms, $index] = findTerm($workspace, 'messages.confirm.overwrite_save');
+    $terms->setField($index, 'value', 'Replace this file?');
+    $terms->save();
+    expect((require $root . '/config.php')['messages']['confirm']['overwrite_save'])->toBe('Replace this file?');
+});
