@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- A confirmation's starting choice is authored per confirmation (Andrew, 21 November 2026: "Authored per
+  confirmation"). A bed's or inn event's Sleep question and an inn command offer Starts On (Yes or No), written as
+  the number the Engine reads (`confirmDialogue.defaultChoice`, 0 or 1); a new bed starts on Yes. An inn command also
+  offers its Kind (Answer or Decision), which it could not before: the Engine's inn declaration did not name it. A row
+  picked from a labelled list now writes its choice's own value, so a starting choice stays a number.
+- Clearing an optional number of a registered command removes it, so the command's own default applies. Changed:
+  before, clearing wrote 0, which made a cleared shop Price override sell the item for 0 and a cleared Buy Rate
+  charge nothing. A number the author types, zero included, is still kept.
 - A choice says who is asking. The event command editor offers a `choice` command's Kind (Answer, a list, or
   Decision, buttons; blank keeps the Engine's default, a decision), and an inn's or bed's Sleep question offers
   Confirm Dialogue Kind. Setting a kind writes only that key; clearing it removes the key and restores the authored
@@ -95,6 +103,11 @@
 
 ### Added
 
+- Database > Mastery Held Skills keeps a skill off the mastery tree for now, with why (`held` in `mastery.php`). A new
+  hold names the first skill no node teaches and nothing holds, and validation warns until its note says why. The
+  tree refuses a hold on a skill a node teaches, a hold names its skill so the skill cannot be deleted from under it,
+  and retiring the skill moves or drops the hold like every other reference. The tree's save check and the Engine
+  share one unknown-skill check (`MasteryTree::describeUnknownSkill()`).
 - **Appearance Regions** for field resources (the Engine's `appearanceRegions` contract): a resource record lists
   rectangles in anchor-relative map cells (`Offset X`, `Offset Y`, `Width`, `Height`), each with an `Appearance`
   chosen from the Engine's tile appearances, so one resource such as a bridge can show barrier rails around a ground

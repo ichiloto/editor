@@ -537,3 +537,54 @@ it('offers who is asking a Sleep question, writes the kind an author picks and l
     $map->save();
     expect(sourceHashTree($root))->toBe($before);
 });
+
+// Andrew, 21 November 2026: a confirmation's starting choice is "Authored per confirmation"; inns and beds start on Yes.
+it('offers where a Sleep question starts, writes the choice as a number and leaves the source as it was when cleared', function () {
+    $root = innDescriptorProject();
+    $workspace = ProjectWorkspace::fromProject($root);
+    $map = innDescriptorMap($workspace);
+    $before = sourceHashTree($root);
+    $inspector = new MapInspector(new ReferenceCatalog($workspace));
+    $startRow = fn() => innDescriptorRow($inspector, $map,
+        static fn(array $row): bool => ($row['path'] ?? null) === ['data', 'confirmDialogue', 'defaultChoice']);
+
+    expect($startRow()['optional'] ?? false)->toBeTrue()
+        ->and(array_column($startRow()['choices'] ?? [], 'label'))->toBe(['Yes', 'No']);
+
+    $inspector->apply($map, $startRow(), '1');
+    $map->save();
+    expect(innDescriptorMap(ProjectWorkspace::fromProject($root))->getEventDefinition('S')['data']['confirmDialogue'])
+        ->toBe(['text' => 'Rest?', 'defaultChoice' => 1]);
+
+    $inspector->apply($map, $startRow(), '');
+    $map->save();
+    expect(sourceHashTree($root))->toBe($before);
+});
+
+it('authors an inn command\'s kind and starting choice as the Engine declares them, and restores the script when cleared', function () {
+    $root = innDescriptorProject();
+    file_put_contents($root . '/assets/Events/rest.php', "<?php\n// keep script annotation\nreturn [['type' => 'inn', 'confirmDialogue' => ['name' => 'Keeper', 'text' => 'Rest?'], 'cost' => 5]];\n");
+    $before = sourceHashTree($root);
+    $workspace = ProjectWorkspace::fromProject($root);
+    $db = $workspace->getRecordDatabase('common_events');
+    $index = array_search('rest', $db->getEntryLabels(), true);
+    $author = new RecordAuthoring();
+    $author->applyField($db, $index, [], 'command0ConfirmDialoguekind', 'decision', 'Kind');
+    $author->applyField($db, $index, [], 'command0ConfirmDialoguedefaultChoice', '1', 'Starts On');
+    $db->save();
+
+    expect(ProjectWorkspace::fromProject($root)->getRecordDatabase('common_events')->getFrameCommands($index, [])[0]['confirmDialogue'])
+        ->toBe(['name' => 'Keeper', 'text' => 'Rest?', 'kind' => 'decision', 'defaultChoice' => 1])
+        ->and(file_get_contents($root . '/assets/Events/rest.php'))->toContain('// keep script annotation');
+
+    $author->applyField($db, $index, [], 'command0ConfirmDialoguekind', '', 'Kind');
+    $author->applyField($db, $index, [], 'command0ConfirmDialoguedefaultChoice', '', 'Starts On');
+    $db->save();
+    expect(sourceHashTree($root))->toBe($before);
+
+    // A typed 0 is a value of its own: Yes, written, never the field's absence.
+    $author->applyField($db, $index, [], 'command0ConfirmDialoguedefaultChoice', '0', 'Starts On');
+    $db->save();
+    expect(ProjectWorkspace::fromProject($root)->getRecordDatabase('common_events')->getFrameCommands($index, [])[0]['confirmDialogue'])
+        ->toBe(['name' => 'Keeper', 'text' => 'Rest?', 'defaultChoice' => 0]);
+});

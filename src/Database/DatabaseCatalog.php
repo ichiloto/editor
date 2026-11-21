@@ -25,6 +25,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition(MasteryFields::MAPS, 'Mastery Maps', 'Set a character\'s own terms for tree nodes: what each costs in SP, when it opens and what it builds on.', true),
             new DatabaseCategoryDefinition(MasteryFields::REGIONS, 'Mastery Regions', 'Name the regions of the mastery tree every character shares, and the nodes on each trunk.', true),
             new DatabaseCategoryDefinition(MasteryFields::BRANCHES, 'Mastery Branches', 'Grow each region\'s branches: an element, aspect or non-elemental practice and its nodes in the order they progress.', true),
+            new DatabaseCategoryDefinition(MasteryFields::HELD, 'Mastery Held Skills', 'Keep a skill off the mastery tree for now, and record why.', true),
             new DatabaseCategoryDefinition('items', 'Items', 'Manage consumables, key items, and resources.', true),
             new DatabaseCategoryDefinition('weapons', 'Weapons', 'Configure weapon stats and restrictions.', true),
             new DatabaseCategoryDefinition('armors', 'Armors', 'Configure armor stats and resistances.', true),

@@ -30,6 +30,7 @@ final class MasteryValidator
     public const string UNCHAINED = 'mastery.unchained';
     public const string LADDER = 'mastery.ladder';
     public const string UNSUMMARISED = 'mastery.summary-missing';
+    public const string UNEXPLAINED_HOLD = 'mastery.held-without-why';
 
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
@@ -73,6 +74,13 @@ final class MasteryValidator
             if (trim($branch->description) === '') {
                 $issues[] = new Issue(Severity::WARNING, $where, sprintf('%s has no summary: Info offers nothing on its family or its foundation.', $branch->name),
                     'Write its Summary in Database > Mastery Branches.', self::UNSUMMARISED);
+            }
+        }
+        foreach ($tree->heldSkills as $held) {
+            if (trim($held->note) === '') {
+                $issues[] = new Issue(Severity::WARNING, sprintf('assets/%s: held %s', MasteryCatalog::SETTINGS, $held->skill),
+                    sprintf('%s is held off the tree without why.', $held->skill),
+                    'Record why it is held in Database > Mastery Held Skills.', self::UNEXPLAINED_HOLD);
             }
         }
         foreach ($tree->regions as $region) {
