@@ -820,3 +820,26 @@ it('writes a one-line list that grows past the width an entry per line, and leav
         ->and($written)->toContain("    ['id' => 'crawl', 'kind' => 'application', 'skill' => 'Crawl'],\n")
         ->and(max(array_map('strlen', explode("\n", $written))))->toBeLessThan(110);
 });
+
+it('retains an authored inline array through coordinate edits and their reversal', function () {
+    $source = <<<'SOURCE'
+    <?php
+    return [
+      'anchors' => [
+        ['id' => 'top-of-the-observation-tower', 'cell' => ['x' => 0, 'y' => -1], 'point' => ['x' => 0.25, 'y' => 0.5833333333333334]],
+      ],
+    ];
+    SOURCE;
+    $original = evaluateSource($source);
+    $edited = $original;
+    $edited['anchors'][0]['point'] = ['x' => 0.375, 'y' => 0.625];
+
+    $changed = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $original, $edited);
+    $restored = ArraySourceWriter::rewrite($changed, $edited, $original);
+
+    expect($changed->source)->toBe(str_replace(
+        "'point' => ['x' => 0.25, 'y' => 0.5833333333333334]",
+        "'point' => ['x' => 0.375, 'y' => 0.625]",
+        $source,
+    ))->and($restored->source)->toBe($source);
+});

@@ -736,9 +736,7 @@ final class ProjectRecordDatabase
                 $field->key, $isEditable, authored: $record->get($field->key)), (array) $record->toArray(), (array) $record->toArray(),
                 $this->findRecordReferences($record));
         }
-        if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
-            $fields = PlayerPresentationFields::describeFields($fields, (array) $record->toArray(), $this->authoringReferences?->getAssetRoot());
-        }
+        $fields = $this->schema->describeRows($fields, (array) $record->toArray(), $this->authoringReferences?->getAssetRoot());
         if ($configIssue !== null) { $fields[] = ['label' => 'Read-only', 'value' => $configIssue, 'editable' => false]; }
 
         foreach ($this->schema->commandListsFor($record->toArray()) as $listKey => $commandList) {

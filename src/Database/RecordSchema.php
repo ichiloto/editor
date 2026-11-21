@@ -113,6 +113,13 @@ final readonly class RecordSchema
         public ?string $legacyRelativePath = null,
         /** Why a project still on `legacyRelativePath` cannot edit the category here, naming what moves it (no final full stop). */
         public ?string $legacyReadOnlyReason = null,
+        /**
+         * Adds what a record's rows show beyond their values, such as an image preview or an ownership note: given
+         * the described rows, the record and the project's asset root (null when the project has none).
+         *
+         * @var (Closure(list<array<string, mixed>>, array<string, mixed>, ?string): list<array<string, mixed>>)|null
+         */
+        public ?Closure $describeRows = null,
     ) {
         if (($legacyRelativePath === null) !== ($legacyReadOnlyReason === null)) {
             throw new LogicException(sprintf('The %s category declares a legacy file only together with why it is read-only there.', $key));
@@ -160,6 +167,18 @@ final readonly class RecordSchema
      * @param array<string, mixed>|object $payload The record payload.
      * @return RecordField[] The fields.
      */
+    /**
+     * A record's described rows with what the category adds to them ({@see $describeRows}).
+     *
+     * @param list<array<string, mixed>> $rows
+     * @param array<string, mixed> $entry
+     * @return list<array<string, mixed>>
+     */
+    public function describeRows(array $rows, array $entry, ?string $assetRoot): array
+    {
+        return $this->describeRows === null ? $rows : ($this->describeRows)($rows, $entry, $assetRoot);
+    }
+
     public function fieldsFor(array|object $payload): array
     {
         if ($this->fieldsFor === null) {

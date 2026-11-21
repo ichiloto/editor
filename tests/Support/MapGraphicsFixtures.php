@@ -17,9 +17,19 @@ function writeTilesetTestPng(string $path, int $width, int $height): void
     }
     $chunk = static fn(string $type, string $data): string => pack('N', strlen($data)) . $type . $data
         . pack('N', crc32($type . $data));
+    $row = "\0" . str_repeat("\x70\x90\xB0\xFF", $width);
+    // A large test sheet has the same rows as a small one. Feed one row at
+    // a time instead of allocating the entire uncompressed image.
+    $compressor = deflate_init(ZLIB_ENCODING_DEFLATE);
+    $compressed = '';
+    for ($line = 0; $line < $height; $line++) {
+        $compressed .= deflate_add($compressor, $row, ZLIB_NO_FLUSH);
+    }
+    $compressed .= deflate_add($compressor, '', ZLIB_FINISH);
+
     file_put_contents($path, "\x89PNG\r\n\x1a\n"
         . $chunk('IHDR', pack('NNCCCCC', $width, $height, 8, 6, 0, 0, 0))
-        . $chunk('IDAT', (string) gzcompress(str_repeat("\0" . str_repeat("\x70\x90\xB0\xFF", $width), $height)))
+        . $chunk('IDAT', $compressed)
         . $chunk('IEND', ''));
 }
 

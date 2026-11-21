@@ -208,3 +208,48 @@ it('authors resource attachments as anchor-relative terminal cells and art point
     expect(fn() => $session->saveDatabase(FieldResourceFields::CATEGORY))->toThrow(SessionRefusal::class)
         ->and((string) file_get_contents($path))->toBe($before);
 });
+
+it('uses the current resource crop for point placement and changes both art coordinates as one undo step', function () {
+    [$root, $path, $session] = createFieldResourceProject();
+    applyResourceRow($session, 0, 'sprites2d.sourceRect', '2, 3, 8, 10');
+    $art = findResourceRow($session, 0, 'sprites2d.asset');
+    expect($art['imagePreview']['frames'][0]['sourceRect'])->toBe(['x' => 2, 'y' => 3, 'width' => 8, 'height' => 10]);
+
+    $heading = array_find($session->readDatabaseRecord(FieldResourceFields::CATEGORY, 0)['rows'],
+        static fn(array $row): bool => ($row['listHeading'] ?? false) && str_starts_with($row['label'], 'Attachments'));
+    $session->addDatabaseItem(FieldResourceFields::CATEGORY, 0, $heading['key'], true);
+    applyResourceRow($session, 0, 'attachment0Id', 'aerial');
+    applyResourceRow($session, 0, 'attachment0Celly', '-1');
+
+    $changes = [
+        ['key' => findResourceRow($session, 0, 'attachment0Pointx')['key'], 'value' => '0.875'],
+        ['key' => findResourceRow($session, 0, 'attachment0Pointy')['key'], 'value' => '0.125'],
+    ];
+    $session->applyDatabaseRecordValues(FieldResourceFields::CATEGORY, 0, $changes, 'Place aerial');
+    $session->undo();
+    expect(findResourceRow($session, 0, 'attachment0Pointx')['value'])->toBe('0.5')
+        ->and(findResourceRow($session, 0, 'attachment0Pointy')['value'])->toBe('0.5');
+    $session->redo();
+    $session->saveDatabase(FieldResourceFields::CATEGORY);
+
+    $resource = FieldPresentationCatalog::load($root . '/assets')->getResource('oak');
+    expect($resource->findAttachment('aerial')?->toArray())->toBe([
+        'id' => 'aerial', 'cell' => ['x' => 0, 'y' => -1], 'point' => ['x' => 0.875, 'y' => 0.125],
+    ])->and($resource->pivot->x)->toBe(0.5)
+        ->and($resource->occupancyStamp[0]['type'])->toBe(CollisionType::SOLID)
+        ->and(file_get_contents($path))->toContain('// Authored cue bindings stay as written.');
+});
+
+it('describes the authored resting cell and the current board source for their point pickers', function () {
+    [, , $session] = createFieldResourceProject();
+    applyResourceRow($session, 0, 'sprites2d.sourceRect', '2, 3, 8, 10');
+    applyResourceRow($session, 0, 'sprites2d.animation.frames', '0, 1');
+    applyResourceRow($session, 0, 'sprites2d.animation.columns', '2');
+    applyResourceRow($session, 0, 'sprites2d.animation.restFrame', '1');
+    expect(findResourceRow($session, 0, 'sprites2d.asset')['imagePreview']['frames'][0]['sourceRect'])
+        ->toBe(['x' => 6, 'y' => 3, 'width' => 4, 'height' => 10]);
+
+    applyResourceRow($session, 0, 'presentation', FieldResourceFields::SIGN);
+    expect(findResourceRow($session, 0, 'sign.asset')['imagePreview']['frames'][0])
+        ->toBe(['label' => 'Board source', 'sourceRect' => ['x' => 0, 'y' => 0, 'width' => 12, 'height' => 16]]);
+});
