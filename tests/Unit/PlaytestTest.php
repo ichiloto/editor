@@ -280,10 +280,13 @@ it('says where it looked when there is no console to find', function (): void {
 function writeFakeConsole(string $directory, ?int $exitCode = null): string
 {
     $path = $directory . '/fake-console.php';
-    file_put_contents($path, '<?php echo implode(" ", array_slice($argv, 1)), "\n"; '
+    // A running console starts its game child before it prints its command line, so a test that waits for the
+    // printed line finds the child already there; printed first, the line could arrive before the child existed.
+    $announce = 'echo implode(" ", array_slice($argv, 1)), "\n";';
+    file_put_contents($path, '<?php '
         . ($exitCode === null
-            ? '$child = proc_open(["sleep", "60"], [], $pipes); sleep(60);'
-            : sprintf('fwrite(STDERR, "renderer missing\n"); exit(%d);', $exitCode)));
+            ? '$child = proc_open(["sleep", "60"], [], $pipes); ' . $announce . ' sleep(60);'
+            : $announce . sprintf(' fwrite(STDERR, "renderer missing\n"); exit(%d);', $exitCode)));
 
     return $path;
 }
