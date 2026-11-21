@@ -415,3 +415,25 @@ it('wraps a long text command in the Database settings pane', function () {
         expect(mb_strwidth($line))->toBeLessThanOrEqual($width);
     }
 });
+
+// Andrew, 21 November 2026: each choice is marked "as an NPC answer (list) or a decision (buttons) in its data".
+it('authors who is asking on a choice and restores the authored script byte for byte when it is cleared', function () {
+    $root = makeTemporaryProject();
+    writeNestedScript($root);
+    $path = $root . '/assets/Events/nested.php';
+    $database = nestedScripts($root);
+    $index = nestedIndex($database);
+    $before = (string) file_get_contents($path);
+    $kind = array_find($database->getFrameSettingsFields($index, []), fn(array $field): bool => ($field['field'] ?? null) === 'command1Kind');
+
+    expect($kind['options'] ?? null)->toBe(['', 'answer', 'decision']);
+
+    $database->setFrameField($index, [], 'command1Kind', 'answer');
+    $database->save();
+    // The new key joins the end of the command, as the source writer adds keys; nothing else moves.
+    expect((string) file_get_contents($path))->toBe(str_replace("  ]],\n];", "  ], 'kind' => 'answer'],\n];", $before));
+
+    $database->setFrameField($index, [], 'command1Kind', '');
+    $database->save();
+    expect((string) file_get_contents($path))->toBe($before);
+});

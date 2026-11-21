@@ -8,12 +8,14 @@ use Ichiloto\Engine\Core\Rect;
 use Ichiloto\Engine\UI\Enumerations\PresentationPriority;
 use Ichiloto\Engine\UI\Interfaces\LayeredPresentationInterface;
 use Ichiloto\Engine\UI\Interfaces\ModalPresentationProviderInterface;
+use Ichiloto\Engine\UI\Modal\ModalChoiceStyle;
 use Ichiloto\Engine\UI\Modal\ModalPresentation;
 
 /**
  * A choice on the preview's screen, with the option the author has
  * highlighted. The Engine's scene composer reads it as it reads the game's
- * choice window ({@see \Ichiloto\Engine\UI\Modal\SelectModal}).
+ * choice window ({@see \Ichiloto\Engine\UI\Modal\SelectModal}): a decision's
+ * buttons or the list of answers to someone in a conversation.
  */
 final class PreviewChoiceOwner implements LayeredPresentationInterface, ModalPresentationProviderInterface
 {
@@ -24,12 +26,14 @@ final class PreviewChoiceOwner implements LayeredPresentationInterface, ModalPre
         public readonly array $options,
         public int $highlighted,
         private readonly Rect $bounds,
+        public readonly ModalChoiceStyle $choiceStyle = ModalChoiceStyle::BUTTONS,
     ) {
     }
 
     public function getModalPresentation(): ModalPresentation
     {
-        return new ModalPresentation($this->title, $this->prompt, $this->options, $this->highlighted, true);
+        return new ModalPresentation($this->title, $this->prompt, $this->options, $this->highlighted, true,
+            choiceStyle: $this->choiceStyle);
     }
 
     public function getPresentationBounds(): Rect

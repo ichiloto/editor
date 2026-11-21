@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- A choice says who is asking. The event command editor offers a `choice` command's Kind (Answer, a list, or
+  Decision, buttons; blank keeps the Engine's default, a decision), and an inn's or bed's Sleep question offers
+  Confirm Dialogue Kind. Setting a kind writes only that key; clearing it removes the key and restores the authored
+  file byte for byte. Optional event data may now be nested (`confirmDialogue.kind`), and an optional row picked
+  from a list clears with a blank value instead of refusing it. A new bed's Sleep question is a decision.
+- The cutscene preview draws a choice as the game does: a decision as centred buttons and an answer as the
+  dialogue list with the cursor, through the Engine's `ModalChoiceStyle::renderTerminalLines()`, and it shows
+  answers (`EventAnswerPresentationInterface`) instead of failing on them. Changed: an unmarked choice in a
+  cinematic no longer shows the list cursor in the preview, because the game shows it as buttons.
 - A preview's Game owns its scene manager and one read-only save manager (the Engine's `SaveManager` with
   `readOnly: true`). Before, the preview built its scene manager outside its Game, so an Engine lookup through the
   Game made a second scene manager and save manager, and a saved-campaign preview read its save through a third.

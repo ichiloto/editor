@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Inspector;
 
+use Ichiloto\Engine\Messaging\Dialogue\ChoiceKind;
 use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Dialogue\DialogueEmotionFields;
@@ -119,6 +120,12 @@ final readonly class MapInspector
     ];
 
     /** A chest event's presentations, as an author picks one. */
+    /** Who is asking a confirmation, as the Engine reads ChoiceKind; left blank, it is an answer. */
+    public const array CHOICE_KIND_CHOICES = [
+        ['label' => 'Answer', 'value' => ChoiceKind::ANSWER->value, 'description' => 'The party answers whoever asks, as a list.'],
+        ['label' => 'Decision', 'value' => ChoiceKind::DECISION->value, 'description' => 'No one asks: the party decides, with buttons.'],
+    ];
+
     public const array CHEST_TYPE_CHOICES = [
         ['label' => 'Common', 'value' => ChestType::COMMON->value, 'description' => 'Standard chest presentation for ordinary treasure.'],
         ['label' => 'Rare', 'value' => ChestType::RARE->value, 'description' => 'Highlights a chest that should feel less common.'],
@@ -358,7 +365,9 @@ final readonly class MapInspector
         };
         $choices = self::findChoiceValues($field);
 
-        if ($control === null && $choices !== null && ! in_array($rawValue, $choices, true)) {
+        // Optional data is cleared with an empty value, which removes it.
+        $clearsOptional = ($field['optional'] ?? false) === true && $rawValue === '';
+        if ($control === null && $choices !== null && ! $clearsOptional && ! in_array($rawValue, $choices, true)) {
             // A row picked from a list takes one of its choices, whatever
             // interface sent the value.
             throw new InspectorRefusal(sprintf('%s cannot be %s; choose one of: %s.',
@@ -2227,7 +2236,8 @@ final readonly class MapInspector
             // The type's optional data is offered as it reads when absent,
             // and stays out of the stored event until an author sets it.
             $className = is_string($definition['class'] ?? null) ? ltrim($definition['class'], '\\') : null;
-            $optional = EventTypeCatalog::findByClass($className)?->optionalData ?? [];
+            $type = EventTypeCatalog::findByClass($className);
+            $optional = $type?->optionalData ?? [];
             $modes = self::listEventModes($className);
             $hasPresentation = array_key_exists('presentation', $optional) || array_key_exists('presentation', $eventData);
             $presentation = $eventData['presentation'] ?? null;
@@ -2236,9 +2246,12 @@ final readonly class MapInspector
             $spawnSprite = $eventData['spawnSprite'] ?? null;
             unset($eventData['spawnSprite']);
             $pages = self::readDialoguePages($shown);
-            $fields = array_map(static function (array $field) use ($optional, $modes): array {
+            $offered = $type?->withAbsentOptionalData(self::withPageEmotions($eventData, $pages)) ?? self::withPageEmotions($eventData, $pages);
+            // The rest stage presentation has its own rows below.
+            if ($hasPresentation) { unset($offered['presentation']); }
+            $fields = array_map(static function (array $field) use ($type, $modes): array {
                 $path = array_values((array) ($field['path'] ?? []));
-                if (count($path) === 2 && array_key_exists((string) $path[1], $optional)) {
+                if (($path[0] ?? null) === 'data' && $type?->isOptionalDataPath(array_slice($path, 1))) {
                     $field['optional'] = true;
                 }
                 if ($path === ['data', 'mode'] && $modes !== null) {
@@ -2249,7 +2262,7 @@ final readonly class MapInspector
                 return $field;
             }, $this->decorateEventInspectorFields(
                 $marker,
-                $this->flattenInspectorFields([...self::withPageEmotions($eventData, $pages), ...array_diff_key($optional, $eventData)], ['data']),
+                $this->flattenInspectorFields($offered, ['data']),
             ));
             $fields = $this->describePageEmotions($fields, $pages);
             $mayKeepHeading = $className !== null && is_a($className, TransferPlayerTrigger::class, true);
@@ -2760,6 +2773,7 @@ final readonly class MapInspector
                 ['engagement'] => self::EVENT_ENGAGEMENT_CHOICES,
                 ['data', 'chestType'] => self::CHEST_TYPE_CHOICES,
                 ['data', 'lootType'] => self::listLootTypeChoices(),
+                ['data', 'confirmDialogue', 'kind'] => self::CHOICE_KIND_CHOICES,
                 default => null,
             };
 

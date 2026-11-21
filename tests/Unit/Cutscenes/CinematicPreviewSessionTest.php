@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
+use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Config\ProjectConfig;
 
@@ -156,3 +157,35 @@ it('waits on dialogue until the author continues, and resolves choices from the 
         $preview->dispose();
     }
 });
+
+it('draws an answer as the dialogue list and a decision as buttons, as the game does', function (?string $kind, bool $listed) {
+    $root = cutsceneProject();
+    $choice = ['type' => 'choice', 'prompt' => 'Go on?', 'options' => [
+        ['text' => 'Onward', 'then' => []],
+        ['text' => 'Stay', 'then' => []],
+    ]];
+    $definition = CutsceneHydration::cinematic(['id' => 'ask', 'name' => 'Ask'],
+        [$kind === null ? $choice : $choice + ['kind' => $kind]], $root);
+    $preview = CinematicPreviewSession::start($root, $definition, ['mapId' => 'harbour']);
+
+    try {
+        $preview->play();
+        $preview->tick(0.1);
+        $frame = implode("\n", array_map(TerminalText::stripAnsi(...), $preview->frame()));
+
+        expect($preview->waitDescription())->toContain('Choice')
+            ->and($frame)->toContain('Onward');
+        expect(str_contains($frame, '> Onward'))->toBe($listed);
+
+        $preview->confirm();
+        $preview->tick(0.1);
+        $preview->runToCompletion(5.0);
+        expect($preview->status())->toBe(CinematicPreviewSession::STATUS_COMPLETED);
+    } finally {
+        $preview->dispose();
+    }
+})->with([
+    'an answer to someone' => ['answer', true],
+    'a decision' => ['decision', false],
+    'an unmarked event choice, a decision' => [null, false],
+]);
