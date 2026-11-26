@@ -9,7 +9,11 @@ use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Engine\IO\SaveCompatibility\ContentMigrationResolution;
 use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
+use JsonException;
 use RuntimeException;
 use Throwable;
 
@@ -31,6 +35,86 @@ final class SaveManifestStep
 
     private function __construct()
     {
+    }
+
+    /** Protect a stable map ID before a move or deletion, using the sources checked again at commit. */
+    public static function protectMapRemoval(string $projectRoot, string $mapId, FileSetTransaction $transaction): void
+    {
+        $path = $projectRoot . '/' . self::PATH;
+        if (! is_file($path)) {
+            $transaction->expectSource($path, null);
+            return;
+        }
+
+        $source = file_get_contents($path);
+        if ($source === false) {
+            throw new MapSourceRefusal('Could not read the save compatibility manifest.');
+        }
+
+        $manifest = PhpDataFile::evaluateIsolated($path, $projectRoot);
+        $history = self::readPositionHistory($projectRoot, $manifest);
+        $protected = self::getProtectedPositions($projectRoot, $manifest, $history);
+        if (! empty($protected[$mapId])) {
+            throw new MapSourceRefusal("Retire {$mapId} before removing it. Existing saves can still load on this map.");
+        }
+
+        $transaction->expectSource($path, $source);
+        if ($history !== null) {
+            $transaction->expectSource($history['path'], $history['source']);
+        }
+    }
+
+    /**
+     * Reads the declared authoring snapshot. The bytes also identify the source
+     * used by a reviewed save or line edit.
+     *
+     * @return array{path: string, source: string}|null
+     */
+    public static function readPositionHistory(string $projectRoot, mixed $manifest): ?array
+    {
+        if (! is_array($manifest) || ! array_key_exists('positionHistoryFile', $manifest)) {
+            return null;
+        }
+
+        $filename = $manifest['positionHistoryFile'];
+        if (! is_string($filename) || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]*\.json\z/', $filename) !== 1) {
+            throw new RuntimeException('positionHistoryFile must name a JSON file in assets/Data.');
+        }
+        $directory = $projectRoot . '/assets/Data';
+        $path = $directory . '/' . $filename;
+        $resolvedDirectory = realpath($directory);
+        $resolvedPath = realpath($path);
+        if ($resolvedDirectory === false || $resolvedPath === false || dirname($resolvedPath) !== $resolvedDirectory || ! is_file($path)) {
+            throw new RuntimeException("The declared save position history $filename must exist in assets/Data.");
+        }
+        $source = file_get_contents($path);
+        if ($source === false) {
+            throw new RuntimeException("Could not read the declared save position history $filename.");
+        }
+
+        return ['path' => $path, 'source' => $source];
+    }
+
+    /**
+     * Positions that can exist in a production save, carried through the same edits as the loader.
+     *
+     * @param array{path: string, source: string}|null $history
+     * @return array<string, array<string, array{int, int}>>|null
+     */
+    public static function getProtectedPositions(string $projectRoot, mixed $manifest, ?array $history): ?array
+    {
+        if ($history === null || ! is_array($manifest)) {
+            return null;
+        }
+        try {
+            $layouts = json_decode($history['source'], true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException $failure) {
+            throw new RuntimeException(basename($history['path']) . ' contains invalid JSON.', previous: $failure);
+        }
+
+        return SaveCompatibilityManifest::fromArray(
+            SaveCompatibilityManifest::readProjectId($projectRoot), $manifest, self::PATH, ContentMigrationResolution::WHEN_REQUIRED,
+        )->projectSavePositions($layouts, basename($history['path']));
     }
 
     /**

@@ -34,7 +34,7 @@ spl_autoload_register(static function (string $class) use ($enumPath): void {
 
 try {
     $workspace = Ichiloto\Editor\ProjectWorkspace::fromProject($projectRoot);
-    $variant = Ichiloto\Editor\Database\RecordSchemaCatalog::eventCommandVariants()['consult_oracle'] ?? [];
+    $variant = $workspace->getRecordDatabase('common_events')?->schema->subList?->variants['consult_oracle'] ?? [];
     $field = array_find(is_array($variant) ? $variant : [], static fn($field): bool => $field->key === 'oracle');
     $issues = new Ichiloto\Editor\Validation\ProjectValidator()->validate($workspace);
     echo json_encode([

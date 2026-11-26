@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\ActionAnimationResolver;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 use Ichiloto\Engine\Entities\Skills\BasicSkill;
 use Ichiloto\Engine\Entities\Skills\MagicSkill;
@@ -20,8 +22,15 @@ final class AnimationReferenceValidator
     public function validate(ProjectWorkspace $workspace): array
     {
         $animations = $workspace->getRecordDatabase('animations')?->getRecords() ?? [];
-        $ids = array_map(static fn($animation): mixed => $animation->get('id'), $animations);
-        $names = array_map(static fn($animation): string => strval($animation->get('name')), $animations);
+        $library = ProjectCatalogs::createAnimationLibrary(array_values(array_map(
+            static fn($animation): mixed => $animation->toArray(),
+            $animations,
+        )));
+        $ids = array_map(static fn($animation): int => $animation->id, $library->load());
+        $summonActions = array_map(
+            static fn(SummonCutsceneDefinition $definition): ?string => $definition->linkedActionId,
+            $workspace->catalogs->loadSummons(),
+        );
         $issues = [];
 
         foreach ($workspace->getRecordDatabase('skills')?->getRecords() ?? [] as $record) {
@@ -38,19 +47,27 @@ final class AnimationReferenceValidator
                 continue;
             }
 
-            // A basic skill's effect follows the attacker's weapon role, and a
-            // summon plays its cutscene; neither is chosen by an animation name.
-            if ($skill instanceof BasicSkill) {
+            // Basic skills use the attacker's weapon. A linked summon has its own cutscene validation.
+            if ($skill instanceof BasicSkill || in_array(trim($skill->name), $summonActions, true)) {
                 continue;
             }
 
             $magicEffectType = $skill instanceof MagicSkill ? $skill->effectType : null;
-            $candidates = ActionAnimationResolver::getSkillCandidateNames($skill->name, $magicEffectType);
-            if (array_intersect($candidates, $names) !== []) {
+            [$skillName, $legacyDefault] = ActionAnimationResolver::getSkillCandidateNames($skill->name, $magicEffectType);
+            $role = ActionAnimationResolver::getSkillRole($skill);
+            $current = $library->findByRole($role);
+            $legacy = $library->findByName($skillName);
+            if ($legacy === null && $current === null) {
+                $legacy = $library->findByName($legacyDefault);
+            }
+
+            if ($legacy !== null && $legacy !== $current) {
                 $issues[] = Issue::warning(
                     $where,
-                    'Animation selection by name is deprecated.',
-                    'Choose an Animation in the picker to store its stable id; name fallback remains supported.',
+                    $current === null
+                        ? sprintf('The %s role has no playable animation. The legacy match was "%s".', $role, $legacy->name)
+                        : sprintf('The %s role selects "%s". The legacy match was "%s".', $role, $current->name, $legacy->name),
+                    'If this skill should use that animation, choose it in the Animation picker to store its id. For a shared default, assign the role to the intended animation.',
                 );
             }
         }
@@ -133,7 +150,7 @@ final class AnimationReferenceValidator
         return [Issue::warning(
             $where,
             'Its animationId does not identify an authored animation.',
-            'Choose a current Animation in the picker. Gameplay still works; an explicit missing id never falls back by name.',
+            'Choose a current Animation in the picker or clear the reference to use automatic selection.',
         )];
     }
 }

@@ -203,3 +203,21 @@ it('sets a map event condition\'s event as picked from its map', function () {
     $other->setMarker('C');
     expect($other->encoded())->toBe('switch:lamp');
 });
+
+it('chooses a visited map from the project and preserves the negated condition', function () {
+    if (WorldConditionType::tryFrom('map_visited') === null) {
+        $this->markTestSkipped('The installed Engine does not include saved map conditions.');
+    }
+
+    $workspace = ProjectWorkspace::fromProject(fixturePath('sample-project'));
+    $condition = conditionEditorOn('!map_visited:test-map');
+    $reference = $condition->nameReference();
+    $grammar = array_column(ConditionEditor::getGrammar(), null, 'type')['map_visited'];
+
+    expect($reference)->toBe(['label' => 'Visited Map', 'category' => 'maps'])
+        ->and($grammar)->toMatchArray(['label' => 'Visited Map', 'nameCategory' => 'maps', 'negatable' => true, 'extras' => []])
+        ->and(new Ichiloto\Editor\Database\ReferenceCatalog($workspace)->valuesFor($reference['category']))
+        ->toContain('test-map')
+        ->and($condition->rows())->toBe(['NOT Visited Map test-map'])
+        ->and($condition->encoded())->toBe('!map_visited:test-map');
+});

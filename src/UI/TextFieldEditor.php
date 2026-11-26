@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\UI;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\IO\Console\TerminalText;
+use Ichiloto\Engine\UI\Navigation\{ToolNavigationAction, ToolNavigationBindings};
 
 /**
  * The one inline edit buffer shared by the inspector and the Database
@@ -30,6 +31,10 @@ final class TextFieldEditor
      * The caret position within the buffer, in grapheme offsets.
      */
     public int $caret = 0;
+
+    public function __construct(private readonly ToolNavigationBindings $toolNavigation = new ToolNavigationBindings())
+    {
+    }
 
     /**
      * Begins an edit session over the given value with the caret at the end.
@@ -65,7 +70,7 @@ final class TextFieldEditor
      */
     public function handleKey(string $input, ?InputControl $control): TextFieldKeyResult
     {
-        if ($input === "\033") {
+        if ($this->toolNavigation->decodeAction($input) === ToolNavigationAction::CANCEL) {
             return TextFieldKeyResult::CANCELLED;
         }
 

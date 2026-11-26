@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes;
 
+use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Closure;
 use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
@@ -57,16 +59,16 @@ final class CutsceneLibrary
      */
     private array $databases = [];
 
-    private function __construct(public readonly string $projectRoot)
+    private function __construct(public readonly string $projectRoot, private readonly ScriptCommandCatalog $scriptCommands)
     {
     }
 
     /**
      * Discovers both forms under a project root.
      */
-    public static function fromProject(string $projectRoot): self
+    public static function fromProject(string $projectRoot, ?ScriptCommandCatalog $commands = null): self
     {
-        $library = new self(rtrim($projectRoot, '/'));
+        $library = new self(rtrim($projectRoot, '/'), $commands ?? ProjectScriptCommands::fromProject($projectRoot)->catalog);
 
         foreach (CutsceneType::cases() as $type) {
             $library->discover($type);
@@ -144,7 +146,7 @@ final class CutsceneLibrary
             $seenIds[$lower] = $entry;
 
             try {
-                $asset = CutsceneAsset::load($type, $folder, $this->projectRoot);
+                $asset = CutsceneAsset::load($type, $folder, $this->projectRoot, $this->scriptCommands);
             } catch (Throwable $throwable) {
                 $this->issues[$type->value][] = ['folder' => $entry, 'message' => $throwable->getMessage()];
 
@@ -363,7 +365,7 @@ final class CutsceneLibrary
     {
         $blank = $this->records($type)->schema->blank;
         $id = $this->freeId($type, $preferredId ?? strval($blank['id'] ?? ('new-' . $type->noun())));
-        $created = CutsceneAsset::create($type, $id, $this->rootFor($type), [...$blank, 'id' => $id], $this->projectRoot);
+        $created = CutsceneAsset::create($type, $id, $this->rootFor($type), [...$blank, 'id' => $id], $this->projectRoot, $this->scriptCommands);
         $this->adopt($created);
 
         return ['asset' => $created, 'command' => $this->createPresenceCommand(sprintf('Create %s', $type->noun()), $created, $restored)];
@@ -450,7 +452,7 @@ final class CutsceneLibrary
     public function schemaFor(CutsceneType $type, bool $graphical = false): RecordSchema
     {
         return match ($type) {
-            CutsceneType::CINEMATIC => \Ichiloto\Editor\Database\CutsceneSchemas::cinematics($graphical),
+            CutsceneType::CINEMATIC => \Ichiloto\Editor\Database\CutsceneSchemas::cinematics($graphical, $this->scriptCommands),
             CutsceneType::SUMMON => \Ichiloto\Editor\Database\CutsceneSchemas::summons($graphical),
             CutsceneType::EFFECT => \Ichiloto\Editor\Database\CutsceneSchemas::effects($graphical),
         };
@@ -491,7 +493,7 @@ final class CutsceneLibrary
                     throw new RuntimeException(sprintf('A new %s needs a stable id no other %s has.', $type->noun(), $type->noun()));
                 }
 
-                $asset = CutsceneAsset::create($type, $id, $this->rootFor($type), $entry, $this->projectRoot);
+                $asset = CutsceneAsset::create($type, $id, $this->rootFor($type), $entry, $this->projectRoot, $this->scriptCommands);
                 $byId[$id] = $asset;
             } else {
                 $asset->markDeleted(false);

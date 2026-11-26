@@ -55,6 +55,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
 use Ichiloto\Engine\Animations\Timelines\EffectStraightFlightFallback;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
+use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordChange;
@@ -130,7 +131,6 @@ use Ichiloto\Editor\Review\CinematicCaptureWriter;
 use Ichiloto\Editor\Review\SceneFrameRaster;
 use Ichiloto\Editor\Review\FieldStillRaster;
 use Ichiloto\Editor\ProjectWorkspace;
-use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\SaveSet;
 use Ichiloto\Editor\Storage\SaveSetAdoptionFailure;
 use Ichiloto\Editor\Storage\SaveSetRefusal;
@@ -142,6 +142,7 @@ use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Editor\Validation\ProjectValidator;
 use Ichiloto\Editor\Validation\SaveCompatibilityValidator;
 use Ichiloto\Editor\Validation\Severity;
+use Ichiloto\Editor\Validation\SkitBackdropValidator;
 use Ichiloto\Engine\IO\Console\TerminalPresentationComposer;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
@@ -168,12 +169,12 @@ use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Stores\ItemStore;
 use Ichiloto\Engine\Util\Stores\EnemyStore;
 use Ichiloto\Engine\Battle\BattlePacing;
+use Ichiloto\Engine\Util\Config\PlaySettings;
 use Ichiloto\Engine\Entities\Troop;
 use Ichiloto\Engine\Scenes\Battle\BattleConfig;
 use Ichiloto\Editor\Cutscenes\Preview\SummonBattlePreview;
 use Ichiloto\Editor\Cutscenes\Preview\EffectBattlePreview;
 use Ichiloto\Editor\Cutscenes\CutsceneHydration;
-use Ichiloto\Engine\Animations\Animation;
 use Ichiloto\Engine\Animations\AnimationLibrary;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Core\Vector2;
@@ -197,6 +198,7 @@ use Ichiloto\Engine\Rendering\FieldViewport;
 use Ichiloto\Engine\Rendering\Runtime\RendererRuntimeConfig;
 use Ichiloto\Engine\Field\Reachability\ProjectReachability;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
+use Ichiloto\Engine\IO\SaveCompatibility\SavePositionLayout;
 use RuntimeException;
 use Throwable;
 use WeakReference;
@@ -3198,6 +3200,7 @@ final class EditorSession
         $artRows = ['Asset' => 'asset', 'Sheetcolumns' => 'columns', 'Sheetrows' => 'rows', 'Fit' => 'fit', 'Attachment' => 'attachment', 'Pivot' => 'pivot',
             'Anchor' => 'anchor', 'Placementsubject' => 'subject', 'Placementattachment' => 'point',
             ProjectRecordDatabase::getFieldToken(CutsceneSchemas::getGroundSpanTipKey()) => 'groundSpanTip',
+            ProjectRecordDatabase::getFieldToken(CutsceneSchemas::getGroundSpanCasterPointKey()) => 'groundSpanCasterPoint',
             ProjectRecordDatabase::getFieldToken(CutsceneSchemas::getGroundSpanOrientationKey()) => 'groundSpanOrientation'];
         $artPattern = '/^track(\d+)(' . implode('|', array_map(static fn(string $token): string => preg_quote($token, '/'), array_keys($artRows))) . ')$/';
         foreach ($this->readDatabaseRecord($category, $index, ['tracks'])['rows'] as $row) {
@@ -3212,7 +3215,7 @@ final class EditorSession
                 // anchor: a battler point, or on the stage a subject and a named point on it.
                 $art = $artRows[$match[2]];
                 $tracks[(int) $match[1]]['art'][$art] = in_array($art, ['columns', 'rows'], true) ? max(1, (int) $row['value']) : (string) ($row['raw'] ?? $row['value']);
-                if (in_array($art, ['fit', 'attachment', 'pivot', 'groundSpanTip', 'groundSpanOrientation', 'subject', 'point'], true)) {
+                if (in_array($art, ['fit', 'attachment', 'pivot', 'groundSpanTip', 'groundSpanCasterPoint', 'groundSpanOrientation', 'subject', 'point'], true)) {
                     $tracks[(int) $match[1]]['art'][$art . 'Key'] = $row['key'];
                 }
                 if (in_array($art, ['fit', 'attachment', 'groundSpanOrientation'], true)) {
@@ -3428,7 +3431,7 @@ final class EditorSession
      * @return array{frame: int, totalFrames: int, fps: int, lines: list<string>, terminalCanvas: array<string, mixed>, cues: list<array<string, mixed>>}
      * @throws SessionRefusal When the record is not a summon or effect, or its timeline does not compile.
      */
-    public function readCutscenePreview(string $category, int $index, int $frame, int $width, int $height): array
+    public function readCutscenePreview(string $category, int $index, int $frame, int $width, int $height, bool $reducedMotion = false): array
     {
         $asset = $this->requireTimelineCutscene($category, $index);
         $stageContext = $this->findStageContext($asset);
@@ -3455,7 +3458,8 @@ final class EditorSession
                 $frame = max(0, min($requestedFrame, $preview->totalFrames() - 1));
                 $stageCanvas = $stageContext->createStage(EffectPresentation::GRAPHICAL)
                     ->renderCanvas($graphical, $this->workspace->projectRoot . '/assets', $frame,
-                        (int) $graphical->defaults['stage']['canvas']['width'], (int) $graphical->defaults['stage']['canvas']['height'])?->toArray();
+                        (int) $graphical->defaults['stage']['canvas']['width'], (int) $graphical->defaults['stage']['canvas']['height'],
+                        $reducedMotion)?->toArray();
             } catch (Throwable $failure) {
                 // A graphical failure is visible in its tab, never a field
                 // fallback or a dependency of independent Terminal playback.
@@ -3504,7 +3508,8 @@ final class EditorSession
         try {
             $this->cinematicPreview = CinematicPreviewSession::start($this->workspace->projectRoot, $definition, [
                 'mapId' => $origin['mapId'], 'x' => $origin['x'], 'y' => $origin['y'], 'width' => max(20, $width), 'height' => max(8, $height),
-            ]);
+            ], playbackGrid: new RendererGridConfig(BattleScreen::WIDTH, BattleScreen::HEIGHT,
+                RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT));
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
         }
@@ -3829,7 +3834,8 @@ final class EditorSession
      * @throws SessionRefusal When the summon does not compile, the battle cannot be set up or the frame is outside the command.
      */
     public function readSummonBattlePreview(int $index, int $frame, bool $reducedMotion = false,
-        EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null): array
+        EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null,
+        bool $consumerAdmitsCanvasImages = false): array
     {
         $asset = $this->requireTimelineCutscene(CutsceneType::SUMMON->getRecordCategory(), $index);
         $graphic = $presentation === EffectPresentation::GRAPHICAL;
@@ -3853,13 +3859,14 @@ final class EditorSession
             $catalog = $graphic ? $this->requireBattleLayoutCatalog('preview summons on') : null;
             $this->summonBattlePreviews[$presentation->value] = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
                 fn(): SummonBattlePreview => $this->createSummonBattlePreview($definition, $graphical, $terminal, $entry, $troop,
-                    BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation))];
+                    $battleUi, $catalog, $presentation))];
         }
         $preview = $this->summonBattlePreviews[$presentation->value]['preview'];
         // A frame of the summon's own timeline is drawn where the battle plays it.
         $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame);
         try {
-            $read = $preview->readFrame(max(0, min($frame, $preview->totalFrames - 1)), $reducedMotion);
+            $read = $preview->readFrame(max(0, min($frame, $preview->totalFrames - 1)), $reducedMotion,
+                $graphic && $consumerAdmitsCanvasImages);
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
         }
@@ -3878,14 +3885,16 @@ final class EditorSession
      * @throws SessionRefusal When the battle cannot be set up or the summon cannot be cast in it.
      */
     private function createSummonBattlePreview(SummonCutsceneDefinition $definition, ?SummonCompiledCutscene $graphical,
-        SummonCompiledCutscene $terminal, array $entry, array $troop, BattlePacing $pacing, ?BattlePresentationCatalog $catalog,
+        SummonCompiledCutscene $terminal, array $entry, array $troop, array $battleUi, ?BattlePresentationCatalog $catalog,
         EffectPresentation $presentation): SummonBattlePreview
     {
         try {
             [$battle, $skills] = $this->createPreviewBattle($entry, $troop);
 
-            return SummonBattlePreview::create($definition, $graphical, $terminal, $battle, $skills, $pacing, $catalog,
-                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation);
+            return SummonBattlePreview::create($definition, $graphical, $terminal, $battle, $skills,
+                BattlePacing::fromBattleUiConfig($battleUi), $catalog,
+                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation,
+                new PlaySettings(['ui' => ['battle' => $battleUi]]));
         } catch (SessionRefusal $refusal) {
             throw $refusal;
         } catch (Throwable $failure) {
@@ -3923,7 +3932,10 @@ final class EditorSession
         EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null, int $binding = 0,
         bool $imageRotation = false, ?int $targetIndex = null, bool $coverageDabs = false, bool $textureStrip = false,
         bool $regionBudget = false, bool $canvasGroups = false, bool $clipOpacity = false, bool $groupColor = false,
-        bool $indicatorImagePath = false, bool $groupScale = false, bool $compositing = true): array
+        bool $indicatorImagePath = false, bool $groupScale = false, bool $compositing = true,
+        bool $textureStripClip = false, bool $compositeBudget = false, bool $imageFlip = false,
+        bool $imageAlphaFlip = false, bool $imageTone = false, bool $imageBottomFade = false,
+        bool $consumerAdmitsCanvasImages = false): array
     {
         $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
         $effects = $this->workspace->cutscenes?->assets(CutsceneType::EFFECT) ?? [];
@@ -3940,14 +3952,15 @@ final class EditorSession
             $catalog = $graphic ? $this->requireBattleLayoutCatalog('preview effects on') : null;
             $this->effectBattlePreviews[$presentation->value] = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
                 fn(): EffectBattlePreview => $this->createEffectBattlePreview($asset->id, $animations, $entry, $troop,
-                    BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation, $binding, $reducedMotion, $targetIndex))];
+                    $battleUi, $catalog, $presentation, $binding, $reducedMotion, $targetIndex))];
         }
         $preview = $this->effectBattlePreviews[$presentation->value]['preview'];
         try {
             $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame, $reducedMotion);
             $totalFrames = $preview->getTotalFrames($reducedMotion);
             $read = $preview->readFrame(max(0, min($frame, $totalFrames - 1)), $reducedMotion, $imageRotation, $coverageDabs, $textureStrip, $regionBudget,
-                $canvasGroups, $clipOpacity, $groupColor, $indicatorImagePath, $groupScale, $compositing);
+                $canvasGroups, $clipOpacity, $groupColor, $indicatorImagePath, $groupScale, $compositing, $textureStripClip, $compositeBudget,
+                $imageFlip, $imageAlphaFlip, $imageTone, $imageBottomFade, $graphic && $consumerAdmitsCanvasImages);
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
         }
@@ -3985,7 +3998,7 @@ final class EditorSession
         $animations = array_values(array_map(static fn($record): mixed => $record->toArray(), $this->requireRecordDatabase('animations')->getRecords()));
         $entry = $this->readBattleTestEntry();
         $config = $this->workspace->config?->getRecord('ui.battle')->get('value');
-        $pacing = BattlePacing::fromBattleUiConfig(is_array($config) ? $config : []);
+        $battleUi = is_array($config) ? $config : [];
         $catalog = $this->requireBattleLayoutCatalog('check flight routes on');
         $root = $this->workspace->projectRoot;
         $compile = function (string $id, EffectPresentation $presentation) use ($asset, $probe, $root): CompiledEffectTimeline {
@@ -3997,7 +4010,7 @@ final class EditorSession
 
             return $effect->compiledEffect($presentation, true);
         };
-        $library = self::createAnimationLibrary($animations);
+        $library = ProjectCatalogs::createAnimationLibrary($animations);
 
         $issues = [];
         foreach ($this->requireRecordDatabase('troops')->getRecords() as $record) {
@@ -4007,7 +4020,7 @@ final class EditorSession
                 continue;
             }
             $issues = [...$issues, ...ProjectDirectoryContext::run($root, fn(): array => $this->checkTroopFlightRoutes(
-                $asset->id, $authored, ['name' => $name, 'data' => $data], $entry, $library, $pacing, $catalog, $compile))];
+                $asset->id, $authored, ['name' => $name, 'data' => $data], $entry, $library, $battleUi, $catalog, $compile))];
         }
 
         // Target choices that select the same targets meet the same route once.
@@ -4020,14 +4033,17 @@ final class EditorSession
      * @return list<Issue>
      */
     private function checkTroopFlightRoutes(string $effectId, array $authored, array $troop, array $entry, AnimationLibrary $library,
-        BattlePacing $pacing, BattlePresentationCatalog $catalog, Closure $compile): array
+        array $battleUi, BattlePresentationCatalog $catalog, Closure $compile): array
     {
         $assets = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
-        $create = function (int $binding, ?int $target) use ($effectId, $troop, $entry, $library, $pacing, $catalog, $compile, $assets): EffectBattlePreview {
+        $pacing = BattlePacing::fromBattleUiConfig($battleUi);
+        $configuration = new PlaySettings(['ui' => ['battle' => $battleUi]]);
+        $create = function (int $binding, ?int $target) use ($effectId, $troop, $entry, $library, $pacing,
+            $catalog, $compile, $assets, $configuration): EffectBattlePreview {
             [$battle, $skills] = $this->createPreviewBattle($entry, $troop);
 
             return EffectBattlePreview::create($effectId, $battle, $skills, $library, $pacing, $catalog, $assets,
-                EffectPresentation::GRAPHICAL, $compile, $binding, false, $target);
+                EffectPresentation::GRAPHICAL, $compile, $binding, false, $target, $configuration);
         };
         try {
             $first = $create(0, null);
@@ -4111,11 +4127,11 @@ final class EditorSession
      * @param array{name: string, data: array<string, mixed>} $troop
      * @throws SessionRefusal When the battle cannot be set up or no action of it plays the effect.
      */
-    private function createEffectBattlePreview(string $effectId, array $animations, array $entry, array $troop, BattlePacing $pacing,
+    private function createEffectBattlePreview(string $effectId, array $animations, array $entry, array $troop, array $battleUi,
         ?BattlePresentationCatalog $catalog, EffectPresentation $presentation, int $binding, bool $reducedMotion,
         ?int $targetIndex): EffectBattlePreview
     {
-        $library = self::createAnimationLibrary($animations);
+        $library = ProjectCatalogs::createAnimationLibrary($animations);
         $compile = function (string $id, EffectPresentation $presentation): CompiledEffectTimeline {
             $effect = $this->workspace->cutscenes?->find(CutsceneType::EFFECT, $id)
                 ?? throw new SessionRefusal(sprintf('The animation plays the effect %s, which does not exist.', $id));
@@ -4125,30 +4141,15 @@ final class EditorSession
         try {
             [$battle, $skills] = $this->createPreviewBattle($entry, $troop);
 
-            return EffectBattlePreview::create($effectId, $battle, $skills, $library, $pacing, $catalog,
-                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation, $compile, $binding, $reducedMotion, $targetIndex);
+            return EffectBattlePreview::create($effectId, $battle, $skills, $library, BattlePacing::fromBattleUiConfig($battleUi), $catalog,
+                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation, $compile, $binding, $reducedMotion,
+                $targetIndex, new PlaySettings(['ui' => ['battle' => $battleUi]]));
         } catch (SessionRefusal $refusal) {
             throw $refusal;
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be previewed in battle: %s', $effectId, $failure->getMessage()), previous: $failure);
         }
     }
-    /**
-     * The animations as authored now; an entry the Engine would not read plays nothing, as in battle.
-     *
-     * @param list<mixed> $animations The animation records as they stand.
-     */
-    private static function createAnimationLibrary(array $animations): AnimationLibrary
-    {
-        return AnimationLibrary::createFromAnimations(array_values(array_filter(array_map(static function (mixed $data): ?Animation {
-            try {
-                return is_array($data) ? Animation::fromArray($data) : null;
-            } catch (Throwable) {
-                return null;
-            }
-        }, $animations))));
-    }
-
     /**
      * The party inputs common to effect and summon previews. Database identity
      * also changes when a source transaction reloads records with fresh versions.
@@ -4194,7 +4195,10 @@ final class EditorSession
         try {
             ConfigStore::put(EnemyStore::class, new EnemyStore());
 
-            return [new BattleConfig($party, Troop::fromArray($troop['data']), settings: $setup->getBattleSettings()), $skills];
+            $abilities = $this->workspace->getWorldAbilities();
+            $abilities->assertReadable();
+
+            return [new BattleConfig($party, Troop::fromArray($troop['data']), settings: $setup->getBattleSettings($abilities->catalog)), $skills];
         } finally {
             $previousEnemies === null ? ConfigStore::remove(EnemyStore::class) : ConfigStore::put(EnemyStore::class, $previousEnemies);
         }
@@ -4442,7 +4446,7 @@ final class EditorSession
         }
         if (($owner['kind'] ?? '') === 'npc') {
             $map = $this->requireMap($mapId ?? throw new SessionRefusal('An NPC route reference requires its map.'));
-            $database = (new NpcInspector($map, graphical: true))->records();
+            $database = (new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map)))->records();
         } else {
             $category = is_string($owner['category'] ?? null) ? $owner['category'] : '';
             $database = $this->requireRecordDatabase($category);
@@ -6644,49 +6648,40 @@ final class EditorSession
     {
         $this->refuseDuringChangeSet('Saving a map');
         $map = $this->requireMap($mapId);
+        if ($answer === 'cancel') {
+            return ['status' => 'cancelled', 'map' => $mapId, 'saved' => null];
+        }
+        if ($answer !== null && $answer !== 'write') {
+            throw new SessionRefusal(sprintf('Answer write or cancel, not %s.', $answer));
+        }
         try {
             $relocation = SaveRelocationPlanner::plan($map, $this->workspace->projectRoot);
         } catch (RuntimeException $failure) {
             throw new SessionRefusal($failure->getMessage(), previous: $failure);
         }
-        if ($relocation !== null) {
+        if ($answer === 'write' && ($relocation === null || $confirm === null || ! hash_equals($relocation->getFingerprint(), $confirm))) {
+            throw new SessionRefusal('The map or the save manifest changed since the save relocations were shown, so nothing was written. Review them again.');
+        }
+        if ($relocation !== null && $answer === null) {
             // Saves standing where the map is now solid or taken by an NPC move with the save, once the author has seen where.
-            if ($answer === null) {
-                return ['status' => 'question', 'map' => $mapId, 'question' => sprintf('Save %s and move existing saves off cells it makes solid or puts an NPC on?', $mapId),
-                    'answers' => [
-                        ['key' => 'cancel', 'label' => 'Cancel', 'description' => 'Save nothing.'],
-                        ['key' => 'write', 'label' => 'Save and move saves', 'description' => sprintf('Saves the map and writes %s. Undo removes the save step.', SaveManifestStep::PATH)],
-                    ],
-                    'relocations' => $relocation->relocations, 'moves' => $relocation->describeMoves(), 'contentVersion' => $relocation->contentVersion,
-                    'confirm' => $relocation->getFingerprint()];
-            }
-            if ($answer === 'cancel') {
-                return ['status' => 'cancelled', 'map' => $mapId, 'saved' => null];
-            }
-            if ($answer !== 'write') {
-                throw new SessionRefusal(sprintf('Answer write or cancel, not %s.', $answer));
-            }
-            if ($confirm === null || ! hash_equals($relocation->getFingerprint(), $confirm)) {
-                throw new SessionRefusal('The map or the save manifest changed since the save relocations were shown, so nothing was written. Review them again.');
-            }
+            return ['status' => 'question', 'map' => $mapId, 'question' => sprintf('Save %s and move existing saves off cells it makes solid or puts an NPC on?', $mapId),
+                'answers' => [
+                    ['key' => 'cancel', 'label' => 'Cancel', 'description' => 'Save nothing.'],
+                    ['key' => 'write', 'label' => 'Save and move saves', 'description' => sprintf('Saves the map and writes %s together.', SaveManifestStep::PATH)],
+                ],
+                'relocations' => $relocation->relocations, 'moves' => $relocation->describeMoves(), 'contentVersion' => $relocation->contentVersion,
+                'confirm' => $relocation->getFingerprint()];
         }
         $issues = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace), $this->workspace->config);
         $failures = [];
-        $step = $relocation?->apply();
-
         try {
-            $saved = $map->save(function (string ...$paths) use (&$failures): void {
+            $saved = WorkspaceSave::saveMap($this->workspace, $map, $relocation, function (string ...$paths) use (&$failures): void {
                 if ($this->backups->isEnabled() && $paths !== []) {
                     $failures = $this->backups->backup(...$paths)['failed'];
                 }
             });
-        } catch (MapSourceRefusal|FileSetTransactionFailure $refusal) {
-            // The map is not saved, so neither is the step that moves saves for it.
-            $relocation?->revert();
+        } catch (MapSourceRefusal|RuntimeException $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
-        }
-        if ($step !== null) {
-            $this->history->record($step);
         }
 
         return ['saved' => $saved, 'warnings' => MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING)),
@@ -7193,9 +7188,8 @@ final class EditorSession
      * @return array{issues: list<array<string, mixed>>, errors: int, warnings: int}
      */
     /**
-     * Checks one map as saving it does ({@see MapValidator}), unsaved edits
-     * included, without the rest of the project: what an editor shows beside
-     * the map. Each issue names the cells it is about, when it names any.
+     * Shows the open map's save checks, recorded save positions and skit backdrop warnings,
+     * including unsaved edits. Issues include the cells they name, when any.
      *
      * @return array{map: string, revision: int, issues: list<array<string, mixed>>, errors: int, warnings: int}
      * @throws SessionRefusal When the map is unknown.
@@ -7203,7 +7197,12 @@ final class EditorSession
     public function validateMap(string $mapId): array
     {
         $map = $this->requireMap($mapId);
-        $issues = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace), $this->workspace->config);
+        $issues = [
+            ...MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace), $this->workspace->config),
+            ...new SaveCompatibilityValidator()->validateRecordedMapPositions($this->workspace, $map),
+            ...array_filter(new SkitBackdropValidator()->validate($this->workspace),
+                static fn(Issue $issue): bool => $issue->affectsAnyMap([$mapId])),
+        ];
 
         return [
             'map' => $map->mapId,
@@ -7218,7 +7217,7 @@ final class EditorSession
     {
         $issues = new ProjectValidator()->validate($this->workspace);
         if ($mapIds !== null) {
-            $issues = array_values(array_filter($issues, static fn(Issue $issue): bool => in_array($issue->map, $mapIds, true)));
+            $issues = array_values(array_filter($issues, static fn(Issue $issue): bool => $issue->affectsAnyMap($mapIds)));
         }
 
         return [
@@ -7226,6 +7225,20 @@ final class EditorSession
             'errors' => count(MapValidator::selectSeverity($issues, Severity::ERROR)),
             'warnings' => count(MapValidator::selectSeverity($issues, Severity::WARNING)),
         ];
+    }
+
+    /**
+     * Captures the disk layout of a project build the author has selected for save compatibility.
+     *
+     * @return array{version: int, maps: array<string, list<array{int, int}>>}
+     */
+    public function captureSavePositionLayout(): array
+    {
+        if ($this->changeSet !== null || $this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal('Finish or undo pending edits before capturing the saved layout.');
+        }
+
+        return ProjectDirectoryContext::run($this->workspace->projectRoot, SavePositionLayout::captureFromProject(...));
     }
 
     /**
@@ -7550,8 +7563,8 @@ final class EditorSession
         $issues = new ProjectValidator()->validate($this->workspace);
         $before = array_fill_keys(array_map(self::identifyIssue(...), $changes['baseline']), true);
         $blocking = array_values(array_filter($issues, static fn(Issue $issue): bool => $issue->severity === Severity::ERROR
-            && (in_array($issue->map, $changed, true) || ! isset($before[self::identifyIssue($issue)]))));
-        $reported = array_values(array_filter($issues, static fn(Issue $issue): bool => in_array($issue->map, $changed, true)
+            && ($issue->affectsAnyMap($changed) || ! isset($before[self::identifyIssue($issue)]))));
+        $reported = array_values(array_filter($issues, static fn(Issue $issue): bool => $issue->affectsAnyMap($changed)
             || in_array($issue, $blocking, true)));
         $outcome = ['maps' => $changed, 'saved' => [], 'written' => [], 'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $reported),
             'blocking' => count($blocking), 'relocated' => [], 'backupFailures' => []];
@@ -7590,7 +7603,7 @@ final class EditorSession
         };
 
         try {
-            $saves = WorkspaceSave::prepareAll($this->workspace, $relocateSaves ? fn(Command $step) => $this->history->record($step) : null, $unrelocated,
+            $saves = WorkspaceSave::prepareAll($this->workspace, $relocateSaves, $unrelocated,
                 $changes['lines']);
             $written = SaveSet::commit($this->workspace->projectRoot, $saves, $backup);
         } catch (SaveSetAdoptionFailure $partial) {

@@ -65,6 +65,11 @@ ichiloto edit --no-tmux
 
 Press `?` anywhere for every shortcut the current context offers, and `Ctrl+P` for the command palette.
 
+Tab and Shift+Tab cycle the visible panes using the Engine's shared tool
+navigation profile. Escape closes or backs out of the current editor context;
+Ctrl+Q requests Quit and keeps the unsaved-change guard. The same profile drives
+Battle Test. Text capture and modal dialogs retain their existing routing.
+
 ## Documentation
 
 - [The manual](docs/manual.md) — the panel-by-panel reference, kept current by tests: a registered keybinding that is not documented fails the suite.

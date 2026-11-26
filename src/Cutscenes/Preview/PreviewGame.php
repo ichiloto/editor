@@ -24,8 +24,10 @@ final class PreviewGame extends Game
     /** The Engine's notice queue, delivering to the preview's screen. */
     public readonly PreviewNoticeManager $notices;
 
-    public function __construct(string $projectRoot)
-    {
+    public function __construct(
+        private readonly string $projectRoot,
+        private readonly ?PreviewConfig $projectConfiguration = null,
+    ) {
         $this->bindSaveManager(new SaveManager($this, compatibilityManifest: static fn() =>
             SaveCompatibilityManifest::fromProjectRoot($projectRoot, migrationResolution: ContentMigrationResolution::WHEN_REQUIRED),
             readOnly: true));
@@ -34,6 +36,16 @@ final class PreviewGame extends Game
         // This Game's own queue, bound before anything acquires one, as the Engine's per-Game contract asks.
         $this->notices = new PreviewNoticeManager($this);
         $this->bindModalManager($this->notices);
+    }
+
+    public function getProjectAssetRoot(): string
+    {
+        return $this->projectRoot . '/assets';
+    }
+
+    public function getProjectConfiguration(): ?PreviewConfig
+    {
+        return $this->projectConfiguration;
     }
 
     public function getSceneManager(): PreviewSceneManager

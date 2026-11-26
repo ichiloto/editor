@@ -126,7 +126,7 @@ final readonly class EffectPreviewStage
         $stage = CinematicStage::fromArray($timeline->defaults['stage'], $length, intval($timeline->defaults['restFrame'] ?? 0));
         $frame = max(0, min($frame, $length - 1));
 
-        return CinematicStagePresentation::compose($stage->getFrame($frame, $reducedMotion),
+        return CinematicStagePresentation::compose($stage->getFrame($frame, $reducedMotion, $timeline->defaults['reducedMotionSamples'] ?? null),
             EffectMotionScope::filterSegments($timeline->playbackSegments, $reducedMotion), $assetRoot, max(1, $width), max(1, $height));
     }
 

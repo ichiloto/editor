@@ -12,12 +12,11 @@ use Ichiloto\Editor\Storage\SourceSetPlan;
 use Ichiloto\Engine\Core\Rect;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\MapCollisionResolver;
-use Ichiloto\Engine\Field\MapTerrainKinds;
+use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Field\MapSourceReader;
 use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
 use Ichiloto\Engine\Field\Reachability\ProjectReachability;
 use RuntimeException;
-use Throwable;
 
 /**
  * Plans the save relocations a map save needs: when the unsaved map takes a
@@ -36,7 +35,9 @@ use Throwable;
  * compatibility manifest, for the author to review before the save writes
  * both. A project without a manifest, or a map not yet on disk, needs none.
  *
- * Planning compares saved sources with current map and catalogue state and writes nothing.
+ * When the project records its save-producing layouts, only recorded positions
+ * carried through the project's migrations can be relocation origins. The current maps
+ * and catalogue still determine which landings are usable. Planning writes nothing.
  *
  * @package Ichiloto\Editor\Maps
  */
@@ -78,6 +79,13 @@ final class SaveRelocationPlanner
         if (! is_file($manifestPath) || $maps === []) {
             return null;
         }
+        $source = (string) file_get_contents($manifestPath);
+        $manifest = PhpDataFile::evaluateIsolated($manifestPath, $root);
+        $historySource = SaveManifestStep::readPositionHistory($root, $manifest);
+        $history = SaveManifestStep::getProtectedPositions($root, $manifest, $historySource);
+        if ($history !== null && ! array_any($maps, static fn(ProjectMap $map): bool => isset($history[$map->mapId]))) {
+            return null;
+        }
         // The Engine reads world_ability conditions through the installed catalogue: install the current source's.
         ProjectWorldAbilities::installFromProject($root)->assertReadable();
         $reachability = ProjectReachability::analyze($root . '/assets');
@@ -91,8 +99,13 @@ final class SaveRelocationPlanner
         $relocations = [];
         $moving = [];
         foreach ($maps as $map) {
+            if ($history !== null && ! isset($history[$map->mapId])) {
+                continue;
+            }
             $report = $reachability->reports[$map->mapId] ?? null;
-            $found = $report === null ? [] : self::planMap($map, $root, $report, $changed->reports[$map->mapId] ?? null, $unsavedLines);
+            $found = $report === null ? [] : self::planMap(
+                $map, $root, $report, $changed->reports[$map->mapId] ?? null, $unsavedLines, $history === null ? null : $history[$map->mapId],
+            );
             if ($found !== []) {
                 $relocations = [...$relocations, ...$found];
                 $moving[] = $map->mapId;
@@ -103,22 +116,19 @@ final class SaveRelocationPlanner
         }
         $label = implode(', ', $moving);
 
-        $source = (string) file_get_contents($manifestPath);
-        try {
-            $manifest = PhpDataFile::evaluateIsolated($manifestPath, $root);
-        } catch (Throwable $failure) {
-            throw new RuntimeException(sprintf('%s could not be read, so the saves standing where %s is now taken cannot be moved: %s',
-                SaveManifestStep::PATH, $label, $failure->getMessage()), previous: $failure);
-        }
         $next = SaveManifestStep::append($source, $manifest, ['relocations' => $relocations]);
         if (is_string($next)) {
             throw new RuntimeException(sprintf('%s cannot take the save relocations %s needs: %s. Add the step %s by hand.',
                 SaveManifestStep::PATH, $label, $next, var_export(SaveManifestStep::describe($manifest, ['relocations' => $relocations]), true)));
         }
 
-        $sources = new SourceSetPlan($root, [$manifestPath => $source], [$manifestPath => $source], [$manifestPath => $next['source']],
+        $watched = [$manifestPath => $source];
+        if ($historySource !== null) {
+            $watched[$historySource['path']] = $historySource['source'];
+        }
+        $sources = new SourceSetPlan($root, $watched, [$manifestPath => $source], [$manifestPath => $next['source']],
             [$manifestPath => PhpDataFile::getComparableValue($manifest)], [$manifestPath => PhpDataFile::getComparableValue($next['value'])],
-            static fn(): array => [$manifestPath],
+            static fn(): array => array_keys($watched),
             static fn(string $path, string $staged): mixed => PhpDataFile::getComparableValue(PhpDataFile::evaluateIsolated($staged, $root)),
             'save relocations', 'Save compatibility manifest');
 
@@ -126,18 +136,18 @@ final class SaveRelocationPlanner
     }
 
     /**
-     * One map's relocations: saves may stand where the player reaches today,
-     * and land where the player reaches once the map is saved.
+     * One map's relocations. The proposed map decides where saves can land.
      *
+     * @param array<string, array{int, int}>|null $history Known carried positions, when the project records them.
      * @return list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>
      */
     private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report, ?MapReachabilityReport $changed,
-        UnsavedMapLines $unsavedLines): array
+        UnsavedMapLines $unsavedLines, ?array $history): array
     {
         $grid = $map->getResolvedCollisionMap();
         // A map the player reaches nowhere today, such as one made in this change and not yet joined to the world,
         // holds no save a relocation could place.
-        if (! $report->isAnyReachable(new Rect(0, 0, max(1, $map->getWidth()), max(1, $map->getHeight())))) {
+        if ($history === null && ! $report->isAnyReachable(new Rect(0, 0, max(1, $map->getWidth()), max(1, $map->getHeight())))) {
             return [];
         }
         // Landings are judged on the map as the change leaves them: a pocket it walls off is no landing.
@@ -150,7 +160,7 @@ final class SaveRelocationPlanner
         $arrived = array_diff_key($npcs, SaveLandingCells::readNpcCells(self::readSavedNpcs($root, $map->mapId)));
         // Any cell walkable on disk may hold a save, even one no route reaches today: an older layout may have
         // reached it, and a save made there must never load inside what now takes it.
-        $walkable = self::readSavedWalkableCells($root, $map->mapId);
+        $walkable = $history === null ? self::readSavedWalkableCells($root, $map->mapId) : [];
         // An event now covering a cell no event covered on disk, such as a door moved there, would start under a save.
         $covered = $cells->getNewEventCells();
         $blocked = [];
@@ -163,7 +173,10 @@ final class SaveRelocationPlanner
                 $taken = CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]) || isset($covered["{$x},{$y}"]);
                 // Floor the player reaches today and the change walls off: a save there would load with no way out.
                 $cutOff = $changed !== null && $report->isReachable($x, $y) && ! $changed->isReachable($x, $y);
-                if (($report->isReachable($x, $y) || isset($walkable["{$x},{$y}"])) && ($taken || $cutOff)) {
+                $occupiedBySave = $history === null
+                    ? $report->isReachable($x, $y) || isset($walkable["{$x},{$y}"])
+                    : isset($history["{$x},{$y}"]);
+                if ($occupiedBySave && ($taken || $cutOff)) {
                     $blocked["{$x},{$y}"] = [$x, $y];
                 }
             }
@@ -177,7 +190,7 @@ final class SaveRelocationPlanner
         $groups = [];
         foreach ($blocked as [$x, $y]) {
             $landing = self::findLanding($x, $y, $passable, $canLand, $grid);
-            if ($landing === null && ! $report->isReachable($x, $y)) {
+            if ($landing === null && $history === null && ! $report->isReachable($x, $y)) {
                 // A map the player reaches nowhere today holds no save a relocation could place.
                 continue;
             }
@@ -231,22 +244,22 @@ final class SaveRelocationPlanner
 
     /**
      * The cells of the map on disk that a player could stand on, by `x,y`:
-     * walkable by its saved collision, reachable or not. None when the
-     * project has no readable collision dictionary.
+     * walkable by its saved collision, reachable or not. Maps with physical
+     * occupancy own their collision and have no need for a glyph dictionary.
      *
      * @return array<string, true>
      */
     private static function readSavedWalkableCells(string $root, string $mapId): array
     {
-        try {
-            $dictionary = MapSourceReader::loadCollisionDictionary($root . '/assets/Maps/collisions.php');
-        } catch (Throwable) {
-            $dictionary = [];
-        }
-        $source = MapSourceReader::readFiles(MapSourceReader::resolvePaths($root . '/assets/Maps', $mapId));
+        $assetRoot = $root . '/assets';
+        $mapsRoot = $assetRoot . '/Maps';
+        $source = MapSourceReader::readFiles(MapSourceReader::resolvePaths($mapsRoot, $mapId));
+        $dictionary = array_key_exists(MapPhysicalOccupancy::DATA_KEY, $source['data'])
+            ? []
+            : MapSourceReader::loadCollisionDictionary($mapsRoot . '/collisions.php');
+        $grid = MapCollisionResolver::resolveFromAssets($assetRoot, $source['layers'], $source['data'], $dictionary)->collisionGrid;
         $walkable = [];
-        $kinds = MapTerrainKinds::loadForMap($root . '/assets', $source['data']);
-        foreach (MapCollisionResolver::resolveMap($source['layers'], $source['data'], $dictionary, $kinds)->collisionGrid as $y => $row) {
+        foreach ($grid as $y => $row) {
             foreach ($row as $x => $value) {
                 if (! CollisionType::from($value)->blocksMovement()) {
                     $walkable["{$x},{$y}"] = true;

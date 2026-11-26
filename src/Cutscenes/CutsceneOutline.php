@@ -95,6 +95,7 @@ final class CutsceneOutline
                     'text' => sprintf('f%d +%d  %s', $frame, $duration, match (true) {
                         ($track['type'] ?? null) === CutsceneSchemas::FIELD_MOTION_TRACK => self::describeMotionSample($keyframe),
                         ($track['type'] ?? null) === CutsceneSchemas::BATTLER_MOTION_TRACK => self::describeMotionSample($keyframe, $track),
+                        ($track['type'] ?? null) === CutsceneSchemas::BATTLER_REACTION_TRACK => strval($track['role'] ?? 'Choose reaction pose'),
                         $content !== '' => $content,
                         isset($keyframe['assetId']) => 'asset ' . strval($keyframe['assetId']),
                         isset($keyframe['sourceFrame']) => self::describeImageKeyframe($keyframe),

@@ -4,13 +4,18 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use InvalidArgumentException;
 use Ichiloto\Engine\Field\NpcPages;
 use Ichiloto\Editor\Database\InventoryCatalog;
+use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Maps\SaveManifestStep;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Exceptions\InvalidSaveCompatibilityManifestException;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
 use Ichiloto\Engine\IO\SaveCompatibility\MapRetirement;
@@ -86,6 +91,92 @@ final class SaveCompatibilityValidator
         )];
         $issues = [...$issues, ...$this->checkMigrations($workspace, $manifest['migrations'] ?? null, $version,
             is_array($manifest['aliases']['maps'] ?? null) ? $manifest['aliases']['maps'] : [])];
+
+        if ($issues === [] && array_key_exists('positionHistoryFile', $manifest)) {
+            try {
+                $issues = $this->checkRecordedLandings(
+                    array_column($workspace->maps, null, 'mapId'),
+                    $this->getRecordedLandings($workspace, $manifest),
+                );
+            } catch (Throwable $failure) {
+                $issues[] = Issue::error(self::WHERE . ' positionHistoryFile', $failure->getMessage());
+            }
+        }
+
+        return $issues;
+    }
+
+    /** @return list<Issue> Saved-position issues for the map as the workspace holds it. */
+    public function validateRecordedMapPositions(ProjectWorkspace $workspace, ProjectMap $map): array
+    {
+        $path = $workspace->projectRoot . '/' . self::WHERE;
+        if (! is_file($path)) {
+            return [];
+        }
+
+        try {
+            $manifest = PhpDataFile::evaluateIsolated($path, $workspace->projectRoot);
+            if (! is_array($manifest)) {
+                throw new InvalidArgumentException('The manifest must return an array.');
+            }
+
+            $maps = [$map->mapId => $map];
+
+            return $this->checkRecordedLandings($maps, array_intersect_key($this->getRecordedLandings($workspace, $manifest), $maps));
+        } catch (Throwable $failure) {
+            return Issue::attributeToMap([Issue::error(self::WHERE, $failure->getMessage())], $map->mapId);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $manifest
+     * @return array<string, array<string, array{int, int}>>
+     */
+    private function getRecordedLandings(ProjectWorkspace $workspace, array $manifest): array
+    {
+        $history = SaveManifestStep::readPositionHistory($workspace->projectRoot, $manifest);
+
+        return SaveManifestStep::getProtectedPositions($workspace->projectRoot, $manifest, $history) ?? [];
+    }
+
+    /**
+     * @param array<string, ProjectMap> $maps
+     * @param array<string, array<string, array{int, int}>> $protected
+     * @return list<Issue>
+     */
+    private function checkRecordedLandings(array $maps, array $protected): array
+    {
+        $where = self::WHERE . ' positionHistoryFile';
+        $issues = [];
+
+        foreach ($protected as $mapId => $cells) {
+            $map = $maps[$mapId] ?? null;
+            if ($map === null) {
+                $issues[] = new Issue(Severity::ERROR, $where, sprintf('Recorded saves still load on the missing map "%s".', $mapId),
+                    'Restore the map or retire it into a map that exists.', 'save.position.missing-map', (string) $mapId);
+                continue;
+            }
+
+            try {
+                $collision = $map->getResolvedCollisionMap();
+            } catch (MapSourceRefusal|InvalidArgumentException) {
+                continue; // The map validator reports unreadable collision sources.
+            }
+
+            $blocked = [];
+            foreach ($cells as [$x, $y]) {
+                if (!isset($collision[$y][$x]) || CollisionType::from($collision[$y][$x])->blocksMovement()) {
+                    $blocked[] = [$x, $y];
+                }
+            }
+
+            if ($blocked !== []) {
+                [$x, $y] = $blocked[0];
+                $issues[] = new Issue(Severity::ERROR, $where,
+                    sprintf('Recorded saves can load onto blocked or missing floor in "%s" at (%d, %d).', $mapId, $x, $y),
+                    'Restore walkable floor or add a save migration to a walkable cell.', 'save.position.blocked', (string) $mapId, $blocked);
+            }
+        }
 
         return $issues;
     }

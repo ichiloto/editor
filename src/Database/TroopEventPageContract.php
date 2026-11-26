@@ -9,6 +9,7 @@ use Ichiloto\Engine\Battle\Events\BattleEventPage;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use InvalidArgumentException;
 
 /**
@@ -22,7 +23,7 @@ final class TroopEventPageContract
      * @param array<array-key, mixed> $troop The troop as it would be saved.
      * @return string|null Why the Engine would refuse it, or null when it reads.
      */
-    public static function findProblem(array $troop): ?string
+    public static function findProblem(array $troop, ?ScriptCommandCatalog $commands = null): ?string
     {
         $where = sprintf('Data/troops.php troop "%s"', is_scalar($troop['name'] ?? null) ? strval($troop['name']) : '(unnamed)');
         $members = is_array($troop['enemies'] ?? null) ? array_values($troop['enemies']) : [];
@@ -35,7 +36,7 @@ final class TroopEventPageContract
         }
 
         try {
-            BattleEventPage::readPages($troop['events'] ?? [], $where, count($members), ScriptCommandRegistry::getCatalog());
+            BattleEventPage::readPages($troop['events'] ?? [], $where, count($members), $commands ?? ScriptCommandRegistry::getCatalog());
         } catch (InvalidArgumentException $problem) {
             return $problem->getMessage();
         }
@@ -48,10 +49,10 @@ final class TroopEventPageContract
      *
      * @param array<array-key, mixed> $whole The troops, as they would be saved.
      */
-    public static function checkTroops(array $whole, string $projectRoot = ''): ?string
+    public static function checkTroops(array $whole, string $projectRoot = '', ?ScriptCommandCatalog $commands = null): ?string
     {
         foreach ($whole as $troop) {
-            if (is_array($troop) && ($problem = self::findProblem($troop)) !== null) {
+            if (is_array($troop) && ($problem = self::findProblem($troop, $commands)) !== null) {
                 return $problem;
             }
         }
@@ -69,12 +70,13 @@ final class TroopEventPageContract
      * @return array<string, mixed> The troop with its pages renumbered.
      * @throws RecordRefusal When a page names a removed member.
      */
-    public static function remapMembers(array $troop, Closure $map): array
+    public static function remapMembers(array $troop, Closure $map, ?ScriptCommandCatalog $commands = null): array
     {
         if (! is_array($troop['events'] ?? null)) {
             return $troop;
         }
 
+        $commands ??= ScriptCommandRegistry::getCatalog();
         foreach ($troop['events'] as $page => $entry) {
             if (! is_array($entry)) {
                 continue;
@@ -84,7 +86,7 @@ final class TroopEventPageContract
                 $entry['conditions']['enemy'] = self::mapMember($entry['conditions']['enemy'], $map, $where);
             }
             if (is_array($entry['commands'] ?? null)) {
-                $entry['commands'] = self::remapCommands($entry['commands'], $map, $where);
+                $entry['commands'] = self::remapCommands($entry['commands'], $map, $where, $commands);
             }
             $troop['events'][$page] = $entry;
         }
@@ -93,9 +95,9 @@ final class TroopEventPageContract
     }
 
     /** @param array<array-key, mixed> $commands */
-    private static function remapCommands(array $commands, Closure $map, string $where): array
+    private static function remapCommands(array $commands, Closure $map, string $where, ScriptCommandCatalog $commandCatalog): array
     {
-        $definitions = ScriptCommandRegistry::getCatalog()->definitions;
+        $definitions = $commandCatalog->definitions;
 
         foreach ($commands as $index => $command) {
             if (! is_array($command)) {
@@ -112,18 +114,18 @@ final class TroopEventPageContract
             }
             foreach (['then', 'else', 'commands', 'cancel'] as $arm) {
                 if (is_array($command[$arm] ?? null)) {
-                    $command[$arm] = self::remapCommands($command[$arm], $map, $where);
+                    $command[$arm] = self::remapCommands($command[$arm], $map, $where, $commandCatalog);
                 }
             }
             foreach (is_array($command['options'] ?? null) ? $command['options'] : [] as $option => $choice) {
                 if (is_array($choice) && is_array($choice['then'] ?? null)) {
-                    $command['options'][$option]['then'] = self::remapCommands($choice['then'], $map, $where);
+                    $command['options'][$option]['then'] = self::remapCommands($choice['then'], $map, $where, $commandCatalog);
                 }
             }
             $finishField = StorybookPlaybackFields::getFinishField();
             $finish = StorybookPlaybackFields::getFinishCommands($command);
             if ($finishField !== null && $finish !== null) {
-                $command[$finishField] = self::remapCommands($finish, $map, $where);
+                $command[$finishField] = self::remapCommands($finish, $map, $where, $commandCatalog);
             }
             $commands[$index] = $command;
         }

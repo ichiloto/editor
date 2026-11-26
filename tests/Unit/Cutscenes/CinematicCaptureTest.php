@@ -21,7 +21,7 @@ use Ichiloto\Engine\Util\Config\ConfigStore;
  */
 
 /** The synthetic cinematic: a lifted glow, then a power showcase, then a switch that says the script went on. */
-function captureShowcaseDefinition(): CinematicDefinition
+function captureShowcaseDefinition(string $grantSwitch = 'quick_step_granted'): CinematicDefinition
 {
     return CinematicDefinition::fromArrays([
         'id' => 'capture-showcase', 'name' => 'Capture showcase', 'startMap' => 'harbour',
@@ -31,7 +31,7 @@ function captureShowcaseDefinition(): CinematicDefinition
             'sprites2d' => ['asset' => 'Graphics/Effects/glow.png', 'cells' => ['width' => 1, 'height' => 1]], 'plane' => 'aboveCover'],
         ['type' => 'wait', 'seconds' => 0.3],
         ['type' => 'remove_actor', 'actorId' => 'glow'],
-        ['type' => 'set_switch', 'name' => 'quick_step_granted', 'value' => true],
+        ['type' => 'set_switch', 'name' => $grantSwitch, 'value' => true],
         ['type' => 'show_power_unlocks', 'announcement' => 'A new power stirs.', 'abilities' => [['ability' => 'quick-step']]],
         ['type' => 'set_switch', 'name' => 'after_showcase', 'value' => true],
     ]);
@@ -90,14 +90,16 @@ it('holds the scene on a power showcase notice until the author acknowledges eac
     }
 });
 
-it('installs the project\'s world abilities for the field and gives back what was installed before', function () {
+it('leaves a separate installed world ability catalogue alone during preview playback', function () {
     $root = captureShowcaseProject();
     $before = new WorldAbilityCatalog([]);
     ConfigStore::put(WorldAbilityCatalog::class, $before);
     $preview = CinematicPreviewSession::start($root, captureShowcaseDefinition(), captureOptions());
 
     try {
-        expect(WorldAbilityCatalog::getProjectCatalog()->getAbility('quick-step')->name)->toBe('Quick Step');
+        expect(WorldAbilityCatalog::getProjectCatalog())->toBe($before)
+            ->and($preview->runToCompletion(5.0))->toBeTrue()
+            ->and(array_column($preview->dialogueLog(), 'text'))->toContain('Crosses open ground quickly.');
     } finally {
         $preview->dispose();
         expect(ConfigStore::get(WorldAbilityCatalog::class))->toBe($before);
@@ -230,5 +232,31 @@ it('draws no glyph for the player while staged art stands in for them, as the ga
             ->and(array_diff(mb_str_split($stagedText), mb_str_split($before)))->toBe([]);
     } finally {
         $preview->dispose();
+    }
+});
+
+it('keeps world powers with the preview project while a second preview is open', function (): void {
+    $firstRoot = captureShowcaseProject();
+    $secondRoot = captureShowcaseProject();
+    $secondFile = $secondRoot . '/assets/Data/world-abilities.php';
+    $definitions = require $secondFile;
+    $definitions[0]['name'] = 'Second Project Step';
+    $definitions[0]['description'] = 'Crosses shallow water safely.';
+    $definitions[0]['conditions'][0]['name'] = 'second_project_step_granted';
+    file_put_contents($secondFile, '<?php return ' . var_export($definitions, true) . ';');
+
+    $first = CinematicPreviewSession::start($firstRoot, captureShowcaseDefinition(), captureOptions());
+    $second = null;
+    try {
+        $second = CinematicPreviewSession::start($secondRoot, captureShowcaseDefinition('second_project_step_granted'), captureOptions());
+        expect($first->runToCompletion(5.0))->toBeTrue()
+            ->and(array_column($first->dialogueLog(), 'text'))->toContain('Crosses open ground quickly.')
+            ->and($first->snapshot()->values['switch after_showcase'])->toBeTrue()
+            ->and($second->runToCompletion(5.0))->toBeTrue()
+            ->and(array_column($second->dialogueLog(), 'text'))->toContain('Crosses shallow water safely.')
+            ->and($second->snapshot()->values['switch after_showcase'])->toBeTrue();
+    } finally {
+        $second?->dispose();
+        $first->dispose();
     }
 });

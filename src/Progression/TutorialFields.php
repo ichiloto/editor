@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Progression;
 
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\Database\RecordField;
 use Ichiloto\Editor\Database\RecordRefusal;
@@ -70,7 +71,7 @@ final class TutorialFields
     {
     }
 
-    public static function getSchema(): RecordSchema
+    public static function getSchema(?ScriptCommandCatalog $commands = null): RecordSchema
     {
         return new RecordSchema(
             key: self::CATEGORY,
@@ -108,7 +109,7 @@ final class TutorialFields
                 return ['id' => 'new-tutorial', 'title' => $name, 'category' => $step['target']['screen'],
                     'start' => TutorialStartMode::SCRIPT->value, 'steps' => [$step], 'replay' => TutorialReplayMode::NONE->value];
             },
-            saveCheck: self::checkSource(...),
+            saveCheck: static fn(array $tutorials, string $root): ?string => self::checkSource($tutorials, $root, $commands),
             subLists: [
                 new RecordSubList(
                     key: self::STEPS,
@@ -129,12 +130,12 @@ final class TutorialFields
      *
      * @param array<array-key, mixed> $whole Every tutorial, as it would be saved.
      */
-    public static function checkSource(array $whole, string $projectRoot = ''): ?string
+    public static function checkSource(array $whole, string $projectRoot = '', ?ScriptCommandCatalog $commands = null): ?string
     {
         try {
             $catalog = new TutorialCatalog(array_values($whole));
             if ($projectRoot !== '') {
-                new TutorialProjectReferences(rtrim($projectRoot, '/') . '/assets')->validateCatalog($catalog);
+                new TutorialProjectReferences(rtrim($projectRoot, '/') . '/assets', $commands)->validateCatalog($catalog);
             }
         } catch (InvalidArgumentException $error) {
             return $error->getMessage();

@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Effect battle previews use the canvas's support for mirrored battlers and
+  masks, tint, clipping and the fade below water. The preview reports missing
+  support for required mirroring, tone and clipping.
+
 - A confirmation's starting choice is authored per confirmation (Andrew, 21 November 2026: "Authored per
   confirmation"). A bed's or inn event's Sleep question and an inn command offer Starts On (Yes or No), written as
   the number the Engine reads (`confirmDialogue.defaultChoice`, 0 or 1); a new bed starts on Yes. An inn command also

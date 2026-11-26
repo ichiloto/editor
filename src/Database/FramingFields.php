@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\CommandTree;
@@ -283,7 +284,7 @@ final class FramingFields
      * @param string $scriptId The reusable event script's id.
      * @throws InvalidArgumentException With the Engine's reason.
      */
-    public static function assertChangedCommandsValid(array $old, array $new, string $scriptId): void
+    public static function assertChangedCommandsValid(array $old, array $new, string $scriptId, ?ScriptCommandCatalog $commands = null): void
     {
         if ($old === $new) {
             return;
@@ -296,8 +297,9 @@ final class FramingFields
                 continue;
             }
             try {
-                CinematicScriptValidator::validate([$command], 'common_event:' . $scriptId);
-                EventCommandRequirements::validate([$command], EventScriptContext::REUSABLE, path: 'common_event:' . $scriptId);
+                CinematicScriptValidator::validate([$command], 'common_event:' . $scriptId, scriptCommands: $commands);
+                EventCommandRequirements::validate([$command], EventScriptContext::REUSABLE,
+                    path: 'common_event:' . $scriptId, scriptCommands: $commands);
             } catch (InvalidArgumentException $refusal) {
                 throw new InvalidArgumentException(sprintf('Event script %s has a %s command requiring %s that the Engine refuses: %s', $scriptId,
                     self::getCommandType(), self::describeSelection($command), $refusal->getMessage()), previous: $refusal);

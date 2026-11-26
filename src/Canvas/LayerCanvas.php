@@ -198,7 +198,7 @@ trait LayerCanvas
 
     private function handleLayerPromptInput(string $input): void
     {
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->layerPrompt = null;
             $this->modals->remove(Modal::LAYER_EDIT);
             $this->requestFullRender();

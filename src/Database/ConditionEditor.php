@@ -36,6 +36,7 @@ final class ConditionEditor
         'item' => ['Item', 'inventory'],
         'key_item' => ['Key Item', 'inventory'],
         'map_event' => ['Map Event', 'maps'],
+        'map_visited' => ['Visited Map', 'maps'],
         'world_ability' => ['World Power', ReferenceCatalog::WORLD_ABILITIES],
         'assigned_summons' => ['Summons Assigned In', ReferenceCatalog::ASSIGNED_SUMMON_SCOPES],
         'present_actor' => ['Party Member', 'actor_ids'],

@@ -2,13 +2,21 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Cutscenes\Preview\PreviewConfig;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewField;
 use Ichiloto\Editor\Cutscenes\Preview\SilentAudioBackend;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionHost;
 use Ichiloto\Editor\Session\SessionRefusal;
+use Ichiloto\Engine\Battle\UI\BattleScreen;
 use Ichiloto\Engine\Core\Vector2;
+use Ichiloto\Engine\IO\Enumerations\KeyCode;
+use Ichiloto\Engine\IO\InputManager;
+use Ichiloto\Engine\Messaging\Dialogue\DialoguePlayback;
+use Ichiloto\Engine\UI\Modal\TextBoxModal;
 use Ichiloto\Engine\Util\Config\ConfigStore;
+use Ichiloto\Engine\Util\Config\PlaySettings;
+use Ichiloto\Engine\Util\Config\PlayerSettings;
 use Ichiloto\Engine\Util\Config\ProjectConfig;
 
 /** A synthetic project whose preview map is independent of authored production content. */
@@ -43,6 +51,80 @@ function readPreviewContractField(EditorSession $session, bool $effect = false):
 
     return new ReflectionProperty($preview, 'field')->getValue($preview);
 }
+
+it('scopes controls and screen size to each open field during nested work and after out-of-order close', function () {
+    $primaryRoot = createPreviewContractProject();
+    $secondaryRoot = createPreviewContractProject();
+    foreach ([$primaryRoot => 'F', $secondaryRoot => 'G'] as $root => $key) {
+        file_put_contents($root . '/input.php', "<?php return ['confirm' => ['keys' => [\\Ichiloto\\Engine\\IO\\Enumerations\\KeyCode::$key]]];");
+    }
+    $bindings = InputManager::getBindings();
+    $screen = ConfigStore::has(PlaySettings::class) ? ConfigStore::get(PlaySettings::class) : null;
+    $previousDirectory = getcwd();
+    $first = PreviewField::open($primaryRoot, 'harbour', new Vector2(2, 3), 40, 12, static fn(): float => 0.0);
+    $second = PreviewField::open($secondaryRoot, 'harbour', new Vector2(2, 3), 63, 16, static fn(): float => 0.0);
+    $verifyContext = static function (KeyCode $confirm, int $width): void {
+        expect(InputManager::getBindings()['confirm']['keys'])->toBe([$confirm])
+            ->and(ConfigStore::get(PlaySettings::class)->get('screen.width'))->toBe($width);
+    };
+    try {
+        $first->run(function () use ($second, $verifyContext): void {
+            $verifyContext(KeyCode::F, 40);
+            expect(fn() => $second->run(static function () use ($verifyContext): void {
+                $verifyContext(KeyCode::G, 63);
+                throw new RuntimeException('Preview step interrupted');
+            }))->toThrow(RuntimeException::class, 'Preview step interrupted');
+            $verifyContext(KeyCode::F, 40);
+        });
+        $first->dispose();
+        $second->resize(72, 17);
+        $second->run(fn() => $verifyContext(KeyCode::G, 72));
+    } finally {
+        $second->dispose();
+        $first->dispose();
+    }
+    expect(InputManager::getBindings())->toBe($bindings)
+        ->and(ConfigStore::has(PlaySettings::class) ? ConfigStore::get(PlaySettings::class) : null)->toBe($screen)
+        ->and(getcwd())->toBe($previousDirectory);
+});
+
+it('keeps Auto in the owning field preview while another project and player store are active', function () {
+    $root = createPreviewContractProject();
+    $otherRoot = createPreviewContractProject();
+    $dataRoot = $otherRoot . '/private-settings';
+    mkdir($dataRoot);
+    $otherPlayer = new PlayerSettings(dataRoot: $dataRoot);
+    $otherPlayer->set(DialoguePlayback::CONFIG_AUTO, true);
+    $otherPlayer->persist();
+    $otherFile = $dataRoot . '/player-settings.json';
+    $otherBytes = file_get_contents($otherFile);
+    $otherConfig = new PreviewConfig(['ui' => ['dialogue' => ['auto' => true]]]);
+    $previousPlayer = ConfigStore::has(PlayerSettings::class) ? ConfigStore::get(PlayerSettings::class) : null;
+    $field = PreviewField::open($root, 'harbour', new Vector2(2, 3), 40, 12, static fn(): float => 0.0);
+    try {
+        ConfigStore::put(PlayerSettings::class, $otherPlayer);
+        ConfigStore::put(ProjectConfig::class, $otherConfig);
+        $field->run(function () use ($field, $otherConfig): void {
+            $game = $field->scene->getGame();
+            $modal = new TextBoxModal($game, 'A preview line.');
+            expect($modal->getDialogueSnapshot()->auto)->toBeFalse();
+            $playback = new ReflectionProperty($modal, 'playback')->getValue($modal);
+            $playback->toggleAuto();
+            expect((new TextBoxModal($game, 'The next line.'))->getDialogueSnapshot()->auto)->toBeTrue();
+            $playback->toggleAuto();
+            expect($modal->getDialogueSnapshot()->auto)->toBeFalse()
+                ->and($otherConfig->get(DialoguePlayback::CONFIG_AUTO))->toBeTrue();
+        });
+        expect(file_get_contents($otherFile))->toBe($otherBytes);
+    } finally {
+        $field->dispose();
+        if ($previousPlayer === null) {
+            ConfigStore::remove(PlayerSettings::class);
+        } else {
+            ConfigStore::put(PlayerSettings::class, $previousPlayer);
+        }
+    }
+});
 
 it('forwards the graphical epoch over both wire routes and refuses retired feedback', function (bool $effect) {
     $root = createPreviewContractProject(effect: $effect);
@@ -101,10 +183,14 @@ it('describes a stable cinematic epoch without opening a graphical host and uses
             ->and(previewFrameGenerations($answer['messages']))->not->toBe([])
             ->and(new ReflectionProperty($field, 'sceneHost')->getValue($field)->sessionId)->toBe($started['sessionId']);
         expect(fn() => $session->exchangeCinematicScene(['not json'], $started['sessionId']))->toThrow(SessionRefusal::class);
-        expect(ConfigStore::get(ProjectConfig::class)->get('audio.music'))->toBeFalse()
-            ->and(ConfigStore::get(ProjectConfig::class)->get('audio.sfx'))->toBeFalse()
-            ->and(ConfigStore::get(ProjectConfig::class)->get('audio.voice'))->toBeFalse()
-            ->and(ConfigStore::get(ProjectConfig::class)->get('save.autosave'))->toBeFalse();
+        $field->run(static function (): void {
+            $configuration = ConfigStore::get(ProjectConfig::class);
+            expect($configuration->get('audio.music'))->toBeFalse()
+                ->and($configuration->get('audio.sfx'))->toBeFalse()
+                ->and($configuration->get('audio.voice'))->toBeFalse()
+                ->and($configuration->get('save.autosave'))->toBeFalse()
+                ->and(ConfigStore::has(PlayerSettings::class))->toBeFalse();
+        });
         $backends = new ReflectionProperty($field->scene->previewSceneManager->game->audioManager, 'backends')
             ->getValue($field->scene->previewSceneManager->game->audioManager);
         expect($backends)->toHaveCount(1)->and($backends[0])->toBeInstanceOf(SilentAudioBackend::class);
@@ -374,7 +460,7 @@ it('resizes a kept cinematic through its control description while preserving pl
             ->and(new ReflectionProperty($field, 'sceneHost')->getValue($field))->toBeNull()
             ->and($session->exchangeCinematicScene([], $first['sessionId']))->toMatchArray([
                 'sessionId' => $resized['sessionId'], 'diagnostics' => [], 'messages' => [],
-                'grid' => ['columns' => 50, 'rows' => 16, 'cellWidth' => 10, 'cellHeight' => 20],
+                'grid' => ['columns' => BattleScreen::WIDTH, 'rows' => BattleScreen::HEIGHT, 'cellWidth' => 10, 'cellHeight' => 20],
             ]);
         expect($session->startCinematicPreview(0, 50, 16, keep: true)['sessionId'])->toBe($resized['sessionId']);
         $fresh = exchangeSceneUntilPresented(static fn(array $events): array

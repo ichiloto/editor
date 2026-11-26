@@ -1572,7 +1572,9 @@ The Terminal preview's `B` moves a staged effect between battle and its owned
 stage. The host's `cutscenes.timeline` reply adds `stageContext` (`battle`,
 `stage` or null) and keeps `ownedStage` true only for the owned-stage consumer;
 `cutscenes.preview` serves the stage canvas compiled with that consumer's
-admission. GUI develop `f261b9b` draws that stage canvas when the battle test
+admission. The optional `reducedMotion` request flag samples the stage with
+the Engine's authored holds and clears, while the Terminal canvas follows its
+own sequence. GUI develop `f261b9b` draws that stage canvas when the battle test
 party cannot play the effect, retains the battle refusal alongside the preview,
 and keeps the stage lanes available. Editor `b6317df` covers the same case at
 the host boundary. An explicit stage-context choice while a battle preview is

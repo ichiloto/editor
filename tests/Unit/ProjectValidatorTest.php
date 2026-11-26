@@ -1217,3 +1217,62 @@ it('checks an any-of group by its members, not as one named condition', function
         ->and(issuesMentioning($issues, 'no-such-grouped-quest'))->toHaveCount(1)
         ->and(issuesMentioning($issues, 'malformed any-of condition group'))->toHaveCount(1);
 });
+
+it('reports invalid visited-map conditions in both the map and project checks', function () {
+    $root = makeTemporaryProject();
+    $file = $root . '/assets/Maps/test-map/test-map.data.php';
+    $map = require $file;
+    $map['events']['E']['conditions'] = [
+        ['type' => 'map_visited', 'name' => 'test-map', 'negate' => true],
+        ['type' => 'map_visited', 'name' => 'retired-map', 'negate' => true],
+        ['type' => 'map_visited', 'name' => 'test-map', 'negate' => 'false'],
+    ];
+    file_put_contents($file, '<?php return ' . var_export($map, true) . ';');
+    $session = \Ichiloto\Editor\Session\EditorSession::open($root);
+
+    foreach ([$session->validateMap('test-map'), $session->validateProject(['test-map'])] as $result) {
+        $issues = array_values(array_filter($result['issues'], static fn(array $issue): bool =>
+            in_array($issue['code'], ['map_visit.missing_map', 'map_visit.malformed'], true)));
+        expect(array_count_values(array_column($issues, 'code')))->toBe([
+            'map_visit.missing_map' => 1,
+            'map_visit.malformed' => 1,
+        ])->and(array_column($issues, 'map'))->toBe(['test-map', 'test-map'])
+            ->and($issues[0]['message'])->toContain('retired-map');
+    }
+});
+
+it('checks visited-map references in world objects, landmarks and music once in either validation scope', function () {
+    $root = makeTemporaryProject();
+    $file = $root . '/assets/Maps/test-map/test-map.data.php';
+    $map = require $file;
+    $map['worldObjects'] = [[
+        'id' => 'lookout',
+        'anchor' => ['x' => 1, 'y' => 1],
+        'pivot' => ['x' => 0.5, 'y' => 1.0],
+        'sprites2d' => null,
+        'conditions' => [['type' => 'map_visited', 'name' => 'retired-lookout']],
+        'variants' => [[
+            'id' => 'earlier',
+            'conditions' => [['type' => 'map_visited', 'name' => 'retired-variant', 'negate' => true]],
+            'sprites2d' => null,
+        ]],
+    ]];
+    $map['landmarks'] = [[
+        'id' => 'lookout', 'kind' => 'landmark', 'anchor' => ['object' => 'lookout'],
+        'revealConditions' => [['type' => 'map_visited', 'name' => 'retired-reveal']],
+    ]];
+    $map['bgmVariants'] = [[
+        'track' => 'field',
+        'conditions' => [['type' => 'map_visited', 'name' => 'retired-music']],
+    ]];
+    file_put_contents($file, '<?php return ' . var_export($map, true) . ';');
+    $session = \Ichiloto\Editor\Session\EditorSession::open($root);
+
+    foreach ([$session->validateMap('test-map'), $session->validateProject(['test-map'])] as $report) {
+        $issues = array_values(array_filter($report['issues'], static fn(array $issue): bool =>
+            $issue['code'] === 'map_visit.missing_map'));
+        expect($issues)->toHaveCount(4)->and(array_unique(array_column($issues, 'map')))->toBe(['test-map'])
+            ->and(implode(' ', array_column($issues, 'message')))
+            ->toContain('retired-lookout', 'retired-variant', 'retired-reveal', 'retired-music');
+    }
+});

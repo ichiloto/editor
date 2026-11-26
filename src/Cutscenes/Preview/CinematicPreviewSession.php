@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
+use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Engine\Audio\BackgroundMusicState;
 use Closure;
 use Ichiloto\Editor\Database\FramingFields;
@@ -87,6 +88,7 @@ final class CinematicPreviewSession
         private readonly CinematicDefinition $definition,
         private readonly array $options,
         private readonly ?array $capture = null,
+        private readonly ?RendererGridConfig $playbackGrid = null,
     ) {
     }
 
@@ -108,9 +110,10 @@ final class CinematicPreviewSession
      *
      * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string, campaignSave?: string|null} $options
      */
-    public static function start(string $projectRoot, CinematicDefinition $definition, array $options = []): self
+    public static function start(string $projectRoot, CinematicDefinition $definition, array $options = [],
+        ?RendererGridConfig $playbackGrid = null): self
     {
-        $preview = new self($projectRoot, $definition, $options);
+        $preview = new self($projectRoot, $definition, $options, playbackGrid: $playbackGrid);
         $preview->boot();
 
         return $preview;
@@ -145,7 +148,7 @@ final class CinematicPreviewSession
     public function restart(): self
     {
         $this->dispose();
-        $preview = new self($this->projectRoot, $this->definition, $this->options, $this->capture);
+        $preview = new self($this->projectRoot, $this->definition, $this->options, $this->capture, $this->playbackGrid);
         $preview->boot();
 
         return $preview;
@@ -184,7 +187,9 @@ final class CinematicPreviewSession
 
         $this->run(function (): void {
             $this->presentation->autoAdvance = (bool) ($this->options['autoAdvance'] ?? false);
-            $this->interpreter = new EventInterpreter($this->scene, $this->presentation);
+            $catalog = $this->scene->getGame()->getBoundGameLoader()?->getScriptCommands()
+                ?? ProjectScriptCommands::fromProject($this->projectRoot)->catalog;
+            $this->interpreter = new EventInterpreter($this->scene, $this->presentation, $catalog);
             $this->scene->installInterpreter($this->interpreter);
             $audio = $this->scene->getGame()->audioManager;
             $startingMusic = is_array($this->options['startingMusic'] ?? null) ? $this->options['startingMusic'] : null;
@@ -622,7 +627,7 @@ final class CinematicPreviewSession
      */
     public function exchangeScene(array $events, ?string $sessionId = null): array
     {
-        return $this->field->exchangeScene($events, $sessionId);
+        return $this->field->exchangeScene($events, $sessionId, $this->getSceneGrid());
     }
 
     /** Whether the Engine still has something of the scene to send the graphical view ({@see PreviewField::hasPendingSceneDelivery()}). */
@@ -631,10 +636,10 @@ final class CinematicPreviewSession
         return $this->field->hasPendingSceneDelivery();
     }
 
-    /** The graphical view's grid ({@see PreviewField::getSceneGrid()}). */
+    /** The graphical view's grid. A live view may have a different surface from the Terminal screen. */
     public function getSceneGrid(): RendererGridConfig
     {
-        return $this->field->getSceneGrid();
+        return $this->playbackGrid ?? $this->field->getSceneGrid();
     }
 
     /** The field's graphical-host epoch, without attaching a graphical view. */

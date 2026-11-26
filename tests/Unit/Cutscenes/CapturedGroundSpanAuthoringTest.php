@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Review\CanvasStillRaster;
 use Ichiloto\Editor\Session\EditorSession;
@@ -151,7 +152,7 @@ it('leaves a ground span as written in the Terminal editor, which has no row for
     openCutsceneFrame($editor, 'commandListTracks');
     $trackRows = array_values(array_filter(cutsceneFieldIds($editor), static fn(string $id): bool => str_starts_with($id, 'track0') && ! str_contains($id, 'Keyframe')));
     expect($trackRows)->toContain('track0Pivot', 'track0Attachment', 'track0Facing', 'track0Toward', 'track0Cellswidth')
-        ->not->toContain('track0GroundSpantip', 'track0GroundSpanorientation', 'track0AnchorLifetime', 'track0Span');
+        ->not->toContain('track0GroundSpantip', 'track0GroundSpanorientation', 'track0GroundSpancasterPoint', 'track0AnchorLifetime', 'track0Span');
     setCutsceneField($editor, 'track0Id', 'lane-light');
 
     expect($asset->save())->toBeTrue()
@@ -189,6 +190,98 @@ it('moves the tip and edits beside it touching only what changed, and undo and r
     }
     expect($session->saveAll()['failures'])->toBe([])
         ->and(file_get_contents($path))->toBe($edited);
+});
+
+it('selects individual ground spans in the graphical authoring session', function () {
+    $root = groundLanceLineProject([300, 500]);
+    $path = effectTimelinePath($root, 'ground-lance');
+    $before = require $path;
+    [$session, $index, $row, $apply] = openGroundSpanSession($root, 'ground-lance');
+    try {
+        expect($apply('track0Anchor', 'target')['changed'])->toBeTrue()
+            ->and($row('track0AnchorLifetime')['options'])->toBe(['', 'target-capture'])
+            ->and($row('track0GroundSpantip')['value'])->toBe('0.1328125, 0.46875')
+            ->and($session->saveDatabase('cutscenes/effect')['saved'])->toBeTrue();
+        $saved = require $path;
+        expect($saved['presentations']['graphical']['tracks'][0]['anchor'])->toBe('target')
+            ->and($saved['presentations']['terminal'])->toBe($before['presentations']['terminal']);
+        $preview = $session->readEffectBattlePreview($index, 0, authoredFrame: 3, textureStrip: true);
+        $spans = array_filter($preview['canvas']['composites'] ?? [], static fn(array $composite): bool =>
+            ($composite['operations'][0]['type'] ?? null) === 'texture_strip');
+        expect($spans)->toHaveCount(2);
+    } finally {
+        $session->close();
+    }
+});
+
+it('saves and clears the caster pose point and explains when the captured pose lacks it', function () {
+    $root = groundLanceProject();
+    $path = effectTimelinePath($root, 'ground-lance');
+    $before = require $path;
+    [$session, $index, $row, $apply] = openGroundSpanSession($root, 'ground-lance');
+
+    try {
+        $field = 'track0' . ProjectRecordDatabase::getFieldToken(CutsceneSchemas::getGroundSpanCasterPointKey());
+        expect($apply($field, 'leading-boot')['changed'])->toBeTrue()
+            ->and($row($field)['value'])->toBe('leading-boot')
+            ->and($session->saveDatabase('cutscenes/effect')['saved'])->toBeTrue();
+        $expected = $before;
+        $expected['presentations']['graphical']['tracks'][0]['groundSpan']['casterPoint'] = 'leading-boot';
+        expect(require $path)->toBe($expected);
+        $first = $session->readEffectBattlePreview($index, 0, textureStrip: true);
+        $span = $session->readEffectBattlePreview($index, 0, authoredFrame: 3, textureStrip: true);
+        $missing = 'Captured caster pose has no ground-span point leading-boot.';
+        expect($first['diagnostics'])->toBe([$missing])
+            ->and($span['diagnostics'])->toBe([$missing])
+            ->and(findGroundSpanComposite($span))->toBeNull()
+            ->and($session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL)['diagnostics'])->toBe([]);
+
+        expect($apply($field, '')['changed'])->toBeTrue()
+            ->and($session->saveDatabase('cutscenes/effect')['saved'])->toBeTrue()
+            ->and(require $path)->toBe($before);
+    } finally {
+        $session->close();
+    }
+});
+
+it('authors a launch frame for the contact reveal and negotiates its raster capability through the preview', function () {
+    $root = groundLanceLineProject([300, 500]);
+    $path = effectTimelinePath($root, 'ground-lance');
+    $source = require $path;
+    $graphical = &$source['presentations']['graphical'];
+    $graphical['tracks'][0]['anchor'] = 'target';
+    $graphical['tracks'][0]['presentation'] = 'graphical';
+    $graphical['tracks'][] = ['id' => 'contact', 'type' => 'image', 'asset' => 'Graphics/Effects/ground-lance.png',
+        'anchor' => 'target', 'presentation' => 'graphical', 'keyframes' => [['frame' => 6, 'duration' => 1]]];
+    $graphical['targetContactSequence'] = ['firstFrame' => 6, 'lastFrame' => 8, 'intervalFrames' => 2, 'tracks' => ['contact']];
+    file_put_contents($path, '<?php return ' . var_export($source, true) . ';');
+    [$session, $index, $row, $apply] = openGroundSpanSession($root, 'ground-lance');
+    $contract = EffectGroundSpan::exportContract();
+    $key = $contract['field'] . '.' . $contract['revealField'];
+    $field = static fn(string $keyPart): string => 'track0' . ProjectRecordDatabase::getFieldToken($key . '.' . $keyPart);
+
+    try {
+        expect($apply($field('startFrame'), '2')['changed'])->toBeTrue()
+            ->and($apply($field('featherPixels'), '3.5')['changed'])->toBeTrue()
+            ->and($apply($field('beforeContactOpacity'), '0.65')['changed'])->toBeTrue()
+            ->and($session->saveDatabase('cutscenes/effect')['saved'])->toBeTrue();
+        $saved = require $path;
+        expect($saved['presentations']['graphical']['tracks'][0]['groundSpan']['reveal'])
+            ->toEqual(['startFrame' => 2, 'featherPixels' => 3.5, 'beforeContactOpacity' => .65])
+            ->and($saved['presentations']['terminal'])->toBe($source['presentations']['terminal']);
+        $preview = $session->readEffectBattlePreview($index, 0, authoredFrame: 4, textureStrip: true, textureStripClip: true);
+        $strip = findGroundSpanComposite($preview);
+        expect($preview['diagnostics'])->toBe([])
+            ->and($strip['operations'][0]['geometry']['clipPlane']['feather'])->toBe(3.5)
+            ->and($strip['opacity'])->toBe(.65);
+        $limited = $session->readEffectBattlePreview($index, 0, authoredFrame: 4, textureStrip: true);
+        expect($limited['diagnostics'])->toBe(['A revealed ground span requires texture strip clipping support.']);
+        expect($apply($field('startFrame'), '')['changed'])->toBeTrue()
+            ->and($session->saveDatabase('cutscenes/effect')['saved'])->toBeTrue()
+            ->and(require $path)->toEqual($source);
+    } finally {
+        $session->close();
+    }
 });
 
 it('refuses a tip that is not a point of the image, changing nothing', function (string $tip) {
@@ -482,9 +575,11 @@ it('tells the Engine\'s inspection of the troop previewed against on every frame
     $session = EditorSession::open(groundLanceLineProject([$caster - 150, $caster + 150]));
     $index = findEffectIndex($session, 'ground-lance');
     $tie = 'Captured ground span has opposite equally far endpoints.';
-    $first = $session->readEffectBattlePreview($index, 0, reducedMotion: true, textureStrip: true);
-    $drawn = $session->readEffectBattlePreview($index, 0, reducedMotion: true, authoredFrame: 5, textureStrip: true);
-    $moving = $session->readEffectBattlePreview($index, 0, textureStrip: true);
+    // The troop stands on both sides of the caster, so the battle turns a battler toward the other side: the canvas
+    // asked for draws texture strips and mirrors images, as the still rasters do.
+    $first = $session->readEffectBattlePreview($index, 0, reducedMotion: true, textureStrip: true, imageFlip: true);
+    $drawn = $session->readEffectBattlePreview($index, 0, reducedMotion: true, authoredFrame: 5, textureStrip: true, imageFlip: true);
+    $moving = $session->readEffectBattlePreview($index, 0, textureStrip: true, imageFlip: true);
     $terminal = $session->readEffectBattlePreview($index, 0, reducedMotion: true, presentation: EffectPresentation::TERMINAL);
 
     // At rest the two selected targets are equally far on opposite sides: told on the first frame, once, in the Engine's words.

@@ -19,7 +19,6 @@ use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicFramingDefinition;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
-use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventScriptContext;
 use Throwable;
 
@@ -310,7 +309,7 @@ trait CutsceneValidation
             if (! in_array($type, CinematicCommandSchema::COMMAND_TYPES, true)) {
                 // The Engine already refused an unknown or malformed command;
                 // what is left to check of a registered one is what it names.
-                $registered = ScriptCommandRegistry::getCatalog()->findDefinition($type);
+                $registered = $this->getScriptCommandCatalog()->findDefinition($type);
 
                 if ($registered !== null) {
                     $issues = [...$issues, ...$this->checkRegisteredReferences($registered, $command, $where, $known,
@@ -511,7 +510,8 @@ trait CutsceneValidation
         $issues = [];
 
         try {
-            CinematicScriptValidator::validate($commands, sprintf('%s:common_event:%s', $where, $eventId));
+            CinematicScriptValidator::validate($commands, sprintf('%s:common_event:%s', $where, $eventId),
+                scriptCommands: $this->getScriptCommandCatalog());
         } catch (Throwable $throwable) {
             $issues[] = Issue::error(
                 $eventWhere,

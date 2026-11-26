@@ -10,8 +10,9 @@ use Ichiloto\Editor\Storage\WorkspaceSave;
 /**
  * Saving a map that makes floor solid where the player can stand today moves
  * existing saves off those cells, once the author has seen where: the save
- * writes the map and a declared relocations step together, and undo removes
- * the step. The fixture is {@see mapLineRemovalProject()}: `home`'s floor is
+ * writes the map and a declared relocations step together. Undo can reopen
+ * a cell in the editor, and the manifest retains the saved content version.
+ * The fixture is {@see mapLineRemovalProject()}: `home`'s floor is
  * reachable, and the project has a save manifest.
  */
 
@@ -46,9 +47,8 @@ it('asks before saving a map that makes reachable floor solid, naming where thos
         ->and(sourceHashTree($root))->toBe($before);
 });
 
-it('saves the map and the relocation step together once confirmed, and undo removes the step', function () {
+it('retains the installed relocation when undoing and saving a map edit', function () {
     [$root, $session] = openWalledHomeSession();
-    $manifest = (string) file_get_contents($root . '/assets/Data/save-compatibility.php');
     $question = $session->saveMap('home');
 
     $saved = $session->saveMap('home', 'write', $question['confirm']);
@@ -63,8 +63,45 @@ it('saves the map and the relocation step together once confirmed, and undo remo
         // Saved: nothing is left to move.
         ->and(SaveRelocationPlanner::plan(getPhysicalOccupancyMap($session), $root))->toBeNull();
 
+    $committed = sourceHashTree($root . '/assets');
+    expect($session->undo()['maps'])->toBe(['home'])
+        ->and(getPhysicalOccupancyMap($session)->isDirty())->toBeTrue()
+        ->and(sourceHashTree($root . '/assets'))->toBe($committed);
+    expect($session->saveMap('home'))->toHaveKey('saved')
+        ->and(readSaveManifest($root)['contentVersion'])->toBe(1)
+        ->and(describeSaveCompatibilityIssues($root))->toBe([]);
+});
+
+it('refuses a stale save confirmation after undo removes the need for relocations', function () {
+    [$root, $session] = openWalledHomeSession();
+    $question = $session->saveMap('home');
+    $before = sourceHashTree($root . '/assets');
     $session->undo();
-    expect(file_get_contents($root . '/assets/Data/save-compatibility.php'))->toBe($manifest);
+
+    expect(fn() => $session->saveMap('home', 'write', $question['confirm']))->toThrow(SessionRefusal::class, 'Review')
+        ->and(sourceHashTree($root . '/assets'))->toBe($before);
+});
+
+it('backs up the map and manifest before writing either of them', function () {
+    [$root, $session] = openWalledHomeSession();
+    $workspace = new ReflectionProperty(EditorSession::class, 'workspace')->getValue($session);
+    $map = getPhysicalOccupancyMap($session);
+    $relocation = SaveRelocationPlanner::plan($map, $root);
+    $before = sourceHashTree($root . '/assets');
+
+    expect(fn() => WorkspaceSave::saveMap($workspace, $map, $relocation,
+        static function (string ...$paths) use ($root, $before): void {
+            $assets = realpath($root . '/assets') . '/';
+            $paths = array_map(realpath(...), $paths);
+            expect($paths)->toContain($assets . 'Data/save-compatibility.php')
+                ->and(array_any($paths, static fn(string $path): bool => str_starts_with($path, $assets . 'Maps/home/')))->toBeTrue();
+            foreach ($paths as $path) {
+                expect(hash_file('sha256', $path))->toBe($before[substr($path, strlen($assets))]);
+            }
+            throw new RuntimeException('Backup stopped the save.');
+        }))->toThrow(Ichiloto\Editor\Storage\SaveSetRefusal::class, 'Backup stopped the save')
+        ->and(sourceHashTree($root . '/assets'))->toBe($before)
+        ->and($map->isDirty())->toBeTrue();
 });
 
 it('refuses a write the author was not shown', function () {
@@ -179,15 +216,12 @@ it('writes the relocations of every map saved together as one manifest step', fu
             $map->setLayerCell($map->getLayers()[0]['id'], $x, $y, '#');
         }
     }
-    $recorded = [];
-
-    Ichiloto\Editor\Storage\SaveSet::commit($root, WorkspaceSave::prepareAll($workspace, static function ($step) use (&$recorded): void { $recorded[] = $step; }));
+    Ichiloto\Editor\Storage\SaveSet::commit($root, WorkspaceSave::prepareAll($workspace, relocateSaves: true));
 
     $steps = readSaveManifest($root)['migrations'];
     expect($steps)->toHaveCount(1)
         ->and(array_values(array_unique(array_column($steps[0]['relocations'], 'map'))))->toBe(['home', 'town'])
-        ->and(readSaveManifest($root)['contentVersion'])->toBe(1)
-        ->and($recorded)->toHaveCount(1);
+        ->and(readSaveManifest($root)['contentVersion'])->toBe(1);
 });
 
 it('lands no save inside a bound event its own cell was not already in', function () {
@@ -501,4 +535,51 @@ it('moves saves only off the floor a door newly covers when it moves and its des
     $relocations = SaveRelocationPlanner::plan(getPhysicalOccupancyMap($session), $root)->relocations;
     expect(array_merge(...array_column($relocations, 'cells')))->toBe([[2, 1]])
         ->and(getPhysicalOccupancyMap($session)->getEventMarkerAt(...$relocations[0]['to']))->toBeNull();
+});
+
+it('saves a reopened map edit without relocating draft cells and protects recorded cells on the same map', function () {
+    $root = mapLineRemovalProject();
+    file_put_contents($root . '/assets/Data/system.php', <<<'SOURCE'
+<?php
+return [
+    'startingPositions' => [
+        'player' => ['destinationMap' => 'cellar', 'spawnPoint' => ['x' => 1, 'y' => 1], 'spawnSprite' => ['South']],
+    ],
+];
+SOURCE);
+    $session = EditorSession::open($root);
+    $session->createMap('Cellar', 'home', 6, 4, 'cellar');
+    $path = $root . '/assets/Data/save-compatibility.php';
+    $manifest = require $path;
+    $history = [['version' => 0, 'maps' => ['cellar' => [[2, 2], [2, 3]]]]];
+    $historyFile = $root . '/assets/Data/save-position-history.json';
+    $manifest['positionHistoryFile'] = basename($historyFile);
+    file_put_contents($historyFile, json_encode($history, JSON_THROW_ON_ERROR));
+    file_put_contents($path, "<?php\n\nreturn " . var_export($manifest, true) . ";\n");
+
+    $session = EditorSession::open($root);
+    $map = $session->readMap('cellar');
+    $session->paint('cellar', $map['revision'], $map['baseLayer'], [[2, 1]], '#');
+
+    expect($session->saveMap('cellar'))->toHaveKey('saved')
+        ->and(readSaveManifest($root)['contentVersion'])->toBe(0);
+
+    $session = EditorSession::open($root);
+    $map = $session->readMap('cellar');
+    $session->paint('cellar', $map['revision'], $map['baseLayer'], [[2, 2]], '#');
+    $question = $session->saveMap('cellar');
+
+    expect($question['relocations'])->toBe([['map' => 'cellar', 'cells' => [[2, 2]], 'to' => [2, 3]]]);
+    $before = sourceHashTree($root);
+    file_put_contents($historyFile, "\n", FILE_APPEND);
+    $expected = sourceHashTree($root);
+    expect($expected)->not->toBe($before)
+        ->and(fn() => $session->saveMap('cellar', 'write', $question['confirm']))->toThrow(
+            Ichiloto\Editor\Session\SessionRefusal::class, 'changed since the save relocations were shown')
+        ->and(sourceHashTree($root))->toBe($expected);
+    $revised = $session->saveMap('cellar');
+    $session->saveMap('cellar', 'write', $revised['confirm']);
+    expect(readSaveManifest($root)['contentVersion'])->toBe(1)
+        ->and(Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest::fromProjectRoot($root)
+            ->projectSavePositions($history, $historyFile))->toBe(['cellar' => ['2,3' => [2, 3]]]);
 });

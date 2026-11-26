@@ -26,6 +26,7 @@ use Ichiloto\Engine\Rendering\Text\TextPreparationProviderInterface;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Config\PlaySettings;
+use Ichiloto\Engine\Util\Config\PlayerSettings;
 use Ichiloto\Engine\Util\Config\ProjectConfig;
 use Ichiloto\Engine\Util\Interfaces\ConfigInterface;
 use Throwable;
@@ -78,10 +79,12 @@ final class PreviewField
     public private(set) string $sessionId;
     /** The editor window's graphical view of the field, while one is attached. */
     private ?PreviewSceneHost $sceneHost = null;
-    /** @var array<string, ConfigInterface> */
-    private array $previousConfigs = [];
+    /** @var array<class-string, ConfigInterface> */
+    private array $projectStores = [];
     /** @var list<string> Why project configuration the field installs could not be read. */
     private array $configurationDiagnostics = [];
+    private WorldAbilityCatalog $worldAbilities;
+    private readonly PreviewConfig $projectConfiguration;
     /** The graphical presentation a capture holds, while one does. */
     private ?ScenePresentationContext $capture = null;
     /** The presentation the capture replaced. */
@@ -89,16 +92,12 @@ final class PreviewField
     private ?SceneFrameComposer $captureComposer = null;
     /** @var (Closure(string): bool)|null The capture's renderer capabilities. */
     private ?Closure $captureSupports = null;
-    private bool $configured = false;
-    /** @var array<string, array<string, mixed>> The Engine's input bindings as the field found them. */
-    private array $previousBindings = [];
+    /** @var array<string, array<string, mixed>> */
+    private array $bindings = [];
     /** The campaign the field plays in: a save's or a new game's. */
     private ?PreviewCampaign $campaign = null;
     /** Why a new game's campaign could not be started, when the field was opened on one and it could not. */
     public private(set) ?string $campaignFailure = null;
-    /** Every Engine configuration the field may install; each is given back as it was found. */
-    private const array INSTALLED_CONFIGURATION = [ProjectConfig::class, PlaySettings::class, WorldAbilityCatalog::class,
-        ActorStore::class, ItemStore::class];
     /** The field's screen in Terminal cells, which the graphical view's camera viewport never changes. */
     private int $screenWidth;
     private int $screenHeight;
@@ -115,6 +114,12 @@ final class PreviewField
         $this->screenWidth = max(20, $width);
         $this->screenHeight = max(8, $height);
         $this->sessionId = bin2hex(random_bytes(16));
+        $this->projectConfiguration = new PreviewConfig([
+            'accessibility' => ['reducedMotion' => false],
+            'save' => ['autosave' => false],
+            'ui' => ['hud' => ['location' => false]],
+            'audio' => ['music' => false, 'sfx' => false, 'voice' => false],
+        ]);
     }
 
     /**
@@ -134,7 +139,7 @@ final class PreviewField
         $field = new self($projectRoot, $width, $height, $readTime);
         try {
             $field->run(function () use ($field, $mapId, $spawn): void {
-                $game = new PreviewGame($field->projectRoot);
+                $game = new PreviewGame($field->projectRoot, $field->projectConfiguration);
                 $field->startNewGame($game);
                 $field->stage($game->getSceneManager(), $mapId, $spawn);
             });
@@ -162,8 +167,8 @@ final class PreviewField
         try {
             $field->run(function () use ($field, $savePath): void {
                 $field->installProjectStores();
-                $game = new PreviewGame($field->projectRoot);
-                $field->campaign = PreviewCampaign::restoreFromSave($game, $field->projectRoot, $savePath);
+                $game = new PreviewGame($field->projectRoot, $field->projectConfiguration);
+                $field->campaign = PreviewCampaign::restoreFromSave($game, $field->projectRoot, $savePath, $field->worldAbilities);
                 $config = $field->campaign->config;
                 $field->stage($game->getSceneManager(), $config->mapId, new Vector2($config->playerPosition->x, $config->playerPosition->y));
             });
@@ -177,16 +182,17 @@ final class PreviewField
 
     /**
      * Starts a new game's campaign for the field's Game. A project a new game
-     * cannot be started in keeps the actors and items the field found
-     * installed and has no campaign; the Engine's reason is kept.
+     * cannot be started in has no campaign; the Engine's reason is kept.
      */
     private function startNewGame(PreviewGame $game): void
     {
         try {
             $this->installProjectStores();
-            $this->campaign = PreviewCampaign::startNewGame($game, $this->projectRoot);
+            $this->campaign = PreviewCampaign::startNewGame($game, $this->projectRoot, $this->worldAbilities);
         } catch (Throwable $failure) {
-            $this->giveBackConfiguration([ActorStore::class, ItemStore::class]);
+            $this->projectStores = [];
+            ConfigStore::remove(ActorStore::class);
+            ConfigStore::remove(ItemStore::class);
             $this->campaignFailure = 'A new game could not be started, so the field has no party: ' . $failure->getMessage();
         }
     }
@@ -194,8 +200,10 @@ final class PreviewField
     /** Installs the project's actors and items, read from its files, as the game does before a campaign. */
     private function installProjectStores(): void
     {
-        ConfigStore::put(ActorStore::class, new ActorStore());
-        ConfigStore::put(ItemStore::class, new ItemStore());
+        $this->projectStores = [ActorStore::class => new ActorStore(), ItemStore::class => new ItemStore()];
+        foreach ($this->projectStores as $class => $store) {
+            ConfigStore::put($class, $store);
+        }
     }
 
     /**
@@ -207,7 +215,8 @@ final class PreviewField
     private function stage(PreviewSceneManager $manager, string $mapId, Vector2 $position): void
     {
         $config = $this->campaign?->config;
-        $this->scene = new PreviewGameScene($manager, $this->screenWidth, $this->screenHeight, $mapId, $this->campaign?->session);
+        $this->scene = new PreviewGameScene($manager, $this->screenWidth, $this->screenHeight, $mapId, $this->campaign?->session,
+            worldAbilities: $this->worldAbilities);
         $this->scene->installFieldEffects(EffectPresentation::TERMINAL);
         $camera = $this->scene->previewCamera();
         $this->presentation = new PreviewPresentation($this->screenWidth, $this->screenHeight, $this->projectRoot . '/assets');
@@ -245,8 +254,9 @@ final class PreviewField
     {
         $field = new self($projectRoot, $width, $height, $readTime);
         $field->run(function () use ($field, $map, $spawn, $heading, $appearance): void {
-            $game = new PreviewGame($field->projectRoot);
-            $field->scene = new PreviewGameScene($game->getSceneManager(), $field->screenWidth, $field->screenHeight, $map->mapId);
+            $game = new PreviewGame($field->projectRoot, $field->projectConfiguration);
+            $field->scene = new PreviewGameScene($game->getSceneManager(), $field->screenWidth, $field->screenHeight, $map->mapId,
+                worldAbilities: $field->worldAbilities);
             $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
             $camera = $field->scene->previewCamera();
             $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight, $field->projectRoot . '/assets');
@@ -451,21 +461,31 @@ final class PreviewField
     }
 
     /**
-     * Runs Engine code inside the project root with the preview
-     * configuration installed and any stray terminal output discarded.
+     * Runs one Engine operation with this field's project, screen and controls.
+     *
+     * @template TResult
+     * @param callable(): TResult $operation
+     * @return TResult
      */
-    public function run(callable $operation): void
+    public function run(callable $operation): mixed
     {
-        $this->installConfiguration();
-
-        ProjectDirectoryContext::run($this->projectRoot, function () use ($operation): void {
-            ob_start();
-
-            try {
-                $operation();
-            } finally {
-                ob_end_clean();
-            }
+        return ProjectDirectoryContext::run($this->projectRoot, function (string $root) use ($operation): mixed {
+            $configurations = $this->projectStores + [
+                ProjectConfig::class => $this->projectConfiguration,
+                PlaySettings::class => $this->createScreenSettings(),
+                PlayerSettings::class => null,
+                ActorStore::class => null,
+                ItemStore::class => null,
+            ];
+            return ConfigStore::withOverrides($configurations, function () use ($root, $operation): mixed {
+                $this->initializeProjectContext($root);
+                ob_start();
+                try {
+                    return InputManager::withBindings($this->bindings, $operation);
+                } finally {
+                    ob_end_clean();
+                }
+            });
         });
     }
 
@@ -511,9 +531,8 @@ final class PreviewField
     /**
      * One exchange with the editor window's graphical view of the field
      * ({@see PreviewSceneHost::exchange()}): its renderer event lines in, what
-     * it should apply out. The view's grid is the field's screen in the
-     * game's graphical text cells, so it shows what the game's graphical
-     * field would. While attached, the Engine sizes the field's camera to
+     * it should apply out. The caller can supply a graphical grid independent
+     * of the field's Terminal screen. While attached, the Engine sizes the field's camera to
      * the graphical field's viewport, as the game does, so the Terminal
      * picture is the game's Terminal view only while detached.
      *
@@ -521,13 +540,13 @@ final class PreviewField
      * @param string|null $sessionId The epoch the feedback answers; null discovers the current epoch without applying events.
      * @return list<array{type: string, payload: array<string, mixed>}>
      */
-    public function exchangeScene(array $events, ?string $sessionId = null): array
+    public function exchangeScene(array $events, ?string $sessionId = null, ?RendererGridConfig $grid = null): array
     {
         // Check ownership before allocating a host or decoding old READY/ACK/error lines; a capture owns the presentation.
         if ($sessionId !== $this->sessionId || $this->capture !== null) {
             return [];
         }
-        $grid = $this->getSceneGrid();
+        $grid ??= $this->getSceneGrid();
         $messages = [];
         $this->run(function () use ($grid, $events, &$messages): void {
             $this->sceneHost ??= new PreviewSceneHost($this->scene, $this->presentation,
@@ -609,46 +628,22 @@ final class PreviewField
         $this->scene->previewCamera()->resize($this->screenWidth, $this->screenHeight);
         $this->presentation->resizeScreen($this->screenWidth, $this->screenHeight);
         $this->run(function (): void {
-            // The Engine places its windows, a dialogue box among them, on the screen it is told of.
-            $this->installScreenSize();
             // The Terminal presentation is the screen's, so it takes the new size.
             $this->presentTerminal();
         });
     }
 
     /**
-     * Ends the graphical view and releases the Engine configuration the field installed.
+     * Ends the graphical view and releases the field's campaign.
      */
     public function dispose(): void
     {
         $this->endCapture();
         $this->detachScene();
-        // The project state the campaign replaced goes back before the configuration it was restored under.
-        $this->campaign?->release();
-        $this->campaign = null;
-        if (! $this->configured) {
-            return;
-        }
-
-        $this->giveBackConfiguration(self::INSTALLED_CONFIGURATION);
-        InputManager::setBindings($this->previousBindings);
-
-        $this->configured = false;
-    }
-
-    /**
-     * Puts Engine configuration back as the field found it: what was installed before, or nothing.
-     *
-     * @param list<class-string<ConfigInterface>> $classes
-     */
-    private function giveBackConfiguration(array $classes): void
-    {
-        foreach ($classes as $class) {
-            if (isset($this->previousConfigs[$class])) {
-                ConfigStore::put($class, $this->previousConfigs[$class]);
-            } else {
-                ConfigStore::remove($class);
-            }
+        if ($this->campaign !== null) {
+            $campaign = $this->campaign;
+            $this->campaign = null;
+            $this->run($campaign->release(...));
         }
     }
 
@@ -688,56 +683,34 @@ final class PreviewField
      * its windows on: where a dialogue box stands, and so what a cinematic's
      * cast is framed clear of.
      */
-    private function installScreenSize(): void
+    private function createScreenSettings(): PreviewConfig
     {
-        ConfigStore::put(PlaySettings::class, new PreviewConfig([
+        return new PreviewConfig([
             'screen' => ['width' => $this->screenWidth, 'height' => $this->screenHeight],
             'width' => $this->screenWidth,
             'height' => $this->screenHeight,
-        ]));
+        ]);
     }
 
-    private function installConfiguration(): void
+    private function initializeProjectContext(string $root): void
     {
-        if ($this->configured) {
+        if (isset($this->worldAbilities)) {
             return;
         }
-
-        foreach (self::INSTALLED_CONFIGURATION as $class) {
-            if (ConfigStore::has($class)) {
-                $this->previousConfigs[$class] = ConfigStore::get($class);
-            }
-        }
-
-        ConfigStore::put(ProjectConfig::class, new PreviewConfig([
-            'accessibility' => ['reducedMotion' => false],
-            'save' => ['autosave' => false],
-            'ui' => ['hud' => ['location' => false]],
-            // The engine records what the field asks for either way; with
-            // music off it never starts a player process for it.
-            'audio' => ['music' => false, 'sfx' => false, 'voice' => false],
-        ]));
-        $this->installScreenSize();
-        // The project's world abilities, as the game installs them before a campaign; a source that cannot be read
-        // leaves none installed and says why, so a condition or showcase that needs them reports it in its own words.
-        ConfigStore::remove(WorldAbilityCatalog::class);
         try {
-            ConfigStore::put(WorldAbilityCatalog::class, WorldAbilityCatalog::fromProject($this->projectRoot . '/assets'));
+            $this->worldAbilities = WorldAbilityCatalog::fromProject($root . '/assets');
         } catch (Throwable $failure) {
+            $this->worldAbilities = new WorldAbilityCatalog();
             $this->configurationDiagnostics[] = 'The project\'s world abilities could not be read: ' . $failure->getMessage();
         }
         // The project's control bindings, as the game installs them, so the hints a dialogue or notice shows name the
         // project's keys. Only the names are read: the preview takes no input through the Engine.
-        $this->previousBindings = InputManager::getBindings();
         try {
-            // A project that authors no bindings has the Engine's own.
-            InputManager::setBindings(is_file($this->projectRoot . '/input.php')
-                ? InputManager::getProjectBindings($this->projectRoot) : []);
+            if (is_file($root . '/input.php')) {
+                $this->bindings = InputManager::getProjectBindings($root);
+            }
         } catch (Throwable $failure) {
             $this->configurationDiagnostics[] = 'The project\'s control bindings could not be read: ' . $failure->getMessage();
         }
-        // Where the Engine writes its diagnostics belongs to the process
-        // running the Editor, so the field leaves it as it found it.
-        $this->configured = true;
     }
 }

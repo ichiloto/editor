@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes;
 
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
+use Ichiloto\Editor\Cutscenes\Source\JsonTimelineDocument;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
+use Ichiloto\Editor\Cutscenes\Source\SiblingJsonTimeline;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Storage\FileSetTransaction;
@@ -28,17 +31,13 @@ use RuntimeException;
 use Throwable;
 
 /**
- * One cutscene: a stable id, one folder, and the two files that are one
- * logical asset.
- *
- * A cinematic is `<id>.data.php` and `<id>.script.php`; a summon is
- * `<id>.data.php` and `<id>.timeline.php`. The editor holds both as the
- * arrays they evaluate to and as the bytes they were authored in, edits the
- * arrays, and on save writes back only the bytes each change needs -- data
- * edits never touch the partner file, partner edits never touch the data
- * file, and a clean save writes nothing. Both files are proposed, evaluated,
- * hydrated through the engine and only then replaced, together; if any step
- * fails, neither existing file changes.
+ * One cutscene: a stable id, one folder and a transaction over its owned files.
+ * A cinematic uses a PHP definition and script. A summon uses a PHP definition
+ * and a timeline, while an effect has only a timeline. A timeline may be a PHP
+ * array or an asset-local JSON document with a fixed PHP runtime adapter.
+ * Saves check the sources, write only changed bytes and hydrate the proposed
+ * arrays through the Engine before installing them together. A clean save
+ * writes nothing.
  *
  * Identity is the folder, captured once. A display-name edit is a field
  * edit; it never renames the folder or the files.
@@ -98,7 +97,8 @@ final class CutsceneAsset
     private CutscenePairShape $shape;
 
     private ?PhpArraySourceDocument $dataDocument = null;
-    private ?PhpArraySourceDocument $partnerDocument = null;
+    private PhpArraySourceDocument|JsonTimelineDocument|null $partnerDocument = null;
+    private ?SiblingJsonTimeline $jsonTimeline = null;
 
     /** @var array<string, string> Authored bytes at load/save, even for read-only sources. */
     private array $baselineSources = [];
@@ -134,6 +134,7 @@ final class CutsceneAsset
         public readonly string $id,
         public readonly string $folder,
         private readonly ?string $projectRoot,
+        private readonly ?ScriptCommandCatalog $scriptCommands,
     ) {
     }
 
@@ -148,9 +149,10 @@ final class CutsceneAsset
      * @param string|null $projectRoot The project root.
      * @return self The asset; read-only, with a reason, when a file cannot be read safely.
      */
-    public static function load(CutsceneType $type, string $folder, ?string $projectRoot = null): self
+    public static function load(CutsceneType $type, string $folder, ?string $projectRoot = null,
+        ?ScriptCommandCatalog $scriptCommands = null): self
     {
-        $asset = new self($type, basename($folder), rtrim($folder, '/'), $projectRoot);
+        $asset = new self($type, basename($folder), rtrim($folder, '/'), $projectRoot, $scriptCommands);
         $dataPath = $asset->dataPath();
         $partnerPath = $asset->partnerPath();
 
@@ -175,8 +177,14 @@ final class CutsceneAsset
             $reasons[] = sprintf('%s could not be evaluated (%s)', basename($dataPath), $throwable->getMessage());
         }
 
+        $adapter = $type === CutsceneType::CINEMATIC ? null : SiblingJsonTimeline::detect($partnerSource, $asset->id);
         try {
-            $partner = $asset->evaluate($partnerPath);
+            if ($adapter !== null) {
+                $asset->loadJsonTimeline($adapter);
+            }
+            $partner = $asset->partnerDocument instanceof JsonTimelineDocument
+                ? $asset->partnerDocument->getValues()
+                : $asset->evaluate($partnerPath);
         } catch (Throwable $throwable) {
             $partner = [];
             $reasons[] = sprintf('%s could not be evaluated (%s)', basename($partnerPath), $throwable->getMessage());
@@ -198,10 +206,12 @@ final class CutsceneAsset
             $reasons[] = sprintf('%s cannot be rewritten in place: %s', basename($dataPath), rtrim($unreadable->getMessage(), '.'));
         }
 
-        try {
-            $asset->partnerDocument = PhpArraySourceDocument::parse($partnerSource);
-        } catch (SourceUnreadable $unreadable) {
-            $reasons[] = sprintf('%s cannot be rewritten in place: %s', basename($partnerPath), rtrim($unreadable->getMessage(), '.'));
+        if ($adapter === null) {
+            try {
+                $asset->partnerDocument = PhpArraySourceDocument::parse($partnerSource);
+            } catch (SourceUnreadable $unreadable) {
+                $reasons[] = sprintf('%s cannot be rewritten in place: %s', basename($partnerPath), rtrim($unreadable->getMessage(), '.'));
+            }
         }
 
         $declared = trim(strval($data['id'] ?? ''));
@@ -238,9 +248,10 @@ final class CutsceneAsset
      * @param array<string, mixed> $payload The initial payload, partner keys included.
      * @param string|null $projectRoot The project root.
      */
-    public static function create(CutsceneType $type, string $id, string $root, array $payload, ?string $projectRoot = null): self
+    public static function create(CutsceneType $type, string $id, string $root, array $payload, ?string $projectRoot = null,
+        ?ScriptCommandCatalog $scriptCommands = null): self
     {
-        $asset = new self($type, $id, rtrim($root, '/') . '/' . $id, $projectRoot);
+        $asset = new self($type, $id, rtrim($root, '/') . '/' . $id, $projectRoot, $scriptCommands);
         $asset->isNew = true;
         $asset->shape = CutscenePairShape::forNewAsset($type);
 
@@ -276,14 +287,49 @@ final class CutsceneAsset
         return $this->folder . '/' . $this->id . $this->type->partnerSuffix();
     }
 
+    private function jsonTimelinePath(): string
+    {
+        return $this->folder . '/' . $this->id . '.json';
+    }
+
+    private function partnerSourcePath(): string
+    {
+        return $this->jsonTimeline === null ? $this->partnerPath() : $this->jsonTimelinePath();
+    }
+
+    private function loadJsonTimeline(SiblingJsonTimeline $adapter): void
+    {
+        $path = $this->jsonTimelinePath();
+        $this->assertJsonTimelinePaths();
+        if (! is_file($path) || ($source = file_get_contents($path)) === false) {
+            throw new SourceUnreadable(sprintf('%s could not be read.', basename($path)));
+        }
+
+        $this->jsonTimeline = $adapter;
+        $this->baselineSources[$path] = $source;
+        $this->partnerDocument = JsonTimelineDocument::parse($source);
+    }
+
+    private function assertJsonTimelinePaths(): void
+    {
+        foreach ([$this->folder, $this->partnerPath(), $this->jsonTimelinePath()] as $path) {
+            clearstatcache(true, $path);
+            if (is_link($path)) {
+                throw new SourceUnreadable(sprintf('%s must belong to the asset folder and cannot be a symbolic link.', basename($path)));
+            }
+        }
+    }
+
     /**
-     * Returns the files a save of this asset would write.
+     * Returns all files owned by this asset, including a JSON timeline when present.
      *
-     * @return string[]
+     * @return list<string>
      */
     public function paths(): array
     {
-        return $this->type->hasDataFile() ? [$this->dataPath(), $this->partnerPath()] : [$this->partnerPath()];
+        $paths = $this->type->hasDataFile() ? [$this->dataPath(), $this->partnerPath()] : [$this->partnerPath()];
+
+        return $this->jsonTimeline === null ? $paths : [...$paths, $this->jsonTimelinePath()];
     }
 
     /**
@@ -551,7 +597,7 @@ final class CutsceneAsset
     public function copyAs(string $id, string $root): self
     {
         $this->assertSourcesUnchanged();
-        $copy = new self($this->type, $id, rtrim($root, '/') . '/' . $id, $this->projectRoot);
+        $copy = new self($this->type, $id, rtrim($root, '/') . '/' . $id, $this->projectRoot, $this->scriptCommands);
         $copy->isNew = true;
         $copy->data = $this->type->hasDataFile() && array_key_exists('id', $this->data)
             ? [...$this->data, 'id' => $id]
@@ -562,6 +608,13 @@ final class CutsceneAsset
         $copy->shape = CutscenePairShape::of($this->type, $copy->data, $copy->partner);
         $copy->loadedData = [];
         $copy->loadedPartner = [];
+        if ($this->jsonTimeline !== null && $this->partnerDocument instanceof JsonTimelineDocument) {
+            $copy->jsonTimeline = $this->jsonTimeline->copyFor($id);
+            $copy->partnerDocument = JsonTimelineDocument::parse(
+                $this->proposedSource($this->partnerDocument, $this->loadedPartner, $this->partner, $this->type->partnerNoun()),
+            );
+            $copy->loadedPartner = $this->partner;
+        }
         $copy->persistedFingerprint = null;
         $copy->touchState();
 
@@ -735,9 +788,13 @@ final class CutsceneAsset
      * @return array<array-key, mixed>
      * @throws RuntimeException When the source cannot take the change; nothing is changed.
      */
-    private function alignWithProposedSource(?PhpArraySourceDocument $document, array $loaded, array $value, string $noun): array
+    private function alignWithProposedSource(PhpArraySourceDocument|JsonTimelineDocument|null $document, array $loaded, array $value, string $noun): array
     {
-        return PhpArraySourceDocument::parse($this->proposedSource($document, $loaded, $value, $noun))->alignValue($value);
+        $source = $this->proposedSource($document, $loaded, $value, $noun);
+
+        return $document instanceof JsonTimelineDocument
+            ? $value
+            : PhpArraySourceDocument::parse($source)->alignValue($value);
     }
 
     /**
@@ -771,9 +828,15 @@ final class CutsceneAsset
     /** Requires each member to hold what it was loaded with. */
     private function expectLoadedSources(FileSetTransaction $transaction): void
     {
+        if ($this->jsonTimeline !== null) {
+            $this->assertJsonTimelinePaths();
+        }
+
         foreach ($this->paths() as $path) {
-            // Null requires an unwritten/deleted member to remain absent.
-            $transaction->expectSource($path, $this->baselineSources[$path] ?? null, allowMissing: true);
+            // Null requires an unwritten or deleted member to remain absent.
+            // Either JSON-side file disappearing invalidates the loaded asset.
+            $allowMissing = $this->jsonTimeline === null || $path === $this->dataPath();
+            $transaction->expectSource($path, $this->baselineSources[$path] ?? null, allowMissing: $allowMissing);
         }
     }
 
@@ -790,8 +853,8 @@ final class CutsceneAsset
     /** Changed rest bindings must be complete; untouched graphical references survive Terminal edits. */
     public function assertInnPresentationsValid(?ReferenceCatalog $references = null): void
     {
-        InnPresentationFields::assertChangedCommandsValid($this->loadedData, $this->data, $references);
-        InnPresentationFields::assertChangedCommandsValid($this->loadedPartner, $this->partner, $references);
+        InnPresentationFields::assertChangedCommandsValid($this->loadedData, $this->data, $references, commands: $this->scriptCommands);
+        InnPresentationFields::assertChangedCommandsValid($this->loadedPartner, $this->partner, $references, commands: $this->scriptCommands);
     }
 
     /** Only changed/new route paths must be complete before either source can be installed. */
@@ -862,9 +925,12 @@ final class CutsceneAsset
         $dataSource = $hasData ? $this->proposedSource($this->dataDocument, $this->loadedData, $this->data, 'data') : '';
         $partnerSource = $this->proposedSource($this->partnerDocument, $this->loadedPartner, $this->partner, $this->type->partnerNoun());
         $writeData = $hasData && (! is_file($this->dataPath()) || $this->isNew || $this->dataDocument === null || $dataSource !== $this->dataDocument->source);
-        $writePartner = ! is_file($this->partnerPath()) || $this->isNew || $this->partnerDocument === null || $partnerSource !== $this->partnerDocument->source;
+        $partnerSourcePath = $this->partnerSourcePath();
+        $writePartner = ! is_file($partnerSourcePath) || $this->isNew || $this->partnerDocument === null || $partnerSource !== $this->partnerDocument->source;
+        $adapterSource = $this->jsonTimeline?->source;
+        $writeAdapter = $adapterSource !== null && ! is_file($this->partnerPath());
 
-        if (! $writeData && ! $writePartner) {
+        if (! $writeData && ! $writePartner && ! $writeAdapter) {
             // Dirty by fingerprint but identical in source: a same-value
             // round trip. Clean without writing.
             $kept = [$this->dataDocument?->source ?? $dataSource, $this->partnerDocument?->source ?? $partnerSource];
@@ -874,22 +940,33 @@ final class CutsceneAsset
 
         return new PreparedSave(
             $label,
-            function (FileSetTransaction $transaction) use ($writeData, $writePartner, $dataSource, $partnerSource): void {
+            function (FileSetTransaction $transaction) use ($writeData, $writePartner, $dataSource, $partnerSource, $partnerSourcePath, $writeAdapter, $adapterSource): void {
                 $this->expectLoadedSources($transaction);
                 if ($writeData) {
                     $transaction->write($this->dataPath(), $dataSource);
                 }
                 if ($writePartner) {
-                    $transaction->write($this->partnerPath(), $partnerSource);
+                    $transaction->write($partnerSourcePath, $partnerSource);
+                }
+                if ($writeAdapter) {
+                    $transaction->write($this->partnerPath(), $adapterSource);
                 }
             },
             // The exact bytes that will be installed, read back where the
             // game would evaluate them, then hydrated through the engine.
-            function (array $staged) use ($hasData): void {
+            function (array $staged) use ($hasData, $partnerSourcePath): void {
                 $evaluatedData = $hasData
                     ? $this->evaluateSide($staged[$this->dataPath()] ?? $this->dataPath(), $this->data, basename($this->dataPath()), 'data')
                     : [];
-                $evaluatedPartner = $this->evaluateSide($staged[$this->partnerPath()] ?? $this->partnerPath(), $this->partner, basename($this->partnerPath()), $this->type->partnerNoun());
+                // The checked adapter reads this file with these decoder flags.
+                // Requiring the adapter here would read the live, unstaged JSON.
+                $evaluatedPartner = $this->evaluateSide(
+                    $staged[$partnerSourcePath] ?? $partnerSourcePath,
+                    $this->partner,
+                    basename($partnerSourcePath),
+                    $this->type->partnerNoun(),
+                    json: $this->jsonTimeline !== null,
+                );
                 $this->hydrate($evaluatedData, $evaluatedPartner);
             },
             function () use ($dataSource, $partnerSource): void {
@@ -907,9 +984,11 @@ final class CutsceneAsset
      * @param array<array-key, mixed> $expected What the editor holds for that side.
      * @return array<array-key, mixed> The evaluated array.
      */
-    private function evaluateSide(string $path, array $expected, string $name, string $noun): array
+    private function evaluateSide(string $path, array $expected, string $name, string $noun, bool $json = false): array
     {
-        $evaluated = $this->evaluate($path);
+        $evaluated = $json
+            ? json_decode((string) file_get_contents($path), true, flags: JSON_THROW_ON_ERROR)
+            : $this->evaluate($path);
 
         if (! is_array($evaluated) || $evaluated !== $expected) {
             throw new RuntimeException(sprintf('%s would not read back as the edited %s; nothing was written.', $name, $noun));
@@ -930,7 +1009,7 @@ final class CutsceneAsset
         $partner ??= $this->partner;
 
         if ($this->type === CutsceneType::CINEMATIC) {
-            CutsceneHydration::cinematic($data, $partner, $this->projectRoot);
+            CutsceneHydration::cinematic($data, $partner, $this->projectRoot, $this->scriptCommands);
 
             return;
         }
@@ -979,7 +1058,7 @@ final class CutsceneAsset
             throw new RuntimeException(sprintf('%s is a summon, not a cinematic.', $this->id));
         }
 
-        return CutsceneHydration::cinematic($this->data, $this->partner, $this->projectRoot);
+        return CutsceneHydration::cinematic($this->data, $this->partner, $this->projectRoot, $this->scriptCommands);
     }
 
     /**
@@ -1022,9 +1101,7 @@ final class CutsceneAsset
      * @throws FileSetTransactionFailure When the pair could not be removed.
      */
     /**
-     * The save that removes a deleted asset's pair. Only the two files are
-     * the asset's; anything else in the folder is left for its author, and
-     * the folder goes only when empty.
+     * Removes only the asset's owned source files. The folder goes only when empty.
      */
     private function prepareDeletion(string $label): PreparedSave
     {
@@ -1061,11 +1138,13 @@ final class CutsceneAsset
      * @param array<array-key, mixed> $loaded
      * @param array<array-key, mixed> $current
      */
-    private function proposedSource(?PhpArraySourceDocument $document, array $loaded, array $current, string $noun): string
+    private function proposedSource(PhpArraySourceDocument|JsonTimelineDocument|null $document, array $loaded, array $current, string $noun): string
     {
         if (isset($this->sourceTemplates[$noun])) {
             $template = $this->sourceTemplates[$noun];
-            $document = PhpArraySourceDocument::parse($template['source']);
+            $document = $document instanceof JsonTimelineDocument
+                ? JsonTimelineDocument::parse($template['source'])
+                : PhpArraySourceDocument::parse($template['source']);
             $loaded = $template['values'];
         }
         if ($document === null) {
@@ -1075,7 +1154,9 @@ final class CutsceneAsset
         }
 
         try {
-            return ArraySourceWriter::rewrite($document, $loaded, $current)->source;
+            return $document instanceof JsonTimelineDocument
+                ? $document->rewrite($current)
+                : ArraySourceWriter::rewrite($document, $loaded, $current)->source;
         } catch (SourcePreservationRefusal $refusal) {
             throw new RuntimeException(sprintf('The %s of "%s" cannot be rewritten safely: %s', $noun, $this->id, $refusal->getMessage()), 0, $refusal);
         }
@@ -1086,11 +1167,18 @@ final class CutsceneAsset
      */
     private function adoptWritten(string $dataSource, string $partnerSource): void
     {
-        $this->baselineSources = $this->type->hasDataFile()
-            ? [$this->dataPath() => $dataSource, $this->partnerPath() => $partnerSource]
-            : [$this->partnerPath() => $partnerSource];
+        $this->baselineSources = [$this->partnerSourcePath() => $partnerSource];
+        if ($this->type->hasDataFile()) {
+            $this->baselineSources[$this->dataPath()] = $dataSource;
+        }
+        if ($this->jsonTimeline !== null) {
+            $this->baselineSources[$this->partnerPath()] = $this->jsonTimeline->source;
+        }
+
         $this->dataDocument = $this->type->hasDataFile() ? PhpArraySourceDocument::parse($dataSource) : null;
-        $this->partnerDocument = PhpArraySourceDocument::parse($partnerSource);
+        $this->partnerDocument = $this->jsonTimeline === null
+            ? PhpArraySourceDocument::parse($partnerSource)
+            : JsonTimelineDocument::parse($partnerSource);
         $this->loadedData = $this->data;
         $this->loadedPartner = $this->partner;
         $this->shape = CutscenePairShape::of($this->type, $this->data, $this->partner);

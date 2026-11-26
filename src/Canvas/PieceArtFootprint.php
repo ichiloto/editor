@@ -56,29 +56,49 @@ final class PieceArtFootprint
      */
     public static function findMisfits(ProjectMap $map, TilesetPiece $piece, array $origins): array
     {
-        if ($piece->connects !== null) {
-            return array_fill_keys(array_keys($origins),
-                sprintf('%s is drawn as connected cells; its art cannot be laid alone. Nothing was changed.', $piece->name));
-        }
-        if (! self::hasTiles($piece)) {
-            return array_fill_keys(array_keys($origins), sprintf('%s has no tiles to lay. Nothing was changed.', $piece->name));
-        }
-        $collision = $map->getResolvedCollisionMap();
-        try {
-            $tileset = $map->loadTileset();
-        } catch (\Throwable $error) {
-            throw new MapSourceRefusal('Pieces are unavailable: ' . $error->getMessage(), previous: $error);
-        }
-        $resolveGlyph = $map->createGlyphCollisionResolver();
-        $misfits = [];
-        foreach ($origins as $index => $origin) {
-            $misfit = self::findMisfit($piece, $origin, $collision, $tileset, $resolveGlyph);
-            if ($misfit !== null) {
-                $misfits[$index] = $misfit;
-            }
-        }
+        return self::createMisfitFinder($map)($piece, $origins);
+    }
 
-        return $misfits;
+    /**
+     * Shares the current map's physical data across piece queries within one placement or validation pass.
+     * Create a new finder after any map or tileset edit.
+     *
+     * @return Closure(TilesetPiece, list<array{x: int, y: int}>): array<int, string>
+     */
+    public static function createMisfitFinder(ProjectMap $map): Closure
+    {
+        $collision = null;
+        $tileset = null;
+        $resolveGlyph = $map->createGlyphCollisionResolver();
+
+        return static function (TilesetPiece $piece, array $origins) use ($map, $resolveGlyph, &$collision, &$tileset): array {
+            if ($piece->connects !== null) {
+                return array_fill_keys(array_keys($origins),
+                    sprintf('%s is drawn as connected cells; its art cannot be laid alone. Nothing was changed.', $piece->name));
+            }
+            if (! self::hasTiles($piece)) {
+                return array_fill_keys(array_keys($origins), sprintf('%s has no tiles to lay. Nothing was changed.', $piece->name));
+            }
+            if ($collision === null) {
+                $currentCollision = $map->getResolvedCollisionMap();
+                try {
+                    $tileset = $map->loadTileset();
+                } catch (\Throwable $error) {
+                    throw new MapSourceRefusal('Pieces are unavailable: ' . $error->getMessage(), previous: $error);
+                }
+                $collision = $currentCollision;
+            }
+
+            $misfits = [];
+            foreach ($origins as $index => $origin) {
+                $misfit = self::findMisfit($piece, $origin, $collision, $tileset, $resolveGlyph);
+                if ($misfit !== null) {
+                    $misfits[$index] = $misfit;
+                }
+            }
+
+            return $misfits;
+        };
     }
 
     /**

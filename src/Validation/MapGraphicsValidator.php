@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Closure;
 use Ichiloto\Editor\Canvas\GlyphTilePlanner;
 use Ichiloto\Editor\Canvas\PieceArtFootprint;
 use Ichiloto\Editor\Canvas\PieceRole;
@@ -47,6 +48,10 @@ final class MapGraphicsValidator
     private const int CELLS_NAMED = 3;
     /** The sheets whose tiles are ground, judged for see-through edges. */
     private const array GROUND_SHEETS = [TilesetSheet::A1, TilesetSheet::A2, TilesetSheet::A3, TilesetSheet::A4, TilesetSheet::A5];
+
+    private ?string $groundAssetRoot = null;
+    private ?Tileset $groundTileset = null;
+    private ?TileCoverage $groundCoverage = null;
 
     private function __construct()
     {
@@ -102,14 +107,26 @@ final class MapGraphicsValidator
      */
     public static function validateCoverage(ProjectMap $map): array
     {
-        $coverage = self::readCoverage($map);
-        if ($coverage === null) {
+        return (new self())->checkCoverage($map);
+    }
+
+    /** @return Closure(ProjectMap): list<Issue> Use one fresh check for each validation pass. */
+    public static function createCoverageCheck(): Closure
+    {
+        return (new self())->checkCoverage(...);
+    }
+
+    /** @return list<Issue> */
+    private function checkCoverage(ProjectMap $map): array
+    {
+        $graphics = self::readGraphics($map);
+        if ($graphics === null) {
             return [];
         }
-        [$tileset, $layers, , $graphics] = $coverage;
+        [$tileset, $layers] = [$graphics->tileset, $graphics->layers];
 
         return [...self::checkUnplacedPieceTiles($map, $graphics), ...self::checkRaisedArtUnderFurniture($map, $graphics),
-            ...self::checkMissingArtTiles($map, $tileset, $layers), ...self::checkSeeThroughGround($map, $tileset, $layers)];
+            ...self::checkMissingArtTiles($map, $tileset, $layers), ...$this->checkSeeThroughGround($map, $tileset, $layers)];
     }
 
     /**
@@ -225,17 +242,6 @@ final class MapGraphicsValidator
      */
     public static function listShownGlyphCells(ProjectMap $map): ?array
     {
-        return self::readCoverage($map)[2] ?? null;
-    }
-
-    /**
-     * The map's tileset, its readable tile layers, the cells whose glyph
-     * still shows and the graphics they make; null when they cannot be read.
-     *
-     * @return array{0: Tileset, 1: list<MapTileLayer>, 2: list<array{x: int, y: int, glyph: string, layer: string}>, 3: MapGraphics}|null
-     */
-    private static function readCoverage(ProjectMap $map): ?array
-    {
         $graphics = self::readGraphics($map);
         if ($graphics === null) {
             return null;
@@ -243,10 +249,8 @@ final class MapGraphicsValidator
 
         // A world object that draws covers its glyph cells in the field, as the Engine's presentation applies it.
         $covered = WorldObjectAuthoring::readRestingCoverage($map)['glyphs'] ?? [];
-        $shown = array_values(array_filter($graphics->getShownGlyphCells($map->getLayerSet(), $map->getAssetRoot()),
+        return array_values(array_filter($graphics->getShownGlyphCells($map->getLayerSet(), $map->getAssetRoot()),
             static fn(array $cell): bool => ! isset($covered[$cell['layer']][$cell['y']][$cell['x']])));
-
-        return [$graphics->tileset, $graphics->layers, $shown, $graphics];
     }
 
     /**
@@ -368,13 +372,14 @@ final class MapGraphicsValidator
 
         $issues = [];
         $laid = [];
+        $findMisfits = PieceArtFootprint::createMisfitFinder($map);
         foreach ($layers as $layer) {
             $stale = [];
             for ($y = 0; $y < $layer->height; $y++) {
                 foreach ($layer->getRowTiles($y) as $x => $id) {
                     if (isset($drawn[$layer->name][$id]) && ! isset($explained[$layer->name][$y][$x][$id])
                         && ! isset($kept[$layer->name][$y][$x])
-                        && ! self::isLaidArt($map, $graphics, $artists[$layer->name][$id] ?? [], $layer->name, $id, $x, $y, $laid)) {
+                        && ! self::isLaidArt($graphics, $artists[$layer->name][$id] ?? [], $layer->name, $id, $x, $y, $findMisfits, $laid)) {
                         $stale[] = "({$x}, {$y})";
                     }
                 }
@@ -400,10 +405,11 @@ final class MapGraphicsValidator
      * tile on this cell, over a footprint that holds its art.
      *
      * @param array<string, TilesetPiece> $pieces The item pieces that draw the tile on its layer.
+     * @param Closure(TilesetPiece, list<array{x: int, y: int}>): array<int, string> $findMisfits
      * @param array<string, bool> $laid Whether each copy found so far fits, by piece and top-left.
      */
-    private static function isLaidArt(ProjectMap $map, MapGraphics $graphics, array $pieces, string $tileLayer, int $id, int $x, int $y,
-        array &$laid): bool
+    private static function isLaidArt(MapGraphics $graphics, array $pieces, string $tileLayer, int $id, int $x, int $y,
+        Closure $findMisfits, array &$laid): bool
     {
         foreach ($pieces as $piece) {
             foreach ($graphics->findPieceStampsCovering($piece, $x, $y) as [$left, $top]) {
@@ -411,7 +417,7 @@ final class MapGraphicsValidator
                     continue;
                 }
                 try {
-                    $laid["{$piece->id}:{$left},{$top}"] ??= PieceArtFootprint::findMisfits($map, $piece, [['x' => $left, 'y' => $top]]) === [];
+                    $laid["{$piece->id}:{$left},{$top}"] ??= $findMisfits($piece, [['x' => $left, 'y' => $top]]) === [];
                 } catch (MapSourceRefusal) {
                     // The tileset's own checks report why it cannot be read.
                     return false;
@@ -471,7 +477,7 @@ final class MapGraphicsValidator
      * @param list<MapTileLayer> $layers The readable tile layers.
      * @return list<Issue>
      */
-    private static function checkSeeThroughGround(ProjectMap $map, Tileset $tileset, array $layers): array
+    private function checkSeeThroughGround(ProjectMap $map, Tileset $tileset, array $layers): array
     {
         // Tiles from a sheet the Engine cannot use draw nothing, so their glyphs show; checkSheets() says why.
         $usable = array_keys($tileset->getUsableSheets($map->getAssetRoot())['sheets'] ?? []);
@@ -486,8 +492,7 @@ final class MapGraphicsValidator
         $cornerSheets = self::readCornerSheets($map, $tileset, $layers)['usable'];
         $corners = array_map(static fn(MapTileLayer $layer): array => CornerShape::resolveLayer($layer->readTiles(), array_keys($cornerSheets),
             $tileset->getCornerJoins()), $layers);
-        // One reader per pass, so replaced artwork is read as it is now.
-        $coverage = new TileCoverage($tileset, $map->getAssetRoot());
+        $coverage = $this->getGroundCoverage($tileset, $map->getAssetRoot());
         $verdicts = [];
         $cells = [];
         foreach ($grids[0] ?? [] as $y => $row) {
@@ -507,9 +512,11 @@ final class MapGraphicsValidator
                 if ($stack === [] && $shares === []) {
                     continue;
                 }
-                $signature = implode(',', $stack) . '|' . implode(',', array_map(static fn(array $share): string => implode(':', $share), $shares));
+                $cornerSignatures = array_map(static fn(array $share): string =>
+                    implode(':', [...$share, ...$cornerSheets[$share[0]]->getCellVariants($x, $y)]), $shares);
+                $signature = implode(',', $stack) . '|' . implode(',', $cornerSignatures);
                 if (! isset($verdicts[$signature])) {
-                    $verdicts[$signature] = $coverage->findUncovered($stack, $shares);
+                    $verdicts[$signature] = $coverage->findUncovered($stack, $shares, $x, $y);
                     if ($verdicts[$signature]['diagnostic'] !== null) {
                         // The artwork or GD cannot be read: say so once, never guess that the cells are covered.
                         return [Issue::warning($map->mapId, 'Its ground could not be checked for see-through edges: '
@@ -531,6 +538,18 @@ final class MapGraphicsValidator
             sprintf('%d %s the background through see-through ground tiles in some animation frame, a dark seam in the game: %s%s.',
                 count($cells), count($cells) === 1 ? 'cell can show' : 'cells can show', implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''),
             'Paint ground beneath them on a lower tile layer, such as the map\'s base or the floor they stand on; the game draws nothing under a tile.')];
+    }
+
+    private function getGroundCoverage(Tileset $tileset, string $assetRoot): TileCoverage
+    {
+        // Keep one tileset's masks for this pass. Different maps supply their own tile layers and corner positions.
+        if ($this->groundCoverage === null || $this->groundAssetRoot !== $assetRoot || $this->groundTileset != $tileset) {
+            $this->groundCoverage = new TileCoverage($tileset, $assetRoot, array_column(self::GROUND_SHEETS, 'value'));
+            $this->groundAssetRoot = $assetRoot;
+            $this->groundTileset = $tileset;
+        }
+
+        return $this->groundCoverage;
     }
 
     /**

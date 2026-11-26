@@ -22,7 +22,6 @@ use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Presentation\PartyStageSelection;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
-use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Throwable;
 
@@ -85,7 +84,8 @@ final class EffectValidator
             }
         }
 
-        return [...$issues, ...self::checkSourceEffectAnchors($workspace), ...self::checkConditionBindings($workspace)];
+        return [...$issues, ...self::checkSourceEffectAnchors($workspace), ...self::checkTargetImpactOwners($workspace),
+            ...self::checkConditionBindings($workspace)];
     }
 
     /**
@@ -163,6 +163,34 @@ final class EffectValidator
                 $issues[] = Issue::error(sprintf('assets/Data/animations.php: %s sourceEffectAnchor', strval($animation->get('name'))),
                     sprintf('Its caster effect %s cannot start at the target phase: %s', $effect, $refusal->getMessage()),
                     'Start it in its own phase (source), or choose a caster effect played on battlefield tracks.');
+            }
+        }
+
+        return $issues;
+    }
+
+    /** @return Issue[] */
+    private static function checkTargetImpactOwners(ProjectWorkspace $workspace): array
+    {
+        $issues = [];
+        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
+            $effect = $animation->get('targetEffect');
+            if ($animation->get('targetImpactSeconds') === null || !is_string($effect) || $effect === '') {
+                continue;
+            }
+            foreach (EffectPresentation::cases() as $presentation) {
+                try {
+                    $target = $workspace->catalogs->loadEffectTimeline($effect, true, $presentation);
+                } catch (Throwable) {
+                    continue; // The primary effect check reports unreadable sources.
+                }
+                try {
+                    BattleCommandTimeline::assertSharedTargetImpactOwner($target);
+                } catch (\InvalidArgumentException $refusal) {
+                    $issues[] = Issue::error(sprintf('assets/Data/animations.php: %s targetImpactSeconds', strval($animation->get('name'))),
+                        sprintf('The target effect %s also owns combat resolution for the %s presentation.', $effect, $presentation->value),
+                        $refusal->getMessage());
+                }
             }
         }
 
@@ -351,9 +379,10 @@ final class EffectValidator
             }
         }
 
+        $commands = $workspace->getScriptCommandCatalog();
         ScriptCommandUses::visitCommands($workspace, $workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [], null,
-            static function (array $command, string $where) use ($name): void {
-                $definition = is_string($command['type'] ?? null) ? (ScriptCommandRegistry::getCatalog()->definitions[$command['type']] ?? null) : null;
+            static function (array $command, string $where) use ($name, $commands): void {
+                $definition = is_string($command['type'] ?? null) ? $commands->findDefinition($command['type']) : null;
                 foreach ($definition?->fields ?? [] as $field) {
                     if ($field->reference !== ScriptCommandReference::STAGE_TIMELINE) { continue; }
                     $value = $command;

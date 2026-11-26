@@ -212,3 +212,38 @@ it('offers the events of the map a map event condition names, each read as what 
         ->toContain(['value' => 'E', 'label' => 'E · Chest'])
         ->and($session->listReferences('test-map', 'map_event_markers', ['map' => 'no-such-map']))->toBe([]);
 });
+
+it('offers and validates actual one-shot NPC dialogue completions with map event conditions', function () {
+    $root = npcSessionProject([[
+        'id' => 'guide',
+        'name' => 'Guide',
+        'x' => 2,
+        'y' => 1,
+        'dialogue' => [
+            ['id' => 'introduction', 'lines' => [['text' => 'Meet me on the road.']], 'reusable' => false],
+            ['id' => 'directions', 'lines' => [['text' => 'Follow the road.']]],
+        ],
+    ]]);
+    $session = EditorSession::open($root);
+    $references = $session->listReferences('test-map', 'map_event_markers', ['map' => 'test-map']);
+    expect($references)->toContain(['value' => 'guide/introduction', 'label' => 'Guide · introduction'])
+        ->and(array_column($references, 'value'))->not->toContain('guide/directions')
+        ->and($references)->toContain(['value' => 'E', 'label' => 'E · Chest']);
+
+    $conditions = [[
+        'type' => 'any',
+        'conditions' => [
+            ['type' => 'map_event', 'name' => 'test-map', 'marker' => 'guide/introduction'],
+            ['type' => 'map_event', 'name' => 'test-map', 'marker' => 'guide/directions'],
+            ['type' => 'map_event', 'name' => 'retired-map', 'marker' => 'guide/introduction'],
+        ],
+    ]];
+    $file = "$root/assets/Maps/test-map/test-map.data.php";
+    $map = require $file;
+    $map['events']['E']['conditions'] = $conditions;
+    file_put_contents($file, '<?php return ' . var_export($map, true) . ';');
+    $issues = validateProject($root);
+    expect(issuesMentioning($issues, 'completion "guide/introduction"'))->toBe([])
+        ->and(issuesMentioning($issues, 'completion "guide/directions"'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'map "retired-map"'))->toHaveCount(1);
+});

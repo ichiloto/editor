@@ -9,8 +9,10 @@ use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\Session\EditorSession;
+use Ichiloto\Editor\Session\SessionHost;
 use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Cutscenes\Presentation\CinematicStageSession;
 
 /**
  * The Engine's reduced-motion samples (`reducedMotionSamples`) and a track's
@@ -638,36 +640,53 @@ it('plays the terminal editor\'s timeline preview with motion: a track drawn for
     expect(array_map(static fn(array $segment): string => $segment['drawCommands'][0]['trackId'], $terminal->activeSegments(1)))->toBe(['spark', 'stroke']);
 });
 
-it('draws a declared stage\'s canvas with motion: the art made for reduced motion alone is left off it', function () {
+it('previews the authored reduced-motion stage holds and clears through the graphical host', function () {
     $root = makeTemporaryProject('reduced-motion-stage-');
-    $art = static fn(string $id, string $motion, string $asset): array => ['id' => $id, 'type' => 'image', 'anchor' => 'stage', 'motion' => $motion,
-        'asset' => $asset, 'placement' => ['subject' => 'visitor'], 'keyframes' => [['frame' => 1, 'duration' => 5, 'sourceFrame' => 0]]];
+    $art = static fn(string $id, string $motion, string $asset, int $frame, int $duration): array => ['id' => $id, 'type' => 'image', 'anchor' => 'stage', 'motion' => $motion,
+        'asset' => $asset, 'placement' => ['subject' => 'visitor'], 'keyframes' => [['frame' => $frame, 'duration' => $duration, 'sourceFrame' => 0]]];
     mkdir($root . '/assets/Animations/quiet-hold', 0o777, true);
     file_put_contents(effectTimelinePath($root, 'quiet-hold'), '<?php return ' . var_export([
         'fps' => 8, 'lengthFrames' => 8, 'restFrame' => 3,
-        'reducedMotionSamples' => [['frame' => 0, 'duration' => 6, 'sourceFrame' => 3], ['frame' => 6, 'duration' => 2, 'sourceFrame' => null]],
+        'reducedMotionSamples' => [['frame' => 0, 'duration' => 5, 'sourceFrame' => 4], ['frame' => 5, 'duration' => 3, 'sourceFrame' => null]],
         'stage' => [
-            'canvas' => ['width' => 80, 'height' => 40], 'startFrame' => 1, 'restoreFrame' => 6,
+            'canvas' => ['width' => 80, 'height' => 40], 'startFrame' => 1, 'restoreFrame' => 6, 'background' => 'black',
             'subjects' => [['id' => 'visitor', 'position' => ['x' => 40, 'y' => 30], 'size' => ['width' => 16, 'height' => 16]]],
             'camera' => [['id' => 'wide', 'frame' => 0, 'focus' => ['x' => 40, 'y' => 20], 'zoom' => 1]],
             'covers' => [['id' => 'clear', 'frame' => 0, 'color' => 'black', 'opacity' => 0], ['id' => 'exit', 'frame' => 7, 'color' => 'black', 'opacity' => 0]],
         ],
-        'tracks' => [$art('portrait', 'normal', 'Graphics/Effects/visitor.png'), $art('still', 'reduced', 'Graphics/Effects/visitor-still.png')],
+        'tracks' => [$art('portrait', 'normal', 'Graphics/Effects/visitor.png', 1, 5), $art('still', 'reduced', 'Graphics/Effects/visitor-still.png', 4, 1)],
         'cues' => [],
     ], true) . ';');
     writeTilesetTestPng($root . '/assets/Graphics/Effects/visitor.png', 8, 8);
     writeTilesetTestPng($root . '/assets/Graphics/Effects/visitor-still.png', 8, 8);
-    $session = EditorSession::open($root);
-    $preview = $session->readCutscenePreview('cutscenes/effect', 0, 3, 24, 3);
+    $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
+    $request = static fn(int $id, string $method, array $params): array =>
+        $host->handle(json_encode(['id' => $id, 'method' => $method, 'params' => $params], JSON_THROW_ON_ERROR));
+    $request(0, 'hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+    $params = ['category' => 'cutscenes/effect', 'index' => 0, 'frame' => 2, 'width' => 24, 'height' => 3];
+    $normal = $request(1, 'cutscenes.preview', $params)['result'];
+    $held = $request(2, 'cutscenes.preview', [...$params, 'reducedMotion' => true])['result'];
+    $clear = $request(3, 'cutscenes.preview', [...$params, 'frame' => 5, 'reducedMotion' => true])['result'];
+
     $asset = libraryOf(openEffectEditor($root, 'quiet-hold'))->find(CutsceneType::EFFECT, 'quiet-hold');
     $compiled = $asset->compileEffect(EffectPresentation::GRAPHICAL, false, forStage: true);
-    $stage = new EffectPreviewStage(EffectPresentation::GRAPHICAL, false, forStage: true);
-    $assets = static fn(?array $canvas): array => array_column($canvas['images'] ?? [], 'asset');
+    $runtime = new CinematicStageSession($compiled, $root . '/assets', 1.0);
+    $runtime->advanceTo(2 / 8);
+    $heldInGame = $runtime->getCanvas(80, 40, reducedMotion: true)?->toArray();
+    $runtime->advanceTo(5 / 8);
+    $assets = static fn(array $canvas): array => array_column($canvas['images'], 'asset');
 
-    expect($preview['stageCanvasError'])->toBeNull()
-        ->and($assets($preview['stageCanvas']))->toBe(['Graphics/Effects/visitor.png'])
-        // The stage asked for with reduced motion draws the other track's art instead.
-        ->and($assets($stage->renderCanvas($compiled, $root . '/assets', 3, 80, 40, reducedMotion: true)?->toArray()))->toBe(['Graphics/Effects/visitor-still.png'])
+    expect($normal['stageCanvasError'])->toBeNull()
+        ->and($assets($normal['stageCanvas']))->toBe(['Graphics/Effects/visitor.png'])
+        ->and($held['stageCanvasError'])->toBeNull()
+        ->and($assets($held['stageCanvas']))->toBe(['Graphics/Effects/visitor-still.png'])
+        ->and($held['stageCanvas'])->toBe($heldInGame)
+        ->and($held['frame'])->toBe(2)
+        ->and($held['terminalCanvas'])->toBe($normal['terminalCanvas'])
+        ->and($runtime->getCanvas(80, 40, reducedMotion: true))->toBeNull()
+        ->and($clear['stageCanvasError'])->toBeNull()
+        ->and($clear['stageCanvas']['images'])->toBe([])
+        ->and($clear['stageCanvas'])->not->toHaveKey('composites')
         ->and(array_column(CutsceneOutline::of(CutsceneType::EFFECT, $asset->payload())->rows(), 'text'))
-        ->toContain('Reduced motion (2 samples)', 'f0 +6  holds frame 3', 'f6 +2  clears the picture');
+        ->toContain('Reduced motion (2 samples)', 'f0 +5  holds frame 4', 'f5 +3  clears the picture');
 });

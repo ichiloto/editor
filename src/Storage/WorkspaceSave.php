@@ -4,11 +4,10 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Storage;
 
-use Closure;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\SharedFileTransaction;
-use Ichiloto\Editor\History\Command;
+use Ichiloto\Editor\Maps\SaveRelocationPlan;
 use Ichiloto\Editor\Maps\SaveRelocationPlanner;
 use Ichiloto\Editor\Maps\UnsavedMapLines;
 use Ichiloto\Editor\ProjectActorDatabase;
@@ -34,6 +33,22 @@ use Throwable;
  */
 final class WorkspaceSave
 {
+    /** Saves an individual map and its reviewed relocation in one transaction. */
+    public static function saveMap(ProjectWorkspace $workspace, ProjectMap $map, ?SaveRelocationPlan $relocation,
+        ?callable $backup = null): string
+    {
+        if ($relocation === null) {
+            return $map->save($backup);
+        }
+        if ($map->willMoveOnSave()) {
+            throw new RuntimeException(sprintf('%s would move its folder. Reload the map before saving.', $map->mapId));
+        }
+
+        SaveSet::commit($workspace->projectRoot, [$relocation->prepareApply(), $map->prepareSave()], $backup);
+
+        return $map->mapId;
+    }
+
     /**
      * Works out the save of every unsaved document of a workspace, writing
      * nothing, for a change set to install as one {@see SaveSet}: its
@@ -41,8 +56,7 @@ final class WorkspaceSave
      * relocations it needs. What the maps name is declared before them, as
      * Save All writes it.
      *
-     * @param (Closure(Command): void)|null $recordRelocation Records the undo step of a map's save relocations once
-     *     they are installed; null refuses a map whose save would move existing saves.
+     * @param bool $relocateSaves Whether the author approved the map save relocations.
      * @param list<string> $unrelocatedMaps Maps whose existing saves this write plans no relocations for: maps made
      *     since the last save, such as in an open change set, on which no save stands whatever their blank files on
      *     disk hold, and maps the change set retires, whose saves the retirement already moves.
@@ -52,7 +66,7 @@ final class WorkspaceSave
      * @throws RuntimeException When a document cannot take its edits, a map would move its folder, or a map needs
      *     save relocations that were not allowed. Nothing is written.
      */
-    public static function prepareAll(ProjectWorkspace $workspace, ?Closure $recordRelocation = null, array $unrelocatedMaps = [],
+    public static function prepareAll(ProjectWorkspace $workspace, bool $relocateSaves = false, array $unrelocatedMaps = [],
         ?UnsavedMapLines $unsavedLines = null): array
     {
         $saves = [];
@@ -104,11 +118,11 @@ final class WorkspaceSave
             static fn(ProjectMap $map): bool => ! in_array($map->mapId, $unrelocatedMaps, true))), $workspace->projectRoot, $unsavedLines);
 
         if ($relocation !== null) {
-            if ($recordRelocation === null) {
+            if (! $relocateSaves) {
                 throw new RuntimeException(sprintf('Saving %s moves existing saves; allow the relocations first.', $relocation->mapId));
             }
 
-            $saves[] = $relocation->prepareApply($recordRelocation);
+            $saves[] = $relocation->prepareApply();
         }
 
         foreach ($dirtyMaps as $map) {

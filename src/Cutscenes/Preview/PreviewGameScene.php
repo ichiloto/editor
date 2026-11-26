@@ -25,6 +25,7 @@ use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePresentationProvider
 use Ichiloto\Engine\Progress\Bestiary;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeCatalog;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeProgressService;
+use Ichiloto\Engine\Progression\WorldAbilityCatalog;
 use Ichiloto\Engine\Rendering\Presentation\ScenePresentationContext;
 use Ichiloto\Engine\Scenes\Game\GameScene;
 use Ichiloto\Engine\UI\UIManager;
@@ -71,6 +72,7 @@ final class PreviewGameScene extends GameScene
         int $screenHeight,
         string $initialMapId,
         ?CampaignSession $campaign = null,
+        ?WorldAbilityCatalog $worldAbilities = null,
     ) {
         $this->sceneManager = $previewSceneManager;
         // The scene's UI belongs to its Game, as every scene's does: the Engine's notice queue asks the current scene
@@ -86,7 +88,7 @@ final class PreviewGameScene extends GameScene
             $this->adoptCampaign($campaign);
             $campaign->setCurrentMapId($initialMapId);
         } else {
-            $this->gameState = new GameState();
+            $this->gameState = new GameState($worldAbilities);
             $this->party = new Party();
             $this->knowledge = new KnowledgeProgressService(KnowledgeCatalog::fromProject());
             $this->bestiary = new Bestiary($this->knowledge);

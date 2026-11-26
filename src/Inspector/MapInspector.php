@@ -61,7 +61,6 @@ use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
 use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
-use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Closure;
 use InvalidArgumentException;
 use Throwable;
@@ -2497,7 +2496,7 @@ final readonly class MapInspector
     /** Inline routes use the same schema/coercion as command records; the map remains their owner. */
     private function projectMovementRoute(array $route, ?array $ownerCommands = null): ProjectRecordDatabase
     {
-        $schema = RecordSchemaCatalog::forKey('common_events')
+        $schema = RecordSchemaCatalog::forKey('common_events', $this->references->getScriptCommandCatalog())
             ?? throw new \LogicException('The event command schema is unavailable.');
         $records = ProjectRecordDatabase::overOwnedList($schema, '', [['commands' => [$route]]], static function (array $entries): void {}, $this->graphical);
         $records->useAuthoringReferences($ownerCommands === null ? $this->references
@@ -2840,7 +2839,7 @@ final readonly class MapInspector
     private function flattenInspectorFields(array $data, array $path, ?array $list = null): array
     {
         $fields = [];
-        $definition = is_string($data['type'] ?? null) ? (ScriptCommandRegistry::getCatalog()->definitions[$data['type']] ?? null) : null;
+        $definition = is_string($data['type'] ?? null) ? $this->references->getScriptCommandCatalog()->findDefinition($data['type']) : null;
         foreach ($definition?->fields ?? [] as $field) {
             if ($field->reference !== ScriptCommandReference::STAGE_TIMELINE) { continue; }
             $segments = explode('.', $field->key);

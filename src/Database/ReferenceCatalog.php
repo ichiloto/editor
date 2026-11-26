@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Ichiloto\Editor\Assets\AudioRole;
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectActor;
@@ -31,6 +32,7 @@ use Ichiloto\Engine\Battle\CounterAttackRule;
 use Ichiloto\Engine\Battle\CrisisAbility;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattleTargetContactSequence;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Entities\Enumerations\ArmorType;
 use Ichiloto\Engine\Entities\Enumerations\Occasion;
@@ -41,6 +43,7 @@ use Ichiloto\Engine\Battle\Resolution\ResolutionKind;
 use Ichiloto\Engine\Entities\Magic\MagicEffectType;
 use Ichiloto\Engine\Battle\Insight\RevealFact;
 use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
+use Ichiloto\Engine\Field\NpcPages;
 use InvalidArgumentException;
 use Throwable;
 
@@ -70,6 +73,10 @@ final class ReferenceCatalog
 
     /** The current effect's caster-attached projectile image tracks. */
     public const string EFFECT_FLIGHT_TRACKS = 'effect_flight_tracks';
+    public const string EFFECT_GRAPHICAL_CONTACT_TRACKS = 'effect_graphical_contact_tracks';
+
+    /** Terminal tracks on the current effect that the Engine can stage per selected recipient. */
+    public const string EFFECT_TERMINAL_CONTACT_TRACKS = 'effect_terminal_contact_tracks';
 
     /** The conversation groups the current cinematic declares, which `select_conversation_group` selects among. */
     public const string CINEMATIC_CONVERSATION_GROUPS = 'cinematic_conversation_groups';
@@ -218,6 +225,8 @@ final class ReferenceCatalog
         'summon_cues',
         'effect_cues',
         self::EFFECT_FLIGHT_TRACKS,
+        self::EFFECT_GRAPHICAL_CONTACT_TRACKS,
+        self::EFFECT_TERMINAL_CONTACT_TRACKS,
         'stage_subjects',
         'stage_attachments',
         self::BATTLE_POSE_POINTS,
@@ -314,6 +323,11 @@ final class ReferenceCatalog
         /** The reusable event script being edited, whose staged actors are its own and its calling cinematics'. */
         private readonly ?string $currentScriptId = null,
     ) {
+    }
+
+    public function getScriptCommandCatalog(): ScriptCommandCatalog
+    {
+        return $this->workspace->getScriptCommandCatalog();
     }
 
     /**
@@ -455,6 +469,8 @@ final class ReferenceCatalog
             'summon_cues' => $this->getTimelineCueIds(CutsceneType::SUMMON),
             'effect_cues' => $this->getTimelineCueIds(CutsceneType::EFFECT),
             self::EFFECT_FLIGHT_TRACKS => $this->getEffectFlightTrackIds(),
+            self::EFFECT_GRAPHICAL_CONTACT_TRACKS => $this->getGraphicalContactTrackIds(),
+            self::EFFECT_TERMINAL_CONTACT_TRACKS => $this->getEffectTerminalContactTrackIds(),
             // A summon sequence's stage: the subjects it registers, and every
             // named point on them (each image picks one on its own subject).
             'stage_subjects' => array_keys($this->getStageSubjects()),
@@ -963,7 +979,8 @@ final class ReferenceCatalog
             return self::listTilesetTileLayers($owner);
         }
         if (str_starts_with($source, 'tutorial_')) {
-            $this->tutorialReferences ??= new \Ichiloto\Engine\Progression\TutorialProjectReferences($this->workspace->projectRoot . '/assets');
+            $this->tutorialReferences ??= new \Ichiloto\Engine\Progression\TutorialProjectReferences(
+                $this->workspace->projectRoot . '/assets', $this->getScriptCommandCatalog());
 
             return \Ichiloto\Editor\Progression\TutorialFields::listChoices($source, $entry === [] ? $holder : $entry, $this->tutorialReferences);
         }
@@ -1058,6 +1075,7 @@ final class ReferenceCatalog
             self::CINEMATIC_CONVERSATION_GROUPS => $cinematic === null ? null : ConversationFields::listGroups($cinematic->data()),
             ConversationFields::SPEAKERS => $cinematic === null ? null : ConversationFields::listSpeakers($cinematic->data()),
             FramingFields::SUBJECTS => $cinematic === null ? null : FramingFields::listSubjects($cinematic->data()),
+            self::EFFECT_GRAPHICAL_CONTACT_TRACKS => $this->getGraphicalContactTrackIds(),
             default => null,
         };
     }
@@ -1257,6 +1275,20 @@ final class ReferenceCatalog
     }
 
     /** @return list<string> */
+    private function getGraphicalContactTrackIds(): array
+    {
+        if ($this->currentCutscene?->type !== CutsceneType::EFFECT
+            || $this->currentCutscene->getPresentationView() === EffectPresentation::TERMINAL) {
+            return [];
+        }
+
+        $tracks = array_filter((array) ($this->currentCutscene->payload()[CutsceneSchemas::TRACKS_KEY] ?? []),
+            BattleTargetContactSequence::canUseTrack(...));
+
+        return array_values(array_map(static fn(array $track): string => $track['id'], $tracks));
+    }
+
+    /** @return list<string> */
     private function getEffectFlightTrackIds(): array
     {
         if ($this->currentCutscene?->type !== CutsceneType::EFFECT) {
@@ -1268,6 +1300,24 @@ final class ReferenceCatalog
             \Ichiloto\Engine\Animations\Timelines\EffectTimelineValidator::canTimeFlightFromTrack(...));
 
         return array_values(array_map(static fn(array $track): string => $track['id'], $tracks));
+    }
+
+    /** @return list<string> */
+    private function getEffectTerminalContactTrackIds(): array
+    {
+        if ($this->currentCutscene?->type !== CutsceneType::EFFECT) {
+            return [];
+        }
+
+        $payload = $this->currentCutscene->payload();
+        if (($payload[CutsceneAsset::SEQUENCE_KEY] ?? null) === EffectPresentation::GRAPHICAL->value) {
+            return [];
+        }
+
+        $tracks = array_filter((array) ($payload[CutsceneSchemas::TRACKS_KEY] ?? []),
+            \Ichiloto\Engine\Battle\Presentation\TerminalBattleContacts::canUseTrack(...));
+
+        return array_values(array_column($tracks, 'id'));
     }
 
     /**
@@ -1549,32 +1599,45 @@ final class ReferenceCatalog
     }
 
     /**
-     * Determines whether a category is one this knows how to resolve.
-     *
-     * @param string $category The kind of reference.
-     * @return bool True when it is.
-     */
-    /**
-     * The events of a map a map event condition names, each read as what it is
-     * ("E · Chest"): what a marker is chosen from in both editors.
+     * The map's event markers and one-shot NPC pages, identified the way the
+     * Engine stores their completions. Used by the condition picker and validator.
      *
      * @return array{values: list<string>, labels: array<string, string>}
      */
     public function listMapEventMarkers(string $mapId): array
     {
-        $index = array_search($mapId, $this->workspace->mapIds, true);
-        $map = $index === false ? null : ($this->workspace->maps[$index] ?? null);
-        $events = $map?->getMapDataField(['events']);
+        $map = $this->findMap($mapId);
         $values = $labels = [];
-        foreach (is_array($events) ? $events : [] as $marker => $event) {
+        foreach ($map?->getEventDefinitions() ?? [] as $marker => $event) {
             $kind = preg_replace('/(EventTrigger|Trigger)$/', '', basename(str_replace('\\', '/', strval($event['class'] ?? ''))));
             $what = $event['data']['scriptId'] ?? $event['data']['cinematicId'] ?? $event['data']['destinationMap'] ?? null;
             $values[] = (string) $marker;
             $labels[(string) $marker] = trim(sprintf('%s · %s %s', $marker, $kind, is_string($what) ? $what : ''));
         }
-        return ['values' => $values, 'labels' => $labels];
+
+        foreach ($map?->getNpcs()->all() ?? [] as $npc) {
+            try {
+                $pages = NpcPages::fromEntry($npc->toArray());
+            } catch (InvalidArgumentException) {
+                // NPC validation reports the malformed entry itself.
+                continue;
+            }
+
+            foreach ($pages->pages as $page) {
+                if ($page->reusable || $pages->npcId === null || $page->id === null) {
+                    continue;
+                }
+
+                $marker = NpcPages::getCompletionMarker($pages->npcId, $page->id);
+                $values[] = $marker;
+                $labels[$marker] = sprintf('%s · %s', $npc->getName(), $page->id);
+            }
+        }
+
+        return ['values' => array_values(array_unique($values)), 'labels' => $labels];
     }
 
+    /** Whether the catalogue can resolve the category. */
     public static function knows(string $category): bool
     {
         return in_array($category, self::CATEGORIES, true);

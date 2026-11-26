@@ -38,11 +38,18 @@ final class SkitBackdropValidator
 
         $issues = [];
         $usedRegions = [];
+        $mapsUsingRegionBackdrops = [];
         $mapBindings = [];
         foreach ($workspace->maps as $map) {
             $binding = SkitBackdrop::readMapBinding($map->getEditableData());
             $mapBindings[$map->mapId] = $binding;
-            if (RegionCatalog::isRegionName($binding['region'] ?? null)) { $usedRegions[$binding['region']] = true; }
+            if (RegionCatalog::isRegionName($binding['region'] ?? null)) {
+                $region = $binding['region'];
+                $usedRegions[$region] = true;
+                if (($binding[SkitBackdrop::MAP_KEY] ?? null) === null) {
+                    $mapsUsingRegionBackdrops[$region][] = $map->mapId;
+                }
+            }
             if (($binding[SkitBackdrop::MAP_KEY] ?? null) === null) { continue; }
             $problem = self::describeProblem($binding[SkitBackdrop::MAP_KEY], $root, 'The map\'s backdrop');
             if ($problem !== null) {
@@ -60,7 +67,7 @@ final class SkitBackdropValidator
             $problem = $asset === null ? null : self::describeProblem($asset, $root, sprintf('Region %s\'s backdrop', $name));
             if ($problem !== null) {
                 $issues[] = Issue::warning(sprintf('%s: %s', self::REGIONS, $name), $problem,
-                    'Choose a project image for its Skit Backdrop on the Regions page.');
+                    'Choose a project image for its Skit Backdrop on the Regions page.', $mapsUsingRegionBackdrops[$name] ?? []);
             }
         }
 
@@ -79,15 +86,18 @@ final class SkitBackdropValidator
         foreach ($workspace->getRecordDatabase('skits')?->getRecords() ?? [] as $record) {
             $skit = (array) $record->toArray();
             $where = sprintf('skit %s', strval($skit['id'] ?? $record->recordId));
+            $title = $skit['title'] ?? null;
+            $subject = is_string($title) && trim($title) !== '' ? sprintf('“%s”', trim($title)) : ucfirst($where);
+            $gate = trim(strval($skit['where'] ?? ''));
+            $maps = $gate === '' ? $mapBindings : array_intersect_key($mapBindings, [$gate => true]);
             if (($skit[SkitBackdrop::SKIT_KEY] ?? null) !== null) {
-                $problem = self::describeProblem($skit[SkitBackdrop::SKIT_KEY], $root, 'The skit\'s backdrop');
+                $problem = self::describeProblem($skit[SkitBackdrop::SKIT_KEY], $root, sprintf('The backdrop for %s', $subject));
                 if ($problem !== null) {
-                    $issues[] = Issue::warning($where, $problem, 'Choose a project image for its Backdrop, or none to show the place\'s.');
+                    $issues[] = Issue::warning($where, $problem, 'Choose a project image for its Backdrop, or none to show the place\'s.',
+                        array_map(strval(...), array_keys($maps)));
                 }
                 continue;
             }
-            $gate = trim(strval($skit['where'] ?? ''));
-            $maps = $gate === '' ? $mapBindings : array_intersect_key($mapBindings, [$gate => true]);
             $bare = array_keys(array_filter($maps, static fn(array $binding): bool
                 => ($binding[SkitBackdrop::MAP_KEY] ?? null) === null && SkitBackdrop::resolve($skit, $binding, $regions)->asset === null));
             if ($bare === []) { continue; }
@@ -95,9 +105,10 @@ final class SkitBackdropValidator
             $listed = implode(', ', array_slice($bare, 0, self::LISTED_MAPS))
                 . (count($bare) > self::LISTED_MAPS ? sprintf(' and %d more', count($bare) - self::LISTED_MAPS) : '');
             $issue = Issue::warning($where, $gate === ''
-                ? sprintf('It can play on any map, and %d of them show it no backdrop: %s.', count($bare), $listed)
-                : sprintf('It plays on map %s, which shows it no backdrop.', $gate),
-                'Choose a Skit Backdrop on the map or its region (Regions page), or a Backdrop on the skit when its content needs one setting.');
+                ? sprintf('%s has no backdrop on %d maps where it can play, including %s.', $subject, count($bare), $listed)
+                : sprintf('%s has no backdrop on %s.', $subject, $gate),
+                'Choose a Skit Backdrop on the map or its region (Regions page), or a Backdrop on the skit when its content needs one setting.',
+                $gate === '' ? array_map(strval(...), $bare) : []);
             $issues = [...$issues, ...($gate === '' ? [$issue] : Issue::attributeToMap([$issue], $gate))];
         }
 

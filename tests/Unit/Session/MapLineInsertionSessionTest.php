@@ -295,3 +295,20 @@ PHP);
             ['type' => 'common_event', 'id' => 'outer'],
         ]);
 });
+
+it('requires a fresh line-edit review when the saved layout snapshot changes', function () {
+    $root = mapInsertionSessionProject();
+    $manifest = $root . '/assets/Data/save-compatibility.php';
+    $settings = require $manifest;
+    $settings['positionHistoryFile'] = 'save-position-history.json';
+    file_put_contents($manifest, "<?php\nreturn " . var_export($settings, true) . ";\n");
+    $history = $root . '/assets/Data/' . $settings['positionHistoryFile'];
+    file_put_contents($history, '[{"version":0,"maps":{"test-map":[[1,1]]}}]');
+
+    $session = EditorSession::open($root);
+    $question = $session->insertMapLines('test-map', $session->readMap('test-map')['revision'], 'y', 1, 1);
+    file_put_contents($history, "\n", FILE_APPEND);
+    $before = sourceHashTree($root);
+    expect(fn() => writeReviewedMapInsertion($session, $question))->toThrow(SessionRefusal::class, 'files or choices changed')
+        ->and(sourceHashTree($root))->toBe($before);
+});

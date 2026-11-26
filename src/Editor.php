@@ -60,6 +60,7 @@ use Ichiloto\Editor\Database\TroopAuthoring;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
 use Ichiloto\Editor\Maps\MapLinePlan;
+use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\SaveManifestStep;
 use Ichiloto\Editor\Maps\SaveRelocationPlan;
 use Ichiloto\Editor\Maps\SaveRelocationPlanner;
@@ -82,6 +83,7 @@ use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\IO\InputDecoder;
 use Ichiloto\Editor\IO\InputRouter;
+use Ichiloto\Engine\UI\Navigation\{ToolNavigationAction, ToolNavigationBindings, DirectionalFocusGraph, FocusDirection};
 use Ichiloto\Editor\IO\KeyBinding;
 use Ichiloto\Editor\Navigation\NavigationEntry;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
@@ -291,6 +293,7 @@ final class Editor
      * interceptor, the base binding table, or the focused pane.
      */
     private readonly InputRouter $inputRouter;
+    private readonly ToolNavigationBindings $toolNavigation;
     private bool $isCharacterMapOpen {
         get => $this->modals->has(Modal::CHARACTER_MAP);
         set {
@@ -760,6 +763,7 @@ final class Editor
 
     public function __construct(private readonly string $projectRoot)
     {
+        $this->toolNavigation = new ToolNavigationBindings();
         $this->actorAuthoring = new ActorAuthoring();
         $this->toasts = new ToastQueue();
         $this->commandPalette = new CommandPalette();
@@ -773,8 +777,8 @@ final class Editor
         $this->terminal = new TerminalHost(self::TERMINAL_SIZE_PROBE_INTERVAL_SECONDS);
         $this->theme = EditorTheme::default();
         $this->loop = new EditorLoop(self::FRAME_BUDGET_MICROSECONDS, $this->terminal);
-        $this->inspectorFieldEditor = new TextFieldEditor();
-        $this->databaseFieldEditor = new TextFieldEditor();
+        $this->inspectorFieldEditor = new TextFieldEditor($this->toolNavigation);
+        $this->databaseFieldEditor = new TextFieldEditor($this->toolNavigation);
         $this->referencePicker = new ReferencePicker();
         $this->conditionEditor = new ConditionEditor();
         $this->affinityEditor = new AffinityEditor();
@@ -1252,6 +1256,11 @@ final class Editor
     private function buildInputRouter(): InputRouter
     {
         $router = new InputRouter($this->modals);
+        $toolBindings = $this->toolNavigation;
+        $paneControls = implode(' / ', array_filter([
+            $toolBindings->controlForAction(ToolNavigationAction::NEXT_PANE->value)?->label,
+            $toolBindings->controlForAction(ToolNavigationAction::PREVIOUS_PANE->value)?->label,
+        ]));
 
         $router->bindModal(Modal::STATUS_DETAIL, $this->handleStatusDetailInput(...));
         $router->bindModal(Modal::UNSAVED_CHANGES_GUARD, $this->handleUnsavedChangesGuardInput(...));
@@ -1283,10 +1292,13 @@ final class Editor
         );
 
         $router->bindBase(
-            KeyBinding::exact("\x11", $this->requestQuit(...), 'Ctrl+Q', 'Quit (guards unsaved changes)'),
+            KeyBinding::when(fn(string $input): bool => $toolBindings->decodeAction($input) === ToolNavigationAction::QUIT,
+                $this->requestQuit(...), $toolBindings->controlForAction(ToolNavigationAction::QUIT->value)?->label, 'Quit (guards unsaved changes)'),
             KeyBinding::attempt($this->handleHistoryShortcut(...), 'Ctrl+Z / Ctrl+Y', 'Undo / redo the last mutation'),
-            KeyBinding::exact("\t", fn() => $this->cycleFocus(1), 'Tab / Shift+Tab', 'Cycle pane focus'),
-            KeyBinding::contains("\033[Z", fn() => $this->cycleFocus(-1)),
+            KeyBinding::when(fn(string $input): bool => $toolBindings->decodeAction($input) === ToolNavigationAction::NEXT_PANE,
+                fn() => $this->cycleFocus(1), $paneControls, 'Cycle pane focus'),
+            KeyBinding::when(fn(string $input): bool => $toolBindings->decodeAction($input) === ToolNavigationAction::PREVIOUS_PANE,
+                fn() => $this->cycleFocus(-1)),
             KeyBinding::when(
                 fn(string $input): bool => $this->isShiftArrow($input, 'up') || $this->isShiftArrow($input, 'left'),
                 fn() => $this->cycleFocus(-1),
@@ -1551,7 +1563,7 @@ final class Editor
             return;
         }
 
-        if ($input === "\033" && $this->assetFilter->isActive()) {
+        if ($this->isToolCancelInput($input) && $this->assetFilter->isActive()) {
             $this->clearAssetFilter();
         }
     }
@@ -1657,7 +1669,7 @@ final class Editor
      */
     private function handleAssetFilterInput(string $input): void
     {
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->clearAssetFilter();
             return;
         }
@@ -1772,7 +1784,7 @@ final class Editor
             return;
         }
 
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             // Esc always walks one level out: Paint returns to Normal, a
             // pending tool anchor pops before the completed selection, and
             // NPC mode (its moves and prompts already cancelled above)
@@ -1922,7 +1934,7 @@ final class Editor
             return;
         }
 
-        if ($input === "\033" && $this->databaseCommandFramePath !== []) {
+        if ($this->isToolCancelInput($input) && $this->databaseCommandFramePath !== []) {
             $this->leaveCommandFrame();
 
             return;
@@ -2264,7 +2276,7 @@ final class Editor
             return true;
         }
 
-        if ($input === "\033" && $this->npcMoveInProgress !== null) {
+        if ($this->isToolCancelInput($input) && $this->npcMoveInProgress !== null) {
             $this->npcMoveInProgress = null;
             $this->setStatus('Move cancelled.');
             $this->renderCanvasArea();
@@ -2588,7 +2600,7 @@ final class Editor
      */
     private function handleNpcNameInput(string $input): void
     {
-        if ($input === "\033" || $input === "\x1b") {
+        if ($this->isToolCancelInput($input)) {
             $this->npcCreationInProgress = null;
             $this->npcNameBuffer = '';
             $this->setStatus('No NPC created.');
@@ -2867,7 +2879,7 @@ final class Editor
             return;
         }
 
-        if (($input === "\033" || $input === "\x1b") && $this->getOpenEventInspectorFrame() !== []) {
+        if (($this->isToolCancelInput($input)) && $this->getOpenEventInspectorFrame() !== []) {
             $this->leaveEventInspectorFrame();
 
             return;
@@ -2964,7 +2976,8 @@ final class Editor
      */
     private function handleDatabaseInput(string $input, string $normalizedInput): void
     {
-        if ($input === "\x11") {
+        $toolAction = $this->toolNavigation->decodeAction($input);
+        if ($toolAction === ToolNavigationAction::QUIT) {
             $this->requestQuit();
             return;
         }
@@ -3035,19 +3048,19 @@ final class Editor
             return;
         }
 
-        if ($input === "\033" && $this->databaseFilter->isActive()) {
+        if ($this->isToolCancelInput($input) && $this->databaseFilter->isActive()) {
             // Esc pops exactly one level: the live filter before the screen.
             $this->clearDatabaseFilter();
             return;
         }
 
-        if ($input === "\033" && $this->databaseCommandFramePath !== []) {
+        if ($this->isToolCancelInput($input) && $this->databaseCommandFramePath !== []) {
             // Esc pops exactly one level: the open frame before the screen.
             $this->leaveCommandFrame();
             return;
         }
 
-        if ($input === "\033" || $this->inputRouter->isDatabaseKey($input)) {
+        if ($this->isToolCancelInput($input) || $this->inputRouter->isDatabaseKey($input)) {
             // Esc pops exactly one level; Ctrl+D / F2 toggles the screen.
             $this->closeDatabaseWindow();
             return;
@@ -3080,12 +3093,12 @@ final class Editor
             return;
         }
 
-        if ($input === "\t") {
+        if ($toolAction === ToolNavigationAction::NEXT_PANE) {
             $this->cycleDatabaseFocus(1);
             return;
         }
 
-        if (str_contains($input, "\033[Z")) {
+        if ($toolAction === ToolNavigationAction::PREVIOUS_PANE) {
             $this->cycleDatabaseFocus(-1);
             return;
         }
@@ -3213,17 +3226,7 @@ final class Editor
             self::DATABASE_FOCUS_LIST,
             self::DATABASE_FOCUS_SETTINGS,
         ];
-        $currentIndex = array_search($this->databaseFocus, $paneOrder, true);
-        $currentIndex = is_int($currentIndex) ? $currentIndex : 0;
-        $nextIndex = $currentIndex + $step;
-
-        if ($nextIndex < 0) {
-            $nextIndex = count($paneOrder) - 1;
-        } elseif ($nextIndex >= count($paneOrder)) {
-            $nextIndex = 0;
-        }
-
-        $this->databaseFocus = $paneOrder[$nextIndex];
+        $this->databaseFocus = $this->getAdjacentToolPane($paneOrder, $this->databaseFocus, self::DATABASE_FOCUS_CATEGORIES, $step);
         $this->renderDatabaseFocusDependentArea();
     }
 
@@ -3339,26 +3342,31 @@ final class Editor
         $this->renderDatabasePanes(['settings']);
     }
 
-    /**
-     * Cycles focus between editor panes.
-     *
-     * @param int $step The focus step direction.
-     * @return void
-     */
+    /** Resolve the shared cancel action after the owning modal or text handler receives the token. */
+    private function isToolCancelInput(string $input): bool
+    {
+        return $this->toolNavigation->decodeAction($input) === ToolNavigationAction::CANCEL;
+    }
+
+    /** Cycle the visible editor panes in the requested direction. */
     private function cycleFocus(int $step): void
     {
         $paneOrder = [self::FOCUS_ASSETS, self::FOCUS_CANVAS, self::FOCUS_INSPECTOR];
-        $currentIndex = array_search($this->focusedPane, $paneOrder, true);
-        $currentIndex = is_int($currentIndex) ? $currentIndex : 0;
-        $nextIndex = $currentIndex + $step;
+        $this->setFocusedPane($this->getAdjacentToolPane($paneOrder, $this->focusedPane, self::FOCUS_ASSETS, $step));
+    }
 
-        if ($nextIndex < 0) {
-            $nextIndex = count($paneOrder) - 1;
-        } elseif ($nextIndex >= count($paneOrder)) {
-            $nextIndex = 0;
+    /** @param non-empty-list<string> $paneOrder */
+    private function getAdjacentToolPane(array $paneOrder, string $current, string $initialPane, int $step): string
+    {
+        if ($step === 0) {
+            return $current;
         }
 
-        $this->setFocusedPane($paneOrder[$nextIndex]);
+        $focus = new DirectionalFocusGraph();
+        $focus->replaceCycle($paneOrder, $initialPane);
+        $focus->setFocus($current);
+        $focus->moveFocus($step > 0 ? FocusDirection::RIGHT : FocusDirection::LEFT);
+        return $focus->getFocusedNode()->id;
     }
 
     /**
@@ -3631,7 +3639,7 @@ final class Editor
             return;
         }
 
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->closeCharacterMap('Character map closed.');
         }
     }
@@ -3784,7 +3792,7 @@ final class Editor
             return;
         }
 
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->isColorPickerOpen = false;
             $this->statusMessage = 'Colour picker closed.';
             $this->requestFullRender();
@@ -5278,7 +5286,7 @@ final class Editor
         // Destructive confirmation: Cancel is the default, so Enter cancels
         // too - discarding work always requires an explicit `y`.
         if (
-            $input === "\033" ||
+            $this->isToolCancelInput($input) ||
             $input === "\n" ||
             $input === "\r" ||
             $this->isPlainShortcut($normalizedInput, 'n')
@@ -5364,7 +5372,7 @@ final class Editor
     private function handleStatusDetailInput(string $input, string $normalizedInput): void
     {
         if (
-            $input === "\033" ||
+            $this->isToolCancelInput($input) ||
             $input === "\x05" ||
             $input === "\n" ||
             $input === "\r"
@@ -5395,7 +5403,7 @@ final class Editor
      */
     private function handleHelpInput(string $input, string $normalizedInput): void
     {
-        if ($input === "\033" || $input === '?' || $input === "\n" || $input === "\r") {
+        if ($this->isToolCancelInput($input) || $input === '?' || $input === "\n" || $input === "\r") {
             $this->isHelpOpen = false;
             $this->requestFullRender();
             return;
@@ -5554,7 +5562,7 @@ final class Editor
      */
     private function handleCommandPaletteInput(string $input, string $normalizedInput): void
     {
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->closeCommandPalette();
             $this->statusMessage = 'Command palette closed.';
             return;
@@ -5924,7 +5932,7 @@ final class Editor
      */
     private function handleDatabaseFilterInput(string $input): void
     {
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->clearDatabaseFilter();
             return;
         }
@@ -6041,7 +6049,7 @@ final class Editor
         // The Phase 4 destructive idiom: Cancel is the default, so Enter
         // cancels and only an explicit `y` deletes.
         if (
-            $input === "\033" ||
+            $this->isToolCancelInput($input) ||
             $input === "\n" ||
             $input === "\r" ||
             $this->isPlainShortcut($normalizedInput, 'n')
@@ -6681,7 +6689,7 @@ final class Editor
         // Destructive confirmation: Cancel is the default, so Enter cancels
         // too - moving the map folder always requires an explicit `y`.
         if (
-            $input === "\033" ||
+            $this->isToolCancelInput($input) ||
             $input === "\n" ||
             $input === "\r" ||
             $this->isPlainShortcut($normalizedInput, 'n')
@@ -6799,6 +6807,10 @@ final class Editor
             $this->setErrorStatus($throwable, 'Save');
             return;
         }
+        if ($reviewed !== null && $relocation === null) {
+            $this->setStatus('The map changed since the review. Save the current map to continue.', StatusLevel::WARN);
+            return;
+        }
         if ($relocation !== null && ($reviewed === null || ! hash_equals($relocation->getFingerprint(), $reviewed->getFingerprint()))) {
             $this->openSaveRelocationReview($relocation);
             return;
@@ -6807,25 +6819,9 @@ final class Editor
         $issues = MapValidator::validate($selectedMap, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace), $this->workspace->config);
         $errors = MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::ERROR));
         $warnings = MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING));
-        $step = null;
-
         try {
             $previousMapId = $selectedMap->mapId;
-            // Saves standing where the map is now solid or taken by an NPC move with it; the step is its own undo.
-            $step = $relocation?->apply();
-            // The save backs up, once, exactly the files it is about to
-            // replace -- so a clean map or an untouched member never
-            // produces a backup copy.
-            try {
-                $savedMapId = $selectedMap->save($this->backupBeforeSave(...));
-            } catch (Throwable $failure) {
-                $relocation?->revert();
-                $step = null;
-                throw $failure;
-            }
-            if ($step !== null) {
-                $this->recordCommand($step);
-            }
+            $savedMapId = WorkspaceSave::saveMap($this->workspace, $selectedMap, $relocation, $this->backupBeforeSave(...));
 
             if ($savedMapId !== $previousMapId) {
                 // The folder moved: swap in a freshly parsed map instance and
@@ -6845,7 +6841,7 @@ final class Editor
                 $this->clampInspectorSelection();
             }
 
-            $moved = $step === null ? '' : sprintf(' Saves on %d cells it makes solid now move to open floor (save content version %d).',
+            $moved = $relocation === null ? '' : sprintf(' Saves on %d cells it makes solid now move to open floor (save content version %d).',
                 array_sum(array_map(static fn(array $relocation): int => count($relocation['cells']), $relocation->relocations)), $relocation->contentVersion);
             if ($errors !== []) {
                 // Saved as a draft: the player would meet these, so validation fails until they are fixed.
@@ -6884,7 +6880,7 @@ final class Editor
         $this->eventOptionDialogEntries = [
             ['label' => 'Cancel', 'value' => 'cancel', 'description' => 'Save nothing.'],
             ['label' => 'Save and move saves', 'value' => 'write',
-                'description' => sprintf('Saves the map and adds save content version %d to %s. Ctrl+Z removes that step.', $plan->contentVersion, SaveManifestStep::PATH)],
+                'description' => sprintf('Saves the map and adds save content version %d to %s.', $plan->contentVersion, SaveManifestStep::PATH)],
             ...array_map(static fn(string $move): array => [
                 'label' => 'Move saves on ' . $move, 'value' => 'preview',
                 'description' => 'A save standing there would load inside what is now solid, or on an NPC.',
@@ -7035,7 +7031,7 @@ final class Editor
             return;
         }
 
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->closeDestinationDialog('Destination selection cancelled.');
             return;
         }
@@ -7068,7 +7064,7 @@ final class Editor
     private function handleDialogFilterKey(string $input): bool
     {
         if ($this->dialogFilter->isCapturing) {
-            if ($input === "\033") {
+            if ($this->isToolCancelInput($input)) {
                 $this->dialogFilter->clear();
                 $this->syncDialogSelectionToFilter();
                 $this->renderOverlays();
@@ -7113,7 +7109,7 @@ final class Editor
             return true;
         }
 
-        if ($input === "\033" && $this->dialogFilter->isActive()) {
+        if ($this->isToolCancelInput($input) && $this->dialogFilter->isActive()) {
             $this->dialogFilter->clear();
             $this->syncDialogSelectionToFilter();
             $this->renderOverlays();
@@ -7689,7 +7685,7 @@ final class Editor
      */
     private function handleDestinationSpawnSelectionInput(string $input, string $normalizedInput): void
     {
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->restoreDestinationSelectionContext('Destination selection cancelled.');
             return;
         }
@@ -7731,7 +7727,7 @@ final class Editor
     private function handleDestinationSpawnConfirmationInput(string $input, string $normalizedInput): void
     {
         if (
-            $input === "\033" ||
+            $this->isToolCancelInput($input) ||
             $this->isPlainShortcut($normalizedInput, 'n')
         ) {
             $this->isDestinationSpawnConfirmationOpen = false;
@@ -7868,7 +7864,7 @@ final class Editor
             return;
         }
 
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->closeEventTypeDialog('Event type selection cancelled.');
             return;
         }
@@ -7971,7 +7967,7 @@ final class Editor
         // Destructive confirmation: Cancel is the default, so Enter cancels
         // too - deleting a map always requires an explicit `y`.
         if (
-            $input === "\033" ||
+            $this->isToolCancelInput($input) ||
             $input === "\n" ||
             $input === "\r" ||
             $this->isPlainShortcut($normalizedInput, 'n')
@@ -9973,7 +9969,7 @@ final class Editor
             return;
         }
 
-        if ($input === "\033" || $input === "\x1b") {
+        if ($this->isToolCancelInput($input)) {
             $this->worldWriteEditor->close();
             $this->statusMessage = 'Writes unchanged.';
             $this->renderDatabasePanes(['settings']);
@@ -10062,7 +10058,7 @@ final class Editor
      */
     private function handleWorldWriteNameInput(string $input): void
     {
-        if ($input === "\033" || $input === "\x1b") {
+        if ($this->isToolCancelInput($input)) {
             $this->isWorldWriteNaming = false;
             $this->worldWriteNameBuffer = '';
             $this->statusMessage = 'Unchanged.';
@@ -10213,7 +10209,7 @@ final class Editor
      */
     private function handleBattleEntryPredicateEditorInput(string $input): void
     {
-        if ($input === "\033" || $input === "\x1b") {
+        if ($this->isToolCancelInput($input)) {
             $this->battleEntryPredicateEditor->close();
             $this->statusMessage = 'Actor predicates unchanged.';
             $this->renderDatabasePanes(['settings']);
@@ -10373,7 +10369,7 @@ final class Editor
     {
         $conversion = $this->animationConversion;
         $review = $conversion->getMode() === AnimationConversionEditor::MODE_REVIEW;
-        if ($input === "\033" || $input === "\x1b") {
+        if ($this->isToolCancelInput($input)) {
             if ($review) {
                 $conversion->returnToChoices();
             } else {
@@ -10513,7 +10509,7 @@ final class Editor
      */
     private function handleAffinityEditorInput(string $input): void
     {
-        if ($input === "\033" || $input === "\x1b") {
+        if ($this->isToolCancelInput($input)) {
             $this->affinityEditor->close();
             $this->statusMessage = 'Elemental wards unchanged.';
             $this->renderDatabasePanes(['settings']);
@@ -10659,7 +10655,7 @@ final class Editor
             return;
         }
 
-        if ($input === "\033" || $input === "\x1b") {
+        if ($this->isToolCancelInput($input)) {
             $this->conditionEditor->close();
             $this->statusMessage = 'Conditions unchanged.';
             $this->renderDatabasePanes(['settings']);
@@ -10801,7 +10797,7 @@ final class Editor
      */
     private function handleConditionNameInput(string $input): void
     {
-        if ($input === "\033" || $input === "\x1b") {
+        if ($this->isToolCancelInput($input)) {
             $this->statusMessage = $this->conditionTypedPart === ConditionTypedPart::VALUE ? 'Value unchanged.' : 'Name unchanged.';
             $this->conditionTypedPart = null;
             $this->conditionNameBuffer = '';
@@ -11091,7 +11087,7 @@ final class Editor
      */
     private function handleReferencePickerInput(string $input): void
     {
-        if ($input === "\033" || $input === "\x1b") {
+        if ($this->isToolCancelInput($input)) {
             $this->referencePicker->close();
             $this->statusMessage = 'Selection cancelled.';
             $this->renderDatabasePanes(['settings']);
@@ -12328,7 +12324,7 @@ final class Editor
         $rows = [
             sprintf('Delete %s?', $mapLabel),
             'This removes the map folder and all associated split files.',
-            '',
+            $this->describeSelectedMapReferences($selectedMap),
             'Y: Delete',
             'Enter/Esc/N: Cancel (default)',
         ];
@@ -12348,6 +12344,20 @@ final class Editor
         );
 
         $window->render();
+    }
+
+    private function describeSelectedMapReferences(?ProjectMap $map): string
+    {
+        if ($map === null || !$this->workspace instanceof ProjectWorkspace) {
+            return '';
+        }
+        $references = new MapReferences($this->workspace)->describe($map->mapId);
+
+        return match (count($references)) {
+            0 => '',
+            1 => sprintf('Referenced by %s.', $references[0]),
+            default => sprintf('%d references include %s.', count($references), $references[0]),
+        };
     }
 
     /**
@@ -14690,7 +14700,7 @@ final class Editor
             sprintf('  To:   %s', $targetMapId),
             '',
             'The old folder is deleted after the new one is written.',
-            '',
+            $this->describeSelectedMapReferences($selectedMap),
             'Y: Save and move',
             'Enter/Esc/N: Cancel (default)',
         ];

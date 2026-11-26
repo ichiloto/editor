@@ -336,3 +336,45 @@ it('scrolls the assets list so the selected map stays visible', function () {
 
   expect($window)->not->toBeNull();
 });
+
+
+it('shares tool pane cycling and semantic cancel while preserving modal ownership and the unsaved quit guard', function () {
+  $editor = uxEditor();
+  $profile = new \Ichiloto\Engine\UI\Navigation\ToolNavigationBindings();
+  foreach (['canvas', 'inspector', 'assets'] as $pane) {
+    callEditorMethod($editor, 'dispatchInput', "\t");
+    expect(getEditorProperty($editor, 'focusedPane'))->toBe($pane);
+  }
+  foreach (['inspector', 'canvas', 'assets'] as $pane) {
+    callEditorMethod($editor, 'dispatchInput', "\033[Z");
+    expect(getEditorProperty($editor, 'focusedPane'))->toBe($pane);
+  }
+  callEditorMethod($editor, 'dispatchInput', "\x04");
+  expect(getEditorProperty($editor, 'isDatabaseOpen'))->toBeTrue();
+  foreach (['database_list', 'database_settings', 'database_categories'] as $pane) {
+    callEditorMethod($editor, 'dispatchInput', "\t");
+    expect(getEditorProperty($editor, 'databaseFocus'))->toBe($pane)
+      ->and(getEditorProperty($editor, 'focusedPane'))->toBe('assets');
+  }
+  foreach (['database_settings', 'database_list', 'database_categories'] as $pane) {
+    callEditorMethod($editor, 'dispatchInput', "\033[Z");
+    expect(getEditorProperty($editor, 'databaseFocus'))->toBe($pane)
+      ->and(getEditorProperty($editor, 'focusedPane'))->toBe('assets');
+  }
+  callEditorMethod($editor, 'dispatchInput', "\033");
+  expect(getEditorProperty($editor, 'isDatabaseOpen'))->toBeFalse()->and(getEditorProperty($editor, 'isRunning'))->toBeTrue();
+  $workspace = getEditorProperty($editor, 'workspace');
+  $workspace->getMapByIndex(0)->setTileSymbol(1, 1, '#');
+  callEditorMethod($editor, 'dispatchInput', "\x11");
+  expect(getEditorProperty($editor, 'isUnsavedChangesGuardOpen'))->toBeTrue();
+  callEditorMethod($editor, 'dispatchInput', "\033");
+  expect(getEditorProperty($editor, 'isUnsavedChangesGuardOpen'))->toBeFalse()->and(getEditorProperty($editor, 'isRunning'))->toBeTrue()
+    ->and($profile->decodeAction("\033"))->toBe(\Ichiloto\Engine\UI\Navigation\ToolNavigationAction::CANCEL);
+  callEditorMethod($editor, 'dispatchInput', "\x04");
+  callEditorMethod($editor, 'dispatchInput', "\x11");
+  expect(getEditorProperty($editor, 'isUnsavedChangesGuardOpen'))->toBeTrue();
+  callEditorMethod($editor, 'dispatchInput', "\033");
+  expect(getEditorProperty($editor, 'isUnsavedChangesGuardOpen'))->toBeFalse()
+    ->and(getEditorProperty($editor, 'isDatabaseOpen'))->toBeTrue()
+    ->and(getEditorProperty($editor, 'isRunning'))->toBeTrue();
+});

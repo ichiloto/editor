@@ -9,7 +9,6 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
-use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 
 /**
  * Finds the commands a project's scripts run, wherever they are authored:
@@ -62,7 +61,7 @@ final class ScriptCommandUses
         }
 
         foreach ($cinematics as $cinematic) {
-            $collect([$cinematic->data(), $cinematic->partner()], sprintf('cinematic %s', $cinematic->id));
+            $collect([$cinematic->data(), $cinematic->partner()], sprintf('%s %s', $cinematic->type->noun(), $cinematic->id));
         }
     }
 
@@ -91,8 +90,9 @@ final class ScriptCommandUses
             }
         };
 
-        self::visitCommands($workspace, $cinematics, null, static function (array $command, string $where) use ($read): void {
-            $definition = is_string($command['type'] ?? null) ? ScriptCommandRegistry::getCatalog()->findDefinition($command['type']) : null;
+        $catalog = $workspace->getScriptCommandCatalog();
+        self::visitCommands($workspace, $cinematics, null, static function (array $command, string $where) use ($read, $catalog): void {
+            $definition = is_string($command['type'] ?? null) ? $catalog->findDefinition($command['type']) : null;
             if ($definition !== null) {
                 $read($definition->fields, $command, $where);
             }

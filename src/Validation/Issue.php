@@ -18,6 +18,7 @@ final readonly class Issue
    * @param string|null $map The id of the map it is about, when it is about one, so a check of some maps
    *     can select its issues without reading $where.
    * @param list<array{0: int, 1: int}> $cells The map cells it names, when it names any, so an editor can show them.
+   * @param list<string> $affectedMaps The maps affected by a shared issue, such as a skit used in several places.
    */
   public function __construct(
     public Severity $severity,
@@ -27,6 +28,7 @@ final readonly class Issue
     public ?string $code = null,
     public ?string $map = null,
     public array $cells = [],
+    public array $affectedMaps = [],
   )
   {
   }
@@ -41,19 +43,27 @@ final readonly class Issue
    */
   public static function attributeToMap(array $issues, string $mapId): array
   {
-    return array_map(static fn(self $issue): self => $issue->map !== null ? $issue
+    return array_map(static fn(self $issue): self => $issue->map !== null || $issue->affectedMaps !== [] ? $issue
       : new self($issue->severity, $issue->where, $issue->message, $issue->hint, $issue->code, $mapId, $issue->cells), array_values($issues));
+  }
+
+  /** @param list<string> $mapIds */
+  public function affectsAnyMap(array $mapIds): bool
+  {
+    return ($this->map !== null && in_array($this->map, $mapIds, true))
+      || array_intersect($this->affectedMaps, $mapIds) !== [];
   }
 
   /**
    * Describes the issue for a client of the editor session.
    *
-   * @return array{severity: string, where: string, message: string, hint: string, code: ?string, map: ?string, cells: list<array{0: int, 1: int}>}
+   * @return array{severity: string, where: string, message: string, hint: string, code: ?string, map: ?string, cells: list<array{0: int, 1: int}>, affectedMaps?: list<string>}
    */
   public function describe(): array
   {
     return ['severity' => $this->severity->value, 'where' => $this->where, 'message' => $this->message,
-      'hint' => $this->hint, 'code' => $this->code, 'map' => $this->map, 'cells' => $this->cells];
+      'hint' => $this->hint, 'code' => $this->code, 'map' => $this->map, 'cells' => $this->cells,
+      ...($this->affectedMaps === [] ? [] : ['affectedMaps' => $this->affectedMaps])];
   }
 
   /**
@@ -76,10 +86,11 @@ final readonly class Issue
    * @param string $where What it is about.
    * @param string $message What is wrong.
    * @param string $hint What to do about it.
+   * @param list<string> $affectedMaps The maps affected by this warning.
    * @return self The issue.
    */
-  public static function warning(string $where, string $message, string $hint = ''): self
+  public static function warning(string $where, string $message, string $hint = '', array $affectedMaps = []): self
   {
-    return new self(Severity::WARNING, $where, $message, $hint);
+    return new self(Severity::WARNING, $where, $message, $hint, affectedMaps: $affectedMaps);
   }
 }

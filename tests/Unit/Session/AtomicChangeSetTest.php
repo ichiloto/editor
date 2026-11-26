@@ -172,7 +172,7 @@ it('writes nothing when the last document of a change set would not read back, a
         ->and($session->listUnsavedChanges())->toBe([]);
 });
 
-it('writes a change set\'s documents and the save relocations its map needs together, and undo removes the step', function () {
+it('writes a change set with its save relocations, and keeps them when a map edit is undone', function () {
     $root = atomicSceneProject();
     // The quay is where the game starts, so saves may stand on its floor.
     file_put_contents($root . '/assets/Maps/collisions.php', "<?php\nuse Ichiloto\\Engine\\Events\\Enumerations\\CollisionType;\n"
@@ -180,7 +180,6 @@ it('writes a change set\'s documents and the save relocations its map needs toge
     file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => "
         . "['destinationMap' => 'harbour', 'spawnPoint' => ['x' => 5, 'y' => 3], 'spawnSprite' => ['South']]]];\n");
     $manifestPath = $root . '/assets/Data/save-compatibility.php';
-    $manifest = (string) file_get_contents($manifestPath);
     $session = EditorSession::open($root);
     $session->beginChanges();
     applyAtomicRebuild($session);
@@ -196,6 +195,8 @@ it('writes a change set\'s documents and the save relocations its map needs toge
             'relocations' => [['map' => 'harbour', 'cells' => [[10, 3]], 'to' => [10, 4]], ['map' => 'harbour', 'cells' => [[6, 4]], 'to' => [6, 5]]]]])
         ->and($session->listUnsavedChanges())->toBe([]);
 
-    $session->undo();
-    expect(file_get_contents($manifestPath))->toBe($manifest);
+    $saved = sourceHashTree($root . '/assets');
+    expect($session->undo()['maps'])->toBe(['harbour'])
+        ->and(sourceHashTree($root . '/assets'))->toBe($saved)
+        ->and((require $manifestPath)['contentVersion'])->toBe(1);
 });

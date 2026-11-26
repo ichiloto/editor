@@ -48,6 +48,7 @@ final class MapValidator
             ...MapCompletenessCheck::validate($map, $inventory),
             ...self::findUncheckedChests($map, $inventory),
             ...self::findDanglingDestinations($map, $mapsById),
+            ...MapVisitConditionValidator::validateMap($map, array_keys($mapsById)),
             ...MapRoleCheck::validate($map, $mapsById),
             ...PlaceIconCheck::validate($map, $mapsById),
             ...self::findOutOfRangeSpawnPoints($map, $mapsById),

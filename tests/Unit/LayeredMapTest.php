@@ -277,6 +277,8 @@ it('keeps raw ANSI styling separate from editable glyphs and preserves untouched
     $map->save();
     expect(file_get_contents($path))->toBe(str_replace(' xx ', '|xx ', $source));
 })->with([
-    ["\033[31m", 'red'], ["\033[38;2;12;34;56m", '#0c2238'],
-    ["\033[38;5;196m", '#ff0000'], ["\033[38;5;232m", '#080808'],
+    'basic red' => ["\033[31m", 'red'],
+    'truecolor' => ["\033[38;2;12;34;56m", '#0c2238'],
+    'indexed red' => ["\033[38;5;196m", '#ff0000'],
+    'indexed gray' => ["\033[38;5;232m", '#080808'],
 ]);

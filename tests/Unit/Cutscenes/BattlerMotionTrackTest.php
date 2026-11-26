@@ -536,3 +536,45 @@ it('composes a frame with no battler motion exactly as before the two features w
             ->and(readBattlerPlaces($before)['troop'])->toHaveCount(2);
     }
 });
+
+it('round trips graphical reaction windows through the shared editor and keeps their role out of Terminal controls', function () {
+    $root = battlerMotionProject();
+    $path = effectTimelinePath($root, 'recoil-strike');
+    $source = str_replace("  'tracks' => [\n", <<<'TRACK'
+  'tracks' => [
+    // A second pose beat with no combat result.
+    ['id' => 'debris', 'type' => 'battler-reaction', 'role' => 'damage',
+     'keyframes' => [['frame' => 4, 'duration' => 2]]],
+TRACK . "\n", recoilStrikeTimeline());
+    file_put_contents($path, $source);
+    $terminal = openEffectEditor($root, 'recoil-strike');
+    expect(cutsceneFieldIds($terminal))->not->toContain('track0Role', 'track0Keyframe0Frame');
+
+    [$session, $index, $row, $apply] = openEffectTrackSession($root, 'recoil-strike');
+    $track = $session->describeCutsceneTimeline('cutscenes/effect', $index)['tracks'][0];
+    expect($row('track0Role'))->toMatchArray(['value' => 'damage', 'options' => ['damage', 'heal']])
+        ->and($track['keyframes'][0])->toMatchArray(['frame' => 4, 'duration' => 2]);
+    $apply('track0Role', 'heal');
+    $apply('track0Keyframe0Duration', '3');
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and(file_get_contents($path))->toBe(str_replace(
+            ["'role' => 'damage'", "'frame' => 4, 'duration' => 2"],
+            ["'role' => 'heal'", "'frame' => 4, 'duration' => 3"],
+            $source,
+        ));
+    $session->undo();
+    $session->undo();
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and(file_get_contents($path))->toBe($source);
+
+    $session->addDatabaseItem('cutscenes/effect', $index, $row('track3Id')['key']);
+    $apply('track4Id', 'recover');
+    $apply('track4Type', 'battler-reaction');
+    $apply('track4Role', 'heal');
+    $session->addDatabaseItem('cutscenes/effect', $index, $row('track4Id')['key'], child: true);
+    $apply('track4Keyframe0Frame', '6');
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and((require $path)['tracks'][4])->toBe([
+            'id' => 'recover', 'type' => 'battler-reaction', 'role' => 'heal', 'keyframes' => [['frame' => 6]],
+        ]);
+});

@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
+use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Engine\Core\Campaign\CampaignSession;
 use Ichiloto\Engine\IO\SaveManager;
+use Ichiloto\Engine\Progression\WorldAbilityCatalog;
 use Ichiloto\Engine\Scenes\Game\GameConfig;
 use Ichiloto\Engine\Scenes\Game\GameLoader;
 use Ichiloto\Engine\Util\Config\ConfigStore;
@@ -50,9 +52,9 @@ final class PreviewCampaign
      * ({@see PreviewField}). A project a new game cannot be started in is
      * refused with the Engine's reason.
      */
-    public static function startNewGame(PreviewGame $game, string $projectRoot): self
+    public static function startNewGame(PreviewGame $game, string $projectRoot, ?WorldAbilityCatalog $worldAbilities = null): self
     {
-        $loader = self::bindLoader($game, $projectRoot);
+        $loader = self::bindLoader($game, $projectRoot, $worldAbilities);
         $config = $loader->loadNewGame();
 
         return new self(CampaignSession::restore($game, $config, $projectRoot . '/assets'), $config, null);
@@ -65,13 +67,14 @@ final class PreviewCampaign
      *
      * @param string $savePath An absolute path to a readable save file.
      */
-    public static function restoreFromSave(PreviewGame $game, string $projectRoot, string $savePath): self
+    public static function restoreFromSave(PreviewGame $game, string $projectRoot, string $savePath,
+        ?WorldAbilityCatalog $worldAbilities = null): self
     {
         $path = realpath($savePath);
         if ($path === false || ! is_file($path) || ! is_readable($path)) {
             throw new InvalidArgumentException(sprintf('The preview\'s save could not be read: %s', $savePath));
         }
-        $loader = self::bindLoader($game, $projectRoot);
+        $loader = self::bindLoader($game, $projectRoot, $worldAbilities);
         // The preview Game owns the read-only pipeline and resolves migrations only when this file needs one.
         $config = $game->getSaveManager()->loadSaveFile($path)->config;
         $config->party->inventory->bindItemStore($loader->itemStore);
@@ -80,14 +83,16 @@ final class PreviewCampaign
     }
 
     /** Gives the preview Game the Engine's loader over the project's installed actors and items. */
-    private static function bindLoader(PreviewGame $game, string $projectRoot): GameLoader
+    private static function bindLoader(PreviewGame $game, string $projectRoot,
+        ?WorldAbilityCatalog $worldAbilities): GameLoader
     {
         $actors = ConfigStore::has(ActorStore::class) ? ConfigStore::get(ActorStore::class) : null;
         $items = ConfigStore::has(ItemStore::class) ? ConfigStore::get(ItemStore::class) : null;
         if (! $actors instanceof ActorStore || ! $items instanceof ItemStore) {
             throw new \LogicException('A preview restores a campaign with the project\'s actors and items installed.');
         }
-        $loader = new GameLoader($game, $actors, $items, $projectRoot . '/assets');
+        $loader = new GameLoader($game, $actors, $items, $projectRoot . '/assets', $worldAbilities,
+            scriptCommands: ProjectScriptCommands::fromProject($projectRoot)->catalog);
         $game->bindGameLoader($loader);
 
         return $loader;

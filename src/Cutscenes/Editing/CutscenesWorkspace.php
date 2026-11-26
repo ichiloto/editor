@@ -32,6 +32,7 @@ use Ichiloto\Editor\Validation\EffectValidator;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\IO\Console\TerminalText;
+use Ichiloto\Engine\UI\Navigation\ToolNavigationAction;
 use Throwable;
 
 /**
@@ -335,7 +336,8 @@ trait CutscenesWorkspace
      */
     private function handleCutscenesInput(string $input, string $normalizedInput): void
     {
-        if ($input === "\x11") {
+        $toolAction = $this->toolNavigation->decodeAction($input);
+        if ($toolAction === ToolNavigationAction::QUIT) {
             $this->requestQuit();
 
             return;
@@ -405,7 +407,7 @@ trait CutscenesWorkspace
             return;
         }
 
-        if ($input === "\033" && $this->cutsceneFilter->isActive()) {
+        if ($toolAction === ToolNavigationAction::CANCEL && $this->cutsceneFilter->isActive()) {
             // Esc pops exactly one level: the live filter before the screen.
             $this->cutsceneFilter->clear();
             $this->clampCutsceneSelection();
@@ -415,14 +417,14 @@ trait CutscenesWorkspace
             return;
         }
 
-        if ($input === "\033" && $this->databaseCommandFramePath !== []) {
+        if ($toolAction === ToolNavigationAction::CANCEL && $this->databaseCommandFramePath !== []) {
             // Esc pops exactly one level: the open frame before the screen.
             $this->leaveCommandFrame();
 
             return;
         }
 
-        if ($input === "\033" || $this->inputRouter->isCutscenesKey($input)) {
+        if ($toolAction === ToolNavigationAction::CANCEL || $this->inputRouter->isCutscenesKey($input)) {
             $this->closeCutscenesWorkspace();
 
             return;
@@ -466,13 +468,13 @@ trait CutscenesWorkspace
             return;
         }
 
-        if ($input === "\t") {
+        if ($toolAction === ToolNavigationAction::NEXT_PANE) {
             $this->cycleCutsceneFocus(1);
 
             return;
         }
 
-        if (str_contains($input, "\033[Z") || $this->isShiftArrow($input, 'up') || $this->isShiftArrow($input, 'left')) {
+        if ($toolAction === ToolNavigationAction::PREVIOUS_PANE || $this->isShiftArrow($input, 'up') || $this->isShiftArrow($input, 'left')) {
             $this->cycleCutsceneFocus(-1);
 
             return;
@@ -633,10 +635,7 @@ trait CutscenesWorkspace
             CutscenesScreen::PANE_TREE,
             CutscenesScreen::PANE_PREVIEW,
         ];
-        $current = array_search($this->cutsceneFocus, $order, true);
-        $current = is_int($current) ? $current : 1;
-        $next = ($current + $step + count($order)) % count($order);
-        $this->cutsceneFocus = $order[$next];
+        $this->cutsceneFocus = $this->getAdjacentToolPane($order, $this->cutsceneFocus, CutscenesScreen::PANE_LIST, $step);
         $this->renderCutscenesArea();
     }
 
@@ -765,7 +764,7 @@ trait CutscenesWorkspace
      */
     private function handleCutsceneFilterInput(string $input): void
     {
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->cutsceneFilter->clear();
             $this->clampCutsceneSelection();
             $this->setStatus('Filter cleared.');
@@ -1873,7 +1872,7 @@ trait CutscenesWorkspace
      */
     private function handleMultilineEditorInput(string $input): void
     {
-        if ($input === "\033" || $input === "\x1b") {
+        if ($this->isToolCancelInput($input)) {
             $this->multilineEditor->close();
             $this->setStatus('Edit cancelled.');
             $this->renderDatabasePanes(['settings']);
