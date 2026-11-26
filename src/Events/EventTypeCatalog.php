@@ -117,8 +117,7 @@ final class EventTypeCatalog
                     // A heading the player faces on arrival, as PlayerSpriteSet reads it.
                     'spawnSprite' => [MovementHeading::SOUTH->value],
                     // No one asks a new bed's question, so it is the party's decision (buttons); an innkeeper's
-                    // offer is authored as an answer, with the keeper as speaker. Andrew, 21 November 2026: inns and
-                    // beds start on Yes.
+                    // offer is authored as an answer, with the keeper as speaker. Inns and beds start on Yes.
                     'confirmDialogue' => [
                         'name' => '',
                         'text' => 'Rest here?',

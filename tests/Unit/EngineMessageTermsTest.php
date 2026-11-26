@@ -90,7 +90,6 @@ it('shows a message that inherits the project\'s vocabulary wording with that pr
         ->and($terms->getRecordByIndex($index)?->get('default'))->not->toBe('EXP So Far');
 });
 
-// Andrew, 21 November 2026: saving into an occupied file asks "Overwrite this save?", starting on No.
 it('offers the save overwrite question and a confirmation\'s choices, and writes the question\'s wording', function () {
     $root = createTermsProject();
     $workspace = ProjectWorkspace::fromProject($root);

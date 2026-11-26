@@ -514,8 +514,7 @@ it('authors inline map command bindings through the same controls while Terminal
         ->and(file_get_contents($file))->toContain('// preserve inline event');
 })->with(['leader', 'party']);
 
-// Andrew, 21 November 2026: the home bed and the Waymeet field post are decisions ("Buttons"); an innkeeper's offer is
-// answered as dialogue. An inn's or bed's question carries its authored kind, offered and written only when set.
+// An inn's or bed's question carries its authored kind, offered and written only when set.
 it('offers who is asking a Sleep question, writes the kind an author picks and leaves the source as it was when cleared', function () {
     $root = innDescriptorProject();
     $workspace = ProjectWorkspace::fromProject($root);
@@ -538,7 +537,6 @@ it('offers who is asking a Sleep question, writes the kind an author picks and l
     expect(sourceHashTree($root))->toBe($before);
 });
 
-// Andrew, 21 November 2026: a confirmation's starting choice is "Authored per confirmation"; inns and beds start on Yes.
 it('offers where a Sleep question starts, writes the choice as a number and leaves the source as it was when cleared', function () {
     $root = innDescriptorProject();
     $workspace = ProjectWorkspace::fromProject($root);

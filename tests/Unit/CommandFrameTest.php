@@ -416,7 +416,6 @@ it('wraps a long text command in the Database settings pane', function () {
     }
 });
 
-// Andrew, 21 November 2026: each choice is marked "as an NPC answer (list) or a decision (buttons) in its data".
 it('authors who is asking on a choice and restores the authored script byte for byte when it is cleared', function () {
     $root = makeTemporaryProject();
     writeNestedScript($root);

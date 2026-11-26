@@ -125,7 +125,7 @@ final readonly class MapInspector
         ['label' => 'Decision', 'value' => ChoiceKind::DECISION->value, 'description' => 'No one asks: the party decides, with buttons.'],
     ];
 
-    /** Where a confirmation's focus starts. Andrew, 21 November 2026: "Authored per confirmation". */
+    /** Where a confirmation's focus starts. */
     public const array CONFIRM_START_CHOICES = [
         ['label' => 'Yes', 'value' => 0, 'description' => 'The focus starts on Yes, as it does when none is set.'],
         ['label' => 'No', 'value' => 1, 'description' => 'The focus starts on No, for a question about something that cannot be undone.'],

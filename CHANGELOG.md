@@ -8,11 +8,10 @@
   masks, tint, clipping and the fade below water. The preview reports missing
   support for required mirroring, tone and clipping.
 
-- A confirmation's starting choice is authored per confirmation (Andrew, 21 November 2026: "Authored per
-  confirmation"). A bed's or inn event's Sleep question and an inn command offer Starts On (Yes or No), written as
-  the number the Engine reads (`confirmDialogue.defaultChoice`, 0 or 1); a new bed starts on Yes. An inn command also
-  offers its Kind (Answer or Decision), which it could not before: the Engine's inn declaration did not name it. A row
-  picked from a labelled list now writes its choice's own value, so a starting choice stays a number.
+- In a bed or inn event, set Starts On to choose which answer the Sleep confirmation focuses first.
+  A new bed starts on Yes. Set an inn command’s Kind to Answer for a dialogue list or Decision
+  for buttons. Starts On writes 0 for Yes and 1 for No in `confirmDialogue.defaultChoice`.
+
 - Clearing an optional number of a registered command removes it, so the command's own default applies. Changed:
   before, clearing wrote 0, which made a cleared shop Price override sell the item for 0 and a cleared Buy Rate
   charge nothing. A number the author types, zero included, is still kept.
