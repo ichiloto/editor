@@ -103,6 +103,91 @@ it('appends one retirement step that the game reads, keeping the manifest as aut
     expect(readRetirementManifest($root)['contentVersion'])->toBe(1);
 });
 
+it('keeps a map with recorded save positions until their retirement moves them', function () {
+    $root = retirementProject();
+    $path = $root . '/assets/Data/save-compatibility.php';
+    $manifest = readRetirementManifest($root);
+    $manifest['positionHistoryFile'] = 'positions.json';
+    file_put_contents($path, "<?php\nreturn " . var_export($manifest, true) . ";\n");
+    file_put_contents($root . '/assets/Data/positions.json',
+        '[{"version":0,"maps":{"old-road":[[2,1],[4,1]],"field":[[1,1]]}}]');
+    $session = EditorSession::open($root);
+    $before = sourceHashTree($root . '/assets');
+
+    expect(fn() => $session->deleteMap('old-road', confirmed: true))
+        ->toThrow(SessionRefusal::class, 'Retire old-road')
+        ->and(sourceHashTree($root . '/assets'))->toBe($before);
+
+    retireOldRoad($session);
+    expect($session->deleteMap('old-road', confirmed: true))->toMatchArray(['status' => 'deleted'])
+        ->and(is_dir($root . '/assets/Maps/old-road'))->toBeFalse()
+        ->and(describeSaveCompatibilityIssues($root))->toBe([]);
+    $migration = SaveCompatibilityManifest::fromProjectRoot($root)->createMigrationFrom(0);
+    expect($migration->movePlace('old-road', new Vector2(2, 1)))
+        ->toEqual(['mapId' => 'field', 'position' => new Vector2(5, 4)])
+        ->and($migration->movePlace('old-road', new Vector2(4, 1)))
+        ->toEqual(['mapId' => 'field', 'position' => new Vector2(1, 4)]);
+});
+
+it('reports recorded saves whose current map or resolved floor is missing', function () {
+    $root = retirementProject();
+    $manifest = readRetirementManifest($root);
+    $manifest['positionHistoryFile'] = 'positions.json';
+    file_put_contents($root . '/assets/Data/save-compatibility.php', "<?php\nreturn " . var_export($manifest, true) . ";\n");
+    file_put_contents($root . '/assets/Data/positions.json',
+        '[{"version":0,"maps":{"field":[[1,1],[2,2],[10,1]],"former-road":[[2,1]]}}]');
+
+    $reported = array_filter(validateProject($root), static fn($issue): bool => $issue->code !== null);
+    $issues = array_column(array_map(static fn($issue): array => $issue->describe(), $reported), null, 'code');
+    expect($issues['save.position.blocked'] ?? null)->toMatchArray([
+        'severity' => 'error',
+        'map' => 'field',
+        'cells' => [[2, 2], [10, 1]],
+    ])->and($issues['save.position.missing-map'] ?? null)->toMatchArray([
+        'severity' => 'error',
+        'map' => 'former-road',
+    ]);
+
+    $session = EditorSession::open($root);
+    $mapSaveIssues = static fn(string $map): array => array_values(array_filter(
+        $session->validateMap($map)['issues'],
+        static fn(array $issue): bool => str_starts_with($issue['code'] ?? '', 'save.position.'),
+    ));
+    expect($mapSaveIssues('field'))->toBe([$issues['save.position.blocked']])
+        ->and($mapSaveIssues('old-road'))->toBe([]);
+});
+
+it('keeps a recorded map id until its saves are retired and allows an unpublished layout to move', function () {
+    $root = retirementProject();
+    $manifestPath = $root . '/assets/Data/save-compatibility.php';
+    $manifest = readRetirementManifest($root);
+    $manifest['positionHistoryFile'] = 'positions.json';
+    file_put_contents($manifestPath, "<?php\nreturn " . var_export($manifest, true) . ";\n");
+    $positionsPath = $root . '/assets/Data/positions.json';
+    file_put_contents($positionsPath, '[{"version":0,"maps":{"field":[[1,1]]}}]');
+    writeRetirementMap($root, 'draft', ['####', '#..#', '####'], ['    ', '    ', '    '], "'events' => [],\n");
+    $session = EditorSession::open($root);
+    $revision = $session->readMap('old-road')['revision'];
+    $draftRevision = $session->readMap('draft')['revision'];
+    expect($session->moveMap('old-road', $revision, to: 'parkway'))->toMatchArray(['status' => 'question']);
+    file_put_contents($positionsPath, '[{"version":0,"maps":{"old-road":[[2,1],[4,1]],"field":[[1,1]]}}]');
+    $before = sourceHashTree($root . '/assets');
+
+    expect(fn() => $session->moveMap('old-road', $revision, 'parkway', confirmed: true, to: 'parkway'))
+        ->toThrow(SessionRefusal::class, 'Retire old-road')
+        ->and(sourceHashTree($root . '/assets'))->toBe($before)
+        ->and(is_dir($root . '/assets/Maps/parkway'))->toBeFalse();
+
+    expect($session->moveMap('draft', $draftRevision, 'unused-layout', confirmed: true, to: 'unused-layout'))
+        ->toMatchArray(['status' => 'moved', 'map' => 'unused-layout']);
+
+    expect(retireOldRoad($session))->toMatchArray(['into' => 'field', 'contentVersion' => 1]);
+    expect($session->moveMap('old-road', $revision, 'parkway', confirmed: true, to: 'parkway'))
+        ->toMatchArray(['status' => 'moved', 'map' => 'parkway'])
+        ->and(is_dir($root . '/assets/Maps/old-road'))->toBeFalse()
+        ->and(readRetirementManifest($root)['contentVersion'])->toBe(1);
+});
+
 it('refuses a retirement whose landings cannot be stood on, writing nothing', function (string $into, array $to, ?array $landings, string $reason) {
     $root = retirementProject();
     $before = sourceHashTree($root . '/assets');

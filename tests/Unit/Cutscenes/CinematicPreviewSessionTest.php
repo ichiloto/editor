@@ -4,8 +4,40 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
-use Ichiloto\Engine\Util\Config\ConfigStore;
-use Ichiloto\Engine\Util\Config\ProjectConfig;
+use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandContext;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandHandlerInterface;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandOutcome;
+use Ichiloto\Engine\IO\Console\TerminalText;
+
+final class PreviewLampCommand implements ScriptCommandHandlerInterface
+{
+    public function execute(ScriptCommandContext $context, array $command): ScriptCommandOutcome
+    {
+        $context->scene->gameState->recordStoryEvent('preview_lamp_lit');
+
+        return ScriptCommandOutcome::complete();
+    }
+}
+
+it('keeps registered commands with their own preview while another project is open', function () {
+    $root = cutsceneProject();
+    $declarations = [['type' => 'light_lamp', 'class' => PreviewLampCommand::class, 'label' => 'Light Lamp', 'fields' => []]];
+    file_put_contents($root . '/assets/Data/script-commands.php', '<?php return ' . var_export($declarations, true) . ';');
+    ProjectWorkspace::fromProject($root);
+    $definition = CutsceneHydration::cinematic(['id' => 'lamps', 'name' => 'Lamps', 'startMap' => 'harbour'], [
+        ['type' => 'wait', 'seconds' => 0.2],
+        ['type' => 'light_lamp'],
+    ], $root);
+    $preview = CinematicPreviewSession::start($root, $definition);
+    try {
+        ProjectWorkspace::fromProject(makeTemporaryProject());
+        expect($preview->runToCompletion(3.0))->toBeTrue()
+            ->and($preview->snapshot()->values['story events'])->toContain('preview_lamp_lit');
+    } finally {
+        $preview->dispose();
+    }
+});
 
 /**
  * The Engine plays a cinematic inside the editor: the interpreter,
@@ -18,9 +50,11 @@ it('plays the harbour cinematic to completion through the Engine and records its
     $preview = CinematicPreviewSession::start($root, harbourDefinition($root), ['x' => 2, 'y' => 3, 'width' => 40, 'height' => 12]);
 
     try {
-        expect(ConfigStore::get(ProjectConfig::class)->get('audio.music'))->toBeFalse()
-            ->and(ConfigStore::get(ProjectConfig::class)->get('audio.sfx'))->toBeFalse()
-            ->and(ConfigStore::get(ProjectConfig::class)->get('audio.voice'))->toBeFalse();
+        $field = new ReflectionProperty($preview, 'field')->getValue($preview);
+        $configuration = $field->scene->getGame()->getProjectConfiguration();
+        expect($configuration->get('audio.music'))->toBeFalse()
+            ->and($configuration->get('audio.sfx'))->toBeFalse()
+            ->and($configuration->get('audio.voice'))->toBeFalse();
         expect($preview->status())->toBe(CinematicPreviewSession::STATUS_PAUSED)
             ->and($preview->lanes())->not->toBe([])
             ->and($preview->lanes()[0]['key'])->toBe('commands.0');
@@ -156,3 +190,35 @@ it('waits on dialogue until the author continues, and resolves choices from the 
         $preview->dispose();
     }
 });
+
+it('draws an answer as the dialogue list and a decision as buttons, as the game does', function (?string $kind, bool $listed) {
+    $root = cutsceneProject();
+    $choice = ['type' => 'choice', 'prompt' => 'Go on?', 'options' => [
+        ['text' => 'Onward', 'then' => []],
+        ['text' => 'Stay', 'then' => []],
+    ]];
+    $definition = CutsceneHydration::cinematic(['id' => 'ask', 'name' => 'Ask'],
+        [$kind === null ? $choice : $choice + ['kind' => $kind]], $root);
+    $preview = CinematicPreviewSession::start($root, $definition, ['mapId' => 'harbour']);
+
+    try {
+        $preview->play();
+        $preview->tick(0.1);
+        $frame = implode("\n", array_map(TerminalText::stripAnsi(...), $preview->frame()));
+
+        expect($preview->waitDescription())->toContain('Choice')
+            ->and($frame)->toContain('Onward');
+        expect(str_contains($frame, '> Onward'))->toBe($listed);
+
+        $preview->confirm();
+        $preview->tick(0.1);
+        $preview->runToCompletion(5.0);
+        expect($preview->status())->toBe(CinematicPreviewSession::STATUS_COMPLETED);
+    } finally {
+        $preview->dispose();
+    }
+})->with([
+    'an answer to someone' => ['answer', true],
+    'a decision' => ['decision', false],
+    'an unmarked event choice, a decision' => [null, false],
+]);

@@ -62,8 +62,16 @@ it('lists both types, switches between them, and filters the list', function () 
 
     expect(callEditorMethod($editor, 'cutsceneEntryLabels'))->toBe([0 => 'Harbour Lanterns (harbour-lanterns)']);
 
-    // Tab back to the types pane and move down to Summon.
-    setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_TYPES);
+    foreach ([CutscenesScreen::PANE_SETTINGS, CutscenesScreen::PANE_TREE, CutscenesScreen::PANE_PREVIEW,
+        CutscenesScreen::PANE_TYPES, CutscenesScreen::PANE_LIST] as $pane) {
+        pressKeys($editor, "\t");
+        expect(getEditorProperty($editor, 'cutsceneFocus'))->toBe($pane);
+    }
+    foreach ([CutscenesScreen::PANE_TYPES, CutscenesScreen::PANE_PREVIEW, CutscenesScreen::PANE_TREE,
+        CutscenesScreen::PANE_SETTINGS, CutscenesScreen::PANE_LIST, CutscenesScreen::PANE_TYPES] as $pane) {
+        pressKeys($editor, "\033[Z");
+        expect(getEditorProperty($editor, 'cutsceneFocus'))->toBe($pane);
+    }
     pressKeys($editor, "\033[B");
 
     expect(getEditorProperty($editor, 'cutsceneType'))->toBe(CutsceneType::SUMMON)

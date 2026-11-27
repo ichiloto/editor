@@ -9,8 +9,6 @@ use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Events\Triggers\CinematicEventTrigger;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\IO\Console\TerminalText;
-use Ichiloto\Engine\Util\Config\ConfigStore;
-use Ichiloto\Engine\Util\Config\ProjectConfig;
 
 function createPreviewWalkingProject(): string
 {
@@ -146,12 +144,13 @@ it('keeps ordinary map events and encounter bookkeeping out of shared preview mo
                 ->and($field->scene->player->tryMove(Vector2::right(), $field->scene->camera, StepOrigin::PLAYER_INPUT))->toBeTrue();
         });
         $field->advance(1.0);
+        $configuration = $field->scene->getGame()->getProjectConfiguration();
         expect($field->scene->finishedSessions)->toBe([])
             ->and($field->scene->cinematicController->active())->toBeNull()
-            ->and(ConfigStore::get(ProjectConfig::class)->get('save.autosave'))->toBeFalse()
-            ->and(ConfigStore::get(ProjectConfig::class)->get('audio.music'))->toBeFalse()
-            ->and(ConfigStore::get(ProjectConfig::class)->get('audio.sfx'))->toBeFalse()
-            ->and(ConfigStore::get(ProjectConfig::class)->get('audio.voice'))->toBeFalse()
+            ->and($configuration->get('save.autosave'))->toBeFalse()
+            ->and($configuration->get('audio.music'))->toBeFalse()
+            ->and($configuration->get('audio.sfx'))->toBeFalse()
+            ->and($configuration->get('audio.voice'))->toBeFalse()
             ->and(sourceHashTree($root))->toBe($before);
     } finally {
         $field->dispose();

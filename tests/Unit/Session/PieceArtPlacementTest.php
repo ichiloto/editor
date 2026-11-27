@@ -247,6 +247,10 @@ it('never warns that a graphical placement\'s art over an authored glyph is not 
 
     // The shelf's art stands whole over the authored `%%`, whose collision holds its ground row.
     expect(readStalePieceArtWarnings($session))->toBe([]);
+    $session->paintOccupancy('test-map', $session->readMap('test-map')['revision'], [[1, 1]], CollisionType::NONE->value);
+    expect(readStalePieceArtWarnings($session))->toHaveCount(1);
+    $session->undo();
+    expect(readStalePieceArtWarnings($session))->toBe([]);
     $session->saveAll();
     expect(readStalePieceArtWarnings(EditorSession::open($root)))->toBe([]);
     $session->undo();

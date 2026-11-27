@@ -306,7 +306,7 @@ final class NpcInspector
         }
 
         $records = ProjectRecordDatabase::overOwnedList(
-            RecordSchemaCatalog::mapNpcs($this->graphical),
+            RecordSchemaCatalog::mapNpcs($this->graphical, $this->references?->getScriptCommandCatalog()),
             $this->map->dataPath,
             $entries,
             function (array $written) use ($authored, $entries): void {

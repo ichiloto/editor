@@ -1744,6 +1744,7 @@ skill's effects, a quest's rewards) listed under them.
 | Skills | `assets/Data/Skills/*.php` | Editable - one data record per numbered file, attacks, abilities and spells alike, with their effects; `skills.php` loads them | Same |
 | Mastery Regions | `assets/Data/mastery.php` (`regions`) | Editable - the regions of the mastery tree every character shares, each with the nodes on its trunk | Same |
 | Mastery Branches | `assets/Data/mastery.php` (`branches`) | Editable - each region's branches (element, aspect or non-elemental) with their nodes in the order they progress | Same |
+| Mastery Held Skills | `assets/Data/mastery.php` (`held`) | Editable - the skills kept off the tree for now, each with why it is held | Same |
 | Mastery Maps | `assets/Data/Mastery/*.php` | Editable - one file per character stating their own terms for tree nodes: price, opening level, what each builds on | Same, plus a graphical page that places and links the character's nodes |
 | Items | `assets/Data/Items/*.php` | Editable - one data record per numbered file, with scope, occasion, animation and effects; `items.php` loads Items, Weapons and Armors | Same |
 | Weapons | `assets/Data/Weapons/*.php` | Editable - one data record per numbered file, with type, stats, element, affinities and equipment metadata | Same |
@@ -2088,6 +2089,14 @@ has a Summary, and a region with trunk nodes also has a Trunk Summary for
 the family those nodes form: the game's Info shows them on the
 discipline, the family and its foundation. Validation warns where one is
 missing, because Info then offers nothing there.
+
+Mastery Held Skills keeps a skill off the tree for now: a complete skill
+that no node may teach yet, with a note of why it is held. A rule that
+expects a skill on the tree passes over a held one. A new hold names the
+project's first skill that no node teaches and nothing holds, and
+validation warns until its note says why. A hold names its skill, so the
+skill cannot be deleted from under it, and retiring the skill moves or
+drops the hold like every other reference.
 
 Items, weapons and armors are one file each under `assets/Data/Items`,
 `Weapons` and `Armors`, returning `['class' => InventoryItem::class, 'data'
@@ -3951,6 +3960,24 @@ motion only for a `cutscenes.effectBattlePreview` request whose
 ordinary battlefield on a moving frame, with the Engine's diagnostic that the
 motion is not applied.
 
+In a `cutscenes.effectBattlePreview` request, set each flag your canvas supports.
+Use `imageFlip` to draw a battler facing either way and `imageAlphaFlip` to
+mirror its tint or flash. Use `imageTone` for an authored tone,
+`clipOpacity` for images that need clipping, and `imageBottomFade` for an
+aquatic battler's fade below the water line.
+
+The preview refuses a frame that requires mirrored battlers when
+`imageFlip` is missing. It reports any omitted masks, tones or clipped
+artwork that the frame requires. An aquatic battler appears whole when the
+canvas omits `imageBottomFade`. The graphical editor sets these flags for
+the features its canvas supports.
+
+In a graphical `cutscenes.effectBattlePreview` or `cutscenes.battlePreview`
+request, set `consumerAdmitsCanvasImages` only when the consumer validates and
+prepares the canvas under its own image-memory limits before displaying it.
+The Editor checks source bounds and drawing limits. The consumer applies
+its byte limits at the viewport's actual device density.
+
 In either editor, a track whose type that editor does not offer keeps its
 type: choosing another is refused and nothing changes. Remove the track to
 replace it. The same holds for every list whose entries have a type or kind.
@@ -4138,9 +4165,10 @@ and every event, painted or bound to an object or area, as the Engine's save
 compatibility contract requires of a landing. A save standing inside an event
 lands outside it too. Map retirement landings follow the same rule.
 **Save and move saves** writes the map and a `relocations` step that raises
-the manifest's content version by one; **Cancel** saves nothing. The step is
-its own undo: `Ctrl+Z` after the save removes it from the manifest, and undoing
-the edit itself is then saved as usual. `Ctrl+A` leaves such a map unsaved and
+the manifest's content version by one; **Cancel** saves nothing. Use
+`Ctrl+Z` to undo a map edit, then save the map again. The relocation step
+stays in the manifest so saves from both versions still load.
+`Ctrl+A` leaves such a map unsaved and
 names it, so its save is always reviewed on its own. A cell no open floor can
 be reached from refuses the save until a path is opened or the edit undone. A
 project without a manifest is saved at once, as before. The GUI editor shows
@@ -4263,7 +4291,8 @@ spawn points outside the map. The warnings appear in the status footer;
 covers every NPC field, as described under [NPC Mode](#npc-mode). The GUI's
 map inspector checks the open map the same way on request (**Check this map**,
 `map.validate`), unsaved edits included, and lists every problem with what to
-do about it, errors first; **Show** moves to the first cell a problem names.
+do about it, errors first. **Show** moves to the first cell a problem names.
+The graphical check also lists skit backdrop warnings that apply to the open map.
 
 Skills are read as one catalogue from their record files, as the game reads
 them: a skill name defined twice, or a record the game cannot read, is an

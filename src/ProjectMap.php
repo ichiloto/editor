@@ -42,6 +42,7 @@ use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Editor\Maps\EditableGrid;
 use Ichiloto\Editor\Maps\MapFolder;
 use Ichiloto\Editor\Maps\MapLayers;
+use Ichiloto\Editor\Maps\SaveManifestStep;
 use Ichiloto\Editor\Maps\TileLayerSettings;
 use Closure;
 use InvalidArgumentException;
@@ -2115,12 +2116,9 @@ final class ProjectMap
                 continue;
             }
             $className = is_string($event['class'] ?? null) ? ltrim($event['class'], '\\') : null;
-            foreach (EventTypeCatalog::findByClass($className)?->optionalData ?? [] as $key => $absent) {
-                $value = $event['data'][$key] ?? null;
-                if (array_key_exists($key, $event['data']) && ($value === $absent
-                    || (is_string($value) && is_string($absent) && trim($value) === trim($absent)))) {
-                    unset($next['events'][$marker]['data'][$key]);
-                }
+            $type = EventTypeCatalog::findByClass($className);
+            if ($type !== null) {
+                $next['events'][$marker]['data'] = $type->withoutAbsentOptionalData($event['data']);
             }
         }
 
@@ -2801,6 +2799,7 @@ final class ProjectMap
     /** Incomplete picker drafts may be edited, but no incomplete descriptor can be saved. */
     private function assertChangedInnPresentations(array $old, array $next, bool $complete): void
     {
+        $commands = $this->catalogs?->getScriptCommandCatalog();
         foreach ((array) ($next['events'] ?? []) as $marker => $event) {
             if (! is_array($event)) { continue; }
             $before = is_array($old['events'][$marker] ?? null) ? $old['events'][$marker] : [];
@@ -2810,10 +2809,10 @@ final class ProjectMap
                     \Ichiloto\Editor\Database\InnPresentationFields::assertValid($value, complete: $complete);
                 }
             }
-            \Ichiloto\Editor\Database\InnPresentationFields::assertChangedCommandsValid($before, $event, complete: $complete);
+            \Ichiloto\Editor\Database\InnPresentationFields::assertChangedCommandsValid($before, $event, complete: $complete, commands: $commands);
         }
         \Ichiloto\Editor\Database\InnPresentationFields::assertChangedCommandsValid(
-            (array) ($old['npcs'] ?? []), (array) ($next['npcs'] ?? []), complete: $complete);
+            (array) ($old['npcs'] ?? []), (array) ($next['npcs'] ?? []), complete: $complete, commands: $commands);
     }
 
     /**
@@ -3384,9 +3383,8 @@ final class ProjectMap
      * Ordinary saves never relocate anything. This writes the map at the new
      * path first, deletes the old directory only after every file landed,
      * and rolls the new copy back if that deletion fails — the map is never
-     * left half-moved. References are NOT migrated: doors, quests, saves and
-     * event identities that name the old id keep naming it, which is the
-     * caller's warning to give.
+     * left half-moved. Recorded saves must be retired before the old id can
+     * be removed. Update doors, quests and event identities separately.
      *
      * @param string $newRelativeId The new project-relative map id, a map
      *   folder path nothing stands at yet ({@see MapFolder}).
@@ -3423,6 +3421,7 @@ final class ProjectMap
 
         try {
             $transaction = $this->createSourceTransaction($directory, reserveFolder: true);
+            SaveManifestStep::protectMapRemoval(dirname($mapsRoot, 2), $previousMapId, $transaction);
             // A move carries the map's content as authored: the data file
             // is the preserved source (unsaved edits rewritten into it, not
             // a regeneration of the whole array), and untouched grids keep

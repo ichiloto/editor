@@ -140,6 +140,9 @@ final class PreviewSceneHost
                 $this->scene->setPresentationContext($this->replaced);
             }
         }
+        if ($this->replaced !== null) {
+            $this->dialogue->resizeScreen($this->replaced->grid->columns, $this->replaced->grid->rows);
+        }
         $this->context = null;
         $this->replaced = null;
         $this->dialogue->pageLayout = null;
@@ -164,6 +167,7 @@ final class PreviewSceneHost
             $this->scene->installFieldEffects(EffectPresentation::GRAPHICAL);
         }
         $width = $this->grid->columns * $this->grid->cellWidth;
+        $this->dialogue->resizeScreen($this->grid->columns, $this->grid->rows);
         $this->dialogue->pageLayout = fn(string $speaker, $context, string $help) => $this->composer->getDialoguePageLayout($speaker, $context, $help, $width);
         $this->dialogue->graphicalGrid = $this->grid;
     }

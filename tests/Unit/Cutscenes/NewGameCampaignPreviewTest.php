@@ -79,7 +79,7 @@ it('shows the party leader\'s art as the player\'s where the project shows the l
     $field = PreviewField::open($root, 'harbour', new Vector2(6, 1), 40, 12, static fn(): float => 0.0);
     try {
         expect($field->campaignFailure)->toBeNull()
-            ->and($field->scene->player?->getGraphicalCharacterSheet()?->asset)->toBe('Graphics/Characters/$Swordsman.png');
+            ->and($field->run(fn() => $field->scene->player?->getGraphicalCharacterSheet()?->asset))->toBe('Graphics/Characters/$Swordsman.png');
     } finally {
         $field->dispose();
     }
@@ -97,7 +97,7 @@ it('opens a field with an empty party and says why where the project cannot star
             ->and($field->mapFailure)->toBeNull()
             ->and($field->scene->campaign)->toBeNull()
             ->and($field->scene->party->leader)->toBeNull()
-            ->and($field->scene->player?->getGraphicalCharacterSheet())->toBeNull()
+            ->and($field->run(fn() => $field->scene->player?->getGraphicalCharacterSheet()))->toBeNull()
             // The actors and items the field found installed stay installed.
             ->and(readInstalledStores())->toBe($stores);
     } finally {

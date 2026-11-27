@@ -379,7 +379,7 @@ final class TemporaryFixtures
      */
     private static function assertTemporary(string $path): void
     {
-        $temporary = rtrim(realpath(self::getTemporaryDirectory()) ?: self::getTemporaryDirectory(), '/') . '/';
+        $temporary = self::getTemporaryDirectory() . '/';
         $parent = realpath(dirname($path));
         $resolved = $parent === false ? $path : $parent . '/' . basename($path);
 
@@ -390,7 +390,13 @@ final class TemporaryFixtures
 
     private static function getTemporaryDirectory(): string
     {
-        return rtrim(sys_get_temp_dir(), '/');
+        $temporary = realpath(sys_get_temp_dir());
+
+        if ($temporary === false) {
+            throw new RuntimeException('Unable to resolve the system temporary directory.');
+        }
+
+        return rtrim($temporary, '/');
     }
 
     private static function describeOwner(): string

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Progression;
 
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\ConditionReferences;
 use Ichiloto\Editor\Events\ScriptCommandUses;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Core\WorldConditionType;
@@ -42,7 +43,7 @@ final readonly class WorldAbilityReferences
         }
         $found = [];
         foreach ($this->workspace->maps as $map) {
-            if (self::conditionsName($map->getEditableData(), $id)) {
+            if (ConditionReferences::containsReference($map->getEditableData(), [WorldConditionType::WORLD_ABILITY->value], $id)) {
                 $found[] = sprintf('map %s', $map->mapId);
             }
         }
@@ -53,7 +54,7 @@ final readonly class WorldAbilityReferences
                 if ($category === WorldAbilityFields::CATEGORY && is_array($payload) && trim(strval($payload['id'] ?? '')) === $id) {
                     continue;
                 }
-                if (self::conditionsName($payload, $id)) {
+                if (ConditionReferences::containsReference($payload, [WorldConditionType::WORLD_ABILITY->value], $id)) {
                     $found[] = sprintf('%s %s', str_replace('_', ' ', strval($category)), $record->recordId);
                 }
             }
@@ -64,7 +65,7 @@ final readonly class WorldAbilityReferences
             } catch (Throwable) {
                 continue;
             }
-            if (self::conditionsName($source, $id)) {
+            if (ConditionReferences::containsReference($source, [WorldConditionType::WORLD_ABILITY->value], $id)) {
                 $found[] = sprintf('cinematic %s', $cinematic->id);
             }
         }
@@ -72,20 +73,5 @@ final readonly class WorldAbilityReferences
             ScriptCommandReference::WORLD_ABILITY)[$id] ?? [];
 
         return array_values(array_unique([...$found, ...$commands]));
-    }
-
-    /** Whether any condition in the value, however deeply nested, is a `world_ability` condition naming the power. */
-    private static function conditionsName(mixed $value, string $id): bool
-    {
-        if (! is_array($value) && ! is_object($value)) {
-            return false;
-        }
-        $value = (array) $value;
-        if (is_string($value['type'] ?? null) && trim($value['type']) === WorldConditionType::WORLD_ABILITY->value
-            && is_string($value['name'] ?? null) && trim($value['name']) === $id) {
-            return true;
-        }
-
-        return array_any($value, static fn(mixed $nested): bool => self::conditionsName($nested, $id));
     }
 }

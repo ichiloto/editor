@@ -3,6 +3,36 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Session\SessionHost;
+use Ichiloto\Engine\Battle\UI\BattleScreen;
+
+it('captures saved terrain for a compatibility history entry and refuses pending edits', function () {
+    $root = mapLineRemovalProject();
+    $input = fopen('php://memory', 'r');
+    $output = fopen('php://memory', 'w+');
+    $diagnostics = fopen('php://memory', 'w+');
+    $host = new SessionHost($input, $output, $diagnostics);
+    $request = static fn(string $method, array $params = []): array =>
+        $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params], JSON_THROW_ON_ERROR));
+    try {
+        expect($request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]))->toHaveKey('result');
+        $before = sourceHashTree($root);
+        $capture = $request('saveCompatibility.captureLayout')['result'];
+        expect($capture['version'])->toBe(0)
+            ->and($capture['maps']['home'])->toContain([1, 2])
+            ->and($capture['maps']['home'])->not->toContain([2, 2])
+            ->and(sourceHashTree($root))->toBe($before);
+
+        $map = $host->session->readMap('home');
+        $host->session->paint('home', $map['revision'], $map['baseLayer'], [[1, 2]], '#');
+        expect($request('saveCompatibility.captureLayout')['error']['kind'])->toBe('refusal')
+            ->and(sourceHashTree($root))->toBe($before);
+    } finally {
+        $host->run();
+        fclose($input);
+        fclose($output);
+        fclose($diagnostics);
+    }
+});
 
 it('exchanges renderer readiness and acknowledgements through the real preview request boundary', function (string $source) {
     $root = effectProject();
@@ -35,14 +65,19 @@ it('exchanges renderer readiness and acknowledgements through the real preview r
         $index = array_search($identity, $request('database.records', ['category' => $category])['result']['records'], true);
         expect($index)->toBeInt();
         $startParams = ['index' => $index, 'frame' => 0, 'width' => 40, 'height' => 12];
-        expect($request($start, $startParams))->toHaveKey('result');
+        $started = $request($start, $startParams);
+        expect($started)->toHaveKey('result');
         $discovery = $request($exchange)['result'];
         $sessionId = $discovery['sessionId'];
         expect($discovery['messages'])->toBe([])
             ->and($sessionId)->toBeString()->not->toBe('');
 
         $ready = $draw($sessionId);
-        expect($ready['grid'])->toBe(['columns' => 40, 'rows' => 12, 'cellWidth' => 10, 'cellHeight' => 20]);
+        $graphicalGrid = $source === 'cinematic'
+            ? ['columns' => BattleScreen::WIDTH, 'rows' => BattleScreen::HEIGHT]
+            : ['columns' => 40, 'rows' => 12];
+        expect($discovery['grid'])->toBe($graphicalGrid + ['cellWidth' => 10, 'cellHeight' => 20])
+            ->and($ready['grid'])->toBe($discovery['grid']);
         $messages = $ready['messages'];
         $generation = max(previewFrameGenerations($messages));
         expect(array_column($messages, 'type'))->toContain('frame');
@@ -58,6 +93,11 @@ it('exchanges renderer readiness and acknowledgements through the real preview r
         }
         expect($request($exchange, ['sessionId' => $sessionId, 'events' => []])['result']['messages'])->toBe([]);
         expect($request($detach))->toHaveKey('result');
+        if ($source === 'cinematic') {
+            $terminal = $request($start, $startParams + ['keep' => true])['result'];
+            expect($terminal['terminalCanvas'])->toBe($started['result']['terminalCanvas'])
+                ->and($terminal['elapsed'])->toBe($started['result']['elapsed']);
+        }
         if ($source !== 'cinematic') {
             expect($request($start, $startParams))->toHaveKey('result');
         }

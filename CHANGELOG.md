@@ -4,6 +4,26 @@
 
 ### Fixed
 
+- Effect battle previews use the canvas's support for mirrored battlers and
+  masks, tint, clipping and the fade below water. The preview reports missing
+  support for required mirroring, tone and clipping.
+
+- In a bed or inn event, set Starts On to choose which answer the Sleep confirmation focuses first.
+  A new bed starts on Yes. Set an inn command’s Kind to Answer for a dialogue list or Decision
+  for buttons. Starts On writes 0 for Yes and 1 for No in `confirmDialogue.defaultChoice`.
+
+- Clearing an optional number of a registered command removes it, so the command's own default applies. Changed:
+  before, clearing wrote 0, which made a cleared shop Price override sell the item for 0 and a cleared Buy Rate
+  charge nothing. A number the author types, zero included, is still kept.
+- A choice says who is asking. The event command editor offers a `choice` command's Kind (Answer, a list, or
+  Decision, buttons; blank keeps the Engine's default, a decision), and an inn's or bed's Sleep question offers
+  Confirm Dialogue Kind. Setting a kind writes only that key; clearing it removes the key and restores the authored
+  file byte for byte. Optional event data may now be nested (`confirmDialogue.kind`), and an optional row picked
+  from a list clears with a blank value instead of refusing it. A new bed's Sleep question is a decision.
+- The cutscene preview draws a choice as the game does: a decision as centred buttons and an answer as the
+  dialogue list with the cursor, through the Engine's `ModalChoiceStyle::renderTerminalLines()`, and it shows
+  answers (`EventAnswerPresentationInterface`) instead of failing on them. Changed: an unmarked choice in a
+  cinematic no longer shows the list cursor in the preview, because the game shows it as buttons.
 - A preview's Game owns its scene manager and one read-only save manager (the Engine's `SaveManager` with
   `readOnly: true`). Before, the preview built its scene manager outside its Game, so an Engine lookup through the
   Game made a second scene manager and save manager, and a saved-campaign preview read its save through a third.
@@ -86,6 +106,11 @@
 
 ### Added
 
+- Database > Mastery Held Skills keeps a skill off the mastery tree for now, with why (`held` in `mastery.php`). A new
+  hold names the first skill no node teaches and nothing holds, and validation warns until its note says why. The
+  tree refuses a hold on a skill a node teaches, a hold names its skill so the skill cannot be deleted from under it,
+  and retiring the skill moves or drops the hold like every other reference. The tree's save check and the Engine
+  share one unknown-skill check (`MasteryTree::describeUnknownSkill()`).
 - **Appearance Regions** for field resources (the Engine's `appearanceRegions` contract): a resource record lists
   rectangles in anchor-relative map cells (`Offset X`, `Offset Y`, `Width`, `Height`), each with an `Appearance`
   chosen from the Engine's tile appearances, so one resource such as a bridge can show barrier rails around a ground

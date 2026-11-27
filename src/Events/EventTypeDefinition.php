@@ -17,7 +17,8 @@ final class EventTypeDefinition
      * type may hold and the Engine reads as unset when absent, with the
      * value an inspector shows for one that is absent. They are offered on
      * every such event and written only when an author sets one; clearing
-     * one removes it again.
+     * one removes it again. A key may name a nested key with dots
+     * (`confirmDialogue.kind`), offered when the data holds its parent.
      */
     public function __construct(
         public readonly string $label,
@@ -27,6 +28,66 @@ final class EventTypeDefinition
         public readonly array $defaultDefinitionFields = [],
         public readonly array $optionalData = [],
     ) {
+    }
+
+    /**
+     * The data with each optional key it lacks added as it reads when absent, for an inspector to offer.
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    public function withAbsentOptionalData(array $data): array
+    {
+        foreach ($this->optionalData as $key => $absent) {
+            $segments = explode('.', (string) $key);
+            $leaf = array_pop($segments);
+            $target = &$data;
+            foreach ($segments as $segment) {
+                if (! is_array($target[$segment] ?? null)) { unset($target); continue 2; }
+                $target = &$target[$segment];
+            }
+            if (! array_key_exists($leaf, $target)) { $target[$leaf] = $absent; }
+            unset($target);
+        }
+
+        return $data;
+    }
+
+    /**
+     * The data without the optional keys that still read as absent, so that only what an author set is written.
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    public function withoutAbsentOptionalData(array $data): array
+    {
+        foreach ($this->optionalData as $key => $absent) {
+            $segments = explode('.', (string) $key);
+            $leaf = array_pop($segments);
+            $target = &$data;
+            foreach ($segments as $segment) {
+                if (! is_array($target[$segment] ?? null)) { unset($target); continue 2; }
+                $target = &$target[$segment];
+            }
+            $value = $target[$leaf] ?? null;
+            if (array_key_exists($leaf, $target) && ($value === $absent
+                || (is_string($value) && is_string($absent) && trim($value) === trim($absent)))) {
+                unset($target[$leaf]);
+            }
+            unset($target);
+        }
+
+        return $data;
+    }
+
+    /**
+     * Whether a data path, below `data`, names one of this type's optional keys.
+     *
+     * @param list<string|int> $path
+     */
+    public function isOptionalDataPath(array $path): bool
+    {
+        return array_key_exists(implode('.', $path), $this->optionalData);
     }
 
     /**

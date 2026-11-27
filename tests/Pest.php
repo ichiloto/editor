@@ -193,6 +193,54 @@ function cleanUpTemporaryProjects(): void
 }
 
 /**
+ * Copies project assets and configuration into a test-owned directory.
+ * Audio is read-only in these fixtures. The edited assets have separate files.
+ */
+function copyLastLegendFixture(string $game, string $root): void
+{
+    $assets = $root . '/assets';
+    if (! mkdir($assets, 0o777, true)) {
+        throw new RuntimeException('Unable to create the Last Legend fixture.');
+    }
+
+    $sources = [];
+    foreach (new FilesystemIterator($game . '/assets', FilesystemIterator::SKIP_DOTS) as $asset) {
+        if ($asset->getFilename() === 'Audio') {
+            if (! symlink($asset->getPathname(), $assets . '/Audio')) {
+                throw new RuntimeException('Unable to link the Last Legend fixture audio.');
+            }
+            continue;
+        }
+        $sources[] = $asset->getPathname();
+    }
+
+    if (PHP_OS_FAMILY === 'Darwin' && function_exists('proc_open') && is_executable('/bin/cp')) {
+        // macOS cp makes independently writable clones where the volume supports them.
+        $process = proc_open(['/bin/cp', '-cRL', ...$sources, $assets],
+            [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => STDERR], $pipes);
+        if (! is_resource($process) || proc_close($process) !== 0) {
+            throw new RuntimeException('Unable to copy the Last Legend fixture assets.');
+        }
+    } else {
+        foreach ($sources as $source) {
+            $target = $assets . '/' . basename($source);
+            if (is_dir($source)) {
+                mkdir($target);
+                copyDirectoryRecursively($source, $target);
+            } else {
+                copy($source, $target);
+            }
+        }
+    }
+
+    foreach (['config.php', 'ichiloto.json', 'input.php', 'composer.json'] as $entry) {
+        if (is_file($game . '/' . $entry) && ! copy($game . '/' . $entry, $root . '/' . $entry)) {
+            throw new RuntimeException('Unable to copy Last Legend fixture file ' . $entry . '.');
+        }
+    }
+}
+
+/**
  * Recursively copies a directory tree.
  */
 function copyDirectoryRecursively(string $source, string $destination): void

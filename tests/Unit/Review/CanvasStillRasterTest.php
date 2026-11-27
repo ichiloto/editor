@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Review\CanvasStillRaster;
+use Ichiloto\Editor\Review\SceneFrameRaster;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasCompositeOperation;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
@@ -17,6 +18,7 @@ use Ichiloto\Engine\Rendering\Presentation\PresentationSpritePivot;
 use Ichiloto\Engine\Rendering\Presentation\PresentationTextRun;
 use Ichiloto\Engine\Rendering\Presentation\SpriteSourceRect;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
+use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 
 /** A throwaway asset root with one two-colour synthetic image: red left half, blue right half. */
 function canvasStillAssets(): string
@@ -182,6 +184,12 @@ it('keeps strongest dab coverage, preserves first ties and clips the retained su
         ->and(canvasStillPixel($image, 5, 5)[2])->toBeBetween(125, 130)
         ->and(canvasStillPixel($image, 7, 5))->toBe([0, 0, 0])
         ->and($raster->diagnostics)->toBe([]);
+});
+
+it('names coverage dabs among what the still rasters draw, as a graphical renderer negotiates them', function () {
+    expect(CanvasStillRaster::supports(RendererSessionConfig::CANVAS_COVERAGE_DABS))->toBeTrue()
+        ->and(SceneFrameRaster::supports(RendererSessionConfig::CANVAS_COVERAGE_DABS))->toBeTrue()
+        ->and(array_count_values(SceneFrameRaster::CAPABILITIES)[RendererSessionConfig::CANVAS_COVERAGE_DABS])->toBe(1);
 });
 
 it('rotates around the authored pivot clockwise, with mirror before rotation and clip after it', function () {

@@ -8,6 +8,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Presentation\PartyStageSelection;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use InvalidArgumentException;
 
 /** Shared authoring of the Engine's scalar or explicitly subject-resolved rest stage. */
@@ -118,9 +119,11 @@ final class InnPresentationFields
     }
 
     /** Validates registered stage references at any command depth, not just inn commands. */
-    public static function assertCommandsValid(array $payload, ?ReferenceCatalog $references = null, bool $complete = true): void
+    public static function assertCommandsValid(array $payload, ?ReferenceCatalog $references = null, bool $complete = true,
+        ?ScriptCommandCatalog $commands = null): void
     {
-        $definition = is_string($payload['type'] ?? null) ? (ScriptCommandRegistry::getCatalog()->definitions[$payload['type']] ?? null) : null;
+        $commands ??= $references?->getScriptCommandCatalog() ?? ScriptCommandRegistry::getCatalog();
+        $definition = is_string($payload['type'] ?? null) ? $commands->findDefinition($payload['type']) : null;
         foreach ($definition?->fields ?? [] as $field) {
             if ($field->reference !== ScriptCommandReference::STAGE_TIMELINE) { continue; }
             $value = $payload;
@@ -128,27 +131,30 @@ final class InnPresentationFields
             self::assertValid($value, $references, $complete);
         }
         foreach ($payload as $nested) {
-            if (is_array($nested)) { self::assertCommandsValid($nested, $references, $complete); }
+            if (is_array($nested)) { self::assertCommandsValid($nested, $references, $complete, $commands); }
         }
     }
 
-    public static function prepareEdit(array $entry, string $field): array
+    public static function prepareEdit(array $entry, string $field, ?ScriptCommandCatalog $commands = null): array
     {
-        $definition = is_string($entry['type'] ?? null) ? (ScriptCommandRegistry::getCatalog()->definitions[$entry['type']] ?? null) : null;
+        $commands ??= ScriptCommandRegistry::getCatalog();
+        $definition = is_string($entry['type'] ?? null) ? $commands->findDefinition($entry['type']) : null;
         foreach ($definition?->fields ?? [] as $declared) {
             if ($declared->reference === ScriptCommandReference::STAGE_TIMELINE
                 && ($field === $declared->key || str_starts_with($field, $declared->key . '.'))) {
-                self::assertCommandsValid($entry, complete: false);
+                self::assertCommandsValid($entry, complete: false, commands: $commands);
             }
         }
         return $entry;
     }
 
     /** Only changed presentation values are authored; unrelated Terminal edits preserve graphical data. */
-    public static function assertChangedCommandsValid(array $old, array $new, ?ReferenceCatalog $references = null, bool $complete = true): void
+    public static function assertChangedCommandsValid(array $old, array $new, ?ReferenceCatalog $references = null, bool $complete = true,
+        ?ScriptCommandCatalog $commands = null): void
     {
         if ($old === $new) { return; }
-        $definition = is_string($new['type'] ?? null) ? (ScriptCommandRegistry::getCatalog()->definitions[$new['type']] ?? null) : null;
+        $commands ??= $references?->getScriptCommandCatalog() ?? ScriptCommandRegistry::getCatalog();
+        $definition = is_string($new['type'] ?? null) ? $commands->findDefinition($new['type']) : null;
         foreach ($definition?->fields ?? [] as $field) {
             if ($field->reference !== ScriptCommandReference::STAGE_TIMELINE) { continue; }
             $before = $old;
@@ -160,7 +166,9 @@ final class InnPresentationFields
             if ($before !== $after) { self::assertValid($after, $references, $complete); }
         }
         foreach ($new as $key => $nested) {
-            if (is_array($nested)) { self::assertChangedCommandsValid(is_array($old[$key] ?? null) ? $old[$key] : [], $nested, $references, $complete); }
+            if (is_array($nested)) {
+                self::assertChangedCommandsValid(is_array($old[$key] ?? null) ? $old[$key] : [], $nested, $references, $complete, $commands);
+            }
         }
     }
 }

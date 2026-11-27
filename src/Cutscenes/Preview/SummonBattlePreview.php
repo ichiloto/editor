@@ -16,7 +16,9 @@ use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use Ichiloto\Engine\Entities\Character;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Rendering\Presentation\PresentationSession;
 use Ichiloto\Engine\Scenes\Battle\BattleConfig;
+use Ichiloto\Engine\Util\Interfaces\ConfigInterface;
 use InvalidArgumentException;
 
 /**
@@ -69,6 +71,7 @@ final class SummonBattlePreview
         ?BattlePresentationCatalog $catalog,
         string $assetRoot,
         EffectPresentation $presentation,
+        ?ConfigInterface $configuration = null,
     ): self {
         $battlers = $battle->partyRoster->battlers;
         $policy = $definition->wielders;
@@ -92,7 +95,7 @@ final class SummonBattlePreview
 
         return new self(
             new BattleCommandPreview($battle, $plan, $caster, $targets, BattlePoseRole::SUMMON,
-                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation),
+                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation, configuration: $configuration),
             $plan,
             $caster->name,
             array_map(static fn($target): string => $target->name, $targets),
@@ -109,9 +112,13 @@ final class SummonBattlePreview
      * @return array<string, mixed>
      * @throws InvalidArgumentException When the frame is outside the command.
      */
-    public function readFrame(int $frame, bool $reducedMotion): array
+    public function readFrame(int $frame, bool $reducedMotion, bool $consumerAdmitsCanvasImages = false): array
     {
-        return $this->preview->getFrameAtIndex($frame, $reducedMotion)->toArray();
+        $read = fn(): array => $this->preview->getFrameAtIndex($frame, $reducedMotion)->toArray();
+
+        return $consumerAdmitsCanvasImages
+            ? PresentationSession::runForSession(static fn(): bool => false, $read, consumerAdmitsCanvasImages: true)
+            : $read();
     }
 
     /**

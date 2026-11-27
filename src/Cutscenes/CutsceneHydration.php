@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes;
 
+use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneCompiler;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
@@ -36,11 +38,13 @@ final class CutsceneHydration
      * @param array<string, mixed> $data The data file's array.
      * @param array<int|string, mixed> $script The script file's array.
      */
-    public static function cinematic(array $data, array $script, ?string $projectRoot = null): CinematicDefinition
+    public static function cinematic(array $data, array $script, ?string $projectRoot = null,
+        ?ScriptCommandCatalog $scriptCommands = null): CinematicDefinition
     {
         return self::inProject(
             $projectRoot,
-            static fn(): CinematicDefinition => CinematicDefinition::fromArrays($data, $script),
+            static fn(): CinematicDefinition => CinematicDefinition::fromArrays($data, $script,
+                $scriptCommands ?? ($projectRoot === null ? null : ProjectScriptCommands::fromProject($projectRoot)->catalog)),
         );
     }
 

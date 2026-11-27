@@ -137,21 +137,23 @@ function drawFramingPicture(CinematicPreviewSession $preview, string $picture, a
 function measureFramingOverlap(CinematicPreviewSession $preview, string $picture, int $worldRow, int $pictureRow): float
 {
     $field = readFramingField($preview);
-    $line = array_find($field->presentation->getActivePresentations(),
-        static fn(object $owner): bool => $owner instanceof DialoguePresentationProviderInterface)
-        ?? throw new RuntimeException('No dialogue line is on screen.');
-    if ($picture === 'terminal') {
-        return ($worldRow + 1 - $pictureRow) - $line->getPresentationBounds()->getY();
-    }
-    $grid = $preview->getSceneGrid();
-    $height = $grid->rows * $grid->cellHeight;
-    $protected = new DialogueScenePresentation($field->scene->getPresentationContext()->assetRoot)
-        ->getProtectedBounds($line->getDialogueSnapshot(), $grid->columns * $grid->cellWidth, $height)
-        ?? throw new RuntimeException('The dialogue page protects no area.');
-    $view = new FieldViewport($grid);
-    $top = ($height - $view->rows * FieldViewport::TILE_SIZE) / 2;
+    return $field->run(static function () use ($field, $preview, $picture, $worldRow, $pictureRow): float {
+        $line = array_find($field->presentation->getActivePresentations(),
+            static fn(object $owner): bool => $owner instanceof DialoguePresentationProviderInterface)
+            ?? throw new RuntimeException('No dialogue line is on screen.');
+        if ($picture === 'terminal') {
+            return ($worldRow + 1 - $pictureRow) - $line->getPresentationBounds()->getY();
+        }
+        $grid = $preview->getSceneGrid();
+        $height = $grid->rows * $grid->cellHeight;
+        $protected = new DialogueScenePresentation($field->scene->getPresentationContext()->assetRoot)
+            ->getProtectedBounds($line->getDialogueSnapshot(), $grid->columns * $grid->cellWidth, $height)
+            ?? throw new RuntimeException('The dialogue page protects no area.');
+        $view = new FieldViewport($grid);
+        $top = ($height - $view->rows * FieldViewport::TILE_SIZE) / 2;
 
-    return $top + ($worldRow + 1 - $pictureRow) * FieldViewport::TILE_SIZE - min(array_map(static fn($area): float => $area->y, $protected));
+        return $top + ($worldRow + 1 - $pictureRow) * FieldViewport::TILE_SIZE - min(array_map(static fn($area): float => $area->y, $protected));
+    });
 }
 
 function stepToFramingLine(CinematicPreviewSession $preview): void
@@ -297,7 +299,7 @@ it('draws the Terminal dialogue window in the footprint its line declares, where
     try {
         // A spoken line stands at the bottom of the screen, its speaker in the top border.
         stepToFramingLine($preview);
-        $bounds = $readLine()->getPresentationBounds();
+        $bounds = readFramingField($preview)->run(fn() => $readLine()->getPresentationBounds());
         $picture = array_map(TerminalText::stripAnsi(...), $preview->frame());
         expect($bounds->getY() + $bounds->getHeight())->toBe(30)
             ->and(findFramingWindowRows($preview, $bounds->getX()))->toBe(range($bounds->getY(), $bounds->getY() + $bounds->getHeight() - 1))
@@ -308,7 +310,7 @@ it('draws the Terminal dialogue window in the footprint its line declares, where
         // A line nobody speaks stands at the top, as the game's narration does.
         $preview->confirm();
         stepToFramingLine($preview);
-        $bounds = $readLine()->getPresentationBounds();
+        $bounds = readFramingField($preview)->run(fn() => $readLine()->getPresentationBounds());
         $picture = array_map(TerminalText::stripAnsi(...), $preview->frame());
         expect($bounds->getY())->toBe(0)
             ->and(findFramingWindowRows($preview, $bounds->getX()))->toBe(range(0, $bounds->getHeight() - 1))

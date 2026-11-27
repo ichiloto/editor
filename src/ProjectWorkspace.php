@@ -22,6 +22,7 @@ use Ichiloto\Editor\Database\SkillReferences;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Events\ScriptCommandUses;
 use Ichiloto\Editor\Maps\MapFolder;
+use Ichiloto\Editor\Maps\SaveManifestStep;
 use Ichiloto\Editor\Progression\ProjectWorldAbilities;
 use Ichiloto\Editor\Progression\WorldAbilityFields;
 use Ichiloto\Editor\Progression\WorldAbilityReferences;
@@ -29,6 +30,7 @@ use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Engine\Core\ProjectFormat;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Ichiloto\Engine\Entities\Elements\ElementRegistry;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
@@ -50,6 +52,7 @@ final readonly class ProjectWorkspace
     public const int CANVAS_HEADER_ROWS = 2;
     /** The project's catalogues as this workspace holds them, unsaved edits included. */
     public ProjectCatalogs $catalogs;
+    public ProjectScriptCommands $scriptCommands;
     /**
      * @param ProjectMap[] $maps
      * @param array<string, ProjectRecordDatabase> $recordDatabases Schema-driven categories, keyed by category key.
@@ -67,8 +70,9 @@ final readonly class ProjectWorkspace
         public ?CutsceneLibrary         $cutscenes = null,
         public ?ProjectConfig           $config = null,
         public ?MenuPresentationSettings $menuPresentation = null,
-        public ?ProjectScriptCommands   $scriptCommands = null,
+        ?ProjectScriptCommands          $scriptCommands = null,
     ) {
+        $this->scriptCommands = $scriptCommands ?? new ProjectScriptCommands();
         // A quest's id follows its name until something refers to it, and
         // what refers to a quest lives across the whole project.
         $this->getRecordDatabase('quests')?->useIdentityReferences(
@@ -122,6 +126,11 @@ final readonly class ProjectWorkspace
     public function getSystemField(string $key): mixed
     {
         return $this->getRecordDatabase('system')?->getRecordByIndex(0)?->get($key);
+    }
+
+    public function getScriptCommandCatalog(): ScriptCommandCatalog
+    {
+        return $this->scriptCommands->catalog;
     }
 
     /**
@@ -237,7 +246,8 @@ final readonly class ProjectWorkspace
     {
         $records = [];
         foreach (['classes' => 'Class', 'enemies' => 'Enemy', 'skills' => 'Skill', 'states' => 'State',
-            MasteryFields::REGIONS => 'Mastery region', MasteryFields::BRANCHES => 'Mastery branch'] as $category => $noun) {
+            MasteryFields::REGIONS => 'Mastery region', MasteryFields::BRANCHES => 'Mastery branch',
+            MasteryFields::HELD => 'Mastery hold on'] as $category => $noun) {
             foreach ($this->getRecordDatabase($category)?->getRecords() ?? [] as $record) {
                 $label = sprintf('%s %s', $noun, strval($record->get('name') ?? $record->get('actor') ?? $record->recordId));
                 if ($category === 'skills' && $record->get('name') === $skill) { continue; }
@@ -338,10 +348,7 @@ final readonly class ProjectWorkspace
         $menuPresentation = new MenuPresentationSettings($projectRoot);
         $settingsFiles = ['config.php' => $projectConfig, MenuPresentationSettings::RELATIVE_PATH => $menuPresentation,
             FieldPresentationSettings::RELATIVE_PATH => new FieldPresentationSettings($projectRoot)];
-        // Before any schema is built: the command editor offers, and Engine
-        // validation accepts, exactly this project's registered commands.
         $scriptCommands = ProjectScriptCommands::fromProject($projectRoot);
-        $scriptCommands->activate();
         // The open project's world abilities answer every world_ability condition the Engine evaluates for it.
         ProjectWorldAbilities::installFromProject($projectRoot);
 
@@ -356,9 +363,9 @@ final readonly class ProjectWorkspace
             recordDatabases: array_map(
                 static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema,
                     $settingsFiles[$schema->relativePath] ?? null, $graphical),
-                RecordSchemaCatalog::all($graphical),
+                RecordSchemaCatalog::all($graphical, $scriptCommands->catalog),
             ),
-            cutscenes: CutsceneLibrary::fromProject($projectRoot),
+            cutscenes: CutsceneLibrary::fromProject($projectRoot, $scriptCommands->catalog),
             config: $projectConfig,
             menuPresentation: $menuPresentation,
             scriptCommands: $scriptCommands,
@@ -777,7 +784,7 @@ final readonly class ProjectWorkspace
     }
 
     /**
-     * Deletes the selected map directory and all associated split files.
+     * Deletes the selected map's split files after checking its recorded save positions.
      *
      * @param int $selectedMapIndex The selected map index.
      * @return string|null The deleted map id.
@@ -801,6 +808,7 @@ final readonly class ProjectWorkspace
         // back, bytes and modification times -- and each folder goes only
         // once it is empty.
         $transaction = new FileSetTransaction($selectedMap->directory, $files ?? new FilesystemFileSetOperations());
+        SaveManifestStep::protectMapRemoval($this->projectRoot, $selectedMap->mapId, $transaction);
         $transaction->remove($selectedMap->dataPath);
         foreach ($selectedMap->getStoredGridPaths() as $path) {
             $transaction->remove($path);

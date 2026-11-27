@@ -3,6 +3,10 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Cutscenes\CutsceneHydration;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Events\EventRecordPane;
+use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Events\ScriptReferenceScope;
@@ -49,10 +53,10 @@ function writeScriptCommandScript(string $path, array $payload): void
 }
 
 /** @return array<string, Ichiloto\Editor\Database\RecordField> */
-function registeredVariantFields(string $type): array
+function registeredVariantFields(string $type, ?ScriptCommandCatalog $commands = null): array
 {
     $fields = [];
-    $variant = RecordSchemaCatalog::forKey('common_events')?->subList?->variants[$type] ?? [];
+    $variant = RecordSchemaCatalog::forKey('common_events', $commands)?->subList?->variants[$type] ?? [];
     if ($variant instanceof Closure) { $variant = $variant(['type' => $type]); }
     foreach ($variant as $field) {
         $fields[$field->key] = $field;
@@ -103,11 +107,11 @@ it('reads a project\'s declared commands without loading their handlers', functi
 it('offers the open project\'s registered commands with their declared fields', function (): void {
     $root = makeTemporaryProject();
     writeCarriageDeclarations($root);
-    ProjectWorkspace::fromProject($root);
-    $list = RecordSchemaCatalog::eventCommandList('script');
-    $shop = registeredVariantFields('shop');
-    $inn = registeredVariantFields('inn');
-    $carriage = registeredVariantFields('hire_carriage');
+    $commands = ProjectWorkspace::fromProject($root)->getScriptCommandCatalog();
+    $list = RecordSchemaCatalog::eventCommandList('script', commands: $commands);
+    $shop = registeredVariantFields('shop', $commands);
+    $inn = registeredVariantFields('inn', $commands);
+    $carriage = registeredVariantFields('hire_carriage', $commands);
 
     // A field script offers the built-in commands the Engine runs on the field, then its registered field
     // commands, then the project's. A command that needs an active cinematic (a framing phase) is not among them.
@@ -119,8 +123,10 @@ it('offers the open project\'s registered commands with their declared fields', 
         ->and($builtIn)->toContain('camera', 'sequence')->not->toContain('framing')
         ->and(array_keys($shop))->toBe(['buyRate', 'sellRate'])
         ->and($shop['sellRate']->type)->toBe(InputControlType::FLOAT)
-        ->and(array_keys($inn))->toBe(['confirmDialogue.text', 'confirmDialogue.name', 'cost', 'spawnPoint.x', 'spawnPoint.y', 'wakeFacing', 'bgm', 'presentation', 'resultVariable'])
+        ->and(array_keys($inn))->toBe(['confirmDialogue.text', 'confirmDialogue.name', 'confirmDialogue.kind', 'confirmDialogue.defaultChoice', 'cost', 'spawnPoint.x', 'spawnPoint.y', 'wakeFacing', 'bgm', 'presentation', 'resultVariable'])
         ->and($inn['wakeFacing']->options)->toEqualCanonicalizing(['North', 'East', 'South', 'West'])
+        ->and($inn['confirmDialogue.kind']->options)->toBe(['answer', 'decision'])
+        ->and($inn['confirmDialogue.defaultChoice']->type)->toBe(InputControlType::INTEGER)
         ->and($inn['bgm']->reference)->toBe('bgm')
         ->and($inn['bgm']->allowsNone)->toBeTrue()
         ->and($inn['presentation']->reference)->toBe('stage_timelines')
@@ -143,15 +149,16 @@ it('offers the open project\'s registered commands with their declared fields', 
         ->and($stops?->key)->toBe('stops');
 });
 
-it('forgets a previous project\'s commands when another project opens', function (): void {
+it('opens each project with its own commands and preserves the standalone registration', function (): void {
     $root = makeTemporaryProject();
     writeCarriageDeclarations($root);
-    ProjectWorkspace::fromProject($root);
+    $standalone = ScriptCommandRegistry::getCatalog();
+    $first = ProjectWorkspace::fromProject($root);
+    $second = ProjectWorkspace::fromProject(makeTemporaryProject());
 
-    ProjectWorkspace::fromProject(makeTemporaryProject());
-
-    expect(RecordSchemaCatalog::getEventCommandTypes())->not->toContain('hire_carriage')
-        ->and(RecordSchemaCatalog::getEventCommandTypes())->toContain('shop', 'inn');
+    expect(RecordSchemaCatalog::getEventCommandTypes(commands: $first->getScriptCommandCatalog()))->toContain('hire_carriage')
+        ->and(RecordSchemaCatalog::getEventCommandTypes(commands: $second->getScriptCommandCatalog()))->not->toContain('hire_carriage')
+        ->and(ScriptCommandRegistry::getCatalog())->toBe($standalone);
 });
 
 it('reports registered commands the runtime would refuse and resources they name that do not exist', function (): void {
@@ -179,6 +186,51 @@ it('reports registered commands the runtime would refuse and resources they name
         ->and(implode("\n", $messages))->toContain('"atlantis"')
         ->and(implode("\n", $messages))->not->toContain('unknown event command type')
         ->and(implode("\n", $messages))->not->toContain('"S-Potion"');
+});
+
+it('hydrates and validates scripts against their own project after opening another project', function (): void {
+    $root = makeTemporaryProject();
+    writeCarriageDeclarations($root);
+    $script = [['type' => 'hire_carriage', 'destination' => 'test-map']];
+    writeScriptCommandScript($root . '/assets/Events/carriage.php', $script);
+    $workspace = ProjectWorkspace::fromProject($root);
+    $foreignRoot = makeTemporaryProject();
+    ProjectWorkspace::fromProject($foreignRoot);
+
+    $messages = array_map(static fn($issue): string => $issue->message,
+        array_filter(new ProjectValidator()->validate($workspace), static fn($issue): bool => str_contains($issue->where, 'carriage')));
+    $cinematic = ['id' => 'carriage', 'name' => 'Carriage'];
+    expect(implode("\n", $messages))->not->toContain('unknown event command type')
+        ->and(CutsceneHydration::cinematic($cinematic, $script, $root)->commands)->toBe($script)
+        ->and(fn() => CutsceneHydration::cinematic($cinematic, $script, $foreignRoot))->toThrow(RuntimeException::class, 'Unknown command type')
+        ->and(ScriptCommandRegistry::getCatalog()->isRegistered('hire_carriage'))->toBeFalse();
+});
+
+it('keeps common event, cinematic, map event and NPC command pickers with their project', function (): void {
+    $root = cutsceneProject();
+    writeCarriageDeclarations($root);
+    $first = ProjectWorkspace::fromProject($root, graphical: true);
+    $second = ProjectWorkspace::fromProject(cutsceneProject(), graphical: true);
+    $check = static function (ProjectWorkspace $workspace, bool $ownsCarriage): void {
+        $map = array_find($workspace->maps, static fn($map): bool => $map->mapId === 'harbour');
+        $references = new ReferenceCatalog($workspace, $map);
+        $event = new EventRecordPane('A', ['class' => \Ichiloto\Engine\Events\Triggers\ScriptEventTrigger::class,
+            'data' => ['script' => []]], $references, graphical: true);
+        $npc = new NpcInspector($map, graphical: true, references: $references);
+        $lists = [
+            $workspace->getRecordDatabase('common_events')->getFrameSubList([]),
+            $workspace->cutscenes->schemaFor(CutsceneType::CINEMATIC, graphical: true)->commandLists['commands'],
+            $event->records()->getFrameSubList(['script']),
+            $npc->records()->getFrameSubList(['script']),
+        ];
+        foreach ($lists as $list) {
+            expect(in_array('hire_carriage', $list?->fields[0]->options ?? [], true))->toBe($ownsCarriage);
+        }
+    };
+
+    $check($first, true);
+    $check($second, false);
+    $check($first, true);
 });
 
 it('reports declarations the game would refuse to start with', function (): void {

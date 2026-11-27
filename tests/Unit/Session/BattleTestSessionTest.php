@@ -175,3 +175,28 @@ it('validates saved test inventory with the default party and preserves explicit
     expect(EditorSession::open($root)->describeBattleTest()['battleTest'])->toBe($entry)
         ->and($validate())->toBe([]);
 })->skip(fn (): bool => !property_exists(ProjectBattleTest::class, 'inventory'), 'Requires the Engine Battle Test inventory contract.');
+
+
+it('preserves each shared battle opening through source save and undo with an explicit or inherited party', function () {
+    $root = battleTestProject();
+    $file = $root . '/assets/Data/system.php';
+    $before = (string) file_get_contents($file);
+    $session = EditorSession::open($root);
+    foreach ([false, true] as $explicitMembers) {
+        foreach (\Ichiloto\Engine\Battle\EncounterAdvantage::cases() as $opening) {
+            $entry = ['troop' => 'Pair', 'firstStrike' => $opening->value,
+                ...($explicitMembers ? ['members' => [['actor' => 'Kaelion', 'level' => 3]]] : [])];
+            $view = $session->applyBattleTest($entry);
+            expect($view['issue'])->toBeNull()->and($view['battleTest'])->toBe($entry);
+            $session->saveDatabase('system');
+            $written = require $file;
+            $record = $written[0][ProjectBattleTest::SYSTEM_KEY] ?? $written[ProjectBattleTest::SYSTEM_KEY] ?? null;
+            expect($record)->toBe($entry);
+            $preset = ProjectBattleTest::fromArray($record);
+            expect($preset->setup?->firstStrike ?? $preset->firstStrike)->toBe($opening);
+            $session->undo();
+            $session->saveDatabase('system');
+            expect(file_get_contents($file))->toBe($before);
+        }
+    }
+});

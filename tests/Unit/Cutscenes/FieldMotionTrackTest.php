@@ -428,7 +428,22 @@ it('leaves the limits of a scale to the Engine: a factor it refuses is refused a
     $apply('track1Keyframe0Payloadscale', '1.25');
     expect($session->saveAll()['failures'])->toBe([])
         ->and((require fieldMotionPath($root))['tracks'][1]['keyframes'][0]['payload'])->toBe(['x' => -10.25, 'y' => 3.5, 'scale' => 1.25]);
-})->with(['0', '-1.5', '8.5', 'wide'])->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
+})->with(['0', '-1.5', '8.5'])->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
+
+it('refuses nonnumeric scale text without changing the motion sample', function (): void {
+    $root = fieldMotionCameraProject();
+    [$session, , $row, $apply] = openFieldMotionSession($root);
+    $scaleField = 'track1Keyframe0Payloadscale';
+    $original = $row($scaleField)['value'];
+
+    expect(fn () => $apply($scaleField, 'wide'))->toThrow(SessionRefusal::class, 'Scale must be a finite number.')
+        ->and($row($scaleField)['value'])->toBe($original)
+        ->and(file_get_contents(fieldMotionPath($root)))->toBe(quakeCameraTimeline());
+
+    $apply($scaleField, '1.25');
+    expect($session->saveAll()['failures'])->toBe([])
+        ->and((require fieldMotionPath($root))['tracks'][1]['keyframes'][0]['payload']['scale'])->toBe(1.25);
+})->skip(fn (): bool => ! class_exists(CanvasGroupScale::class), ENGINE_FIELD_MOTION_SCALE_MISSING);
 
 it('refuses to turn a whole-field motion into a battler\'s while a sample holds a scale, and changes nothing', function () {
     $root = fieldMotionCameraProject();
@@ -612,8 +627,9 @@ it('holds the battlefield in place where no enabled sample moves it, and keeps a
     $root = fieldMotionProject();
     [$session, $index] = openFieldMotionSession($root);
     $samples = (require fieldMotionPath($root))['tracks'][1]['keyframes'];
+    // The canvas tones images, so the effect's authored tone composes and leaves the field motion's diagnostics alone.
     $read = static fn(int $authored, bool $canvasGroups = true, bool $reducedMotion = false): array => $session->readEffectBattlePreview(
-        $index, 0, $reducedMotion, authoredFrame: $authored, canvasGroups: $canvasGroups);
+        $index, 0, $reducedMotion, authoredFrame: $authored, canvasGroups: $canvasGroups, imageTone: true);
     $disabled = array_find($samples, static fn(array $sample): bool => ($sample['visible'] ?? true) === false);
     $zero = array_find($samples, static fn(array $sample): bool => $sample['payload'] == ['x' => 0, 'y' => 0]);
 

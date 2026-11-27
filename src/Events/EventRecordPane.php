@@ -63,7 +63,7 @@ final class EventRecordPane
         bool $graphical = false,
     ) {
         $className = is_string($definition['class'] ?? null) ? $definition['class'] : null;
-        $this->schema = RecordSchemaCatalog::mapEvent($className, $graphical);
+        $this->schema = RecordSchemaCatalog::mapEvent($className, $graphical, $references?->getScriptCommandCatalog());
         [$payload, $this->lifted] = $this->project($definition);
         $this->records = ProjectRecordDatabase::overOwnedList($this->schema, '', [$payload], static function (array $entries): void {}, $graphical);
 

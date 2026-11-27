@@ -6,6 +6,8 @@ use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\UI\TextFieldEditor;
 use Ichiloto\Editor\UI\TextFieldKeyResult;
+use Ichiloto\Engine\IO\Enumerations\KeyCode;
+use Ichiloto\Engine\UI\Navigation\{ToolNavigationAction, ToolNavigationBindings};
 
 function textControl(string $rawValue = ''): InputControl
 {
@@ -43,6 +45,16 @@ it('reports Esc as cancelled and Enter as submitted', function () {
   expect($editor->handleKey("\033", textControl()))->toBe(TextFieldKeyResult::CANCELLED)
     ->and($editor->handleKey("\n", textControl()))->toBe(TextFieldKeyResult::SUBMITTED)
     ->and($editor->handleKey("\r", textControl()))->toBe(TextFieldKeyResult::SUBMITTED);
+});
+
+it('takes the cancel key from its tool profile without changing the edit buffer', function () {
+  $profile = new ToolNavigationBindings([ToolNavigationAction::CANCEL->value => [KeyCode::F6]]);
+  $editor = new TextFieldEditor($profile);
+  $editor->open('abc');
+
+  expect($editor->handleKey("\033", textControl()))->toBe(TextFieldKeyResult::IGNORED)
+    ->and($editor->handleKey("\033[17~", textControl()))->toBe(TextFieldKeyResult::CANCELLED)
+    ->and($editor->value)->toBe('abc');
 });
 
 it('inserts typed symbols at the caret', function () {

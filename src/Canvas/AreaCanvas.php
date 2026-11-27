@@ -60,7 +60,7 @@ trait AreaCanvas
             $input === 'n' || $input === 'N' => $this->pickUpAreaAtCursor($map, step: true),
             $input === 'c' || $input === 'C' => $this->clearAreaSelection('Selection cleared.'),
             str_contains($input, "\033[3~") || $input === "\x7f" => $this->deleteEditedArea($map),
-            $input === "\033" => $this->backOutOfAreaSelection(),
+            $this->isToolCancelInput($input) => $this->backOutOfAreaSelection(),
             default => false,
         };
     }
@@ -168,7 +168,7 @@ trait AreaCanvas
 
     private function handleAreaIdInput(ProjectMap $map, string $input): void
     {
-        if ($input === "\033") {
+        if ($this->isToolCancelInput($input)) {
             $this->areaIdBuffer = null;
             $this->setStatus('No area made; the selection is kept.');
         } elseif ($input === "\n" || $input === "\r") {

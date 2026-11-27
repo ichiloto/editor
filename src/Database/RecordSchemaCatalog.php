@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Messaging\Dialogue\ChoiceKind;
 use Ichiloto\Engine\Field\MapDoorReference;
 use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
 use Ichiloto\Engine\Animations\EffectScale;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
 use Ichiloto\Engine\Battle\Presentation\BattlerContact;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Editor\Dialogue\DialoguePortraitFields;
@@ -46,6 +50,7 @@ use Ichiloto\Editor\Field\NpcBedFields;
 use Ichiloto\Editor\Field\NpcPlacementFields;
 use Ichiloto\Editor\Events\ScriptReferenceSource;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
@@ -142,7 +147,7 @@ final class RecordSchemaCatalog
      *
      * @return array<string, RecordSchema>
      */
-    public static function all(bool $graphical = false): array
+    public static function all(bool $graphical = false, ?ScriptCommandCatalog $commands = null): array
     {
         $schemas = [
             self::classes(),
@@ -150,12 +155,12 @@ final class RecordSchemaCatalog
             self::incomeSchedules(),
             self::system(),
             self::states(),
-            self::troops(),
+            self::troops($commands),
             self::animations(),
             self::battleEntryRules(),
             SuperMoveFields::getSchema(),
             \Ichiloto\Editor\Progression\WorldAbilityFields::getSchema(),
-            \Ichiloto\Editor\Progression\TutorialFields::getSchema(),
+            \Ichiloto\Editor\Progression\TutorialFields::getSchema($commands),
             \Ichiloto\Editor\Progression\AchievementFields::getSchema(),
             self::items(),
             self::weapons(),
@@ -164,6 +169,7 @@ final class RecordSchemaCatalog
             self::skills(),
             MasteryFields::getRegionSchema(),
             MasteryFields::getBranchSchema(),
+            MasteryFields::getHeldSkillSchema(),
             MasteryFields::getMapSchema($graphical),
             self::skits(),
             self::knowledgeSubjects(),
@@ -174,7 +180,7 @@ final class RecordSchemaCatalog
             self::optimizeWeights(),
             self::optimizeOutcomes(),
             self::optimizeExclusions(),
-            self::commonEvents($graphical),
+            self::commonEvents($graphical, $commands),
             self::terms(),
             WordFormFields::getSchema(),
             \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
@@ -210,9 +216,9 @@ final class RecordSchemaCatalog
      * @param string $key The Database category key.
      * @return RecordSchema|null
      */
-    public static function forKey(string $key): ?RecordSchema
+    public static function forKey(string $key, ?ScriptCommandCatalog $commands = null): ?RecordSchema
     {
-        return self::all()[$key] ?? null;
+        return self::all(commands: $commands)[$key] ?? null;
     }
 
     /**
@@ -323,6 +329,8 @@ final class RecordSchemaCatalog
                 removeWhenEmpty: true, displayDefault: \Ichiloto\Engine\Animations\ActionMovement::STEP->value),
             RecordField::reference('sourceEffect', 'Caster Effect', 'effects', allowsNone: true, noneLabel: '(none)'),
             RecordField::reference('targetEffect', 'Target Effect', 'effects', allowsNone: true, noneLabel: '(none)'),
+            new RecordField('targetImpactSeconds', 'Target Impact Delay (Seconds)', InputControlType::FLOAT,
+                removeWhenEmpty: true, displayDefault: '(effect timing)'),
             new RecordField('roles', 'Roles', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true,
                 reference: 'animation_roles', uniqueAcrossRecords: true),
         ];
@@ -404,9 +412,15 @@ final class RecordSchemaCatalog
      */
     public static function checkAnimations(array $whole, string $projectRoot): ?string
     {
+        $effects = new EffectTimelineLibrary($projectRoot . '/assets');
         foreach ($whole as $index => $entry) {
             try {
-                Animation::fromArray(is_array($entry) ? $entry : []);
+                $animation = Animation::fromArray(is_array($entry) ? $entry : []);
+                if ($animation->targetImpactSeconds !== null && $animation->targetEffect !== null) {
+                    foreach (EffectPresentation::cases() as $presentation) {
+                        BattleCommandTimeline::assertSharedTargetImpactOwner($effects->load($animation->targetEffect, true, $presentation));
+                    }
+                }
             } catch (\InvalidArgumentException|\ValueError|\TypeError $error) {
                 // Animations are numbered by their own id, which their position need not match.
                 $id = is_array($entry) && (is_int($entry['id'] ?? null) || is_string($entry['id'] ?? null)) ? $entry['id'] : intval($index) + 1;
@@ -419,7 +433,7 @@ final class RecordSchemaCatalog
         return null;
     }
 
-    private static function troops(): RecordSchema
+    private static function troops(?ScriptCommandCatalog $commands): RecordSchema
     {
         return new RecordSchema(
             key: 'troops',
@@ -485,11 +499,11 @@ final class RecordSchemaCatalog
                 // The enemy is chosen when a member is added (TroopAuthoring).
                 blank: ['enemy' => '', 'position' => [15, 7]],
                 // Event pages name members by index; they follow a member that moves.
-                remapIndexReferences: TroopEventPageContract::remapMembers(...),
+                remapIndexReferences: static fn(array $troop, Closure $map): array => TroopEventPageContract::remapMembers($troop, $map, $commands),
             ),
-            subLists: [self::troopEventPageList()],
+            subLists: [self::troopEventPageList($commands)],
             // The Engine reads event pages when a battle starts; a page it would refuse is refused here.
-            saveCheck: static fn(array $troops, string $root): ?string => TroopEventPageContract::checkTroops($troops, $root)
+            saveCheck: static fn(array $troops, string $root): ?string => TroopEventPageContract::checkTroops($troops, $root, $commands)
                 ?? TroopLogicalFormationContract::checkTroops($troops, $root),
         );
     }
@@ -499,7 +513,7 @@ final class RecordSchemaCatalog
      * runs over the paused battle and the battle commands it runs. Every
      * given condition must hold; members are chosen from the troop itself.
      */
-    private static function troopEventPageList(): RecordSubList
+    private static function troopEventPageList(?ScriptCommandCatalog $commands): RecordSubList
     {
         return new RecordSubList(
             key: 'events',
@@ -522,7 +536,7 @@ final class RecordSchemaCatalog
             commandArms: ['commands' => 'Commands'],
             heading: 'Event Pages',
             removeWhenEmpty: true,
-            armCommandList: self::eventCommandList('commands', scope: EventExecutionScope::BATTLE),
+            armCommandList: self::eventCommandList('commands', scope: EventExecutionScope::BATTLE, commands: $commands),
         );
     }
 
@@ -1683,7 +1697,7 @@ final class RecordSchemaCatalog
                 reference: 'animation_ids',
                 removeWhenEmpty: true,
                 allowsNone: true,
-                displayDefault: '(Legacy fallback)',
+                displayDefault: '(Automatic)',
             ),
             // How large the bound animation's target effect plays: one timeline serves every grade of a spell.
             self::animationScaleField(),
@@ -1871,7 +1885,7 @@ final class RecordSchemaCatalog
      *
      * @return RecordSchema
      */
-    private static function commonEvents(bool $graphical = false): RecordSchema
+    private static function commonEvents(bool $graphical, ?ScriptCommandCatalog $commands): RecordSchema
     {
         return new RecordSchema(
             key: 'common_events',
@@ -1889,7 +1903,8 @@ final class RecordSchemaCatalog
                 ],
             ],
             // A reusable script is what cinematic sessions call, so it is edited with their full vocabulary.
-            subList: CutsceneSchemas::cinematicCommandList('commands', $graphical, ['type' => 'text', 'name' => '', 'text' => 'Something happens.']),
+            subList: CutsceneSchemas::cinematicCommandList('commands', $graphical,
+                ['type' => 'text', 'name' => '', 'text' => 'Something happens.'], commands: $commands),
             listPayloadKey: 'commands',
         );
     }
@@ -2661,7 +2676,7 @@ final class RecordSchemaCatalog
      *
      * @return RecordSchema The schema.
      */
-    public static function mapNpcs(bool $graphical = false): RecordSchema
+    public static function mapNpcs(bool $graphical = false, ?ScriptCommandCatalog $commands = null): RecordSchema
     {
         $fields = [
                 // Identity
@@ -2749,7 +2764,7 @@ final class RecordSchemaCatalog
             ),
             // The NPC's inline script: the shared command vocabulary, in a
             // frame. The runtime runs it INSTEAD of dialogue when non-empty.
-            commandLists: ['script' => self::eventCommandList('script', $graphical)],
+            commandLists: ['script' => self::eventCommandList('script', $graphical, commands: $commands)],
             // Named destinations commit_npc_placement saves, beside the pages.
             subLists: [NpcPlacementFields::getList($graphical)],
         );
@@ -2769,7 +2784,7 @@ final class RecordSchemaCatalog
      *
      * @param string|null $className The event's trigger class.
      */
-    public static function mapEvent(?string $className, bool $graphical = false): RecordSchema
+    public static function mapEvent(?string $className, bool $graphical = false, ?ScriptCommandCatalog $commands = null): RecordSchema
     {
         $className = $className === null ? null : ltrim($className, '\\');
         $dialogue = $className === DialogueEventTrigger::class;
@@ -2798,7 +2813,7 @@ final class RecordSchemaCatalog
                 ['name' => '', 'text' => 'Something to say.'],
             ) : null,
             commandLists: $className !== null && is_a($className, ScriptEventTrigger::class, true)
-                ? ['script' => self::eventCommandList('script', $graphical)]
+                ? ['script' => self::eventCommandList('script', $graphical, commands: $commands)]
                 : [],
         );
     }
@@ -2869,9 +2884,10 @@ final class RecordSchemaCatalog
      * @param string $key The payload key holding the list.
      * @return RecordSubList The command list.
      */
-    public static function eventCommandList(string $key, bool $graphical = false, EventExecutionScope $scope = EventExecutionScope::FIELD): RecordSubList
+    public static function eventCommandList(string $key, bool $graphical = false, EventExecutionScope $scope = EventExecutionScope::FIELD,
+        ?ScriptCommandCatalog $commands = null): RecordSubList
     {
-        $types = self::getEventCommandTypes($scope);
+        $types = self::getEventCommandTypes($scope, $commands);
         $offered = static fn(array $byType): array => array_intersect_key($byType, array_flip($types));
 
         return new RecordSubList(
@@ -2883,15 +2899,15 @@ final class RecordSchemaCatalog
             ],
             blank: ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
             // A scope offers only the commands its scripts may run: a battle page never shows a transfer.
-            variants: $offered(self::eventCommandVariants($graphical)),
+            variants: $offered(self::eventCommandVariants($graphical, $commands)),
             variantKey: 'type',
             nestedLists: $offered([
                 'move_route' => static fn(array $entry): ?RecordSubList => MovementRouteFields::getPointList($entry, graphical: $graphical),
-                ...self::getRegisteredCommandLists($graphical),
+                ...self::getRegisteredCommandLists($graphical, $commands),
             ]),
             variantArms: $offered(StorybookPlaybackFields::getCommandArms()),
             prepareEdit: static fn(array $entry, string $field): array => MovementRouteFields::prepareEdit(
-                InnPresentationFields::prepareEdit($entry, $field), $field),
+                InnPresentationFields::prepareEdit($entry, $field, $commands), $field),
         );
     }
 
@@ -2951,7 +2967,7 @@ final class RecordSchemaCatalog
      *
      * @return array<string, RecordField[]|Closure(array<string, mixed>): RecordField[]>
      */
-    public static function eventCommandVariants(bool $graphical = false): array
+    public static function eventCommandVariants(bool $graphical = false, ?ScriptCommandCatalog $commands = null): array
     {
         return [
             'text' => [
@@ -2962,6 +2978,10 @@ final class RecordSchemaCatalog
             'choice' => [
                 new RecordField('prompt', 'Prompt', removeWhenEmpty: true),
                 new RecordField('title', 'Title', removeWhenEmpty: true),
+                // Who is asking, as the Engine reads it: answers to someone are a list, the party's own decision is
+                // buttons. Left unset, the choice is a decision.
+                new RecordField('kind', 'Kind', options: ['', ...array_column(ChoiceKind::cases(), 'value')],
+                    removeWhenEmpty: true, displayDefault: '(' . ChoiceKind::DECISION->value . ')'),
                 // Options become their own rows and frames; see
                 // ProjectRecordDatabase::describeSubEntryFields.
             ],
@@ -3043,7 +3063,7 @@ final class RecordSchemaCatalog
                 new RecordField('conditions', 'Conditions', codec: RecordFieldCodec::CONDITIONS),
                 // The arms become frames; see describeSubEntryFields.
             ],
-            ...self::getRegisteredCommandVariants($graphical),
+            ...self::getRegisteredCommandVariants($graphical, $commands),
         ];
     }
 
@@ -3071,11 +3091,12 @@ final class RecordSchemaCatalog
         ];
     }
 
-    public static function getEventCommandTypes(EventExecutionScope $scope = EventExecutionScope::FIELD): array
+    public static function getEventCommandTypes(EventExecutionScope $scope = EventExecutionScope::FIELD,
+        ?ScriptCommandCatalog $commands = null): array
     {
         return [
             ...array_values(array_filter(self::EVENT_COMMAND_TYPES, $scope->allowsBuiltInCommand(...))),
-            ...self::getRegisteredCommandTypes($scope),
+            ...self::getRegisteredCommandTypes($scope, $commands),
         ];
     }
 
@@ -3085,9 +3106,10 @@ final class RecordSchemaCatalog
      *
      * @return list<string>
      */
-    public static function getRegisteredCommandTypes(EventExecutionScope $scope = EventExecutionScope::FIELD): array
+    public static function getRegisteredCommandTypes(EventExecutionScope $scope = EventExecutionScope::FIELD,
+        ?ScriptCommandCatalog $commands = null): array
     {
-        return array_values(array_keys(array_filter(ScriptCommandRegistry::getCatalog()->definitions,
+        return array_values(array_keys(array_filter(($commands ?? ScriptCommandRegistry::getCatalog())->definitions,
             static fn(ScriptCommandDefinition $definition): bool => $definition->runsIn($scope))));
     }
 
@@ -3100,11 +3122,11 @@ final class RecordSchemaCatalog
      *
      * @return array<string, RecordField[]|Closure(array): list<RecordField>>
      */
-    public static function getRegisteredCommandVariants(bool $graphical = false): array
+    public static function getRegisteredCommandVariants(bool $graphical = false, ?ScriptCommandCatalog $commands = null): array
     {
         $variants = [];
 
-        foreach (ScriptCommandRegistry::getCatalog()->definitions as $type => $definition) {
+        foreach (($commands ?? ScriptCommandRegistry::getCatalog())->definitions as $type => $definition) {
             $listField = self::findRegisteredListField($definition);
             $getFields = static function (array $entry) use ($definition, $listField, $graphical): array {
                 $fields = [];
@@ -3133,11 +3155,11 @@ final class RecordSchemaCatalog
      *
      * @return array<string, RecordSubList|Closure(array): ?RecordSubList>
      */
-    public static function getRegisteredCommandLists(bool $graphical = false): array
+    public static function getRegisteredCommandLists(bool $graphical = false, ?ScriptCommandCatalog $commands = null): array
     {
         $lists = [];
 
-        foreach (ScriptCommandRegistry::getCatalog()->definitions as $type => $definition) {
+        foreach (($commands ?? ScriptCommandRegistry::getCatalog())->definitions as $type => $definition) {
             $listField = self::findRegisteredListField($definition);
 
             if ($listField === null) {
@@ -3181,9 +3203,9 @@ final class RecordSchemaCatalog
 
     /**
      * Describes one declared field as the settings it is edited through. An
-     * optional text or reference drops out when cleared; numbers and flags
-     * keep what the author sets, since a project's handler decides what an
-     * absent one means.
+     * optional text, reference or number drops out when cleared, so the
+     * project's handler decides what its absence means; a number the author
+     * sets is kept, zero included. Flags keep what the author sets.
      *
      * @param list<ScriptCommandField> $siblings The fields declared beside it, which a placement's NPC is among.
      * @return RecordField[]
@@ -3192,8 +3214,11 @@ final class RecordSchemaCatalog
     {
         return match ($field->kind) {
             ScriptCommandFieldKind::TEXT => [new RecordField($field->key, $field->label, removeWhenEmpty: ! $field->required)],
-            ScriptCommandFieldKind::INTEGER => [new RecordField($field->key, $field->label, InputControlType::INTEGER)],
-            ScriptCommandFieldKind::NUMBER => [new RecordField($field->key, $field->label, InputControlType::FLOAT)],
+            // An absent optional number reads as blank, so a typed 0 is a value of its own, never its absence.
+            ScriptCommandFieldKind::INTEGER => [new RecordField($field->key, $field->label, InputControlType::INTEGER,
+                removeWhenEmpty: ! $field->required, displayDefault: $field->required ? null : '')],
+            ScriptCommandFieldKind::NUMBER => [new RecordField($field->key, $field->label, InputControlType::FLOAT,
+                removeWhenEmpty: ! $field->required, displayDefault: $field->required ? null : '')],
             ScriptCommandFieldKind::BOOLEAN => [RecordField::boolean($field->key, $field->label, removeWhenEmpty: false)],
             ScriptCommandFieldKind::OPTION => [new RecordField($field->key, $field->label, options: $field->options, removeWhenEmpty: ! $field->required)],
             ScriptCommandFieldKind::REFERENCE => [self::describeRegisteredReference($field, $siblings)],

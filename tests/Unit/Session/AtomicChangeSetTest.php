@@ -172,7 +172,7 @@ it('writes nothing when the last document of a change set would not read back, a
         ->and($session->listUnsavedChanges())->toBe([]);
 });
 
-it('writes a change set\'s documents and the save relocations its map needs together, and undo removes the step', function () {
+it('writes a change set with its save relocations, and keeps them when a map edit is undone', function (bool $recorded) {
     $root = atomicSceneProject();
     // The quay is where the game starts, so saves may stand on its floor.
     file_put_contents($root . '/assets/Maps/collisions.php', "<?php\nuse Ichiloto\\Engine\\Events\\Enumerations\\CollisionType;\n"
@@ -180,12 +180,35 @@ it('writes a change set\'s documents and the save relocations its map needs toge
     file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => "
         . "['destinationMap' => 'harbour', 'spawnPoint' => ['x' => 5, 'y' => 3], 'spawnSprite' => ['South']]]];\n");
     $manifestPath = $root . '/assets/Data/save-compatibility.php';
-    $manifest = (string) file_get_contents($manifestPath);
+    if ($recorded) {
+        $manifest = require $manifestPath;
+        $manifest['positionHistoryFile'] = 'positions.json';
+        file_put_contents($manifestPath, "<?php\nreturn " . var_export($manifest, true) . ";\n");
+        file_put_contents($root . '/assets/Data/positions.json', '[{"version":0,"maps":{"harbour":[[10,3],[6,4]]}}]');
+    }
     $session = EditorSession::open($root);
-    $session->beginChanges();
-    applyAtomicRebuild($session);
-    $map = $session->readMap('harbour');
-    $session->paint('harbour', $map['revision'], $map['baseLayer'], [[6, 4]], '#');
+    $stage = static function () use ($session): void {
+        $session->beginChanges();
+        applyAtomicRebuild($session);
+        $map = $session->readMap('harbour');
+        $session->paint('harbour', $map['revision'], $map['baseLayer'], [[6, 4]], '#');
+    };
+    if ($recorded) {
+        $before = sourceHashTree($root . '/assets');
+        $stage();
+        $refused = $session->commitChanges();
+        expect($refused)->toMatchArray(['status' => 'refused', 'written' => []])
+            ->and($refused['reason'])->toContain('allow them to move to open floor')
+            ->and(sourceHashTree($root . '/assets'))->toBe($before);
+
+        $stage();
+        $checked = $session->commitChanges(relocateSaves: true, checkOnly: true);
+        expect($checked)->toMatchArray(['status' => 'checked', 'written' => [], 'blocking' => 0])
+            ->and($checked['relocated'])->toBe($refused['relocated'])
+            ->and(sourceHashTree($root . '/assets'))->toBe($before);
+    }
+
+    $stage();
 
     $outcome = $session->commitChanges(relocateSaves: true);
 
@@ -195,7 +218,13 @@ it('writes a change set\'s documents and the save relocations its map needs toge
         ->and((require $manifestPath)['migrations'])->toBe([['from' => 0, 'to' => 1,
             'relocations' => [['map' => 'harbour', 'cells' => [[10, 3]], 'to' => [10, 4]], ['map' => 'harbour', 'cells' => [[6, 4]], 'to' => [6, 5]]]]])
         ->and($session->listUnsavedChanges())->toBe([]);
+    if ($recorded) {
+        $issues = $session->validateMap('harbour')['issues'];
+        expect(array_filter($issues, static fn(array $issue): bool => ($issue['code'] ?? null) === 'save.position.blocked'))->toBe([]);
+    }
 
-    $session->undo();
-    expect(file_get_contents($manifestPath))->toBe($manifest);
-});
+    $saved = sourceHashTree($root . '/assets');
+    expect($session->undo()['maps'])->toBe(['harbour'])
+        ->and(sourceHashTree($root . '/assets'))->toBe($saved)
+        ->and((require $manifestPath)['contentVersion'])->toBe(1);
+})->with(['reachable floor' => [false], 'recorded historical positions' => [true]]);

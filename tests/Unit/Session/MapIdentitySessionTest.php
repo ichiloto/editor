@@ -173,3 +173,82 @@ it('takes a nested map made inside a cancelled change set away with its folders'
         ->and(is_dir($root . '/assets/Maps/test-map/cellar'))->toBeFalse()
         ->and(array_column($session->describeMaps(), 'id'))->toBe(['test-map']);
 });
+
+it('reports map conditions before deleting or moving the map even when no transfer names it', function () {
+    $root = mapGraphicsProject();
+    $session = EditorSession::open($root);
+    $session->createMap('Hall', null, 3, 3);
+    $file = $root . '/assets/Maps/hall/hall.data.php';
+    $hall = require $file;
+    $hall['events']['D'] = ['class' => 'Door', 'data' => [], 'conditions' => [[
+        'type' => 'any', 'conditions' => [
+            ['type' => 'event', 'name' => 'test-map'],
+            ['type' => 'map_visited', 'name' => 'test-map', 'negate' => true],
+        ],
+    ]]];
+    file_put_contents($file, '<?php return ' . var_export($hall, true) . ';');
+    $request = mapIdentityHost($root);
+    $revision = $request('map.read', ['map' => 'test-map'])['result']['revision'];
+    $before = sourceHashTree($root);
+    $review = ['status' => 'question', 'references' => ['conditions on map hall']];
+
+    expect($request('map.move', ['map' => 'test-map', 'revision' => $revision, 'to' => 'workshop'])['result'])->toMatchArray($review)
+        ->and($request('map.delete', ['map' => 'test-map'])['result'])->toMatchArray($review)
+        ->and(sourceHashTree($root))->toBe($before);
+});
+
+it('lists transfers in reusable event script branches before a map move or deletion', function () {
+    $root = mapGraphicsProject();
+    $event = [[
+        'type' => 'branch',
+        'conditions' => [['type' => 'switch', 'name' => 'bridge_open']],
+        'then' => [
+            ['type' => 'transfer', 'map' => 'test-map', 'x' => 1, 'y' => 1],
+            ['type' => 'transfer', 'map' => 'test-map', 'x' => 0, 'y' => 0],
+        ],
+        'else' => [['type' => 'text', 'text' => 'test-map']],
+    ]];
+    file_put_contents($root . '/assets/Events/bridge-return.php', '<?php return ' . var_export($event, true) . ';');
+    $request = mapIdentityHost($root);
+    $revision = $request('map.read', ['map' => 'test-map'])['result']['revision'];
+    $before = sourceHashTree($root);
+    $review = ['status' => 'question', 'references' => ['event script bridge-return']];
+
+    expect($request('map.move', ['map' => 'test-map', 'revision' => $revision, 'to' => 'workshop'])['result'])->toMatchArray($review)
+        ->and($request('map.delete', ['map' => 'test-map'])['result'])->toMatchArray($review)
+        ->and(sourceHashTree($root))->toBe($before);
+});
+
+it('lists a cinematic that starts on the map before a move or deletion', function () {
+    $root = cutsceneProject();
+    $request = mapIdentityHost($root);
+    $revision = $request('map.read', ['map' => 'harbour'])['result']['revision'];
+    $before = sourceHashTree($root);
+    $review = ['status' => 'question', 'references' => ['start map of cinematic harbour-lanterns']];
+
+    expect($request('map.move', ['map' => 'harbour', 'revision' => $revision, 'to' => 'quayside'])['result'])->toMatchArray($review)
+        ->and($request('map.delete', ['map' => 'harbour'])['result'])->toMatchArray($review)
+        ->and(sourceHashTree($root))->toBe($before);
+});
+
+it('lists a legacy edge transfer before moving or deleting its destination', function () {
+    $root = mapGraphicsProject();
+    $session = EditorSession::open($root);
+    $session->createMap('Hall', null, 3, 3);
+    $file = $root . '/assets/Maps/hall/hall.data.php';
+    $hall = require $file;
+    $hall['triggers'][] = [
+        'destinationMap' => 'test-map',
+        'trigger_area' => ['x' => 0, 'y' => 1, 'width' => 1, 'height' => 1],
+        'spawn_point' => ['x' => 1, 'y' => 1],
+    ];
+    file_put_contents($file, '<?php return ' . var_export($hall, true) . ';');
+    $request = mapIdentityHost($root);
+    $revision = $request('map.read', ['map' => 'test-map'])['result']['revision'];
+    $before = sourceHashTree($root);
+    $review = ['status' => 'question', 'references' => ['edge trigger 1 on hall']];
+
+    expect($request('map.move', ['map' => 'test-map', 'revision' => $revision, 'to' => 'workshop'])['result'])->toMatchArray($review)
+        ->and($request('map.delete', ['map' => 'test-map'])['result'])->toMatchArray($review)
+        ->and(sourceHashTree($root))->toBe($before);
+});

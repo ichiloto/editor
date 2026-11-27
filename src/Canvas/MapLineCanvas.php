@@ -56,7 +56,7 @@ trait MapLineCanvas
         }
         $this->finalizeActiveStroke();
         $this->mapLinePrompt = ['axis' => $axis, 'at' => $axis === 'y' ? $this->cursorY : $this->cursorX, 'mapId' => $map->mapId, 'remove' => $remove];
-        $this->mapLineCount = new TextFieldEditor();
+        $this->mapLineCount = new TextFieldEditor($this->toolNavigation);
         $this->mapLineCount->open('1');
         $this->modals->push(Modal::MAP_LINES);
         $this->requestFullRender();

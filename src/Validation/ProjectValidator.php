@@ -21,6 +21,7 @@ use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\Database\StorybookPlaybackFields;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Maps\MapDoors;
+use Ichiloto\Editor\Maps\SaveRelocationPlan;
 use Ichiloto\Engine\Field\MapDoorReference;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Database\SuperMoveFields;
@@ -48,6 +49,7 @@ use Ichiloto\Engine\Field\EncounterEntry;
 use Ichiloto\Engine\Field\EncounterTable;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
+use Ichiloto\Engine\Core\WorldConditionEvaluator;
 use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Field\NpcPlacementSet;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicFramingDefinition;
@@ -55,6 +57,7 @@ use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicStageManager;
 use Ichiloto\Engine\Field\SkitSpeaker;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
@@ -133,6 +136,11 @@ class ProjectValidator
    */
   protected ?ProjectWorkspace $validatedWorkspace = null;
 
+  protected function getScriptCommandCatalog(): ScriptCommandCatalog
+  {
+    return $this->validatedWorkspace?->getScriptCommandCatalog() ?? ScriptCommandRegistry::getCatalog();
+  }
+
 
   /**
    * The arena keys the project's battle presentation declares, read once per
@@ -183,7 +191,7 @@ class ProjectValidator
    * @param ProjectWorkspace $workspace The project to check.
    * @return Issue[] Everything wrong with it, worst first.
    */
-  public function validate(ProjectWorkspace $workspace): array
+  public function validate(ProjectWorkspace $workspace, ?SaveRelocationPlan $relocation = null): array
   {
     $this->validatedWorkspace = $workspace;
     $this->readArenaKeys($workspace);
@@ -247,7 +255,7 @@ class ProjectValidator
       ...$this->checkTilesets($workspace),
       ...$this->checkPermanentGrowth($workspace),
       ...$this->checkOptimizationPolicy($workspace),
-      ...new SaveCompatibilityValidator()->validate($workspace),
+      ...new SaveCompatibilityValidator()->validate($workspace, $relocation),
       ...new ScreenTransitionValidator()->validate($workspace),
       ...new ReachabilityValidator()->validate($workspace),
       ...new EdgeTransferAgreementCheck()->validate($workspace),
@@ -1367,7 +1375,8 @@ class ProjectValidator
     }
 
     foreach ($database->getRecords() as $record) {
-      $problem = is_array($record->toArray()) ? TroopEventPageContract::findProblem((array) $record->toArray()) : null;
+      $problem = is_array($record->toArray())
+        ? TroopEventPageContract::findProblem((array) $record->toArray(), $this->getScriptCommandCatalog()) : null;
 
       if ($problem !== null) {
         // The Engine refuses the troop when its battle starts, with this message.
@@ -1881,6 +1890,7 @@ class ProjectValidator
     $issues = [];
     $troops = $this->labelsOf($workspace, 'troops');
     $mapsById = array_column(array_map(static fn(ProjectMap $map): array => ['id' => $map->mapId, 'map' => $map], $workspace->maps), 'map', 'id');
+    $checkMapCoverage = MapGraphicsValidator::createCoverageCheck();
 
     foreach ($workspace->maps as $map) {
       if (($sourceIssue = $map->getGridSourceIssue()) !== null) {
@@ -1898,7 +1908,7 @@ class ProjectValidator
         ...Issue::attributeToMap([
           ...$this->checkLayers($map),
           ...MapGraphicsValidator::validate($map),
-          ...MapGraphicsValidator::validateCoverage($map),
+          ...$checkMapCoverage($map),
           ...BrokenPieceCheck::validate($map),
           ...SavePointAgreementCheck::validate($map),
           ...SavePointLimitCheck::validate($map, $workspace->config),
@@ -3593,7 +3603,7 @@ class ProjectValidator
     $items = $this->inventoryCatalog?->ids() ?? [];
     $foes = [...$this->labelsOf($workspace, 'troops'), ...$this->labelsOf($workspace, 'enemies')];
     $questIds = array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $quests);
-    $known = ['quests' => $questIds, 'inventory' => $items];
+    $known = ['quests' => $questIds, 'inventory' => $items, 'maps' => $workspace->mapIds];
 
     foreach ($quests as $quest) {
       $questId = $quest->getId();
@@ -4195,7 +4205,8 @@ class ProjectValidator
     try {
       // A script that does not exist has no commands to judge; the reference check reports it.
       EventCommandRequirements::validate($commands, $scriptContext,
-        fn(string $id): array => array_values($this->commonEventScripts[$id] ?? []), $framing, $path);
+        fn(string $id): array => array_values($this->commonEventScripts[$id] ?? []), $framing, $path,
+        $this->getScriptCommandCatalog());
     } catch (InvalidArgumentException $refusal) {
       return [Issue::error($where, $refusal->getMessage(),
         'The Engine refuses this script where it runs; the message names the command path, through the reusable event scripts it calls.')];
@@ -4224,7 +4235,7 @@ class ProjectValidator
 
       $type = strval($command['type'] ?? '');
 
-      $registered = ScriptCommandRegistry::getCatalog()->findDefinition($type);
+      $registered = $this->getScriptCommandCatalog()->findDefinition($type);
 
       if ($registered !== null) {
         // Outside a cinematic there is no conversation to select a group of.
@@ -4688,7 +4699,10 @@ class ProjectValidator
     $eventScripts = $this->commonEventScripts;
 
     foreach ($workspace->maps as $map) {
-      $issues = [...$issues, ...Issue::attributeToMap($this->checkMapContentReferences($map, $known, $npcIdsByMap, $eventScripts), $map->mapId)];
+      $issues = [...$issues, ...Issue::attributeToMap([
+        ...$this->checkMapContentReferences($map, $known, $npcIdsByMap, $eventScripts),
+        ...MapVisitConditionValidator::validateMapMetadata($map, $workspace->mapIds),
+      ], $map->mapId)];
     }
 
     return $issues;
@@ -5291,6 +5305,12 @@ class ProjectValidator
         continue;
       }
 
+      if ($type === MapVisitConditionValidator::TYPE) {
+        array_push($issues, ...MapVisitConditionValidator::validateCondition(
+          $condition, $where, $this->validatedWorkspace?->mapIds ?? $known['maps'] ?? []));
+        continue;
+      }
+
       $nameValue = $condition['name'] ?? null;
 
       if (! is_string($nameValue)) {
@@ -5303,6 +5323,11 @@ class ProjectValidator
       }
 
       $name = $nameValue;
+
+      if ($type === WorldConditionType::MAP_EVENT->value) {
+        array_push($issues, ...$this->checkMapEventCondition($condition, $where));
+        continue;
+      }
 
       if ($questPrerequisites && $type === WorldConditionType::QUEST->value) {
         $trimmedName = trim($name);
@@ -5327,6 +5352,34 @@ class ProjectValidator
     }
 
     return $issues;
+  }
+
+  /** @return list<Issue> */
+  private function checkMapEventCondition(array $condition, string $where): array
+  {
+    try {
+      WorldConditionEvaluator::validateAll([$condition], 'condition');
+    } catch (InvalidArgumentException $refusal) {
+      return [Issue::error($where, $refusal->getMessage(), 'Choose the map and completion from the condition picker.')];
+    }
+
+    if ($this->validatedWorkspace === null) {
+      return [];
+    }
+
+    $catalog = new ReferenceCatalog($this->validatedWorkspace);
+    $mapId = trim($condition['name']);
+    $marker = trim($condition['marker']);
+
+    if ($catalog->findMap($mapId) === null) {
+      return [Issue::error($where, sprintf('Its condition names the map "%s", which does not exist.', $mapId),
+        'Choose the map that records the completion.')];
+    }
+
+    return in_array($marker, $catalog->listMapEventMarkers($mapId)['values'], true) ? [] : [
+      Issue::error($where, sprintf('Its condition names completion "%s", which %s does not record.', $marker, $mapId),
+        'Choose an event or one-shot NPC page from that map.'),
+    ];
   }
 
   /**
@@ -5402,7 +5455,7 @@ class ProjectValidator
    */
   protected function checkScriptCommandDeclarations(ProjectWorkspace $workspace): array
   {
-    $problem = $workspace->scriptCommands?->declarationProblem;
+    $problem = $workspace->scriptCommands->declarationProblem;
 
     return $problem === null ? [] : [Issue::error(
       'assets/' . ScriptCommandRegistry::PROJECT_FILE,

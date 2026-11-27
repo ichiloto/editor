@@ -152,7 +152,7 @@ final readonly class CutsceneRecordCategory implements DatabaseCategory
         $paths = [];
         foreach ($this->library->assets($this->type) as $asset) {
             if ($asset->isDirty()) {
-                array_push($paths, ...array_filter([$asset->dataPath(), $asset->partnerPath()], is_file(...)));
+                array_push($paths, ...array_filter($asset->paths(), is_file(...)));
             }
         }
 

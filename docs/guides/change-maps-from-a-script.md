@@ -189,6 +189,9 @@ maps the batch never touches do not refuse it.
 The batch alone writes. When it is valid, `changes.commit` saves everything
 it changed, databases (field resources, common events and the rest),
 cutscenes, maps and the save relocations its maps need, as one transaction.
+After commit, undo can change the map in memory. Save again to write the
+map. The installed relocation remains in the manifest so both save versions
+stay supported.
 Every file is worked out and staged first, and each document proves its
 staged file reads back as what it holds. Only then is any file installed,
 and a file that cannot be installed puts back the ones already installed.
@@ -293,6 +296,25 @@ refused with the reason.
 
 ## Save Migrations
 
+`saveCompatibility.captureLayout {}` returns the content version and the
+walkable cells for each saved map in the open project. Open the layout from
+a release or a playtest build whose saves you support. Save the returned
+record in a JSON list in `assets/Data/save-position-history.json`. Add its
+filename to `assets/Data/save-compatibility.php`.
+
+```php
+'positionHistoryFile' => 'save-position-history.json',
+```
+
+Keep a record for each distinct supported layout, including layouts that
+share a content version. Save and line-edit reviews read this file and
+require a fresh review if its contents change. The Editor carries the recorded
+cells through
+declared map migrations before checking which positions need relocation.
+When a project migration class moves saves, record the carried positions
+after that step. The capture leaves project files untouched and refuses
+while there are pending edits.
+
 `saveCompatibility.appendStep {class}` registers the project's own save
 migration class as the next step of `assets/Data/save-compatibility.php`:
 `contentVersion` rises by exactly one, and the step is
@@ -338,8 +360,11 @@ A map redrawn under its own ID retires into itself: `map` and `into` are the
 same, the rectangles are in its old layout's coordinates and the landings are
 judged on the new layout the session holds. Every save made on the old layout
 moves.
-`map` may still exist: retire it first, then delete it with `map.delete`
-outside the batch. A save that visited `map` has visited `into` too; only
+`map` may still exist. If the save position history shows that a save can
+load there, the Editor keeps that map ID. Retire it to a successor map
+before moving it with `map.move` or deleting it with `map.delete`. Run
+the move or deletion outside the batch. A save that
+visited `map` has visited `into` too; only
 `into`, which takes over the retired identity, inherits the visit. The
 retirement adds no map alias, since an alias would make the two maps one and
 read every completed one-shot event `map:marker` as `into`'s own marker.

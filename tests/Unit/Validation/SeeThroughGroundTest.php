@@ -71,6 +71,26 @@ it('reads the artwork as it is now, so replacing an opaque sheet with a see-thro
     expect(findSeeThroughWarnings($root))->toHaveCount(1);
 });
 
+it('keeps the same tileset name separate across asset roots and reads replaced sheets on a fresh validation pass', function () {
+    $opaqueRoot = mapGraphicsProject();
+    $transparentRoot = mapGraphicsProject();
+    $sheet = '/assets/Graphics/Tilesets/Home_A2.png';
+    writeTransparentTestPng($transparentRoot . $sheet, 32, 24);
+    $opaqueMap = ProjectWorkspace::fromProject($opaqueRoot)->getMapByIndex(0);
+    $transparentMap = ProjectWorkspace::fromProject($transparentRoot)->getMapByIndex(0);
+    $checkCoverage = MapGraphicsValidator::createCoverageCheck();
+    $findSeams = static fn(array $issues): array => array_filter($issues,
+        static fn($issue): bool => str_contains($issue->message, 'dark seam'));
+
+    expect($findSeams($checkCoverage($opaqueMap)))->toBe([])
+        ->and($findSeams($checkCoverage($transparentMap)))->toHaveCount(1)
+        ->and($findSeams($checkCoverage($opaqueMap)))->toBe([]);
+
+    writeTransparentTestPng($opaqueRoot . $sheet, 32, 24);
+    $nextPass = MapGraphicsValidator::createCoverageCheck();
+    expect($findSeams($nextPass($opaqueMap)))->toHaveCount(1);
+});
+
 /** Adds a corner-edged pond kind on the `water` tile layer, its corner sheet one still phase of 2-pixel tiles. */
 function writeCornerPondTileset(string $root, bool $usable = true): void
 {
@@ -94,6 +114,24 @@ it('judges a corner-edged kind by the corner tiles it draws, on its own cells an
     writeTileLayer($root . '/assets/Maps/test-map', '01.floor.tiles.php', "0 0 2816 2816\n0 2816 2816 2816");
     expect(findSeeThroughWarnings($root))->toBe(['3 cells can show the background through see-through ground tiles in some animation frame,'
         . ' a dark seam in the game: (0, 0), (1, 0), (0, 1).']);
+});
+
+it('checks the corner variants the renderer draws at each cell', function () {
+    $root = mapGraphicsProject();
+    writeCornerPondTileset($root);
+    $sheet = imagecreatetruecolor(8, 16);
+    imagealphablending($sheet, false);
+    imagesavealpha($sheet, true);
+    // Opaque variant 0, transparent variant 1.
+    imagefilledrectangle($sheet, 0, 8, 7, 15, imagecolorallocatealpha($sheet, 0, 0, 0, 127));
+    imagepng($sheet, $root . '/assets/Graphics/Tilesets/Pond.corners.png');
+    $directory = $root . '/assets/Maps/test-map';
+    writeTileLayer($directory, '03.water.tiles.php', "2864 2864 2864 2864\n2864 2864 2864 2864");
+    writeTileLayer($directory, '01.floor.tiles.php', "2816 2816 2816 2816\n2816 0 0 2816");
+
+    // Both exposed cells have the same corner shape. Only (1, 1) selects transparent quarters.
+    expect(findSeeThroughWarnings($root))->toBe(['1 cell can show the background through see-through ground tiles in some animation frame,'
+        . ' a dark seam in the game: (1, 1).']);
 });
 
 it('warns when a corner-edged kind the map shows cannot be drawn from its corner sheet', function () {

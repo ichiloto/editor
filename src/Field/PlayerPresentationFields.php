@@ -29,7 +29,9 @@ final class PlayerPresentationFields
             projection: new WholeFileProjection(['graphicalSubject', 'sprites2d']),
             labelFor: static fn(array $row): string => 'Player Field Appearance',
             fieldsFor: self::getFields(...),
+            describeRows: self::describeFields(...),
             requireUnchangedSource: true,
+            applyFieldValue: self::applyField(...),
         );
     }
 
@@ -75,8 +77,11 @@ final class PlayerPresentationFields
         return $fields;
     }
 
-    public static function applyField(array $data, string $field, string $value, string $assetRoot): array
+    public static function applyField(array $data, string $field, string $value, ?string $assetRoot): array
     {
+        if ($assetRoot === null) {
+            throw new InvalidArgumentException('The player presentation has no project asset root.');
+        }
         if ($field === 'graphicalSubject') {
             if ($value === self::LEGACY) {
                 unset($data[$field]);

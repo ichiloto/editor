@@ -28,6 +28,7 @@ use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSession;
 use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 use Ichiloto\Engine\Scenes\Battle\BattleConfig;
+use Ichiloto\Engine\Util\Interfaces\ConfigInterface;
 use InvalidArgumentException;
 
 /**
@@ -107,6 +108,7 @@ final class EffectBattlePreview
         int $binding = 0,
         bool $reducedMotion = false,
         ?int $targetIndex = null,
+        ?ConfigInterface $configuration = null,
     ): self {
         $state = new GameState();
         $found = [];
@@ -140,20 +142,22 @@ final class EffectBattlePreview
         $binding = $binding >= 0 && $binding < count($found) ? $binding : 0;
         ['lane' => $lane, 'animation' => $animation, 'action' => $action, 'caster' => $caster] = $found[$binding];
 
-        // The animation's two effects as the battle plays them in this presentation; a graphical target
-        // drawing nothing in the terminal keeps its terminal sequence beside it, as the battle does.
+        // A battle without an available graphical arena runs the Terminal presentation.
+        $graphical = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null
+            ? GraphicalBattlePresentation::prepare($battle, $catalog, $assetRoot, $configuration) : null;
+        if ($presentation === EffectPresentation::GRAPHICAL && $catalog !== null && $graphical === null) {
+            $presentation = EffectPresentation::TERMINAL;
+        }
+        // The animation's two effects as the battle plays them in the selected presentation.
         $source = $animation->sourceEffect === null ? null : $compile($animation->sourceEffect, $presentation);
         $target = $animation->targetEffect === null ? null : $compile($animation->targetEffect, $presentation);
-        $terminalTarget = $presentation === EffectPresentation::GRAPHICAL && $target !== null && ! $target->hasTerminalContent
-            ? $compile($animation->targetEffect, EffectPresentation::TERMINAL) : null;
         // The action's own binding sizes the target effect, so each grade previews at its authored scale. A graphical
         // battle starts the caster effect where the animation anchors it, as the battle does; the terminal keeps its
         // own source phase. The command's own target boundary then drives the pose's impact entry too.
         $anchor = $presentation === EffectPresentation::GRAPHICAL ? $animation->sourceEffectAnchor : SourceEffectAnchor::SOURCE;
         $role = BattlePoseRole::getForAction($action);
         // The same stable actor binding used by production supplies the complete post-impact recovery.
-        $poses = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null && $catalog->getArenaFor($battle) !== null
-            ? ($catalog->actorPoses[$caster->actorId] ?? null) : null;
+        $poses = $graphical === null ? null : ($catalog->actorPoses[$caster->actorId] ?? null);
         $pose = $poses?->getPose($role);
         $allies = $battle->partyRoster->battlers;
         $opponents = $battle->troop->members->toArray();
@@ -170,8 +174,6 @@ final class EffectBattlePreview
             throw new InvalidArgumentException(sprintf('%s has no one to act on in the battle test.', $action->name));
         }
 
-        $graphical = $presentation === EffectPresentation::GRAPHICAL && $catalog !== null
-            ? GraphicalBattlePresentation::prepare($battle, $catalog, $assetRoot) : null;
         $travel = !$reducedMotion && $animation->movement->usesTargetRoute()
             ? $graphical?->planActionTravel($caster, $targets, $action, animationId: $animation->id, movement: $animation->movement) : null;
         $actionPoseOverride = $poses?->getAnimationPose($animation->id);
@@ -180,18 +182,19 @@ final class EffectBattlePreview
             throw new InvalidArgumentException('Flash step requires action transit cells and a planted first frame.');
         }
         $movementPoses = !$reducedMotion && $flashStep === null;
-        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target, $terminalTarget,
+        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), $source, $target,
             targetScale: ActionAnimationResolver::getExplicitAnimationScale($action), sourceEffectAnchor: $anchor, actionPose: $pose,
             movementPoses: $movementPoses && ($poses?->getPose(BattlePoseRole::MOVE) !== null
                 || $poses?->getPose(BattlePoseRole::RETURNING) !== null), travel: $travel,
             movePose: $movementPoses ? $poses?->getPose(BattlePoseRole::MOVE) : null,
             returnPose: $movementPoses ? $poses?->getPose(BattlePoseRole::RETURNING) : null,
             projectedRange: isset($target->defaults['rangeTiming']) ? $graphical?->measureActionRange($caster, $targets) : null,
-            actionPoseOverride: $actionPoseOverride, flashStep: $flashStep, targetCount: count($targets));
+            actionPoseOverride: $actionPoseOverride, flashStep: $flashStep, targetCount: count($targets),
+            targetImpactSeconds: $animation->targetImpactSeconds, movement: $animation->movement);
 
         return new self(
             new BattleCommandPreview($battle, $plan, $caster, $targets, $role,
-                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation, $graphical),
+                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation, $graphical, $configuration),
             $plan,
             $lane,
             array_map(static fn(array $context): array => ['caster' => $context['caster']->name, 'action' => $context['action']->name, 'lane' => $context['lane']], $found),
@@ -265,7 +268,10 @@ final class EffectBattlePreview
      * group scales and the region budget beside them, so does one whose
      * sample holds a scale; without both image rotation and clipped images
      * an authored battler motion leaves its battler where it stands. Each
-     * time the frame carries the Engine's diagnostic. Composites are composed
+     * time the frame carries the Engine's diagnostic. The preview uses the
+     * caller's support for image flips, alpha flips, tone and bottom fade.
+     * The clip capability also governs a captured beam's image clip.
+     * Composites are composed
      * unless the caller says its canvas draws none, as the Engine's own
      * preview composes them unless told otherwise; a captured ground span
      * needs them and texture strips both, and without either the frame
@@ -282,13 +288,22 @@ final class EffectBattlePreview
      */
     public function readFrame(int $frame, bool $reducedMotion, bool $imageRotation = false, bool $coverageDabs = false,
         bool $textureStrip = false, bool $regionBudget = false, bool $canvasGroups = false, bool $clipOpacity = false,
-        bool $groupColor = false, bool $indicatorImagePath = false, bool $groupScale = false, bool $compositing = true): array
+        bool $groupColor = false, bool $indicatorImagePath = false, bool $groupScale = false, bool $compositing = true,
+        bool $textureStripClip = false, bool $compositeBudget = false, bool $imageFlip = false,
+        bool $imageAlphaFlip = false, bool $imageTone = false, bool $imageBottomFade = false,
+        bool $consumerAdmitsCanvasImages = false): array
     {
-        $read = fn(): array => $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation, $coverageDabs, $textureStrip, $compositing)->toArray();
+        $read = fn(): array => $this->preview->getFrameAtIndex($frame, $reducedMotion, $imageRotation, $coverageDabs, $textureStrip,
+            $compositing, imageFlips: $imageFlip, maskFlips: $imageAlphaFlip, imageTones: $imageTone, imageClips: $clipOpacity,
+            bottomFade: $imageBottomFade)->toArray();
         $negotiated = self::listNegotiatedCapabilities($imageRotation, $regionBudget, $canvasGroups, $clipOpacity, $groupColor,
-            $indicatorImagePath, $groupScale);
-        $composed = $negotiated === [] ? $read()
-            : PresentationSession::runForSession(static fn(string $capability): bool => in_array($capability, $negotiated, true), $read);
+            $indicatorImagePath, $groupScale, $textureStrip && $textureStripClip, $compositing && $compositeBudget,
+            $imageFlip, $imageAlphaFlip, $imageTone, $imageBottomFade);
+        $composed = $negotiated === [] && ! $consumerAdmitsCanvasImages ? $read()
+            : PresentationSession::runForSession(
+                static fn(string $capability): bool => in_array($capability, $negotiated, true),
+                $read, $consumerAdmitsCanvasImages,
+            );
 
         return [...$composed, 'diagnostics' => array_values(array_unique([...$this->findGroundSpanDiagnostics($reducedMotion), ...$composed['diagnostics']]))];
     }
@@ -321,16 +336,23 @@ final class EffectBattlePreview
      */
     public static function listNegotiatedCapabilities(bool $imageRotation = false, bool $regionBudget = false,
         bool $canvasGroups = false, bool $clipOpacity = false, bool $groupColor = false, bool $indicatorImagePath = false,
-        bool $groupScale = false): array
+        bool $groupScale = false, bool $textureStripClip = false, bool $compositeBudget = false, bool $imageFlip = false,
+        bool $imageAlphaFlip = false, bool $imageTone = false, bool $imageBottomFade = false): array
     {
         return array_keys(array_filter([
             RendererSessionConfig::CANVAS_REGION_BUDGET => $regionBudget,
+            RendererSessionConfig::CANVAS_COMPOSITE_BUDGET => $compositeBudget,
             RendererSessionConfig::CANVAS_GROUPS => $canvasGroups,
             RendererSessionConfig::CANVAS_GROUP_COLOR => $groupColor,
             RendererSessionConfig::CANVAS_GROUP_SCALE => $groupScale,
             RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH => $indicatorImagePath,
             RendererSessionConfig::CANVAS_IMAGE_ROTATION => $imageRotation,
             RendererSessionConfig::CANVAS_CLIP_OPACITY => $clipOpacity,
+            RendererSessionConfig::CANVAS_TEXTURE_STRIP_CLIP => $textureStripClip,
+            RendererSessionConfig::CANVAS_IMAGE_FLIP => $imageFlip,
+            RendererSessionConfig::CANVAS_IMAGE_ALPHA_FLIP => $imageAlphaFlip,
+            RendererSessionConfig::CANVAS_IMAGE_TONE => $imageTone,
+            RendererSessionConfig::CANVAS_IMAGE_BOTTOM_FADE => $imageBottomFade,
         ]));
     }
 

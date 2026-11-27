@@ -10,7 +10,6 @@ use Ichiloto\Editor\Events\ScriptReferenceSource;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
-use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Throwable;
@@ -72,8 +71,8 @@ final class NpcReferences
         $placement = trim($placement);
 
         return $npcId === '' || $placement === '' ? []
-            : $this->find($map, static fn(array $commands): bool => self::commandsMatch($commands,
-                static fn(array $node): bool => self::registeredFieldsName($node, $npcId, $placement)), null);
+            : $this->find($map, fn(array $commands): bool => self::commandsMatch($commands,
+                fn(array $node): bool => $this->registeredFieldsName($node, $npcId, $placement)), null);
     }
 
     /**
@@ -237,10 +236,10 @@ final class NpcReferences
      */
     private function commandsName(array $commands, string $npcId): bool
     {
-        return self::commandsMatch($commands, static fn(array $node): bool =>
+        return self::commandsMatch($commands, fn(array $node): bool =>
             (strtolower(self::readText($node['kind'] ?? $node['subject'] ?? null)) === 'npc'
                 && self::readText($node['npcId'] ?? $node['id'] ?? null) === $npcId)
-            || self::registeredFieldsName($node, $npcId, null));
+            || $this->registeredFieldsName($node, $npcId, null));
     }
 
     /**
@@ -268,9 +267,9 @@ final class NpcReferences
      *
      * @param array<int|string, mixed> $node A node that may be a command.
      */
-    private static function registeredFieldsName(array $node, string $npcId, ?string $placement): bool
+    private function registeredFieldsName(array $node, string $npcId, ?string $placement): bool
     {
-        $definition = is_string($node['type'] ?? null) ? ScriptCommandRegistry::getCatalog()->findDefinition($node['type']) : null;
+        $definition = is_string($node['type'] ?? null) ? $this->workspace->getScriptCommandCatalog()->findDefinition($node['type']) : null;
         $read = static function (array $fields, array $data) use (&$read, $npcId, $placement): bool {
             foreach ($fields as $field) {
                 $value = ScriptCommandField::readPath($data, $field->key);

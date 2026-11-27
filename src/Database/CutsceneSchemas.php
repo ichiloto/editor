@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Engine\Animations\Timelines\BattleBattlerReactionTrack;
 use Ichiloto\Engine\Animations\Timelines\BattleMotionAnchor;
 use Ichiloto\Engine\Animations\Timelines\BattleMotionSpace;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
@@ -17,6 +19,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightContact;
 use Ichiloto\Engine\Animations\Timelines\EffectFlightRoute;
 use Ichiloto\Engine\Animations\Timelines\EffectGroundSpan;
+use Ichiloto\Engine\Battle\Presentation\TerminalBattleContacts;
 use Ichiloto\Engine\Animations\Timelines\EffectImpactTimingMode;
 use Ichiloto\Engine\Animations\Timelines\EffectMotionScope;
 use Ichiloto\Engine\Animations\Timelines\EffectStraightFlightFallback;
@@ -25,6 +28,8 @@ use Ichiloto\Engine\Animations\Timelines\EffectImageDepth;
 use Ichiloto\Engine\Animations\Timelines\EffectPoseClock;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageFit;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Battle\Presentation\BattleContactDirection;
+use Ichiloto\Engine\Battle\Presentation\BattleTargetContactSequence;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Presentation\CinematicStage;
 use Ichiloto\Engine\Events\Interpreter\EventCommandRequirements;
@@ -79,6 +84,7 @@ final class CutsceneSchemas
 
     /** The battle effect track that moves the caster or the selected targets, by the Engine's name for it. */
     public const string BATTLER_MOTION_TRACK = EffectTrackType::BATTLER_MOTION->value;
+    public const string BATTLER_REACTION_TRACK = EffectTrackType::BATTLER_REACTION->value;
 
     /** The payload key a summon stage's subjects are edited under. */
     public const string STAGE_SUBJECTS_KEY = 'stage.subjects';
@@ -107,14 +113,28 @@ final class CutsceneSchemas
     public const array SUMMON_IMAGE_ANCHORS = ['target', 'caster', 'screen', 'stage'];
 
     /**
-     * Where a track keeps the tip of a captured ground span, the point of its image that lands on the farthest
-     * selected target's ground, by the names the Engine exports ({@see EffectGroundSpan::exportContract()}).
+     * Where a track keeps the tip of a captured ground span, by the names the Engine exports.
      */
     public static function getGroundSpanTipKey(): string
     {
         $contract = EffectGroundSpan::exportContract();
 
         return $contract['field'] . '.' . $contract['tipField'];
+    }
+
+    /** Where a track selects a named attachment on the caster's captured pose cell. */
+    public static function getGroundSpanCasterPointKey(): string
+    {
+        $contract = EffectGroundSpan::exportContract();
+
+        return $contract['field'] . '.' . $contract['casterPointField'];
+    }
+
+    private static function getGroundSpanRevealKey(): string
+    {
+        $contract = EffectGroundSpan::exportContract();
+
+        return $contract['field'] . '.' . $contract['revealField'];
     }
 
     /** Where a track keeps which way up a captured ground span holds its image, by the names the Engine exports. */
@@ -130,7 +150,7 @@ final class CutsceneSchemas
      * fields, its cast as a sub-list, and its script and finalizer as
      * command lists opened as frames.
      */
-    public static function cinematics(bool $graphical = false): RecordSchema
+    public static function cinematics(bool $graphical = false, ?ScriptCommandCatalog $commands = null): RecordSchema
     {
         return new RecordSchema(
             key: self::CINEMATICS_KEY,
@@ -164,7 +184,8 @@ final class CutsceneSchemas
             ],
             subList: self::castList($graphical),
             commandLists: [
-                CutsceneAsset::COMMANDS_KEY => self::cinematicCommandList(CutsceneAsset::COMMANDS_KEY, $graphical, context: EventScriptContext::CINEMATIC),
+                CutsceneAsset::COMMANDS_KEY => self::cinematicCommandList(CutsceneAsset::COMMANDS_KEY, $graphical,
+                    context: EventScriptContext::CINEMATIC, commands: $commands),
                 self::FINALIZER_KEY => self::finalizerCommandList(),
             ],
             // The conversation's speakers, addressees and phase groups and the framing subjects, beside the cast.
@@ -557,7 +578,7 @@ final class CutsceneSchemas
      *   the built-in types the Engine says are available there ({@see EventCommandRequirements::isAvailable()}).
      */
     public static function cinematicCommandList(string $key, bool $graphical = false, array $blank = ['type' => 'wait', 'seconds' => 0.5],
-        EventScriptContext $context = EventScriptContext::REUSABLE): RecordSubList
+        EventScriptContext $context = EventScriptContext::REUSABLE, ?ScriptCommandCatalog $commands = null): RecordSubList
     {
         $ownScript = $context === EventScriptContext::CINEMATIC;
 
@@ -569,18 +590,18 @@ final class CutsceneSchemas
                 new RecordField('type', 'Type', options: [
                     ...array_values(array_filter(CinematicCommandSchema::COMMAND_TYPES,
                         static fn(string $type): bool => EventCommandRequirements::isAvailable($type, $context))),
-                    ...RecordSchemaCatalog::getRegisteredCommandTypes(),
+                    ...RecordSchemaCatalog::getRegisteredCommandTypes(commands: $commands),
                 ]),
             ],
             blank: $blank,
-            variants: self::cinematicCommandVariants($graphical, $ownScript),
+            variants: self::cinematicCommandVariants($graphical, $ownScript, $commands),
             variantKey: 'type',
             nestedLists: [
                 'move_route' => static fn(array $entry): ?RecordSubList => MovementRouteFields::getPointList($entry, cinematic: true, graphical: $graphical),
                 'parallel' => self::laneList(),
                 FramingFields::getCommandType() => FramingFields::getSelectionList($ownScript),
                 'camera' => static fn(array $entry): ?RecordSubList => strtolower(strval($entry['operation'] ?? '')) === 'route' ? self::cameraPointList($graphical) : null,
-                ...RecordSchemaCatalog::getRegisteredCommandLists($graphical),
+                ...RecordSchemaCatalog::getRegisteredCommandLists($graphical, $commands),
                 ...($graphical ? ['stage_actor' => StagedActorFields::getSuppressionList(...)] : []),
             ],
             variantArms: [
@@ -591,8 +612,8 @@ final class CutsceneSchemas
             // A block of this script holds this script's commands: a reusable script's blocks its staging vocabulary.
             isCommandList: true,
             exclusiveFields: [['effect', 'animation'], ['effect', 'id'], ['effect', 'secondsPerFrame']],
-            prepareEdit: static function (array $entry, string $field) use ($graphical): array {
-                $entry = InnPresentationFields::prepareEdit($entry, $field);
+            prepareEdit: static function (array $entry, string $field) use ($graphical, $commands): array {
+                $entry = InnPresentationFields::prepareEdit($entry, $field, $commands);
                 $entry = $graphical ? StagedActorFields::prepareEdit($entry, $field) : $entry;
                 $entry = StagedActorFields::prepareAppearanceEdit($entry, $field);
                 $entry = StagedActorFields::preparePositionEdit($entry, $field);
@@ -669,9 +690,10 @@ final class CutsceneSchemas
      *
      * @return array<string, RecordField[]|\Closure(array<string, mixed>): RecordField[]>
      */
-    public static function cinematicCommandVariants(bool $graphical = false, bool $ownScript = false): array
+    public static function cinematicCommandVariants(bool $graphical = false, bool $ownScript = false,
+        ?ScriptCommandCatalog $commands = null): array
     {
-        $base = RecordSchemaCatalog::eventCommandVariants($graphical);
+        $base = RecordSchemaCatalog::eventCommandVariants($graphical, $commands);
         if ($ownScript) {
             $base['text'] = [...$base['text'], ...ConversationFields::getLineFields()];
         }
@@ -811,6 +833,33 @@ final class CutsceneSchemas
      */
     public static function effects(bool $graphical = false): RecordSchema
     {
+        $contactField = TerminalBattleContacts::FIELD;
+        $intervalField = $contactField . '.intervalFrames';
+        $captureField = EffectGroundSpan::exportContract()['captureField'];
+        $graphicalContact = BattleTargetContactSequence::FIELD;
+        $directionField = $graphicalContact . '.direction';
+        $staggerField = $graphicalContact . '.intervalFrames';
+        $resultField = $graphicalContact . '.' . BattleTargetContactSequence::RESULT_FIELD;
+        $previewField = $graphicalContact . '.' . BattleTargetContactSequence::PREVIEW_REACTION_FIELD;
+        $graphicalContactFields = [
+            new RecordField($directionField, 'Contact Sweep Direction',
+                options: ['', ...array_column(BattleContactDirection::cases(), 'value')],
+                removeWhenEmpty: true, displayDefault: '(off)'),
+            new RecordField($staggerField, 'Contact Stagger (frames)', InputControlType::INTEGER,
+                removeWhenEmpty: true, displayDefault: '(off)'),
+            new RecordField($graphicalContact . '.firstFrame', 'First Contact Frame', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField($graphicalContact . '.lastFrame', 'Last Contact Frame', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField($resultField, 'Show Results at Contact',
+                InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
+            new RecordField($graphicalContact . '.tracks', 'Graphical Contact Tracks', codec: RecordFieldCodec::CSV_LIST,
+                removeWhenEmpty: true, reference: ReferenceCatalog::EFFECT_GRAPHICAL_CONTACT_TRACKS),
+        ];
+        $terminalFields = [
+            new RecordField($captureField, 'Target Capture Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(omitted)'),
+            new RecordField($intervalField, 'Contact Spacing (frames)', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(off)'),
+            new RecordField($contactField . '.tracks', 'Contact Tracks', codec: RecordFieldCodec::CSV_LIST,
+                removeWhenEmpty: true, reference: ReferenceCatalog::EFFECT_TERMINAL_CONTACT_TRACKS),
+        ];
         $fields = [
             new RecordField('id', 'Id', isReadOnly: true),
             new RecordField('fps', 'FPS', InputControlType::INTEGER),
@@ -887,8 +936,36 @@ final class CutsceneSchemas
                     self::REDUCED_MOTION_SAMPLES_KEY => self::reducedMotionSampleList(),
                 ] : []),
             ],
-            fieldsFor: static fn(array $payload): array => $graphical && is_array($payload['stage'] ?? null)
-                ? [...$fields, ...self::stageFields()] : $fields,
+            fieldsFor: static fn(array $payload): array => [
+                ...$fields,
+                ...($graphical && is_array($payload['stage'] ?? null) ? self::stageFields() : []),
+                ...($graphical && ($payload[CutsceneAsset::SEQUENCE_KEY] ?? null) !== EffectPresentation::TERMINAL->value
+                    ? [...$graphicalContactFields,
+                        ...(($payload[$graphicalContact][BattleTargetContactSequence::RESULT_FIELD] ?? false) === true
+                            ? [new RecordField($previewField, 'Contact Preview Pose',
+                                options: ['', ...BattleBattlerReactionTrack::ROLES], removeWhenEmpty: true)] : [])] : []),
+                ...(!$graphical && ($payload[CutsceneAsset::SEQUENCE_KEY] ?? null) !== EffectPresentation::GRAPHICAL->value
+                    ? $terminalFields : []),
+            ],
+            prepareEdit: static function (array $edited, string $field) use ($intervalField, $contactField, $directionField, $staggerField, $graphicalContact, $resultField): array {
+                if ($field === $resultField && ($edited[$graphicalContact][BattleTargetContactSequence::RESULT_FIELD] ?? false) !== true) {
+                    unset($edited[$graphicalContact][BattleTargetContactSequence::PREVIEW_REACTION_FIELD]);
+                }
+                if ($field === $intervalField && !array_key_exists('intervalFrames', $edited[$contactField] ?? [])) {
+                    unset($edited[$contactField]);
+                }
+                if ($field === $directionField || $field === $staggerField) {
+                    $selectedMode = $field === $directionField ? 'direction' : 'intervalFrames';
+                    $otherMode = $field === $directionField ? 'intervalFrames' : 'direction';
+                    if (array_key_exists($selectedMode, $edited[$graphicalContact] ?? [])) {
+                        unset($edited[$graphicalContact][$otherMode]);
+                    } elseif (!array_key_exists($otherMode, $edited[$graphicalContact] ?? [])) {
+                        unset($edited[$graphicalContact]);
+                    }
+                }
+
+                return $edited;
+            },
             commandListsFor: static fn(array $payload): array => [
                 self::TRACKS_KEY, self::CUES_KEY,
                 ...($graphical ? (is_array($payload['stage'] ?? null)
@@ -918,6 +995,7 @@ final class CutsceneSchemas
     public static function effectTrackList(bool $graphical = false): RecordSubList
     {
         $keyframes = self::effectKeyframeList();
+        $glyphLane = EffectTrackType::GLYPH_LANE->value;
         // The two motion tracks read the same held samples, the whole field's with a scale besides: a motion
         // turned from one into the other keeps its samples, and a scale never goes to a battler with them.
         $motionSamples = self::battleMotionSamples();
@@ -932,36 +1010,61 @@ final class CutsceneSchemas
                 removeWhenEmpty: true, displayDefault: EffectFacingTarget::RECIPIENT->value),
         ];
 
+        $identityFields = [
+            new RecordField('id', 'Id'),
+            new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake',
+                ...($graphical ? self::getGraphicalTrackTypes() : [$glyphLane])]),
+        ];
+
+        $variantFields = [
+            'image' => static fn(array $entry): array => $graphical && self::isOnStage($entry)
+                ? self::stageImageTrackFields()
+                : self::withoutGroundSpanConflicts($graphical, $entry, [
+                    new RecordField('anchor', 'Anchor', options: $graphical ? [...self::SUMMON_IMAGE_ANCHORS, 'target-group'] : ['target', 'caster', 'screen'],
+                        removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], $anchors[2],
+                    ...self::imageTrackFields(sharedWithField: true, subjectOrder: self::supportsSubjectOrder($entry)),
+                    ...($graphical ? self::groundAnchorFields($entry) : []),
+                    ...($graphical ? self::battleFlightFields(is_string($entry['anchor'] ?? null) ? $entry['anchor'] : 'target') : [])]),
+            'glyph' => $anchors,
+            'text' => $anchors,
+            'flash' => $anchors,
+            'shake' => $anchors,
+            ...(!$graphical ? [$glyphLane => [
+                new RecordField('facing', 'Facing', options: ['west', 'east']),
+            ]] : []),
+            // A whole-field motion has no subject: its samples are all it holds.
+            ...($graphical ? ['trail' => self::battleTrailFields(), 'tether' => self::battleTetherFields(), self::FIELD_MOTION_TRACK => [],
+                self::BATTLER_MOTION_TRACK => self::battleBattlerMotionFields(),
+                    self::BATTLER_REACTION_TRACK => [new RecordField('role', 'Reaction Pose', options: BattleBattlerReactionTrack::ROLES)]] : []),
+        ];
+
+        $presentationField = new RecordField('presentation', 'Presentation',
+            options: ['all', ...array_column(EffectPresentation::cases(), 'value')],
+            removeWhenEmpty: true, displayDefault: 'all');
+        $terminalPresentation = new RecordField('presentation', 'Presentation',
+            isReadOnly: true, displayDefault: EffectPresentation::TERMINAL->value);
+        $motionFields = $graphical ? [self::trackMotionField()] : [];
+
         return new RecordSubList(
             key: self::TRACKS_KEY,
             prefix: 'track',
             singular: 'track',
-            fields: [
-                new RecordField('id', 'Id'),
-                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake', ...($graphical ? self::getGraphicalTrackTypes() : [])]),
-                new RecordField('presentation', 'Presentation',
-                    options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
-                    removeWhenEmpty: true, displayDefault: 'all'),
-                ...($graphical ? [self::trackMotionField()] : []),
-            ],
+            fields: $identityFields,
             blank: ['id' => 'track', 'type' => 'glyph', 'keyframes' => [['frame' => 0, 'duration' => 1, 'content' => '*', 'position' => ['x' => 0, 'y' => 0]]]],
-            variants: [
-                'image' => static fn(array $entry): array => $graphical && self::isOnStage($entry)
-                    ? self::stageImageTrackFields()
-                    : self::withoutGroundSpanConflicts($graphical, $entry, [
-                        new RecordField('anchor', 'Anchor', options: $graphical ? [...self::SUMMON_IMAGE_ANCHORS, 'target-group'] : ['target', 'caster', 'screen'],
-                            removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], $anchors[2],
-                        ...self::imageTrackFields(sharedWithField: true, subjectOrder: self::supportsSubjectOrder($entry)),
-                        ...($graphical ? self::targetGroupFields($entry) : []),
-                        ...($graphical ? self::battleFlightFields(is_string($entry['anchor'] ?? null) ? $entry['anchor'] : 'target') : [])]),
-                'glyph' => $anchors,
-                'text' => $anchors,
-                'flash' => $anchors,
-                'shake' => $anchors,
-                // A whole-field motion has no subject: its samples are all it holds.
-                ...($graphical ? ['trail' => self::battleTrailFields(), 'tether' => self::battleTetherFields(), self::FIELD_MOTION_TRACK => [],
-                    self::BATTLER_MOTION_TRACK => self::battleBattlerMotionFields()] : []),
-            ],
+            variants: $variantFields,
+            getFields: static function (array $entry) use (
+                $identityFields, $variantFields, $glyphLane, $graphical, $presentationField, $terminalPresentation, $motionFields
+            ): array {
+                $type = (string) ($entry['type'] ?? '');
+                $specific = $variantFields[$type] ?? [];
+
+                return [
+                    ...$identityFields,
+                    $type === $glyphLane && !$graphical ? $terminalPresentation : $presentationField,
+                    ...$motionFields,
+                    ...($specific instanceof \Closure ? $specific($entry) : $specific),
+                ];
+            },
             variantKey: 'type',
             nestedLists: [
                 'image' => static fn(array $entry): RecordSubList => $graphical && self::isOnStage($entry)
@@ -970,11 +1073,13 @@ final class CutsceneSchemas
                 'text' => $keyframes,
                 'flash' => $keyframes,
                 'shake' => $keyframes,
+                ...(!$graphical ? [$glyphLane => self::glyphLaneKeyframeList()] : []),
                 ...($graphical ? ['trail' => self::battleTrailBands(), 'tether' => self::battleTetherSamples(),
-                    self::FIELD_MOTION_TRACK => $fieldMotionSamples, self::BATTLER_MOTION_TRACK => $motionSamples] : []),
+                    self::FIELD_MOTION_TRACK => $fieldMotionSamples, self::BATTLER_MOTION_TRACK => $motionSamples,
+                    self::BATTLER_REACTION_TRACK => self::battlerReactionWindows()] : []),
             ],
-            prepareEdit: static function (array $entry, string $field): array {
-                if ($field === 'type' && in_array($entry['type'] ?? null, self::getGraphicalTrackTypes(), true)) {
+            prepareEdit: static function (array $entry, string $field) use ($glyphLane): array {
+                if ($field === 'type' && in_array($entry['type'] ?? null, [$glyphLane, ...self::getGraphicalTrackTypes()], true)) {
                     unset($entry['presentation']);
                 }
                 // A ground span is its tip: with the tip cleared, nothing of it is left to write, its orientation included.
@@ -982,7 +1087,10 @@ final class CutsceneSchemas
                 if ($field === self::getGroundSpanTipKey() && ! array_key_exists($groundSpan['tipField'], (array) ($entry[$groundSpan['field']] ?? []))) {
                     unset($entry[$groundSpan['field']]);
                 }
-
+                if ($field === self::getGroundSpanRevealKey() . '.startFrame'
+                    && ! isset($entry[$groundSpan['field']][$groundSpan['revealField']]['startFrame'])) {
+                    unset($entry[$groundSpan['field']][$groundSpan['revealField']]);
+                }
                 return $entry;
             },
         );
@@ -1013,28 +1121,47 @@ final class CutsceneSchemas
     }
 
     /** @return list<RecordField> */
-    private static function targetGroupFields(array $entry): array
+    private static function groundAnchorFields(array $entry): array
     {
         $groundGroup = ($entry['anchor'] ?? null) === 'target-group' && ($entry['attachment'] ?? null) === 'ground';
+        $groundRecipient = ($entry['anchor'] ?? null) === 'target' && ($entry['attachment'] ?? null) === 'ground';
         $groundSpan = EffectGroundSpan::exportContract();
         $spansGround = array_key_exists($groundSpan['field'], $entry);
+        $reveal = $entry[$groundSpan['field']][$groundSpan['revealField']] ?? null;
+        $revealKey = self::getGroundSpanRevealKey();
         // What the Engine requires of a track before it can hold a span, each value as the Engine exports it.
-        $takesGroundSpan = array_all($groundSpan['requiredTrackValues'], static fn(mixed $value, string $field): bool => ($entry[$field] ?? null) === $value);
+        $takesGroundSpan = in_array($entry['anchor'] ?? null, $groundSpan['anchors'], true)
+            && array_all($groundSpan['requiredTrackValues'], static fn(mixed $value, string $field): bool =>
+                $field === 'anchor' || ($entry[$field] ?? null) === $value);
         return [
-            ...($groundGroup || array_key_exists('anchorLifetime', $entry) ? [
+            ...($groundGroup || $groundRecipient || array_key_exists('anchorLifetime', $entry) ? [
                 // Every lifetime the Engine knows but the one a track has by naming none.
                 new RecordField('anchorLifetime', 'Ground Anchor Lifetime',
-                    options: ['', ...array_values(array_diff(array_column(EffectAnchorLifetime::cases(), 'value'), [EffectAnchorLifetime::FOLLOW->value]))],
+                    options: $groundRecipient ? ['', EffectAnchorLifetime::TARGET_CAPTURE->value]
+                        : ['', ...array_values(array_diff(array_column(EffectAnchorLifetime::cases(), 'value'), [EffectAnchorLifetime::FOLLOW->value]))],
                     removeWhenEmpty: true, displayDefault: EffectAnchorLifetime::FOLLOW->value),
             ] : []),
             ...(array_key_exists('span', $entry) || ($groundGroup && ($entry['fit'] ?? null) === CanvasImageFit::CONTAIN->value)
                 ? [RecordField::boolean('span', 'Span Selected Targets')] : []),
-            // A captured ground image fitted whole from the caster's ground, where its pivot (the rear) lands, to the
-            // farthest selected target's ground, where this point of it (the tip) lands. A point turns the span on;
+            // A captured ground image fitted from the caster's ground to the group or to each selected recipient.
+            // A point turns the span on;
             // cleared, the key goes whole ({@see effectTrackList()}).
             ...($spansGround || $takesGroundSpan
                 ? [new RecordField(self::getGroundSpanTipKey(), 'Ground Span Tip (empty: no ground span)',
                     codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true)] : []),
+            ...($spansGround
+                ? [new RecordField(self::getGroundSpanCasterPointKey(), 'Ground Span Caster Pose Point',
+                    removeWhenEmpty: true)] : []),
+            ...($spansGround && $groundRecipient
+                ? [new RecordField($revealKey . '.startFrame', 'Ground Span Reveal Start Frame',
+                    InputControlType::INTEGER, removeWhenEmpty: true)] : []),
+            ...(is_array($reveal)
+                ? [
+                    new RecordField($revealKey . '.featherPixels', 'Ground Span Reveal Feather Pixels',
+                        InputControlType::FLOAT, removeWhenEmpty: true),
+                    new RecordField($revealKey . '.beforeContactOpacity', 'Ground Span Before Contact Opacity',
+                        InputControlType::FLOAT, removeWhenEmpty: true),
+                ] : []),
             // Which way up the span holds its image, among the Engine's orientations: the empty choice leaves the key
             // out, and the image is then held as the Engine's default holds it.
             ...($spansGround
@@ -1205,6 +1332,20 @@ final class CutsceneSchemas
         );
     }
 
+    private static function battlerReactionWindows(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'keyframes',
+            prefix: 'keyframe',
+            singular: 'reaction window',
+            fields: [
+                new RecordField('frame', 'Start Frame', InputControlType::INTEGER),
+                new RecordField('duration', 'Duration', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+            ],
+            blank: ['frame' => 0],
+        );
+    }
+
     private static function battleTrailBands(): RecordSubList
     {
         return new RecordSubList(
@@ -1258,6 +1399,27 @@ final class CutsceneSchemas
                 new RecordField('payload', 'Payload', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
             ],
             blank: ['frame' => 0, 'duration' => 1, 'content' => '*', 'position' => ['x' => 0, 'y' => 0]],
+        );
+    }
+
+    private static function glyphLaneKeyframeList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'keyframes',
+            prefix: 'keyframe',
+            singular: 'keyframe',
+            fields: [
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('duration', 'Duration', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+                new RecordField('payload.head', 'Head', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES),
+                new RecordField('payload.shaft', 'Shaft', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES),
+                new RecordField('payload.reach', 'Reach (0–1)', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1'),
+                new RecordField('color', 'Color', options: ['', ...array_map(
+                    static fn(\Ichiloto\Engine\IO\Enumerations\Color $color): string => strtolower($color->name),
+                    \Ichiloto\Engine\IO\Enumerations\Color::cases())], removeWhenEmpty: true),
+                RecordField::boolean('visible', 'Visible'),
+            ],
+            blank: ['frame' => 0, 'duration' => 1, 'payload' => ['head' => ['<'], 'shaft' => ['-']]],
         );
     }
 

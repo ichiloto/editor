@@ -122,7 +122,7 @@ it('gives a skit its own backdrop only as an optional override in Database > Ski
 it('warns where a skit would show no backdrop and about backdrops and regions the game cannot use', function () {
     $root = createSkitBackdropProject();
     $session = EditorSession::open($root);
-    expect(findSkitBackdropIssues($session))->toBe(['It plays on map test-map, which shows it no backdrop.']);
+    expect(findSkitBackdropIssues($session))->toBe(['“Breakfast Banter” has no backdrop on test-map.']);
 
     applyLandmarkRow($session, ['target' => MapInspector::SKIT_BACKDROP_TARGET], 'Graphics/Skits/Square.png');
     expect(findSkitBackdropIssues($session))->toBe([]);
@@ -183,3 +183,72 @@ it('opens the shared image picker for a skit\'s Backdrop and a region\'s Skit Ba
     'skit override' => ['skits', SkitBackdrop::SKIT_KEY],
     'region backdrop' => [RegionFields::CATEGORY, SkitBackdrop::MAP_KEY],
 ]);
+
+it('includes a roaming skit backdrop warning once for every validation scope that contains an affected map', function () {
+    $root = createSkitBackdropProject();
+    $skit = $root . '/assets/Data/Skits/breakfast-banter.php';
+    $story = require $skit;
+    unset($story['where']);
+    file_put_contents($skit, '<?php return ' . var_export($story, true) . ';');
+    $session = EditorSession::open($root);
+    $session->createMap('First Road', null, 6, 6);
+    $session->createMap('Second Road', null, 6, 6);
+    applyLandmarkRow($session, ['target' => MapInspector::SKIT_BACKDROP_TARGET], 'Graphics/Skits/Square.png');
+
+    $select = static fn (?array $maps = null): array => array_values(array_filter(
+        $session->validateProject($maps)['issues'],
+        static fn (array $issue): bool => $issue['where'] === 'skit breakfast-banter'
+            && str_contains($issue['message'], 'no backdrop'),
+    ));
+    $scoped = $select(['second-road']);
+    expect($scoped)->toHaveCount(1)
+        ->and($scoped[0]['affectedMaps'])->toBe(['first-road', 'second-road'])
+        ->and($select(['test-map']))->toBe([])
+        ->and($select(['first-road', 'second-road']))->toBe($scoped)
+        ->and($select())->toBe($scoped);
+});
+
+it('scopes unreadable skit and region artwork to the maps that can use those bindings', function () {
+    $root = createSkitBackdropProject();
+    $skit = $root . '/assets/Data/Skits/breakfast-banter.php';
+    $story = require $skit;
+    $story['backdrop'] = 'Graphics/Skits/UnavailableSkit.png';
+    file_put_contents($skit, '<?php return ' . var_export($story, true) . ';');
+    $regions = new RegionCatalog(['Synthetic Vale' => [SkitBackdrop::MAP_KEY => 'Graphics/Skits/UnavailableRegion.png']]);
+    file_put_contents($root . '/assets/' . RegionCatalog::FILE, '<?php return ' . var_export($regions->toArray(), true) . ';');
+
+    $session = EditorSession::open($root);
+    $session->createMap('Unrelated Room', null, 6, 6);
+    $select = static fn(array $maps): array => array_values(array_filter($session->validateProject($maps)['issues'],
+        static fn(array $issue): bool => str_contains($issue['message'], 'cannot be drawn') && str_contains($issue['message'], '/Unavailable')));
+
+    $reported = $select(['test-map']);
+    expect($reported)->toHaveCount(2)
+        ->and(array_column($reported, 'affectedMaps'))->toBe([['test-map'], ['test-map']])
+        ->and($select(['unrelated-room']))->toBe([]);
+
+    applyLandmarkRow($session, ['target' => MapInspector::SKIT_BACKDROP_TARGET], 'Graphics/Skits/Square.png');
+    $reported = $select(['test-map']);
+    expect($reported)->toHaveCount(1)
+        ->and($reported[0]['message'])->toContain('UnavailableSkit.png');
+});
+
+it('shows a roaming skit by name in the map Problems check and clears it after an unsaved backdrop choice', function () {
+    $root = createSkitBackdropProject();
+    $skit = $root . '/assets/Data/Skits/breakfast-banter.php';
+    $story = require $skit;
+    unset($story['where']);
+    file_put_contents($skit, '<?php return ' . var_export($story, true) . ';');
+    $session = EditorSession::open($root);
+    $find = static fn(): array => array_values(array_filter($session->validateMap('test-map')['issues'],
+        static fn(array $issue): bool => $issue['where'] === 'skit breakfast-banter'));
+    $issues = $find();
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]['severity'])->toBe('warning')
+        ->and($issues[0]['message'])->toContain($story['title'], 'no backdrop');
+
+    applyLandmarkRow($session, ['target' => MapInspector::SKIT_BACKDROP_TARGET], 'Graphics/Skits/Square.png');
+    expect($find())->toBe([]);
+    $session->undo();
+    expect($find())->toBe($issues);
+});

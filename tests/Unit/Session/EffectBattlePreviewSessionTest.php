@@ -32,6 +32,66 @@ it('previews an effect in the action that plays it, as the battle draws it, for 
         ->and($terminal['terminalLines'])->not->toBe([]);
 });
 
+it('keeps the graphical command boundaries when the independent Terminal target becomes longer', function () {
+    $root = effectBattlePreviewProject();
+    $path = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $before = EditorSession::open($root);
+    $index = findEffectIndex($before, 'dusk-slash');
+    $graphical = $before->readEffectBattlePreview($index, 0);
+    $terminal = $before->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL);
+    $timeline = require $path;
+    $timeline['presentations']['terminal']['lengthFrames'] = 48;
+    file_put_contents($path, '<?php return ' . var_export($timeline, true) . ';');
+    $after = EditorSession::open($root);
+    $longTerminal = $after->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL);
+    $unchangedGraphical = $after->readEffectBattlePreview($index, 0);
+
+    expect($unchangedGraphical['phases'])->toBe($graphical['phases'])
+        ->and($unchangedGraphical['totalFrames'])->toBe($graphical['totalFrames'])
+        ->and($longTerminal['phases']['target']['length'])->toBeGreaterThan($terminal['phases']['target']['length']);
+});
+
+it('uses the saved shared impact delay in both battle previews without retiming the effect', function () {
+    $root = effectBattlePreviewProject();
+    $effect = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $source = file_get_contents($effect);
+    $database = \Ichiloto\Editor\ProjectWorkspace::fromProject($root)->getRecordDatabase('animations');
+    $database->setField(0, 'targetImpactSeconds', '3');
+    $database->save();
+    $session = EditorSession::open($root);
+    $index = findEffectIndex($session, 'dusk-slash');
+    foreach (EffectPresentation::cases() as $presentation) {
+        $first = $session->readEffectBattlePreview($index, 0, presentation: $presentation);
+        $target = $first['phases']['target'];
+        $late = $session->readEffectBattlePreview($index, $target['start'] + 359, presentation: $presentation);
+        expect($target['length'])->toBe(360)
+            ->and($first['phases']['reaction']['start'])->toBe($target['start'] + 360)
+            ->and($late['authoredFrames']['target'])->toBeNull();
+    }
+    expect(file_get_contents($effect))->toBe($source);
+});
+
+it('refuses an animation delay when either effect presentation owns impact', function () {
+    $root = effectBattlePreviewProject();
+    $effect = $root . '/assets/Animations/dusk-slash/dusk-slash.timeline.php';
+    $timeline = require $effect;
+    $timeline['presentations']['terminal']['cues'] = [
+        ['id' => 'hit', 'type' => 'applyEffect', 'frame' => 0, 'payload' => []],
+    ];
+    file_put_contents($effect, '<?php return ' . var_export($timeline, true) . ';');
+    $animations = $root . '/assets/Data/animations.php';
+    $before = file_get_contents($animations);
+    $workspace = \Ichiloto\Editor\ProjectWorkspace::fromProject($root);
+    $database = $workspace->getRecordDatabase('animations');
+    $database->setField(0, 'targetImpactSeconds', '0.8');
+    expect(fn() => $database->save())->toThrow(\RuntimeException::class, 'Clear the target effect impact timing')
+        ->and(file_get_contents($animations))->toBe($before);
+
+    $issues = new \Ichiloto\Editor\Validation\EffectValidator()->validate($workspace);
+    expect(array_any($issues, static fn($issue): bool => str_contains($issue->message, 'also owns combat resolution for the terminal presentation.')))
+        ->toBeTrue();
+});
+
 it('refreshes both battle previews after an unsaved actor edit and history changes', function () {
     $session = EditorSession::open(effectBattlePreviewProject());
     $index = findEffectIndex($session, 'dusk-slash');
@@ -318,10 +378,12 @@ it('finishes impact-anchored recovery in the current graphical arena preview wit
     $graphical = $session->readEffectBattlePreview($index, 0);
     $terminal = $session->readEffectBattlePreview($index, 0, presentation: EffectPresentation::TERMINAL);
     expect($graphical['caster'])->toBe('Travelling Actor');
-    foreach (['advance','announce','source','target','reaction','return'] as $phase) {
+    foreach (['advance', 'announce', 'source'] as $phase) {
         expect($graphical['phases'][$phase])->toBe($terminal['phases'][$phase]);
     }
     if ($hasArena) {
+        expect($graphical['phases']['target']['length'])->toBe(20)
+            ->and($terminal['phases']['target']['length'])->toBe(40);
         $recoveryEnd = $graphical['phases']['target']['start'] + 108; // Eighteen authored entries at 20 fps on the 120 fps command clock.
         expect($graphical['totalFrames'])->toBe($recoveryEnd)
             ->and($terminal['totalFrames'])->toBeLessThan($recoveryEnd);
@@ -336,7 +398,9 @@ it('finishes impact-anchored recovery in the current graphical arena preview wit
         expect($hits)->toHaveCount(1)
             ->and($hits[0]['frame'])->toBe($graphical['phases']['target']['start'] + $graphical['phases']['target']['length']);
     } else {
-        expect($graphical['canvas'])->toBeNull()->and($graphical['totalFrames'])->toBe($terminal['totalFrames']);
+        expect($graphical['canvas'])->toBeNull()
+            ->and($graphical['phases'])->toBe($terminal['phases'])
+            ->and($graphical['totalFrames'])->toBe($terminal['totalFrames']);
     }
     expect(array_map(file_get_contents(...), $sources))->toBe($before)
         ->and($session->listUnsavedChanges())->toBe([]);
@@ -705,3 +769,251 @@ it('reads the indicator path request from the host route beside the other drawin
             ->toBe([$plain['result']['frame'], $plain['result']['lane'], $plain['result']['totalFrames']]);
     }
 })->skip(fn (): bool => ! hasEngineIndicatorPath(), ENGINE_INDICATOR_PATH_MISSING);
+
+/**
+ * The effect battle preview project with its party to the left of its troop, so the battle turns every battler and
+ * mirrors its art, and with Glint Strike, which an unarmed attack plays on its target: a stroke, a tint and a tone
+ * on the target. With `$aquatic` the Regular Bat stands in water below the ground.
+ */
+function mirroredEffectBattleProject(bool $aquatic = false): string
+{
+    $root = effectBattlePreviewProject();
+    file_put_contents($root . '/assets/Data/Presentation/battle.php', str_replace(
+        'partySlots: [new BattleStageSlot(1050, 180, 180, 260), new BattleStageSlot(1180, 40, 180, 260)]',
+        'partySlots: [new BattleStageSlot(150, 180, 180, 260), new BattleStageSlot(300, 40, 180, 260)]',
+        (string) file_get_contents($root . '/assets/Data/Presentation/battle.php')));
+    file_put_contents($root . '/assets/Data/troops.php', '<?php return ' . var_export([['name' => 'Pair', 'enemies' => [
+        ['enemy' => 'Regular Bat', 'position' => [15, 7], 'graphicalPlacement' => ['x' => 800, 'depth' => 300, 'width' => 275, 'height' => 190]],
+        ['enemy' => 'Regular Bat', 'position' => [15, 20], 'graphicalPlacement' => ['x' => 1050, 'depth' => 220, 'width' => 275, 'height' => 190]],
+    ]]], true) . ';');
+    writeTilesetTestPng($root . '/assets/Graphics/Battlers/Hero.png', 8, 16);
+    writeTilesetTestPng($root . '/assets/Graphics/Battlers/Bat.png', 8, 16);
+    file_put_contents($root . '/assets/Data/Presentation/battlers.php', '<?php return ' . var_export([
+        'actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/Battlers/Hero.png']]],
+        'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/Battlers/Bat.png'],
+            ...($aquatic ? ['grounding' => ['elevation' => -.25, 'contact' => 'ripple']] : [])]],
+    ], true) . ';');
+    @mkdir($root . '/assets/Animations/glint-strike', 0o777, true);
+    file_put_contents($root . '/assets/Animations/glint-strike/glint-strike.timeline.php', <<<'PHP_SOURCE'
+<?php
+
+return [
+  'fps' => 12,
+  'lengthFrames' => 4,
+  'tracks' => [
+    ['id' => 'stroke', 'type' => 'glyph',
+     'keyframes' => [['frame' => 0, 'duration' => 4, 'content' => '/', 'position' => ['x' => 0, 'y' => 0]]]],
+    ['id' => 'glint', 'type' => 'battler-tint', 'anchor' => 'target', 'presentation' => 'graphical',
+     'keyframes' => [['frame' => 0, 'duration' => 4, 'payload' => ['color' => ['kind' => 'rgb', 'r' => 240, 'g' => 20, 'b' => 30], 'strength' => .5]]]],
+    ['id' => 'shade', 'type' => 'tone', 'anchor' => 'target', 'presentation' => 'graphical',
+     'keyframes' => [['frame' => 0, 'duration' => 4, 'payload' => ['brightness' => .7]]]],
+  ],
+  'cues' => [],
+];
+PHP_SOURCE);
+    file_put_contents($root . '/assets/Data/animations.php', "<?php\n\nreturn " . var_export([
+        ['id' => 1, 'name' => 'Glint Strike', 'roles' => ['attack', 'attack-unarmed'], 'targetEffect' => 'glint-strike'],
+    ], true) . ";\n");
+
+    return $root;
+}
+
+/** The Engine's image of a battler in a preview frame, by the battler's art. */
+function findPreviewBattlerImage(array $frame, string $asset): ?array
+{
+    return array_find($frame['canvas']['images'] ?? [], static fn(array $image): bool => $image['asset'] === $asset);
+}
+
+it('advertises mirrored images, mirrored masks, image tones and bottom fades to the Engine only for a frame whose request asks for each', function () {
+    $flags = ['imageFlip' => RendererSessionConfig::CANVAS_IMAGE_FLIP, 'imageAlphaFlip' => RendererSessionConfig::CANVAS_IMAGE_ALPHA_FLIP,
+        'imageTone' => RendererSessionConfig::CANVAS_IMAGE_TONE, 'imageBottomFade' => RendererSessionConfig::CANVAS_IMAGE_BOTTOM_FADE,
+        'clipOpacity' => RendererSessionConfig::CANVAS_CLIP_OPACITY];
+    $every = array_fill_keys(array_keys($flags), true);
+
+    expect(EffectBattlePreview::listNegotiatedCapabilities())->toBe([]);
+    foreach ($flags as $flag => $capability) {
+        $others = array_diff_key($every, [$flag => true]);
+        expect(EffectBattlePreview::listNegotiatedCapabilities(...[$flag => true]))->toBe([$capability])
+            ->and(EffectBattlePreview::listNegotiatedCapabilities(...$others))->not->toContain($capability)
+            ->and(array_values(array_diff(EffectBattlePreview::listNegotiatedCapabilities(...$every),
+                EffectBattlePreview::listNegotiatedCapabilities(...$others))))->toBe([$capability]);
+    }
+});
+
+it('composes a mirrored battler\'s tint only for a canvas that mirrors image-alpha masks, and otherwise gives the Engine\'s diagnostic', function () {
+    $session = EditorSession::open(mirroredEffectBattleProject());
+    $index = findEffectIndex($session, 'glint-strike');
+    $read = static fn(array $features): array => $session->readEffectBattlePreview(...[$index, 0, 'authoredFrame' => 1,
+        'imageFlip' => true, 'imageTone' => true, ...$features]);
+    $tinted = static fn(array $frame): bool => array_any($frame['canvas']['composites'] ?? [],
+        static fn(array $composite): bool => str_starts_with($composite['id'], 'command-tints-layer-'));
+
+    $without = $read([]);
+    $with = $read(['imageAlphaFlip' => true]);
+    $bat = findPreviewBattlerImage($with, 'Graphics/Battlers/Bat.png');
+
+    // The troop stands to the party's right, so the battle turns the bat toward the party and mirrors its art.
+    expect($bat)->not->toBeNull()
+        ->and(($bat['flipX'] ?? false) || ($bat['flipY'] ?? false))->toBeTrue()
+        ->and(implode(' ', $without['diagnostics']))->toContain('cannot mirror image-alpha masks')
+        ->and($tinted($without))->toBeFalse()
+        ->and(array_column($without['canvas']['images'], 'id'))->toContain('arena')
+        ->and($with['diagnostics'])->toBe([])
+        ->and($tinted($with))->toBeTrue();
+});
+
+it('refuses a battler the battle must turn for a canvas that mirrors no image, in the Engine\'s words', function () {
+    $session = EditorSession::open(mirroredEffectBattleProject());
+    $index = findEffectIndex($session, 'glint-strike');
+
+    expect(fn() => $session->readEffectBattlePreview($index, 0, authoredFrame: 1, imageAlphaFlip: true, imageTone: true))
+        ->toThrow(SessionRefusal::class, 'cannot mirror a battler')
+        ->and($session->readEffectBattlePreview($index, 0, authoredFrame: 1, imageFlip: true, imageAlphaFlip: true, imageTone: true)['diagnostics'])
+        ->toBe([]);
+});
+
+it('tones a battler only for a canvas that tones images, and otherwise draws it untoned with the Engine\'s diagnostic', function () {
+    $session = EditorSession::open(mirroredEffectBattleProject());
+    $index = findEffectIndex($session, 'glint-strike');
+    $read = static fn(bool $tone): array => $session->readEffectBattlePreview($index, 0, authoredFrame: 1, imageFlip: true,
+        imageAlphaFlip: true, imageTone: $tone);
+    $untoned = $read(false);
+    $toned = $read(true);
+
+    expect(implode(' ', $untoned['diagnostics']))->toContain('cannot apply the authored battler image tone')
+        ->and(findPreviewBattlerImage($untoned, 'Graphics/Battlers/Bat.png')['brightness'] ?? 1.0)->toEqual(1.0)
+        ->and(findPreviewBattlerImage($toned, 'Graphics/Battlers/Bat.png')['brightness'])->toEqual(.7)
+        ->and($toned['diagnostics'])->toBe([])
+        ->and($untoned['terminalLines'])->toBe($toned['terminalLines']);
+});
+
+it('fades an aquatic battler\'s bottom only for a canvas that fades image bottoms', function () {
+    $session = EditorSession::open(mirroredEffectBattleProject(aquatic: true));
+    $index = findEffectIndex($session, 'glint-strike');
+    $read = static fn(bool $fade): array => $session->readEffectBattlePreview($index, 0, authoredFrame: 1, imageFlip: true,
+        imageAlphaFlip: true, imageTone: true, imageBottomFade: $fade);
+    $whole = $read(false);
+    $faded = $read(true);
+
+    expect(findPreviewBattlerImage($whole, 'Graphics/Battlers/Bat.png'))->not->toBeNull()->not->toHaveKey('bottomFade')
+        ->and(findPreviewBattlerImage($faded, 'Graphics/Battlers/Bat.png')['bottomFade'] ?? null)->not->toBeNull()
+        ->and($whole['diagnostics'])->toBe([])
+        ->and($faded['diagnostics'])->toBe([]);
+});
+
+it('reads the mirrored image, mask, tone and bottom fade requests from the host route, and composes each for that request alone', function () {
+    $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
+    $request = static fn(string $method, array $params = []): array => $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params]));
+    $request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => mirroredEffectBattleProject(aquatic: true)]);
+    $index = array_find_key($request('database.records', ['category' => 'cutscenes/effect'])['result']['records'],
+        static fn(mixed $label): bool => str_contains(strval($label), 'glint-strike'));
+    $preview = static fn(array $features): array => $request('cutscenes.effectBattlePreview',
+        ['index' => $index, 'frame' => 0, 'authoredFrame' => 1, 'presentation' => 'graphical', ...$features]);
+    $bat = static fn(array $reply): ?array => findPreviewBattlerImage($reply['result'], 'Graphics/Battlers/Bat.png');
+    $every = ['imageFlip' => true, 'imageAlphaFlip' => true, 'imageTone' => true, 'imageBottomFade' => true];
+
+    $all = $preview($every);
+    expect($all)->not->toHaveKey('error')
+        ->and($all['result']['diagnostics'])->toBe([])
+        ->and($bat($all)['brightness'])->toEqual(.7)
+        ->and($bat($all)['bottomFade'] ?? null)->not->toBeNull();
+    // Only `true` asks: a flag left out, false or anything else composes the frame of a canvas without it.
+    foreach ([false, 'yes', null] as $value) {
+        $flip = $preview([...$every, 'imageFlip' => $value]);
+        expect($flip['error']['message'] ?? '')->toContain('cannot mirror a battler');
+        $mask = $preview([...$every, 'imageAlphaFlip' => $value]);
+        expect(implode(' ', $mask['result']['diagnostics']))->toContain('cannot mirror image-alpha masks');
+        $tone = $preview([...$every, 'imageTone' => $value]);
+        expect(implode(' ', $tone['result']['diagnostics']))->toContain('cannot apply the authored battler image tone')
+            ->and($bat($tone)['brightness'] ?? 1.0)->toEqual(1.0);
+        $fade = $preview([...$every, 'imageBottomFade' => $value]);
+        expect($bat($fade))->not->toHaveKey('bottomFade')
+            ->and($fade['result']['diagnostics'])->toBe([]);
+    }
+});
+
+/**
+ * The effect battle preview project with Lance Beam, which an unarmed attack plays: a captured beam from the
+ * caster's release point whose length past its tip runs off the battlefield's left edge, so the canvas clips it.
+ */
+function clippedBeamBattleProject(): string
+{
+    $root = effectBattlePreviewProject();
+    writeTilesetTestPng($root . '/assets/Graphics/Battlers/Hero.png', 8, 16);
+    writeTilesetTestPng($root . '/assets/Graphics/Battlers/Bat.png', 8, 16);
+    writeTilesetTestPng($root . '/assets/Graphics/Effects/lance-beam.png', 400, 40);
+    file_put_contents($root . '/assets/Data/Presentation/battlers.php', '<?php return ' . var_export([
+        'actors' => ['Kaelion' => ['artwork' => ['image' => 'Graphics/Battlers/Hero.png'],
+            'poses' => ['attack' => ['image' => 'Graphics/Battlers/Hero.png',
+                'attachmentPoints' => [['cell' => 0, 'name' => 'release', 'point' => ['x' => .5, 'y' => .2]]]]]]],
+        'enemies' => ['Regular Bat' => ['artwork' => ['image' => 'Graphics/Battlers/Bat.png']]],
+    ], true) . ';');
+    @mkdir($root . '/assets/Animations/lance-beam', 0o777, true);
+    file_put_contents($root . '/assets/Animations/lance-beam/lance-beam.timeline.php', <<<'PHP_SOURCE'
+<?php
+
+return [
+  'fps' => 24,
+  'lengthFrames' => 4,
+  'restFrame' => 1,
+  'targetCaptureFrame' => 0,
+  'targetContactSequence' => ['firstFrame' => 1, 'lastFrame' => 1, 'direction' => 'west', 'tracks' => ['hit']],
+  'tracks' => [
+    ['id' => 'stroke', 'type' => 'glyph',
+     'keyframes' => [['frame' => 0, 'duration' => 4, 'content' => '-', 'position' => ['x' => 0, 'y' => 0]]]],
+    ['id' => 'beam', 'type' => 'image', 'presentation' => 'graphical', 'asset' => 'Graphics/Effects/lance-beam.png',
+     'anchor' => 'caster', 'attachmentPoint' => 'release', 'detachFrame' => 0, 'facing' => 'west', 'pivot' => ['x' => .99, 'y' => .5],
+     'flight' => ['mode' => 'beam', 'route' => 'straight', 'tipX' => .5, 'arrivalFrame' => 1, 'fallback' => 'horizontal-exit'],
+     'keyframes' => [['frame' => 1, 'duration' => 3]]],
+    ['id' => 'hit', 'type' => 'image', 'presentation' => 'graphical', 'asset' => 'Graphics/Effects/dusk-slash.png',
+     'anchor' => 'target', 'keyframes' => [['frame' => 1, 'duration' => 3]]],
+  ],
+  'cues' => [],
+];
+PHP_SOURCE);
+    file_put_contents($root . '/assets/Data/animations.php', "<?php\n\nreturn " . var_export([
+        ['id' => 1, 'name' => 'Lance Beam', 'roles' => ['attack', 'attack-unarmed'], 'targetEffect' => 'lance-beam'],
+    ], true) . ";\n");
+
+    return $root;
+}
+
+it('clips a captured beam only for a canvas that clips images, the one flag that negotiates clipped images', function () {
+    $session = EditorSession::open(clippedBeamBattleProject());
+    $index = findEffectIndex($session, 'lance-beam');
+    $read = static fn(bool $clipOpacity): array => $session->readEffectBattlePreview($index, 0, authoredFrame: 1,
+        imageRotation: true, clipOpacity: $clipOpacity, imageFlip: true, imageAlphaFlip: true, imageTone: true);
+    $unclipped = $read(false);
+    $clipped = $read(true);
+    $beam = static fn(array $frame): ?array => array_find($frame['canvas']['images'] ?? [],
+        static fn(array $image): bool => $image['asset'] === 'Graphics/Effects/lance-beam.png');
+
+    expect(implode(' ', $unclipped['diagnostics']))->toContain('cannot clip the authored captured beam')
+        ->and($clipped['diagnostics'])->toBe([])
+        ->and($beam($clipped))->toHaveKey('clipRect');
+});
+
+it('previews each editor project’s condition effects even when another project supplies the process settings', function () {
+    $effect = EditorSession::open(effectBattlePreviewProject());
+    $effectIndex = findEffectIndex($effect, 'dusk-slash');
+    $key = \Ichiloto\Engine\Util\Config\ProjectConfig::class;
+    $previous = \Ichiloto\Engine\Util\Config\ConfigStore::has($key)
+        ? \Ichiloto\Engine\Util\Config\ConfigStore::get($key) : null;
+    $foreign = new \Ichiloto\Engine\Util\Config\PlaySettings(['ui' => ['battle' => [
+        'conditions' => ['unknownGroup' => []],
+    ]]]);
+    \Ichiloto\Engine\Util\Config\ConfigStore::put($key, $foreign);
+    try {
+        $graphical = $effect->readEffectBattlePreview($effectIndex, 0, authoredFrame: 1);
+        $terminal = $effect->readEffectBattlePreview($effectIndex, 0, presentation: EffectPresentation::TERMINAL, authoredFrame: 0);
+
+        expect($graphical['canvas'])->not->toBeNull()
+            ->and($terminal['terminalLines'])->not->toBeEmpty()
+            ->and($effect->listUnsavedChanges())->toBe([])
+            ->and(\Ichiloto\Engine\Util\Config\ConfigStore::get($key))->toBe($foreign);
+    } finally {
+        $previous === null
+            ? \Ichiloto\Engine\Util\Config\ConfigStore::remove($key)
+            : \Ichiloto\Engine\Util\Config\ConfigStore::put($key, $previous);
+    }
+});

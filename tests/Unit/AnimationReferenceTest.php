@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\ReferencePicker;
@@ -58,7 +59,7 @@ it('round trips item animation references through the existing typed resource pi
     expect(loadRecordDatabase($root, 'items')->getRecords()[0]->get('animationId'))->toBeNull();
 });
 
-it('reports deprecated name fallback and stale ids without rejecting gameplay', function () {
+it('reports a legacy animation that the current role does not select and stale explicit ids', function () {
     $root = makeTemporaryProject();
     writeSkillRecords(
         $root,
@@ -69,12 +70,12 @@ it('reports deprecated name fallback and stale ids without rejecting gameplay', 
     $issues = new AnimationReferenceValidator()->validate(ProjectWorkspace::fromProject($root));
     expect($issues)->toHaveCount(2)
         ->and($issues[0]->severity)->toBe(Severity::WARNING)
-        ->and($issues[0]->message)->toContain('deprecated')
+        ->and($issues[0]->message)->toBe('The skill role has no playable animation. The legacy match was "Slash".')
         ->and($issues[1]->severity)->toBe(Severity::WARNING)
         ->and($issues[1]->message)->toContain('animationId');
 });
 
-it('uses the engine fallback rules for magic animation diagnostics', function () {
+it('warns when an old magic fallback has no role and accepts it once assigned to the current role', function () {
     $root = makeTemporaryProject();
     file_put_contents($root . '/assets/Data/animations.php', "<?php return [['id' => 2, 'name' => 'Healing Aura']];");
     writeSkillRecords(
@@ -84,13 +85,38 @@ it('uses the engine fallback rules for magic animation diagnostics', function ()
     );
     // Only the skills' diagnostics; this project binds no roles, which is
     // reported separately.
-    $issues = array_values(array_filter(
-        new AnimationReferenceValidator()->validate(ProjectWorkspace::fromProject($root)),
+    $workspace = ProjectWorkspace::fromProject($root);
+    $validator = new AnimationReferenceValidator();
+    $skillIssues = static fn(): array => array_values(array_filter(
+        $validator->validate($workspace),
         static fn($issue): bool => str_starts_with($issue->where, 'assets/Data/Skills/'),
     ));
+    $issues = $skillIssues();
     expect($issues)->toHaveCount(1)
         ->and($issues[0]->where)->toContain('Cure');
+
+    $workspace->getRecordDatabase('animations')->setField(0, 'roles', 'restorative');
+    expect($skillIssues())->toBe([]);
 });
+
+it('uses the live summon link instead of warning about a legacy animation with the same name', function (bool $graphical) {
+    $root = makeTemporaryProject();
+    writeSkillRecords($root, new SpecialSkill('Slash', '', '', 0, 0));
+    $workspace = ProjectWorkspace::fromProject($root, graphical: $graphical);
+    $validator = new AnimationReferenceValidator();
+    $skillIssues = static fn(): array => array_values(array_filter(
+        $validator->validate($workspace),
+        static fn($issue): bool => str_starts_with($issue->where, 'assets/Data/Skills/'),
+    ));
+    expect($skillIssues())->toHaveCount(1);
+
+    $summon = $workspace->cutscenes->createAsset(CutsceneType::SUMMON, 'test-summon')['asset'];
+    $summon->apply([...$summon->payload(), 'linkedActionId' => 'Slash']);
+    expect($skillIssues())->toBe([]);
+
+    $workspace->getRecordDatabase('skills')->setField(0, 'animationId', '999');
+    expect($skillIssues()[0]->message)->toContain('animationId');
+})->with([false, true]);
 
 it('routes skill animation edits through the existing picker and undo transaction', function () {
     $root = makeTemporaryProject();
@@ -109,7 +135,8 @@ it('routes skill animation edits through the existing picker and undo transactio
     expect($animation())->toBeNull();
     callEditorMethod($editor, 'performRedo');
     expect($animation())->toBe(1);
-    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $field, '(Legacy fallback)');
+    expect($field['noneLabel'])->toBe('(Automatic)');
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $field, '(Automatic)');
     expect($animation())->toBeNull();
 });
 

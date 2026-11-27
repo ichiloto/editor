@@ -326,3 +326,26 @@ it('moves a branch within another branch of its region as a sub-family, keeping 
         ->and($board->findFamily('odd')->nodes)->toBe(['haste'])
         ->and(file_get_contents($settings))->toContain('// Odd forces.')->toContain("'within' => 'odd'");
 });
+
+it('holds a skill off the tree with why, keeps the tree as written, and refuses holding a skill a node teaches', function () {
+    $root = masteryProject();
+    writeSkillRecords($root, new SpecialSkill('Cut', 'Cuts.', '', 2, 0), new MagicSkill('Spark', 'Shocks.', '', 4, 0),
+        new MagicSkill('Ward', 'Wards.', '', 6, 0));
+    $before = require $root . '/assets/Data/mastery.php';
+    $session = EditorSession::open($root);
+    $index = $session->createDatabaseRecord(MasteryFields::HELD, 'Ward')['index'];
+    $held = static fn(): array => $session->readDatabaseRecord(MasteryFields::HELD, $index);
+    $session->applyDatabaseRecord(MasteryFields::HELD, $index, masteryRow($held(), 'skill')['key'], 'Ward');
+    $session->applyDatabaseRecord(MasteryFields::HELD, $index, masteryRow($held(), 'note')['key'], 'Kept for a later chapter.');
+    $session->saveDatabase(MasteryFields::HELD);
+
+    $saved = require $root . '/assets/Data/mastery.php';
+    expect($saved['held'])->toBe([['skill' => 'Ward', 'note' => 'Kept for a later chapter.']])
+        ->and($saved['regions'])->toBe($before['regions'])
+        ->and(MasteryCatalog::load($root . '/assets')->tree->isSkillHeld('Ward'))->toBeTrue()
+        // A hold names the skill, so the skill cannot be deleted from under it.
+        ->and(fn() => $session->deleteDatabaseRecord('skills', 2))->toThrow(SessionRefusal::class, 'Mastery hold on Ward');
+
+    $session->applyDatabaseRecord(MasteryFields::HELD, $index, masteryRow($held(), 'skill')['key'], 'Cut');
+    expect(fn() => $session->saveDatabase(MasteryFields::HELD))->toThrow(SessionRefusal::class, 'which node cut teaches');
+});

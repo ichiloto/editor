@@ -72,7 +72,8 @@ final class CanvasStillRaster
         RendererSessionConfig::CANVAS_OVERLAY, RendererSessionConfig::CANVAS_CLIP_OPACITY,
         RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::CANVAS_IMAGE_TONE, RendererSessionConfig::CANVAS_IMAGE_FLIP,
         RendererSessionConfig::TEXT_LAYOUT, RendererSessionConfig::CANVAS_LABELS,
-        RendererSessionConfig::CANVAS_IMAGE_ROTATION, RendererSessionConfig::CANVAS_TEXTURE_STRIP,
+        RendererSessionConfig::CANVAS_IMAGE_ROTATION, RendererSessionConfig::CANVAS_COVERAGE_DABS,
+        RendererSessionConfig::CANVAS_TEXTURE_STRIP, RendererSessionConfig::CANVAS_TEXTURE_STRIP_CLIP,
         RendererSessionConfig::CANVAS_IMAGE_BOTTOM_FADE, RendererSessionConfig::CANVAS_GROUPS,
         RendererSessionConfig::CANVAS_GROUP_COLOR, RendererSessionConfig::CANVAS_INDICATOR_IMAGE_PATH,
         RendererSessionConfig::CANVAS_GROUP_SCALE,
@@ -522,6 +523,10 @@ final class CanvasStillRaster
         imagealphablending($surface, false);
         for ($y = $top; $y < $bottom; $y++) {
             for ($x = $left; $x < $right; $x++) {
+                $factor = $strip->getClipCoverage($x + .5, $y + .5);
+                if ($factor === 0.0) {
+                    continue;
+                }
                 $sample = $strip->getSourcePoint($x + .5, $y + .5);
                 if ($sample === null) {
                     continue;
@@ -532,7 +537,7 @@ final class CanvasStillRaster
                 $pixel = imagecolorat($picture,
                     $sourceX + ($data['flipX'] ? $sourceWidth - 1 - $sampleX : $sampleX),
                     $sourceY + ($data['flipY'] ? $sourceHeight - 1 - $sampleY : $sampleY));
-                $coverage = (int) round((127 - ($pixel >> 24)) * $opacity);
+                $coverage = (int) round((127 - ($pixel >> 24)) * $opacity * $factor);
                 imagesetpixel($surface, $x, $y, ((127 - $coverage) << 24) | ($pixel & 0xFFFFFF));
             }
         }

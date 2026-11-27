@@ -444,30 +444,7 @@ function disposableLastLegend(string $prefix = 'last-legend-cutscenes-'): ?strin
     }
 
     $root = reserveTemporaryPath($prefix);
-    mkdir($root . '/assets', 0o777, true);
-
-    foreach (scandir($game . '/assets') ?: [] as $entry) {
-        if ($entry === '.' || $entry === '..') {
-            continue;
-        }
-
-        $source = $game . '/assets/' . $entry;
-
-        if ($entry === 'Audio') {
-            symlink($source, $root . '/assets/' . $entry);
-        } elseif (is_dir($source)) {
-            mkdir($root . '/assets/' . $entry, 0o777, true);
-            copyDirectoryRecursively($source, $root . '/assets/' . $entry);
-        } else {
-            copy($source, $root . '/assets/' . $entry);
-        }
-    }
-
-    foreach (['config.php', 'ichiloto.json', 'input.php', 'composer.json'] as $entry) {
-        if (is_file($game . '/' . $entry)) {
-            copy($game . '/' . $entry, $root . '/' . $entry);
-        }
-    }
+    copyLastLegendFixture($game, $root);
 
     static $autoloaderRegistered = false;
 

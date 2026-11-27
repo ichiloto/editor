@@ -123,7 +123,7 @@ final readonly class TroopAuthoring
         }
         $before = $record->toArray();
         // A page that still names a member keeps the troop's members.
-        TroopEventPageContract::remapMembers((array) $before, static fn(int $member): ?int => null);
+        TroopEventPageContract::remapMembers((array) $before, static fn(int $member): ?int => null, $troops->getScriptCommandCatalog());
         $record->setEntries($list, []);
         $after = $record->toArray();
         try {

@@ -17,6 +17,9 @@ use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\Enumerations\DoorwayEntrance;
 use Ichiloto\Engine\Field\WorldObjectResource;
+use Ichiloto\Engine\Rendering\Presentation\PresentationSpritePivot;
+use Ichiloto\Engine\Rendering\Sprites\FieldSpriteRole;
+use Ichiloto\Engine\Rendering\Sprites\PngAssetPreflight;
 use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
 use Throwable;
 
@@ -45,6 +48,7 @@ final class FieldResourceFields
             makeBlank: self::makeBlank(...),
             projection: new KeyedDictionaryProjection('resources'),
             fieldsFor: self::getFields(...),
+            describeRows: self::describeFields(...),
             subLists: [self::getStampList(), self::getDoorwayList(), self::getAttachmentList(), self::getAppearanceRegionList()],
             saveCheck: self::checkCatalog(...),
             prepareEdit: self::checkEdit(...),
@@ -90,6 +94,50 @@ final class FieldResourceFields
             new RecordField('presentation', 'Shows', options: [self::IMAGE, self::SIGN], displayDefault: $sign ? self::SIGN : self::IMAGE),
             ...($sign ? self::getSignFields() : FieldSpriteFields::getFields($entry)),
         ];
+    }
+
+    /** Describe the visible source crop for the graphical point picker, including the selected resting cell. */
+    public static function describeFields(array $fields, array $entry, ?string $assetRoot): array
+    {
+        if ($assetRoot === null) { return $fields; }
+        $sprites = $entry['sprites2d'] ?? [];
+        $field = match (true) {
+            isset($entry['sign']) => 'sign.asset',
+            isset($sprites['sheet']) => 'sprites2d.sheet',
+            default => 'sprites2d.asset',
+        };
+        foreach ($fields as &$row) {
+            if (($row['field'] ?? null) !== $field || ($row['value'] ?? '') === '') { continue; }
+            $row['imagePreview'] = self::describeArt($entry, $assetRoot, $row['value']);
+        }
+        unset($row);
+        return $fields;
+    }
+
+    private static function describeArt(array $entry, string $assetRoot, string $asset): array
+    {
+        try {
+            $size = PngAssetPreflight::inspect($assetRoot, $asset);
+            $rect = ['x' => 0, 'y' => 0, 'width' => $size['width'], 'height' => $size['height']];
+            $label = 'Board source';
+            if (!isset($entry['sign'])) {
+                $sprite = FieldSpriteRole::readDefinition($entry['sprites2d'] ?? []);
+                $role = new FieldSpriteRole($sprite, $assetRoot, 'Field resource ' . $entry['id']);
+                try {
+                    $frame = $role->getStillFrame(PresentationSpritePivot::fromArray($entry['pivot']));
+                } finally {
+                    $role->release();
+                }
+                if ($frame === null || $frame->asset !== $asset) {
+                    return ['frames' => [], 'issue' => 'The current artwork has no readable resting image.'];
+                }
+                $rect = $frame->sourceRect?->toArray() ?? $rect;
+                $label = 'Resting artwork';
+            }
+            return ['frames' => [['label' => $label, 'sourceRect' => $rect]]];
+        } catch (\InvalidArgumentException|\RuntimeException $error) {
+            return ['frames' => [], 'issue' => $error->getMessage()];
+        }
     }
 
     /** How an image depicts the ground, shared by resources and inline objects; clearing preserves legacy inference. */

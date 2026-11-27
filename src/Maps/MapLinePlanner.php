@@ -196,14 +196,26 @@ final class MapLinePlanner
 
         $notes = [];
         $manifestPath = $root . '/' . self::MANIFEST;
+        $manifest = $payloads[$manifestPath] ?? null;
+        $historySource = SaveManifestStep::readPositionHistory($root, $manifest);
+        $history = SaveManifestStep::getProtectedPositions($root, $manifest, $historySource);
+        $historyPaths = [];
+        if ($historySource !== null) {
+            $historyPaths[] = $historySource['path'];
+            $watched[$historySource['path']] = $historySource['source'];
+        }
+        $protected = $history === null ? null : ($history[$edit->mapId] ?? []);
         $report = array_key_exists($manifestPath, $payloads) ? self::analyzeReachability($root)->reports[$edit->mapId] ?? null : null;
         if (! array_key_exists($manifestPath, $payloads)) {
             $notes[] = sprintf('Existing saves are not migrated: the project has no %s.', self::MANIFEST);
-        } elseif (! ($report?->isAnyReachable(new Rect(0, 0, max(1, $width), max(1, $height))) ?? false)) {
+        } elseif ($protected !== null && ! array_any($protected,
+            static fn(array $cell): bool => $cell[$edit->axis === 'y' ? 1 : 0] >= $edit->at)) {
+            $notes[] = 'No save moves: the recorded save positions are outside the lines this edit moves.';
+        } elseif ($protected === null && ! ($report?->isAnyReachable(new Rect(0, 0, max(1, $width), max(1, $height))) ?? false)) {
             // As for save relocations: a map the player reaches nowhere today, such as one not yet joined to the
             // world, holds no save to move.
             $notes[] = 'No save moves: the player reaches this map nowhere today.';
-        } elseif (! self::reachesMovedCells($report, $edit, $width, $height)) {
+        } elseif ($protected === null && ! self::reachesMovedCells($report, $edit, $width, $height)) {
             // Only cells at or beyond the line move, or land when removed: a save stands on none the player cannot
             // reach today, so a step would move no save.
             $notes[] = sprintf('No save moves: the player reaches nothing at or beyond %s %d today.',
@@ -225,7 +237,7 @@ final class MapLinePlanner
         }
 
         $sources = new SourceSetPlan($root, $watched, $originals, $proposals, $before, $after,
-            static fn(): array => [...self::findGridPaths($directory), ...self::findDataPaths($root)],
+            static fn(): array => [...self::findGridPaths($directory), ...self::findDataPaths($root), ...$historyPaths],
             static fn(string $path, string $staged): mixed => in_array($path, $gridPaths, true)
                 ? MapGridSource::parseSource((string) file_get_contents($staged), $path)
                 : PhpDataFile::getComparableValue(PhpDataFile::evaluateIsolated($staged, $root)),

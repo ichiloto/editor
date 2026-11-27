@@ -44,7 +44,7 @@ it('keeps every field it does not edit, comments and the header, and numbers a n
     // An older record shows its own frames and cues read-only; a current one has none.
     expect($legacy['Legacy Frames'])->toMatchArray(['value' => '(1)', 'editable' => false])
         ->and($legacy['Legacy Position']['value'])->toBe('center')
-        ->and($current)->toBe(['Id', 'Name', 'Movement', 'Caster Effect', 'Target Effect', 'Roles']);
+        ->and($current)->toBe(['Id', 'Name', 'Movement', 'Caster Effect', 'Target Effect', 'Target Impact Delay (Seconds)', 'Roles']);
 
     $database->setField(0, 'name', 'Blade Slash');
     $database->save();
@@ -66,6 +66,25 @@ it('keeps every field it does not edit, comments and the header, and numbers a n
     expect($again)->toHaveCount(3)
         ->and($again[$index])->toBe(['id' => 5, 'name' => 'New Animation'])
         ->and($again[0]['targetEffect'])->toBe('battle-physical-impact');
+});
+
+it('round-trips optional shared target impact timing without editing the effect', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/animations.php';
+    file_put_contents($path, "<?php\n// Shared timing.\nreturn [['id' => 1, 'name' => 'Ward']];\n");
+    $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('animations');
+    $database->setField(0, 'targetImpactSeconds', '0.8');
+    $database->save();
+    expect((require $path)[0]['targetImpactSeconds'])->toBe(0.8)
+        ->and(file_get_contents($path))->toContain('// Shared timing.');
+    expect(fn() => $database->setField(0, 'targetImpactSeconds', 'bad'))->toThrow(InvalidArgumentException::class);
+    expect((require $path)[0]['targetImpactSeconds'])->toBe(0.8);
+    $database->setField(0, 'targetImpactSeconds', '0');
+    $database->save();
+    expect(\Ichiloto\Engine\Animations\Animation::fromArray((require $path)[0])->targetImpactSeconds)->toBe(0.0);
+    $database->setField(0, 'targetImpactSeconds', '');
+    $database->save();
+    expect((require $path)[0])->not->toHaveKey('targetImpactSeconds');
 });
 
 it('authors flash-step timing through the animation record and preserves its source', function () {

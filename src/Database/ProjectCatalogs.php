@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Dialogue\DialogueCatalogFile;
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Animations\Animation;
+use Ichiloto\Engine\Animations\AnimationLibrary;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
@@ -53,6 +56,11 @@ final readonly class ProjectCatalogs
 
     public function __construct(private ProjectWorkspace $workspace)
     {
+    }
+
+    public function getScriptCommandCatalog(): ScriptCommandCatalog
+    {
+        return $this->workspace->getScriptCommandCatalog();
     }
 
     /** @return non-empty-string The project's asset root. */
@@ -385,6 +393,29 @@ final readonly class ProjectCatalogs
         }
 
         return $problems;
+    }
+
+    /**
+     * Builds an Engine lookup from the animation records currently open in the Editor.
+     *
+     * @param list<mixed> $records
+     */
+    public static function createAnimationLibrary(array $records): AnimationLibrary
+    {
+        $animations = [];
+        foreach ($records as $record) {
+            if (! is_array($record)) {
+                continue;
+            }
+
+            try {
+                $animations[] = Animation::fromArray($record);
+            } catch (Throwable) {
+                // The runtime also leaves invalid records out of animation selection.
+            }
+        }
+
+        return AnimationLibrary::createFromAnimations($animations);
     }
 
     /**

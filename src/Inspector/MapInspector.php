@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Inspector;
 
+use Ichiloto\Engine\Messaging\Dialogue\ChoiceKind;
 use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Dialogue\DialogueEmotionFields;
@@ -60,7 +61,6 @@ use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
 use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
-use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Closure;
 use InvalidArgumentException;
 use Throwable;
@@ -119,6 +119,18 @@ final readonly class MapInspector
     ];
 
     /** A chest event's presentations, as an author picks one. */
+    /** Who is asking a confirmation, as the Engine reads ChoiceKind; left blank, it is an answer. */
+    public const array CHOICE_KIND_CHOICES = [
+        ['label' => 'Answer', 'value' => ChoiceKind::ANSWER->value, 'description' => 'The party answers whoever asks, as a list.'],
+        ['label' => 'Decision', 'value' => ChoiceKind::DECISION->value, 'description' => 'No one asks: the party decides, with buttons.'],
+    ];
+
+    /** Where a confirmation's focus starts. */
+    public const array CONFIRM_START_CHOICES = [
+        ['label' => 'Yes', 'value' => 0, 'description' => 'The focus starts on Yes, as it does when none is set.'],
+        ['label' => 'No', 'value' => 1, 'description' => 'The focus starts on No, for a question about something that cannot be undone.'],
+    ];
+
     public const array CHEST_TYPE_CHOICES = [
         ['label' => 'Common', 'value' => ChestType::COMMON->value, 'description' => 'Standard chest presentation for ordinary treasure.'],
         ['label' => 'Rare', 'value' => ChestType::RARE->value, 'description' => 'Highlights a chest that should feel less common.'],
@@ -358,11 +370,20 @@ final readonly class MapInspector
         };
         $choices = self::findChoiceValues($field);
 
-        if ($control === null && $choices !== null && ! in_array($rawValue, $choices, true)) {
+        // Optional data is cleared with an empty value, which removes it.
+        $clearsOptional = ($field['optional'] ?? false) === true && $rawValue === '';
+        if ($control === null && $choices !== null && ! $clearsOptional && ! in_array($rawValue, $choices, true)) {
             // A row picked from a list takes one of its choices, whatever
             // interface sent the value.
             throw new InspectorRefusal(sprintf('%s cannot be %s; choose one of: %s.',
                 trim((string) ($field['label'] ?? 'That row')), $rawValue, implode(', ', $choices)));
+        }
+        if ($control === null && is_array($field['choices'] ?? null) && ! $clearsOptional) {
+            // A picked row takes its choice's own value, as the choice declares it: a starting choice stays a number.
+            $picked = array_find($field['choices'], static fn(array $choice): bool => (string) $choice['value'] === $rawValue);
+            if ($picked !== null) {
+                $value = $picked['value'];
+            }
         }
 
         if (($field['mapConditions'] ?? false) === true) {
@@ -2227,7 +2248,8 @@ final readonly class MapInspector
             // The type's optional data is offered as it reads when absent,
             // and stays out of the stored event until an author sets it.
             $className = is_string($definition['class'] ?? null) ? ltrim($definition['class'], '\\') : null;
-            $optional = EventTypeCatalog::findByClass($className)?->optionalData ?? [];
+            $type = EventTypeCatalog::findByClass($className);
+            $optional = $type?->optionalData ?? [];
             $modes = self::listEventModes($className);
             $hasPresentation = array_key_exists('presentation', $optional) || array_key_exists('presentation', $eventData);
             $presentation = $eventData['presentation'] ?? null;
@@ -2236,9 +2258,12 @@ final readonly class MapInspector
             $spawnSprite = $eventData['spawnSprite'] ?? null;
             unset($eventData['spawnSprite']);
             $pages = self::readDialoguePages($shown);
-            $fields = array_map(static function (array $field) use ($optional, $modes): array {
+            $offered = $type?->withAbsentOptionalData(self::withPageEmotions($eventData, $pages)) ?? self::withPageEmotions($eventData, $pages);
+            // The rest stage presentation has its own rows below.
+            if ($hasPresentation) { unset($offered['presentation']); }
+            $fields = array_map(static function (array $field) use ($type, $modes): array {
                 $path = array_values((array) ($field['path'] ?? []));
-                if (count($path) === 2 && array_key_exists((string) $path[1], $optional)) {
+                if (($path[0] ?? null) === 'data' && $type?->isOptionalDataPath(array_slice($path, 1))) {
                     $field['optional'] = true;
                 }
                 if ($path === ['data', 'mode'] && $modes !== null) {
@@ -2249,7 +2274,7 @@ final readonly class MapInspector
                 return $field;
             }, $this->decorateEventInspectorFields(
                 $marker,
-                $this->flattenInspectorFields([...self::withPageEmotions($eventData, $pages), ...array_diff_key($optional, $eventData)], ['data']),
+                $this->flattenInspectorFields($offered, ['data']),
             ));
             $fields = $this->describePageEmotions($fields, $pages);
             $mayKeepHeading = $className !== null && is_a($className, TransferPlayerTrigger::class, true);
@@ -2471,7 +2496,7 @@ final readonly class MapInspector
     /** Inline routes use the same schema/coercion as command records; the map remains their owner. */
     private function projectMovementRoute(array $route, ?array $ownerCommands = null): ProjectRecordDatabase
     {
-        $schema = RecordSchemaCatalog::forKey('common_events')
+        $schema = RecordSchemaCatalog::forKey('common_events', $this->references->getScriptCommandCatalog())
             ?? throw new \LogicException('The event command schema is unavailable.');
         $records = ProjectRecordDatabase::overOwnedList($schema, '', [['commands' => [$route]]], static function (array $entries): void {}, $this->graphical);
         $records->useAuthoringReferences($ownerCommands === null ? $this->references
@@ -2755,11 +2780,15 @@ final readonly class MapInspector
 
             $path = array_values((array) ($field['path'] ?? []));
 
-            $choices = match ($path) {
-                ['cue', 'kind'] => self::EVENT_CUE_KIND_CHOICES,
-                ['engagement'] => self::EVENT_ENGAGEMENT_CHOICES,
-                ['data', 'chestType'] => self::CHEST_TYPE_CHOICES,
-                ['data', 'lootType'] => self::listLootTypeChoices(),
+            // A confirmation's kind and starting choice read alike on a bed's question and an inn command's.
+            $confirmation = array_slice($path, -2);
+            $choices = match (true) {
+                $path === ['cue', 'kind'] => self::EVENT_CUE_KIND_CHOICES,
+                $path === ['engagement'] => self::EVENT_ENGAGEMENT_CHOICES,
+                $path === ['data', 'chestType'] => self::CHEST_TYPE_CHOICES,
+                $path === ['data', 'lootType'] => self::listLootTypeChoices(),
+                $confirmation === ['confirmDialogue', 'kind'] => self::CHOICE_KIND_CHOICES,
+                $confirmation === ['confirmDialogue', 'defaultChoice'] => self::CONFIRM_START_CHOICES,
                 default => null,
             };
 
@@ -2810,7 +2839,7 @@ final readonly class MapInspector
     private function flattenInspectorFields(array $data, array $path, ?array $list = null): array
     {
         $fields = [];
-        $definition = is_string($data['type'] ?? null) ? (ScriptCommandRegistry::getCatalog()->definitions[$data['type']] ?? null) : null;
+        $definition = is_string($data['type'] ?? null) ? $this->references->getScriptCommandCatalog()->findDefinition($data['type']) : null;
         foreach ($definition?->fields ?? [] as $field) {
             if ($field->reference !== ScriptCommandReference::STAGE_TIMELINE) { continue; }
             $segments = explode('.', $field->key);

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Field\NpcCollection;
+use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\ProjectMap;
@@ -58,7 +59,49 @@ it('rewrites one source node for a metadata edit, and nothing the author wrote a
     // And the saved file still evaluates to exactly the edited map.
     $reloaded = authoredMap($root);
     expect($reloaded->getEditableData())->toBe($map->getEditableData());
+
+    $reloaded->setMapField('description', 'A tiny fixture map.');
+    $reloaded->save();
+    $restored = tripletState($reloaded);
+    expect($restored['data'][0])->toBe($before['data'][0])
+        ->and($restored['map'])->toBe($before['map'])
+        ->and($restored['event'])->toBe($before['event']);
 });
+
+it('round-trips music and encounters without rewriting neighbouring authored expressions', function (bool $declared) {
+    $root = authoredMapProject();
+    $map = authoredMap($root);
+    $encounterPath = [MapEncounters::KEY];
+    if ($declared) {
+        $map->setMapDataField(['bgm'], 'harbour-theme');
+        $map->setMapDataField($encounterPath, MapEncounters::of(null)->withTroopAdded('Bat x 2'));
+        $map->save();
+        $map = authoredMap($root);
+    }
+    $before = tripletState($map);
+    $originalBgm = $map->getMapDataField(['bgm']);
+    $originalEncounters = $map->getMapDataField($encounterPath);
+    $encounters = MapEncounters::fromMap($map);
+    $editedEncounters = $declared ? $encounters->withRate(21) : $encounters->withTroopAdded('Bat x 2');
+
+    $map->setMapDataField(['bgm'], 'crypt-theme');
+    $map->setMapDataField($encounterPath, $editedEncounters);
+    $map->save();
+    $reloaded = authoredMap($root);
+    $edited = tripletState($reloaded);
+    expect($reloaded->getMapDataField(['bgm']))->toBe('crypt-theme')
+        ->and($reloaded->getMapDataField($encounterPath))->toBe($editedEncounters)
+        ->and($edited['data'][0])->toContain("use Ichiloto\\Engine\\Core\\Enumerations\\MovementHeading;")
+        ->and($edited['data'][0])->toContain("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',")
+        ->and($edited['data'][0])->toContain('[MovementHeading::NORTH->value]')
+        ->and($edited['map'])->toBe($before['map'])
+        ->and($edited['event'])->toBe($before['event']);
+
+    $reloaded->setMapDataField(['bgm'], $originalBgm);
+    $reloaded->setMapDataField($encounterPath, $originalEncounters);
+    $reloaded->save();
+    expect(tripletState($reloaded)['data'][0])->toBe($before['data'][0]);
+})->with(['absent metadata' => false, 'declared metadata' => true]);
 
 it('installs the triplet completely or not at all when a later member fails', function () {
     $root = authoredMapProject();

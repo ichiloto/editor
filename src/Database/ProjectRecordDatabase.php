@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
-use Ichiloto\Editor\Field\PlayerPresentationFields;
-
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandCatalog;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\PreparedSave;
 use Ichiloto\Editor\Storage\SaveSet;
@@ -65,6 +65,11 @@ final class ProjectRecordDatabase
         $this->authoringReferences = $references;
     }
 
+    public function getScriptCommandCatalog(): ScriptCommandCatalog
+    {
+        return $this->authoringReferences?->getScriptCommandCatalog() ?? ScriptCommandRegistry::getCatalog();
+    }
+
     /**
      * Scopes the references one record chooses from to that record, where it owns some of its own: a cinematic's
      * map-local subjects are on the map it starts on.
@@ -117,6 +122,7 @@ final class ProjectRecordDatabase
             }
         }
         if ($references !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects',
+            ReferenceCatalog::EFFECT_TERMINAL_CONTACT_TRACKS,
             \Ichiloto\Editor\Field\NpcBedFields::BED_OBJECTS], true) && $value !== null) {
             $choices = $field->reference === 'cinematic_movement_routes'
                 ? $references->getMovementRouteIds($record, $ownerPath)
@@ -736,9 +742,7 @@ final class ProjectRecordDatabase
                 $field->key, $isEditable, authored: $record->get($field->key)), (array) $record->toArray(), (array) $record->toArray(),
                 $this->findRecordReferences($record));
         }
-        if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
-            $fields = PlayerPresentationFields::describeFields($fields, (array) $record->toArray(), $this->authoringReferences?->getAssetRoot());
-        }
+        $fields = $this->schema->describeRows($fields, (array) $record->toArray(), $this->authoringReferences?->getAssetRoot());
         if ($configIssue !== null) { $fields[] = ['label' => 'Read-only', 'value' => $configIssue, 'editable' => false]; }
 
         foreach ($this->schema->commandListsFor($record->toArray()) as $listKey => $commandList) {
@@ -1038,11 +1042,11 @@ final class ProjectRecordDatabase
             }
             $before = $record->toArray();
             $draft = clone $record;
-            if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
-                $draft->restorePayload(PlayerPresentationFields::applyField((array) $before, $fieldId, $rawValue,
-                    $this->authoringReferences?->getAssetRoot() ?? throw new \InvalidArgumentException('The player presentation has no project asset root.')));
-            } else {
+            $applied = $this->schema->applyFieldValue((array) $before, $fieldId, $rawValue, $this->authoringReferences?->getAssetRoot());
+            if ($applied === null) {
                 $draft->set($field->key, $value);
+            } else {
+                $draft->restorePayload($applied);
             }
             if ($this->schema->prepareEdit !== null) {
                 $draft->restorePayload(($this->schema->prepareEdit)((array) $draft->toArray(), $field->key, is_array($before) ? $before : (array) $before));
@@ -1937,7 +1941,8 @@ final class ProjectRecordDatabase
                 if ($this->schema->listPayloadKey !== null) { $original = [$this->schema->listPayloadKey => $original]; }
                 InnPresentationFields::assertChangedCommandsValid($original, $record->toArray(), $this->authoringReferences);
                 MovementRouteFields::assertChangedCommandsValid($original, $record->toArray());
-                FramingFields::assertChangedCommandsValid($original, $record->toArray(), $record->recordId);
+                FramingFields::assertChangedCommandsValid($original, $record->toArray(), $record->recordId,
+                    $this->getScriptCommandCatalog());
             }
         }
 
@@ -4247,10 +4252,19 @@ final class ProjectRecordDatabase
     {
         return match ($field->type) {
             InputControlType::INTEGER => self::coerceInteger($field, $value),
-            InputControlType::FLOAT => floatval($value),
+            InputControlType::FLOAT => self::coerceFloat($field, $value),
             InputControlType::BOOLEAN => self::coerceBoolean($field, $value),
             default => $value,
         };
+    }
+
+    private static function coerceFloat(RecordField $field, string $value): float
+    {
+        if ($value !== '' && (!is_numeric($value) || !is_finite((float)$value))) {
+            throw new \InvalidArgumentException(sprintf('%s must be a finite number.', $field->label));
+        }
+
+        return (float)$value;
     }
 
     /**
@@ -4430,7 +4444,8 @@ final class ProjectRecordDatabase
 
         // Descended from the sub-list into a command arm: commands from here
         // down. The catalog's shared command list is what every arm holds.
-        return RecordSchemaCatalog::eventCommandList('commands', $this->graphical);
+        return RecordSchemaCatalog::eventCommandList('commands', $this->graphical,
+            commands: $this->getScriptCommandCatalog());
     }
 
     /**

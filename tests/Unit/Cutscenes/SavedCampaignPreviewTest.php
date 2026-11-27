@@ -143,20 +143,24 @@ it('refuses a save that needs a migration class the Editor cannot load, naming t
         ->and(readInstalledStores())->toBe($stores);
 });
 
-it('names the project\'s keys in the Engine\'s bindings while a field is open, and gives them back', function () {
+it('names the project\'s keys during field work and restores the caller\'s bindings', function () {
     $root = cutsceneProject();
     file_put_contents($root . '/input.php', "<?php\n\nuse Ichiloto\\Engine\\IO\\Enumerations\\KeyCode;\n\nreturn ['confirm' => ['description' => 'Confirm', 'keys' => [KeyCode::F]]];\n");
     $before = \Ichiloto\Engine\IO\InputManager::getBindings();
 
     $field = PreviewField::open($root, 'harbour', new Vector2(3, 1), 40, 12, static fn(): float => 0.0);
     try {
-        expect(\Ichiloto\Engine\IO\InputManager::getBindings()['confirm']['keys'] ?? null)->toBe([\Ichiloto\Engine\IO\Enumerations\KeyCode::F])
-            ->and($field->getDiagnostics())->toBe([]);
+        $field->run(static function (): void {
+            expect(\Ichiloto\Engine\IO\InputManager::getBindings()['confirm']['keys'] ?? null)
+                ->toBe([\Ichiloto\Engine\IO\Enumerations\KeyCode::F]);
+        });
+        expect($field->getDiagnostics())->toBe([])
+            ->and(\Ichiloto\Engine\IO\InputManager::getBindings())->toBe($before);
     } finally {
         $field->dispose();
     }
 
-    expect(\Ichiloto\Engine\IO\InputManager::getBindings()['confirm']['keys'] ?? null)->toBe($before['confirm']['keys'] ?? null);
+    expect(\Ichiloto\Engine\IO\InputManager::getBindings())->toBe($before);
 });
 
 it('shares the owning preview Game scene and read-only save services', function () {
