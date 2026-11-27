@@ -21,6 +21,7 @@ use Ichiloto\Editor\Database\SkitPlaybackFields;
 use Ichiloto\Editor\Database\StorybookPlaybackFields;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Maps\MapDoors;
+use Ichiloto\Editor\Maps\SaveRelocationPlan;
 use Ichiloto\Engine\Field\MapDoorReference;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Database\SuperMoveFields;
@@ -190,7 +191,7 @@ class ProjectValidator
    * @param ProjectWorkspace $workspace The project to check.
    * @return Issue[] Everything wrong with it, worst first.
    */
-  public function validate(ProjectWorkspace $workspace): array
+  public function validate(ProjectWorkspace $workspace, ?SaveRelocationPlan $relocation = null): array
   {
     $this->validatedWorkspace = $workspace;
     $this->readArenaKeys($workspace);
@@ -254,7 +255,7 @@ class ProjectValidator
       ...$this->checkTilesets($workspace),
       ...$this->checkPermanentGrowth($workspace),
       ...$this->checkOptimizationPolicy($workspace),
-      ...new SaveCompatibilityValidator()->validate($workspace),
+      ...new SaveCompatibilityValidator()->validate($workspace, $relocation),
       ...new ScreenTransitionValidator()->validate($workspace),
       ...new ReachabilityValidator()->validate($workspace),
       ...new EdgeTransferAgreementCheck()->validate($workspace),

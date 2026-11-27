@@ -7560,7 +7560,19 @@ final class EditorSession
     {
         $changes = $this->changeSet ?? throw new SessionRefusal('No change set is open; begin one first.');
         $changed = $this->listChangedMaps($changes);
-        $issues = new ProjectValidator()->validate($this->workspace);
+        // Newly made maps held no saves. A retirement has already moved a retired map's saves.
+        $maps = $this->getMapsById();
+        $made = array_diff(array_keys($maps), array_keys($changes['revisions']));
+        $unrelocated = [...$made, ...$this->listRetiredMaps($changes)];
+        $changedMaps = array_map(static fn(string $mapId): ProjectMap => $maps[$mapId], array_values(array_diff($changed, $unrelocated)));
+        $relocation = null;
+        $planningFailure = null;
+        try {
+            $relocation = SaveRelocationPlanner::planAll($changedMaps, $this->workspace->projectRoot, $changes['lines']);
+        } catch (Throwable $failure) {
+            $planningFailure = $failure->getMessage();
+        }
+        $issues = new ProjectValidator()->validate($this->workspace, $relocation);
         $before = array_fill_keys(array_map(self::identifyIssue(...), $changes['baseline']), true);
         $blocking = array_values(array_filter($issues, static fn(Issue $issue): bool => $issue->severity === Severity::ERROR
             && ($issue->affectsAnyMap($changed) || ! isset($before[self::identifyIssue($issue)]))));
@@ -7569,17 +7581,11 @@ final class EditorSession
         $outcome = ['maps' => $changed, 'saved' => [], 'written' => [], 'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $reported),
             'blocking' => count($blocking), 'relocated' => [], 'backupFailures' => []];
 
-        // A map the change set made holds no save, though its blank files were written when it was made, and a map it
-        // retires has every save moved off it by the retirement, onto landings checked again below.
-        $made = array_values(array_diff(array_keys($this->getMapsById()), array_keys($changes['revisions'])));
-        $unrelocated = [...$made, ...$this->listRetiredMaps($changes)];
-        $changedMaps = array_values(array_filter(array_map(fn(string $mapId): ?ProjectMap => $this->getMapsById()[$mapId] ?? null, $changed),
-            static fn(?ProjectMap $map): bool => $map?->isDirty() === true && ! in_array($map->mapId, $unrelocated, true)));
-        // The change set writes one manifest step for every map that moves saves.
-        $relocations = SaveRelocationPlanner::planAll($changedMaps, $this->workspace->projectRoot, $changes['lines'])?->describeMoves() ?? [];
+        $relocations = $relocation?->describeMoves() ?? [];
         $retirementRefusal = $blocking === [] ? $this->findRetirementRefusal($changes) : null;
         $reason = match (true) {
             $blocking !== [] => sprintf('%d error%s the player would meet.', count($blocking), count($blocking) === 1 ? '' : 's'),
+            $planningFailure !== null => 'Nothing was written: ' . $planningFailure,
             $retirementRefusal !== null => $retirementRefusal,
             // A manifest step is a migration class or declared position edits, never both.
             $relocations !== [] && ($changes['migrationRegistered'] ?? false) => 'This change set registers a save migration class and moves saves off cells a changed map now takes. '
@@ -7603,8 +7609,7 @@ final class EditorSession
         };
 
         try {
-            $saves = WorkspaceSave::prepareAll($this->workspace, $relocateSaves, $unrelocated,
-                $changes['lines']);
+            $saves = WorkspaceSave::prepareWithRelocations($this->workspace, $relocation);
             $written = SaveSet::commit($this->workspace->projectRoot, $saves, $backup);
         } catch (SaveSetAdoptionFailure $partial) {
             // The files are written: the change set is, though the editor's view of it is not current.

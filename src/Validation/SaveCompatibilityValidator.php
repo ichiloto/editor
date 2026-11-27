@@ -11,6 +11,7 @@ use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\SaveManifestStep;
+use Ichiloto\Editor\Maps\SaveRelocationPlan;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
@@ -35,7 +36,7 @@ final class SaveCompatibilityValidator
     private ?SkillCatalog $skillCatalog = null;
 
     /** @return Issue[] */
-    public function validate(ProjectWorkspace $workspace): array
+    public function validate(ProjectWorkspace $workspace, ?SaveRelocationPlan $relocation = null): array
     {
         $issues = [];
 
@@ -60,7 +61,7 @@ final class SaveCompatibilityValidator
         }
 
         try {
-            $manifest = require $path;
+            $manifest = $relocation?->manifest ?? require $path;
         } catch (Throwable $throwable) {
             $issues[] = Issue::error(self::WHERE, 'The manifest could not be loaded: ' . $throwable->getMessage());
 

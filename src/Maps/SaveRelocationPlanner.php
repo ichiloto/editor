@@ -132,7 +132,7 @@ final class SaveRelocationPlanner
             static fn(string $path, string $staged): mixed => PhpDataFile::getComparableValue(PhpDataFile::evaluateIsolated($staged, $root)),
             'save relocations', 'Save compatibility manifest');
 
-        return new SaveRelocationPlan($label, $relocations, $next['value']['contentVersion'], $sources);
+        return new SaveRelocationPlan($label, $relocations, $next['value']['contentVersion'], $next['value'], $sources);
     }
 
     /**

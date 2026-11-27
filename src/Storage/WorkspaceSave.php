@@ -69,6 +69,18 @@ final class WorkspaceSave
     public static function prepareAll(ProjectWorkspace $workspace, bool $relocateSaves = false, array $unrelocatedMaps = [],
         ?UnsavedMapLines $unsavedLines = null): array
     {
+        $relocation = SaveRelocationPlanner::planAll(array_values(array_filter($workspace->maps,
+            static fn(ProjectMap $map): bool => ! in_array($map->mapId, $unrelocatedMaps, true))), $workspace->projectRoot, $unsavedLines);
+        if ($relocation !== null && ! $relocateSaves) {
+            throw new RuntimeException(sprintf('Saving %s moves existing saves; allow the relocations first.', $relocation->mapId));
+        }
+
+        return self::prepareWithRelocations($workspace, $relocation);
+    }
+
+    /** @return list<PreparedSave> Documents and the same relocation plan used to validate them. */
+    public static function prepareWithRelocations(ProjectWorkspace $workspace, ?SaveRelocationPlan $relocation): array
+    {
         $saves = [];
         // Categories editing through one settings file (Terms and Configuration write `config.php`
         // through the project configuration) are prepared once, by that file, wherever they are listed.
@@ -112,16 +124,8 @@ final class WorkspaceSave
             }
         }
 
-        // One manifest step holds every map's relocations: the manifest is written once. A map made since the last
-        // save holds no save, whatever stands on its blank files, and a retired map's saves move with its retirement.
-        $relocation = SaveRelocationPlanner::planAll(array_values(array_filter($dirtyMaps,
-            static fn(ProjectMap $map): bool => ! in_array($map->mapId, $unrelocatedMaps, true))), $workspace->projectRoot, $unsavedLines);
-
+        // One manifest step holds every map's relocations: the manifest is written once.
         if ($relocation !== null) {
-            if (! $relocateSaves) {
-                throw new RuntimeException(sprintf('Saving %s moves existing saves; allow the relocations first.', $relocation->mapId));
-            }
-
             $saves[] = $relocation->prepareApply();
         }
 

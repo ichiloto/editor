@@ -18,11 +18,13 @@ final class SaveRelocationPlan
 {
     /**
      * @param list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}> $relocations
+     * @param array<array-key, mixed> $manifest The manifest that will be written with the maps.
      */
     public function __construct(
         public readonly string $mapId,
         public readonly array $relocations,
         public readonly int $contentVersion,
+        public readonly array $manifest,
         private readonly SourceSetPlan $sources,
     ) {
     }
