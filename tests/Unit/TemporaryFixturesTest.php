@@ -134,7 +134,7 @@ it('removes the fixtures of a process that was killed before it could clean up',
     // its first fixture meanwhile may remove it first, which is the same.)
     [, $errors, $status] = runWithTestHelpers('makeTemporaryDirectory("ichiloto-script-");');
 
-    expect($abandoned)->toStartWith(rtrim(sys_get_temp_dir(), '/') . '/ichiloto-editor-fixtures-')
+    expect($abandoned)->toStartWith(realpath(sys_get_temp_dir()) . '/ichiloto-editor-fixtures-')
         ->and($status)->toBe(0)
         ->and($errors)->toBe('')
         ->and(file_exists($abandoned))->toBeFalse()
@@ -149,7 +149,7 @@ it('makes every fixture inside the run directory of the process that owns it', f
     $run = dirname($directory);
 
     expect(basename($run))->toStartWith('ichiloto-editor-fixtures-')
-        ->and(dirname($run))->toBe(rtrim(sys_get_temp_dir(), '/'))
+        ->and(dirname($run))->toBe(realpath(sys_get_temp_dir()))
         ->and(dirname($file))->toBe($run)
         ->and(dirname($reserved))->toBe($run)
         ->and(file_exists($reserved))->toBeFalse()
@@ -177,7 +177,7 @@ it('keeps the Engine\'s and the Editor\'s diagnostics with the run, before and a
     Ichiloto\Engine\Util\Debug::warn('after the preview');
     Ichiloto\Editor\Debug\Debug::warn('from the Editor');
 
-    expect(dirname($logs))->toStartWith(rtrim(sys_get_temp_dir(), '/') . '/ichiloto-editor-fixtures-')
+    expect(dirname($logs))->toStartWith(realpath(sys_get_temp_dir()) . '/ichiloto-editor-fixtures-')
         ->and(file_get_contents($logs . '/warning.log'))->toContain('before the preview')->toContain('after the preview')
         ->and(file_get_contents($logs . '/debug.log'))->toContain('from the Editor');
 });
